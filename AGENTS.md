@@ -16,10 +16,10 @@
 
 - B 端按需拉取数据：小数据使用 `getLatest`；连续波形/节律必须经 `subscribe` 启动、每 600 ms 一组或一批发送，并可由 `unsubscribe` 停止。
 - 每条数据至少携带 `messageType`、`mode`、`deviceId`、`subjectId`、`gatewayId`、`sequence`、`timestampMs`、`data`、`valid`。实时与录播共用同一北向协议，`mode` 分别为 `live` 与 `replay`。
-- v0.1 北向协议固定为网关服务端、B 端客户端的 WSS/WebSocket + UTF-8 JSON；路径、证书、令牌和端口以部署配置为准。完整契约见 [头环蓝牙网关北向网络协议 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%8C%97%E5%90%91%E7%BD%91%E7%BB%9C%E5%8D%8F%E8%AE%AE_v0.1.md)。
+- v0.1 北向协议固定为网关服务端、B 端客户端的 WSS/WebSocket + UTF-8 JSON；不使用 Token，路径、证书、端口和 B 端主机地址白名单以部署配置为准。完整契约见 [头环蓝牙网关北向网络协议 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%8C%97%E5%90%91%E7%BD%91%E7%BB%9C%E5%8D%8F%E8%AE%AE_v0.1.md)。
 - 原始波形和节律使用批量 JSON 或二进制帧；不得按单采样点发送单条 JSON。
 - 任何北向协议变更都必须同时更新字段说明、时序/示例、模拟服务端测试与录播兼容性。
-- 不要假设采样率、每 600 ms 样本数、鉴权、端口或补传规则；这些均须由双方确认并配置化。
+- 不要假设采样率、每 600 ms 样本数、端口、白名单或补传规则；这些均须由双方确认并配置化。
 
 ## SDK 集成原则
 
