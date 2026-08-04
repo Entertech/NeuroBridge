@@ -9,7 +9,7 @@ NeuroBridge 是将回车科技头环的 BLE 数据接入第三方 B 端主机的
 - 目标硬件：N100/N150 x86 小主机，8 GB 内存、256 GB SSD、千兆网口（双网口优先）、经实机验证可稳定连接目标头环的蓝牙 5.x 芯片。
 - 目标系统：Ubuntu LTS/Linux。网关不需要运行 Android；Android 或浏览器仅作为第三方展示端。
 - 链路：`头环 → BLE → 网关 → 有线以太网 → 第三方 B 端主机`。
-- 运行方式：实时模式和录播模式均为交付范围；网关应开机自启，现场无需操作。
+- 运行方式：实时模式和录播模式均为交付范围；头环未连接时，网关在 B 端 `subscribe` 或 `getLatest` 后自动使用已配置录播，并以 `mode="replay"` 标记数据来源。网关应开机自启，现场无需操作。
 - 演示范围：本次为单人；北向协议仅保留录播关联所需的 `subjectId`。
 
 若现场禁止任何蓝牙，实时链路不能工作；只能改用有线采集、在允许蓝牙的区域采集后录播，或取得场地方对限制范围的书面确认。
@@ -26,7 +26,6 @@ NeuroBridge 是将回车科技头环的 BLE 数据接入第三方 B 端主机的
 | `subscribe` | 连续展示原始波形或脑波节律 | 确认后每 600 ms 返回一组/批数据 |
 | `unsubscribe` | 停止连续数据 | 确认响应 |
 | `getStatus` | 查询连接、信号、电量和当前模式 | 状态响应 |
-| `selectReplay` | 选择并启动录播 | 确认响应与回放数据 |
 
 网关所有输出统一为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 固定为 `1.0`，`code=200` 成功，非 `200` 时 `message` 为错误原因。连续数据事件的 `data` 中包含 `gatewayBootId`、`mode`（`live`/`replay`）、`subjectId`、`timestampMs`、`valid` 与 `payload`。v0.1 为单头环、单网关实例，不传 `deviceId` 或 `gatewayId`。原始波形和节律数据使用批量 JSON 或二进制帧，避免单采样点逐条 JSON 发送。
 

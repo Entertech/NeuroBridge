@@ -15,6 +15,7 @@
 ## 数据与协议规则
 
 - B 端按需拉取数据：小数据使用 `getLatest`；连续波形/节律必须经 `subscribe` 启动、每 600 ms 一组或一批发送，并可由 `unsubscribe` 停止。
+- 录播由网关部署配置管理，B 端不选择录播或切换数据源；头环未连接时，网关在收到 `subscribe` 或 `getLatest` 后自动使用录播，并以输出中的 `mode="replay"` 告知 B 端。
 - 网关所有输出的根对象固定为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 为 `1.0`，`code=200` 成功，非 `200` 时 `message` 必须写明错误原因。连续事件的 `data` 携带 `gatewayBootId`、`mode`、`subjectId`、`timestampMs`、`valid` 与 `payload`；实时与录播的 `mode` 分别为 `live` 与 `replay`。v0.1 为单头环、单网关实例，不传 `deviceId` 或 `gatewayId`。
 - v0.1 北向协议固定为网关服务端、B 端客户端的 WSS/WebSocket + UTF-8 JSON；不使用 Token，路径、证书、端口和 B 端主机地址白名单以部署配置为准。完整契约见 [头环蓝牙网关北向网络协议 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%8C%97%E5%90%91%E7%BD%91%E7%BB%9C%E5%8D%8F%E8%AE%AE_v0.1.md)。
 - 连接保活使用网关每 15 秒发送的标准 WebSocket Ping/Pong 控制帧，不创建 JSON 心跳消息；连续 3 次未收到 Pong 时以 `4000/KEEPALIVE_TIMEOUT` 关闭连接，客户端重连后必须重新订阅。
