@@ -22,11 +22,12 @@
 - 不使用应用层保活：网关与 B 端均不得发送 WebSocket Ping/Pong 或 JSON 心跳。实际断线后网关继续监听新连接；B 端重新建连后先调用 `getStatus`，再重新订阅，旧 `subscriptionId` 不可复用。
 - 原始波形和节律使用批量 JSON 或二进制帧；不得按单采样点发送单条 JSON。
 - 任何北向协议变更都必须同时更新字段说明、时序/示例、模拟服务端测试与录播兼容性。
-- 不要假设采样率、每 600 ms 样本数、端口、静态 IP/子网掩码或补传规则；这些均须由双方确认并配置化。
+- Flowtime 首期 BLE profile 以 [头环蓝牙通信协议](https://entertech.feishu.cn/docs/doccnlmMLpxwY25gJQyiFQmBeRd?from=from_copylink) 为准：`FF31` 为 14 字节大端 EEG 包，`FF51` 为 16 字节设备原生心率包，`FF52` 为 20 字节 HR 原始包，`FF32` 为 2 字节 EEG/HR 佩戴与接触状态；采集控制写 `FF21` 的 `0x05` 启动、`0x06` 停止。所有 `FF31`/`FF51`/`FF52` 原始字节必须持久化，不得被 SDK 解包示例改写。
+- 不要假设采样率、每 600 ms 样本数、算法输入分组/触发条件、端口、静态 IP/子网掩码或补传规则；这些均须由双方确认并配置化。
 
 ## SDK 集成原则
 
-- BLE 接入 POC 使用 [Enter-Biomodule-BLE-PC-SDK](https://github.com/Entertech/Enter-Biomodule-BLE-PC-SDK)。它依赖 Python 与 Bleak 0.19；将扫描、连接、通知和断线状态封装在网关适配层，业务与北向层不得直接依赖其回调细节。
+- BLE 接入 POC 使用 [Enter-Biomodule-BLE-PC-SDK](https://github.com/Entertech/Enter-Biomodule-BLE-PC-SDK)。它依赖 Python 与 Bleak 0.19；将扫描、连接、通知和断线状态封装在网关适配层，业务与北向层不得直接依赖其回调细节。SDK 的旧解包代码不是帧格式依据，必须按已确认的头环蓝牙通信协议解析。
 - 算法优先使用 [AffectiveCloud-Algorithm-SDK](https://github.com/Entertech/AffectiveCloud-Algorithm-SDK) 的 C++ 实现。其输入必须保留原始字节序和完整分组，未经真实录制数据比对不得自行重编码或重采样。
 - 算法 C++ 构建依赖 C++17、Eigen3 和 NumCpp。锁定并记录 CMake、编译器和依赖版本；提交部署配置前在 Ubuntu x86_64 构建验证。
 - 不要直接把算法仓库的旧 Python 依赖（例如 TensorFlow 1.8）加入生产镜像；如确需使用，先创建隔离环境并完成安全、兼容和回归验证。

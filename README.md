@@ -11,6 +11,7 @@ NeuroBridge 是将回车科技头环的 BLE 数据接入第三方 B 端主机的
 - 链路：`头环 → BLE → 网关 → 有线以太网 → 第三方 B 端主机`。
 - 运行方式：实时模式和录播模式均为交付范围；头环未连接时，网关在 B 端 `subscribe` 或 `getLatest` 后自动使用已配置录播，并以 `mode="replay"` 标记数据来源。网关应开机自启，现场无需操作。
 - 演示范围：本次为单人；北向协议仅保留录播关联所需的 `subjectId`。
+- 已确认的首期 Flowtime BLE profile：EEG `FF31` 为 14 字节大端数据包，HR 原始 `FF52` 为 20 字节数据包，佩戴/接触状态 `FF32` 为 2 字节；北向仍最多按 600 ms 分组，但实际包数由网关运行时记录，不写死。
 
 若现场禁止任何蓝牙，实时链路不能工作；只能改用有线采集、在允许蓝牙的区域采集后录播，或取得场地方对限制范围的书面确认。
 
@@ -35,7 +36,7 @@ NeuroBridge 是将回车科技头环的 BLE 数据接入第三方 B 端主机的
 
 | SDK | 结论 | 依据与处理方式 |
 | --- | --- | --- |
-| [Enter-Biomodule-BLE-PC-SDK](https://github.com/Entertech/Enter-Biomodule-BLE-PC-SDK) | **适配，作为 BLE 接入层的首选 POC** | Python SDK 基于 Bleak 0.19，声明支持 macOS、Linux 和 Windows；内置 Flowtime 采集器，提供 EEG、心率、佩戴状态、电量及断连回调，并能启动设备采集。Linux 上仍须在目标蓝牙芯片与头环实机验证扫描、连接、通知、断线重连与长期稳定性。 |
+| [Enter-Biomodule-BLE-PC-SDK](https://github.com/Entertech/Enter-Biomodule-BLE-PC-SDK) | **适配，作为 BLE 接入层的首选 POC** | Python SDK 基于 Bleak 0.19，声明支持 macOS、Linux 和 Windows；可承担 Flowtime 的扫描、连接、通知、启动采集与断线回调。BLE UUID、14 字节 EEG 帧、20 字节 HR 原始帧等数据契约以 [头环蓝牙通信协议](https://entertech.feishu.cn/docs/doccnlmMLpxwY25gJQyiFQmBeRd?from=from_copylink) 为准，不能以 SDK 的旧解包示例推断。Linux 上仍须实机验证。 |
 | [AffectiveCloud-Algorithm-SDK](https://github.com/Entertech/AffectiveCloud-Algorithm-SDK) | **适配 x86 Linux 网关的算法层，须完成构建 POC 后上线** | C++ SDK 提供双通道 `appendEEG`、单通道 `appendSCEEG`、`appendHR` 及注意力、放松度、脑波等报表；接口注释以 0.6 秒为默认触发周期，和本网关 600 ms 分组一致。它要求 C++17、Eigen3、NumCpp；仓库当前没有可直接交付的 Linux 产物，需在 Ubuntu x86_64 上补齐依赖、编译并用真实 BLE 原始字节流做结果比对。 |
 
 算法 SDK 还带有 Python 实现，但其依赖固定在 TensorFlow 1.8、Keras 2.2、NumPy 1.16 等较旧版本。首期网关优先选 C++ 实现；不要在未完成独立环境验证的情况下将该 Python 环境直接用于生产镜像。
@@ -50,7 +51,7 @@ NeuroBridge 是将回车科技头环的 BLE 数据接入第三方 B 端主机的
 ## 上线前 POC 与验收
 
 1. 在目标 N100/N150 + Ubuntu LTS 上测试 PC BLE SDK：扫描、连接、订阅、断线重连、重启恢复和长时间运行。
-2. 在同一环境编译算法 C++ SDK，固定 Eigen3/NumCpp/CMake/编译器版本，并以录制的真实原始数据验证算法输入长度、字节序和 600 ms 触发节奏。
+2. 在同一环境编译算法 C++ SDK，固定 Eigen3/NumCpp/CMake/编译器版本，并以录制的真实 `FF31`/`FF51`/`FF52` 原始字节验证算法输入长度、字节序、分组方式和 600 ms 触发节奏。
 3. 完成北向模拟服务端和真实 B 端主机联调，覆盖实时、录播、网关/服务端离线、恢复补传和异常数据。
 4. 在展演网络完成一次全链路演练，交付版本号、配置备份、操作手册和问题日志。
 
