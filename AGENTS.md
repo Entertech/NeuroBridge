@@ -7,7 +7,7 @@
 ## 架构边界
 
 - 链路固定为：头环 BLE → 本项目网关 → 有线网络 → 第三方 B 端主机。
-- 网关拥有 BLE 连接、配对、重连、数据解析、序号/时间戳、缓存、算法调用、录播和北向协议适配。
+- 网关拥有 BLE 连接、配对、重连、数据解析、时间戳、缓存、算法调用、录播和北向协议适配。
 - 第三方主机拥有展示与保存。本项目不负责其后续服务端上传。
 - 首期部署目标为 Ubuntu LTS on x86_64（N100/N150）。不要因展示端是 Android 或浏览器而将网关改为 Android。
 - NanoPi R3S-LTS 仅作为后续 ARM 候选；引入它前必须验证 USB 蓝牙驱动和算法的 ARM64 构建。
@@ -15,7 +15,7 @@
 ## 数据与协议规则
 
 - B 端按需拉取数据：小数据使用 `getLatest`；连续波形/节律必须经 `subscribe` 启动、每 600 ms 一组或一批发送，并可由 `unsubscribe` 停止。
-- 网关所有输出的根对象固定为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 为 `1.0`，`code=200` 成功，非 `200` 时 `message` 必须写明错误原因。连续事件的 `data` 携带 `gatewayBootId`、`mode`、`subjectId`、`sequence`、`timestampMs`、`valid` 与 `payload`；实时与录播的 `mode` 分别为 `live` 与 `replay`。v0.1 为单头环、单网关实例，不传 `deviceId` 或 `gatewayId`。
+- 网关所有输出的根对象固定为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 为 `1.0`，`code=200` 成功，非 `200` 时 `message` 必须写明错误原因。连续事件的 `data` 携带 `gatewayBootId`、`mode`、`subjectId`、`timestampMs`、`valid` 与 `payload`；实时与录播的 `mode` 分别为 `live` 与 `replay`。v0.1 为单头环、单网关实例，不传 `deviceId` 或 `gatewayId`。
 - v0.1 北向协议固定为网关服务端、B 端客户端的 WSS/WebSocket + UTF-8 JSON；不使用 Token，路径、证书、端口和 B 端主机地址白名单以部署配置为准。完整契约见 [头环蓝牙网关北向网络协议 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%8C%97%E5%90%91%E7%BD%91%E7%BB%9C%E5%8D%8F%E8%AE%AE_v0.1.md)。
 - 连接保活使用网关每 15 秒发送的标准 WebSocket Ping/Pong 控制帧，不创建 JSON 心跳消息；连续 3 次未收到 Pong 时以 `4000/KEEPALIVE_TIMEOUT` 关闭连接，客户端重连后必须重新订阅。
 - 原始波形和节律使用批量 JSON 或二进制帧；不得按单采样点发送单条 JSON。
@@ -33,7 +33,7 @@
 
 - 连接断开、头环离线、非法数据、算法异常、网络不可达和服务端拒绝均应转换为可观测状态，不能让主进程退出。
 - 重连、缓存上限、补传、幂等键和日志轮转必须配置化。缓存或补传是否启用须遵守双方协议。
-- 服务以 systemd 开机自启；日志应包含网关版本、头环连接状态、序号范围和错误原因，但不得记录令牌、密码、私钥或完整敏感原始数据。
+- 服务以 systemd 开机自启；日志应包含网关版本、头环连接状态、数据时间范围和错误原因，但不得记录令牌、密码、私钥或完整敏感原始数据。
 - 修改 BLE、算法或网络依赖后，至少验证：实时、录播、BLE 断线重连、服务端不可达与恢复场景。
 
 ## 文档与提交
