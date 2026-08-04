@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>NeuroBridge B 端联调台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">NEUROBRIDGE / B-SIDE TEST CONSOLE</p>
+          <h1>网关联调台</h1>
+          <p class="intro">按 v1.0 北向协议连接网关，发送请求并查看实时数据事件。</p>
+        </div>
+        <div class="connection-badge" aria-live="polite">
+          <span id="connectionDot" class="dot dot-off"></span>
+          <span id="connectionLabel">未连接</span>
+        </div>
+      </header>
+
+      <section class="connect-panel card" aria-labelledby="connectTitle">
+        <div class="section-heading">
+          <p class="section-index">01</p>
+          <div>
+            <h2 id="connectTitle">连接网关</h2>
+            <p>页面会使用子协议 <code>neurobridge.v1</code> 建立 WebSocket 连接；不发送 Ping/Pong 或 JSON 心跳。</p>
+          </div>
+        </div>
+        <div class="connect-row">
+          <label class="field endpoint-field" for="endpoint">
+            <span>WebSocket 地址</span>
+            <input id="endpoint" type="url" value="ws://127.0.0.1:8080/neurobridge/v1/ws" spellcheck="false" />
+          </label>
+          <button id="connectButton" class="button button-primary" type="button">连接</button>
+          <button id="disconnectButton" class="button button-quiet" type="button" disabled>断开</button>
+        </div>
+        <p class="hint">请替换为现场网关的 <code>ws://IP:端口/neurobridge/v1/ws</code>。仅限专用有线网络使用。</p>
+      </section>
+
+      <div class="workspace">
+        <section class="card commands" aria-labelledby="commandTitle">
+          <div class="section-heading">
+            <p class="section-index">02</p>
+            <div>
+              <h2 id="commandTitle">协议请求</h2>
+              <p>所有操作均按协议生成 <code>requestId</code>，可在日志中对应响应。</p>
+            </div>
+          </div>
+
+          <div class="action-grid">
+            <article class="action-card">
+              <h3>状态与最新值</h3>
+              <p>用于建连后的状态核对，或读取当前算法结果。</p>
+              <div class="button-row">
+                <button id="getStatusButton" class="button" type="button">getStatus</button>
+                <button id="getLatestButton" class="button" type="button">getLatest</button>
+              </div>
+              <fieldset class="stream-options compact" aria-label="getLatest 流选择">
+                <legend>getLatest 流</legend>
+                <label><input type="checkbox" name="latestStream" value="eeg" checked /> EEG</label>
+                <label><input type="checkbox" name="latestStream" value="hr" checked /> HR</label>
+              </fieldset>
+            </article>
+
+            <article class="action-card action-card-accent">
+              <h3>连续订阅</h3>
+              <p>网关确认后，将以最多每 600 ms 一组的节奏发送事件。</p>
+              <fieldset class="stream-options" aria-label="订阅流选择">
+                <legend>订阅流</legend>
+                <label><input type="checkbox" name="subscribeStream" value="eeg" checked /> EEG 算法</label>
+                <label><input type="checkbox" name="subscribeStream" value="hr" checked /> HR 算法</label>
+                <label><input type="checkbox" name="subscribeStream" value="eeg.raw" /> EEG 原始字节</label>
+                <label><input type="checkbox" name="subscribeStream" value="hr.raw" /> HR 原始字节</label>
+                <label><input type="checkbox" name="subscribeStream" value="status" checked /> 状态</label>
+              </fieldset>
+              <label class="checkline"><input id="includeInvalid" type="checkbox" /> 同时接收无效窗口</label>
+              <button id="subscribeButton" class="button button-primary" type="button">subscribe</button>
+            </article>
+
+            <article class="action-card">
+              <h3>取消订阅</h3>
+              <p>订阅只在当前连接内有效。断开后应重新连接并重新订阅。</p>
+              <label class="field" for="subscriptionSelect">
+                <span>subscriptionId</span>
+                <select id="subscriptionSelect" disabled>
+                  <option value="">暂无订阅</option>
+                </select>
+              </label>
+              <button id="unsubscribeButton" class="button button-danger" type="button" disabled>unsubscribe</button>
+            </article>
+          </div>
+
+          <details class="custom-request">
+            <summary>发送自定义请求 JSON</summary>
+            <p>仅用于临时排查。内容必须符合请求根对象：<code>{protocolVersion, messageType, requestId, action, params}</code>。</p>
+            <textarea id="customRequest" spellcheck="false" aria-label="自定义 JSON 请求">{
+  "protocolVersion": "1.0",
+  "messageType": "request",
+  "requestId": "",
+  "action": "getStatus",
+  "params": {}
+}</textarea>
+            <button id="sendCustomButton" class="button" type="button">发送 JSON</button>
+          </details>
+        </section>
+
+        <aside class="card snapshot" aria-labelledby="snapshotTitle">
+          <div class="section-heading">
+            <p class="section-index">03</p>
+            <div>
+              <h2 id="snapshotTitle">最新状态</h2>
+              <p>从网关响应或事件中提取的最后一次状态。</p>
+            </div>
+          </div>
+          <dl class="status-list">
+            <div><dt>数据来源</dt><dd id="modeValue">—</dd></div>
+            <div><dt>头环连接</dt><dd id="deviceConnectionValue">—</dd></div>
+            <div><dt>佩戴状态</dt><dd id="wearValue">—</dd></div>
+            <div><dt>电量</dt><dd id="batteryValue">—</dd></div>
+            <div><dt>受试者</dt><dd id="subjectValue">—</dd></div>
+            <div><dt>数据时间</dt><dd id="timestampValue">—</dd></div>
+          </dl>
+          <div class="latest-summary" id="latestSummary">尚未收到网关数据。</div>
+        </aside>
+      </div>
+
+      <section class="card log-card" aria-labelledby="logTitle">
+        <div class="log-header">
+          <div class="section-heading">
+            <p class="section-index">04</p>
+            <div>
+              <h2 id="logTitle">协议日志</h2>
+              <p>显示连接状态、发送请求和接收帧。原始字节只显示长度，不展开 Base64 内容。</p>
+            </div>
+          </div>
+          <div class="button-row">
+            <button id="copyLogButton" class="button button-quiet" type="button">复制日志</button>
+            <button id="clearLogButton" class="button button-quiet" type="button">清空</button>
+          </div>
+        </div>
+        <div id="log" class="log" aria-live="polite" aria-label="协议日志"></div>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>
