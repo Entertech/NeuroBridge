@@ -8,7 +8,9 @@ const fields = {
   message: document.querySelector('#message'),
   start: document.querySelector('#startButton'),
   stop: document.querySelector('#stopButton'),
-  logs: document.querySelector('#logs'),
+  dataLogs: document.querySelector('#dataLogs'),
+  algorithmLogs: document.querySelector('#algorithmLogs'),
+  systemLogs: document.querySelector('#systemLogs'),
 };
 
 function render(status) {
@@ -43,15 +45,25 @@ async function refresh() {
   try {
     const response = await fetch('/api/logs', { cache: 'no-store' });
     const { entries } = await response.json();
-    const next = entries.map(({ timestampMs, level, message }) => {
+    const format = ({ timestampMs, level, message }) => {
       const time = new Date(timestampMs).toLocaleTimeString('zh-CN', { hour12: false });
       return `${time} ${level.padEnd(7)} ${message}`;
-    }).join('\n') || '等待本地服务日志…';
-    const keepAtBottom = fields.logs.scrollTop + fields.logs.clientHeight >= fields.logs.scrollHeight - 8;
-    if (fields.logs.textContent !== next) fields.logs.textContent = next;
-    if (keepAtBottom) fields.logs.scrollTop = fields.logs.scrollHeight;
+    };
+    const renderLogs = (element, filtered, empty) => {
+      const next = filtered.map(format).join('\n') || empty;
+      const keepAtBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 8;
+      if (element.textContent !== next) element.textContent = next;
+      if (keepAtBottom) element.scrollTop = element.scrollHeight;
+    };
+    const isData = ({ message }) => message.startsWith('Received headband data');
+    const isAlgorithm = ({ message }) => message.startsWith('Algorithm output');
+    renderLogs(fields.dataLogs, entries.filter(isData), '等待头环数据…');
+    renderLogs(fields.algorithmLogs, entries.filter(isAlgorithm), '等待算法 bridge 输出…');
+    renderLogs(fields.systemLogs, entries.filter((entry) => !isData(entry) && !isAlgorithm(entry)), '等待本地服务日志…');
   } catch {
-    fields.logs.textContent = '无法读取本地日志。';
+    fields.dataLogs.textContent = '无法读取本地日志。';
+    fields.algorithmLogs.textContent = '无法读取本地日志。';
+    fields.systemLogs.textContent = '无法读取本地日志。';
   }
 }
 

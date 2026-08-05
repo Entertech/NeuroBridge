@@ -103,6 +103,26 @@ class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_window_observer_receives_algorithm_output(self) -> None:
+        class Algorithm:
+            available = True
+            error = None
+            async def evaluate(self, _: DataWindow) -> tuple[dict, list[str]]:
+                return {"attention": 7.0}, []
+            async def stop(self) -> None:
+                pass
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = Gateway(config(Path(directory)))
+            gateway.algorithm = Algorithm()
+            observed: list[tuple[dict | None, list[str], bool]] = []
+            async def observe(_: DataWindow, algorithm: dict | None, reasons: list[str], valid: bool) -> None:
+                observed.append((algorithm, reasons, valid))
+            gateway.window_observer = observe
+            window = DataWindow(0, 600)
+            window.append(RawPacket("ff31", 100, b"x" * EEG_PACKET_BYTES))
+            await gateway.publish_window(window)
+            self.assertEqual(observed, [({"attention": 7.0}, [], True)])
+
     async def test_subscribe_raw_live_event_has_contract_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             gateway = Gateway(config(Path(directory)))

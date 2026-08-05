@@ -8,7 +8,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from ..algorithm.runner import AlgorithmRunner
 from ..config import GatewayConfig
@@ -65,6 +65,7 @@ class Gateway:
         self.sessions: set[Any] = set()
         self.latest_algorithm: dict | None = None
         self.latest_algorithm_timestamp: int | None = None
+        self.window_observer: Callable[[DataWindow, dict | None, list[str], bool], Awaitable[None]] | None = None
         self._window_flush_task: asyncio.Task | None = None
         self._window_flush_deadline_ms: int | None = None
 
@@ -164,6 +165,11 @@ class Gateway:
             self.store.save_algorithm(timestamp_ms=window.end_ms, valid=valid, invalid_reasons=reasons, algorithm=algorithm_payload)
             if valid:
                 self.latest_algorithm, self.latest_algorithm_timestamp = algorithm_payload, window.end_ms
+        if self.window_observer:
+            try:
+                await self.window_observer(window, algorithm_payload, reasons, valid)
+            except Exception:
+                LOG.exception("Capture window observer failed")
         for session in tuple(self.sessions):
             for subscription in tuple(session.subscriptions.values()):
                 payload = self.filtered_payload(raw, algorithm_payload, subscription.streams)

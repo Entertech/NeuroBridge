@@ -60,6 +60,7 @@ class CaptureController:
         self.connection_error: str | None = None
         self.packet_log_bucket: int | None = None
         self.packet_log_summary: dict[str, dict[str, Any]] = {}
+        self.gateway.window_observer = self.log_algorithm_output
         self.adapter = FlowtimeAdapter(config.ble, self.receive_packet, self.update_status, self.gateway.on_device_ready, self.update_connection_error)
         self.server: Any | None = None
         self.adapter_task: asyncio.Task[None] | None = None
@@ -97,6 +98,22 @@ class CaptureController:
         summary["count"] += 1
         summary["bytes"] = len(value)
         summary["preview"] = value[:8].hex(" ") or "empty"
+
+    async def log_algorithm_output(self, _window: object, algorithm: dict | None, reasons: list[str], valid: bool) -> None:
+        """Expose a POC-only summary of bridge output without exposing raw bytes."""
+        if algorithm is None:
+            suffix = f"; reasons={','.join(reasons)}" if reasons else ""
+            LOG.info("Algorithm output: unavailable (valid=%s%s)", valid, suffix)
+            return
+        safe = {
+            str(key): value
+            for key, value in algorithm.items()
+            if not any(marker in str(key).lower() for marker in ("raw", "base64", "byte"))
+        }
+        rendered = json.dumps(safe, ensure_ascii=False, separators=(",", ":"), default=str)
+        if len(rendered) > 2048:
+            rendered = rendered[:2048] + "…(truncated)"
+        LOG.info("Algorithm output (valid=%s): %s", valid, rendered)
 
     async def start(self) -> dict[str, Any]:
         async with self.lock:

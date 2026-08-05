@@ -38,9 +38,17 @@
         <p>本页仅绑定本机回环地址。B 端页面中订阅 <code>eeg.raw</code> 与 <code>hr.raw</code>；算法输入 bridge 只核验和审计原始窗口，不会生成未经验证的脑波或心率指标。</p>
       </section>
       <p id="message" class="message" role="status"></p>
-      <section class="logs" aria-label="本地运行日志">
-        <div class="logs-title"><h2>运行日志</h2><span>每 600 ms 显示流、包数、长度与前 8 字节预览</span></div>
-        <pre id="logs" aria-live="polite">等待本地服务日志…</pre>
+      <section class="logs" aria-label="蓝牙接收数据日志">
+        <div class="logs-title"><h2>蓝牙接收数据</h2><span>每 600 ms：流、包数、长度与前 8 字节预览</span></div>
+        <pre id="dataLogs" aria-live="polite">等待头环数据…</pre>
+      </section>
+      <section class="logs" aria-label="算法输出日志">
+        <div class="logs-title"><h2>算法输出</h2><span>显示算法 bridge 返回值</span></div>
+        <pre id="algorithmLogs" aria-live="polite">等待算法 bridge 输出…</pre>
+      </section>
+      <section class="logs" aria-label="连接与运行日志">
+        <div class="logs-title"><h2>连接与运行日志</h2><span>扫描、连接、订阅和异常</span></div>
+        <pre id="systemLogs" aria-live="polite">等待本地服务日志…</pre>
       </section>
     </main>
     <script src="/capture/app.js"></script>
