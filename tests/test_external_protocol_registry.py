@@ -20,7 +20,10 @@ class ExternalProtocolRegistryTests(unittest.TestCase):
 
         self.assertEqual(current, numeric)
         self.assertEqual(numeric, prefixed)
-        self.assertEqual(numeric["markdown_path"], "doc/tech/头环数据网关北向网络协议_v0.2.md")
+        self.assertEqual(
+            numeric["markdown_path"],
+            "doc/tech/对外/头环数据网关北向网络协议/头环数据网关北向网络协议_v0.2.md",
+        )
 
     def test_unknown_version_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown external protocol version"):

@@ -32,7 +32,7 @@ title = "头环数据网关北向网络协议"
 [[documents.external_northbound.versions]]
 version = "0.2"
 status = "published"
-markdown_path = "doc/tech/头环数据网关北向网络协议_v0.2.md"
+markdown_path = "doc/tech/对外/头环数据网关北向网络协议/头环数据网关北向网络协议_v0.2.md"
 pdf_artifact_name = "头环数据网关北向网络协议_v0.2.pdf"
 published_date = "2026-08-05"
 markdown_sha256 = "1c9ff5c543150e3cd7504328c2c4da5b76afc0954f04a7bd4fd1f63d79f21260"
@@ -50,7 +50,7 @@ locked_at = "2026-08-05"
 [change_policy]
 external_documents_require_explicit_user_request = true
 default_external_document_action = "record_only"
-change_log_path = "doc/tech/版本变更记录.md"
+change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
 id = "2026-08-05-public-northbound-v0.2"

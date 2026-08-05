@@ -12,7 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "neurobridge" / "version_registry.toml"
 CLIENT_VERSION_PATH = ROOT / "tools" / "b-client-test" / "version.js"
 PYPROJECT_PATH = ROOT / "pyproject.toml"
-CHANGE_LOG_PATH = ROOT / "doc" / "tech" / "版本变更记录.md"
 
 
 def render_change_log(registry: dict) -> str:
@@ -87,7 +86,9 @@ def main() -> None:
     if replacements != 1:
         raise SystemExit("Unable to update project version in pyproject.toml")
     PYPROJECT_PATH.write_text(updated_pyproject, encoding="utf-8")
-    CHANGE_LOG_PATH.write_text(render_change_log(registry), encoding="utf-8")
+    change_log_path = ROOT / registry["change_policy"]["change_log_path"]
+    change_log_path.parent.mkdir(parents=True, exist_ok=True)
+    change_log_path.write_text(render_change_log(registry), encoding="utf-8")
 
 
 if __name__ == "__main__":
