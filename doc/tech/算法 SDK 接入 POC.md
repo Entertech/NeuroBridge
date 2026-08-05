@@ -6,13 +6,13 @@
 
 ## 当前实现结论
 
-NeuroBridge 已迁入 AffectiveCloud C++ SDK 的进程边界：网关在 `algorithm.enabled=true` 时启动配置的行 JSON bridge 进程，每个完整 BLE 窗口将原始 `FF31` 和 `FF51` 字节以 Base64 交给 bridge，bridge 返回已映射的 `algorithm` 对象。算法结果与原始窗口分别写入 `algorithm/`、`raw/` JSONL 文件，录播只读取两个文件，不重新调用算法。
+NeuroBridge 已实现 AffectiveCloud C++ SDK 的进程边界：网关在 `algorithm.enabled=true` 时启动配置的行 JSON bridge 进程，每个完整 BLE 窗口将原始 `FF31` 和 `FF51` 字节以 Base64 交给 bridge。bridge 以双通道 `appendEEG` 和 `appendHR` 调用 SDK，显式启用 EEG、HR、放松、注意力、愉悦、睡眠、心流、压力、和谐度与激活度，并返回已映射的嵌套 `algorithm` 对象。算法结果与原始窗口分别写入 `algorithm/`、`raw/` JSONL 文件，录播只读取两个文件，不重新调用算法。
 
-**这不是算法现场验收通过的声明。** 当前公开 SDK 的 `Affective.h` 注释默认双通道 EEG 每 0.6 秒为 50 个包、HR 为 3 个包；当前接入的 Flowtime 文档 profile 是 `FF31=20` 字节、`FF51=1` 字节，包数、采样率及算法输入分组尚未验证。因此示例配置保持 `algorithm.enabled=false`，不会输出模拟的注意力、压力等值。
+**这不是算法 POC 或现场验收通过的声明。** 当前公开 SDK 的 `Affective.h` 注释默认双通道 EEG 每 0.6 秒为 50 个包、HR 为 3 个包；当前接入的 Flowtime 文档 profile 是 `FF31=20` 字节、`FF51=1` 字节。macOS POC 已完成 SDK 源码构建与合成输入烟雾测试，未使用任何人体数据；真实数据的包数、采样率、字节序、输入分组及输出时序尚未完成验证。因此生产模板仍保持 `algorithm.enabled=false`，不得以 SDK 的零值或单个窗口作为有效算法结论。
 
 ## 固定来源
 
-SDK 的仓库、提交和版本锁定在仓库根目录的 [sdk.lock](../../sdk.lock)。使用 [prepare-algorithm-sdk.sh](../../tools/prepare-algorithm-sdk.sh) 下载到受控构建目录；不要把构建产物、录制人体数据或 SDK 缓存提交到本仓库。
+SDK 的仓库、提交和版本锁定在仓库根目录的 [sdk.lock](../../sdk.lock)。macOS POC 使用 [build-algorithm-bridge.command](../../mac/build-algorithm-bridge.command) 将源码和 NumCpp 2.11.0 构建在 `/tmp/neurobridge-affective-runtime`；Ubuntu 可使用 [prepare-algorithm-sdk.sh](../../tools/prepare-algorithm-sdk.sh) 下载到受控构建目录后按同一锁定版本构建。不要把构建产物、录制人体数据或 SDK 缓存提交到本仓库。
 
 SDK 构建前在 Ubuntu x86_64 记录以下信息：Ubuntu 版本、`cmake --version`、`c++ --version`、Eigen3 版本、NumCpp 版本、SDK commit 和 bridge commit。C++ SDK 要求 C++17、Eigen3、NumCpp；其源码的 CMake 配置可作为构建入口。
 
@@ -31,10 +31,18 @@ SDK 构建前在 Ubuntu x86_64 记录以下信息：Ubuntu 版本、`cmake --ver
 成功响应必须是：
 
 ```json
-{ "algorithm": { "eeg": {}, "hr": { "value": 72, "hrv": 0.0 } } }
+{
+  "algorithm": {
+    "eeg": { "wave": { "left": [], "right": [], "single": null }, "bandPower": { "alpha": 0.0 }, "quality": 0.0 },
+    "sleep": { "updated": false, "degree": 0.0, "state": 0, "stage": 0, "spindle": 0.0 },
+    "attention": 0.0,
+    "hr": { "value": 72, "hrv": 0.0 },
+    "pressure": 0.0
+  }
+}
 ```
 
-bridge 必须仅在真实录制字节已验证的分组上调用 `appendEEG`/`appendHR`；不得补零、截断、重排字节或跨相邻窗口拼接。窗口不足、算法异常或返回不符合合同，bridge 或网关必须令该窗口 `valid=false` 并给出 `invalidReasons`。数值范围、单位和有效阈值须记录在验收报告后才向 B 端承诺。
+bridge 保留每个窗口内的原始字节顺序，不补零、截断、重排或跨相邻窗口拼接；`FF31` 不是 20 字节整数倍时拒绝该窗口。窗口不足、算法异常或返回不符合合同时，bridge 或网关必须令该窗口 `valid=false` 并给出 `invalidReasons`。数值范围、单位和有效阈值须记录在验收报告后才向 B 端承诺。
 
 ## POC 门槛
 

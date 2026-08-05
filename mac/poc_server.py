@@ -110,6 +110,11 @@ class CaptureController:
             for key, value in algorithm.items()
             if not any(marker in str(key).lower() for marker in ("raw", "base64", "byte"))
         }
+        # The SDK includes processed waveform arrays under eeg.wave.  The capture
+        # log is intended for operational observability, not retaining a second
+        # copy of physiological time-series data in a browser-visible surface.
+        if isinstance(safe.get("eeg"), dict):
+            safe["eeg"] = {key: value for key, value in safe["eeg"].items() if key != "wave"}
         rendered = json.dumps(safe, ensure_ascii=False, separators=(",", ":"), default=str)
         if len(rendered) > 2048:
             rendered = rendered[:2048] + "…(truncated)"

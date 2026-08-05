@@ -25,7 +25,7 @@ replay_recording_id = ""
 replay_speed = 1.0
 
 [algorithm]
-# 此 bridge 会接收每个完整窗口并记录仅含长度/时间戳的审计信息；不会生成算法指标。
-# 完成真实字节分组验证并构建官方 SDK 后，才能改为实际算法 bridge。
+# start-poc.command 会构建锁定的 C++ SDK，并启动实际算法 bridge。
+# bridge 从每个 600 ms 原始窗口计算脑电、心率和已启用的情感指标。
 enabled = true
-command = ["/usr/bin/env", "python3", "mac/algorithm_ingest_bridge.py", "--audit-file", "/tmp/neurobridge-headband-poc/algorithm-ingest-audit.jsonl"]
+command = ["/tmp/neurobridge-affective-runtime/affective_bridge"]

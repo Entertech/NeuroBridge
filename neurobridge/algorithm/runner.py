@@ -61,6 +61,9 @@ class AlgorithmRunner:
             await self.process.stdin.drain()
             response = await asyncio.wait_for(self.process.stdout.readline(), timeout=2)
             result = json.loads(response)
+            bridge_error = result.get("bridgeError") or result.get("pocError")
+            if bridge_error:
+                raise ValueError(f"algorithm bridge: {bridge_error}")
             if not isinstance(result.get("algorithm"), dict):
                 return None, ["ALGORITHM_OUTPUT_INVALID"]
             return result["algorithm"], []

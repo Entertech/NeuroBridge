@@ -79,6 +79,28 @@ class AlgorithmRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reasons, ["ALGORITHM_ERROR"])
         self.assertIn("bridge exited", runner.error or "")
 
+    async def test_bridge_reported_error_marks_window_invalid(self) -> None:
+        class Stdin:
+            def write(self, _: bytes) -> None:
+                pass
+            async def drain(self) -> None:
+                pass
+        class Stdout:
+            async def readline(self) -> bytes:
+                return b'{"algorithm":{},"bridgeError":"invalid EEG group"}\n'
+        class Process:
+            returncode = None
+            stdin = Stdin()
+            stdout = Stdout()
+        runner = AlgorithmRunner(AlgorithmConfig(True, ("bridge",)))
+        runner.process = Process()  # type: ignore[assignment]
+        window = DataWindow(0, 600)
+        window.append(RawPacket("ff31", 100, b"x" * EEG_PACKET_BYTES))
+        payload, reasons = await runner.evaluate(window)
+        self.assertIsNone(payload)
+        self.assertEqual(reasons, ["ALGORITHM_ERROR"])
+        self.assertIn("invalid EEG group", runner.error or "")
+
 
 class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_algorithm_is_initialized_for_each_device_ready_event(self) -> None:
@@ -142,6 +164,27 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event["data"]["subscriptionId"], subscription_id)
             self.assertEqual(event["data"]["payload"]["eegRaw"]["packetBytes"], EEG_PACKET_BYTES)
             await gateway.close_session(session)
+
+    def test_algorithm_streams_preserve_the_nested_contract_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = Gateway(config(Path(directory)))
+            algorithm = {
+                "eeg": {"bandPower": {"alpha": 1.2}},
+                "sleep": {"updated": False, "stage": 0},
+                "attention": 7.0,
+                "hr": {"value": 72, "hrv": 0.4},
+                "pressure": 2.0,
+                "coherence": 0.5,
+                "arousal": 1.0,
+            }
+            self.assertEqual(
+                gateway.filtered_payload({}, algorithm, frozenset({"eeg"})),
+                {"algorithm": {"eeg": {"bandPower": {"alpha": 1.2}}, "sleep": {"updated": False, "stage": 0}, "attention": 7.0}},
+            )
+            self.assertEqual(
+                gateway.filtered_payload({}, algorithm, frozenset({"hr"})),
+                {"algorithm": {"hr": {"value": 72, "hrv": 0.4}, "pressure": 2.0, "coherence": 0.5, "arousal": 1.0}},
+            )
 
     async def test_invalid_request_is_wrapped(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

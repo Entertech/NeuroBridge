@@ -26,7 +26,7 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。因此每个采集启动后的原始 EEG/HR 窗口都会自动进入算法 bridge。算法 SDK 通过独立的行 JSON bridge 进程接入，避免 Python 进程直接依赖 C++ ABI。SDK 的输入分组与当前设备录制字节尚未完成核验，`algorithm.enabled` 默认关闭；在完成真实数据比对前，网关只发布已验证的原始流，不会生成伪算法指标。
+Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。因此每个采集启动后的原始 EEG/HR 窗口都会自动进入算法 bridge。算法 SDK 通过独立的行 JSON C++ bridge 接入，避免 Python 进程直接依赖 C++ ABI；bridge 调用 AffectiveCloud SDK 的双通道 EEG 和心率入口，输出与现有算法负载一致的嵌套字段。macOS 已完成源码构建及合成输入烟雾测试；SDK 输入分组、真实 Flowtime 数据输出和 Ubuntu x86_64 构建尚未验证，生产配置的 `algorithm.enabled` 必须继续保持关闭，直到完成真实数据比对。
 
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
