@@ -13,6 +13,20 @@ log_dir="/tmp/neurobridge-headband-poc"
 log_path="$log_dir/poc-server.log"
 stopping=0
 
+if curl --fail --silent "$ui_url/api/status" >/dev/null 2>&1; then
+  echo "检测到已有采集服务正在运行；为避免中断当前采集，本次不会启动第二个实例。"
+  echo "采集控制台：$ui_url"
+  if [[ "${NEUROBRIDGE_NO_BROWSER:-0}" != "1" ]]; then
+    /usr/bin/open "$ui_url" || echo "浏览器未能自动打开，请手动访问：$ui_url"
+  fi
+  exit 0
+fi
+
+if /usr/sbin/lsof -nP -iTCP:8090 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "端口 8090 已被其他程序占用，无法启动采集控制台。请关闭占用该端口的程序后重试。"
+  exit 1
+fi
+
 if ! command -v uv >/dev/null 2>&1; then
   echo "未找到 uv。请先在终端执行：brew install uv"
   exit 1
