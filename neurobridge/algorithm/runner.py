@@ -4,8 +4,8 @@ import asyncio
 import base64
 import json
 import logging
-from .config import AlgorithmConfig
-from .packets import DataWindow
+from ..config import AlgorithmConfig
+from ..ble.packets import DataWindow
 
 LOG = logging.getLogger(__name__)
 

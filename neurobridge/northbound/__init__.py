@@ -1,0 +1,1 @@
+"""Northbound WebSocket transport adapter."""

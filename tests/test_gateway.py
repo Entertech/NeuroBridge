@@ -7,9 +7,9 @@ import tempfile
 import unittest
 
 from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, RecordingConfig, ServerConfig
-from neurobridge.gateway import ClientSession, Gateway
-from neurobridge.packets import DataWindow, EEG_PACKET_BYTES, HR_RAW_PACKET_BYTES, RawPacket, WindowAssembler
-from neurobridge.recording import RecordingStore
+from neurobridge.business.gateway import ClientSession, Gateway
+from neurobridge.ble.packets import DataWindow, EEG_PACKET_BYTES, HR_RAW_PACKET_BYTES, RawPacket, WindowAssembler
+from neurobridge.business.recording import RecordingStore
 
 
 def config(root: Path, replay_id: str | None = None) -> GatewayConfig:

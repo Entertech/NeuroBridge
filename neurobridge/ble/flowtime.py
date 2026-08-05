@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Awaitable, Callable
-from .config import BleConfig
+from ..config import BleConfig
 
 LOG = logging.getLogger(__name__)
 BASE = "-1212-abcd-1523-785feabcd123"

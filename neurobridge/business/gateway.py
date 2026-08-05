@@ -9,9 +9,9 @@ import time
 import uuid
 from typing import Any
 
-from .algorithm import AlgorithmRunner
-from .config import GatewayConfig
-from .packets import DataWindow, WindowAssembler
+from ..algorithm.runner import AlgorithmRunner
+from ..config import GatewayConfig
+from ..ble.packets import DataWindow, WindowAssembler
 from .recording import RecordingStore
 
 LOG = logging.getLogger(__name__)

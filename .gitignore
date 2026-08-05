@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+build/
+*.egg-info/
 recordings/
 *.log
 config/gateway.toml

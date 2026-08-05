@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from .gateway import ClientSession, Gateway
+from ..business.gateway import ClientSession, Gateway
 
 LOG = logging.getLogger(__name__)
 

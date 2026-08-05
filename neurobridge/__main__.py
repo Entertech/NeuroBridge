@@ -5,9 +5,9 @@ import asyncio
 import logging
 
 from .config import load
-from .flowtime import FlowtimeAdapter
-from .gateway import Gateway
-from .server import serve
+from .ble.flowtime import FlowtimeAdapter
+from .business.gateway import Gateway
+from .northbound.websocket import serve
 
 
 async def run(config_path: str) -> None:
