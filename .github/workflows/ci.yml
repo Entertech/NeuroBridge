@@ -5,6 +5,12 @@ on:
     branches: [master]
   push:
     branches: [master]
+  workflow_dispatch:
+    inputs:
+      protocol_version:
+        description: "要生成 PDF 的对外协议版本，例如 0.2 或 v0.2；留空则生成当前版本"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -28,9 +34,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pandoc poppler-utils
       - name: Build external protocol PDF artifact and page previews
+        env:
+          PROTOCOL_VERSION: ${{ inputs.protocol_version }}
         run: |
           mkdir -p artifacts/protocol-preview
-          python tools/build-external-protocol-artifact.py --output-dir artifacts
+          version_args=()
+          if [[ -n "$PROTOCOL_VERSION" ]]; then
+            version_args=(--version "$PROTOCOL_VERSION")
+          fi
+          python tools/build-external-protocol-artifact.py --output-dir artifacts "${version_args[@]}"
           pdf_path=$(find artifacts -maxdepth 1 -type f -name '*.pdf' -print -quit)
           test -n "$pdf_path"
           pdfinfo "$pdf_path"

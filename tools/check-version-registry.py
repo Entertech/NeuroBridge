@@ -10,9 +10,7 @@ import subprocess
 import tomllib
 from urllib.parse import quote
 
-
-ROOT = Path(__file__).resolve().parents[1]
-REGISTRY_PATH = ROOT / "neurobridge" / "version_registry.toml"
+from external_protocol_registry import ROOT, external_protocol_catalog, load_registry, select_external_protocol
 
 
 def fail(message: str) -> None:
@@ -24,9 +22,10 @@ def digest(path: Path) -> str:
 
 
 def main() -> None:
-    registry = tomllib.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    registry = load_registry()
     policy = registry["change_policy"]
-    external = registry["documents"]["external_northbound"]
+    external_catalog = external_protocol_catalog(registry)
+    external = select_external_protocol(registry)
     internal = registry["documents"]["internal_northbound"]
     integration = registry["documents"]["integration_plan"]
     wire_version = registry["northbound_wire_protocol"]["version"]
@@ -36,22 +35,43 @@ def main() -> None:
         fail("external document updates must require an explicit user request")
     if policy["default_external_document_action"] != "record_only":
         fail("the default external document action must be record_only")
-    if external["audience"] != "b_side" or external["status"] != "published":
-        fail("external_northbound must be the published B-side document")
-    publication_records = [record for record in registry["change_records"] if record["id"] == external["publication_record"]]
-    if len(publication_records) != 1:
-        fail("external_northbound must reference exactly one persisted publication record")
-    publication_record = publication_records[0]
-    if publication_record["external_document_action"] != "explicit_user_authorized":
-        fail("published external documents require explicit_user_authorized record")
-    if publication_record["external_document_version"] != external["version"]:
-        fail("publication record version does not match the current external document")
-    if publication_record["date"] != external["published_date"]:
-        fail("publication record date does not match the current external document")
-    if publication_record["change_state"] != "locked":
-        fail("published external documents must have a locked publication record")
+    if external_catalog["audience"] != "b_side":
+        fail("external_northbound must be a B-side document catalog")
+    known_versions = [protocol["version"] for protocol in external_catalog["versions"]]
+    if len(known_versions) != len(set(known_versions)):
+        fail("every external protocol version must be stored exactly once")
+    if external_catalog["current_version"] not in known_versions:
+        fail("current external protocol version must exist in the catalog")
+    artifact_names = [protocol["pdf_artifact_name"] for protocol in external_catalog["versions"]]
+    if len(artifact_names) != len(set(artifact_names)):
+        fail("every external protocol version must have a unique PDF artifact name")
+    for versioned_protocol in external_catalog["versions"]:
+        if versioned_protocol["status"] != "published":
+            fail("stored external protocol versions must be published and locked")
+        publication_records = [
+            record for record in registry["change_records"] if record["id"] == versioned_protocol["publication_record"]
+        ]
+        if len(publication_records) != 1:
+            fail("each external protocol version must reference exactly one persisted publication record")
+        publication_record = publication_records[0]
+        if publication_record["external_document_action"] != "explicit_user_authorized":
+            fail("published external documents require explicit_user_authorized record")
+        if publication_record["external_document_version"] != versioned_protocol["version"]:
+            fail("publication record version does not match the stored external document")
+        if publication_record["date"] != versioned_protocol["published_date"]:
+            fail("publication record date does not match the stored external document")
+        if publication_record["change_state"] != "locked":
+            fail("published external documents must have a locked publication record")
+        markdown = ROOT / versioned_protocol["markdown_path"]
+        if not markdown.is_file():
+            fail("every published external Markdown must exist")
+        if digest(markdown) != versioned_protocol["markdown_sha256"]:
+            fail("external document changed without a persisted version-registry update")
+        if Path(versioned_protocol["pdf_artifact_name"]).name != versioned_protocol["pdf_artifact_name"]:
+            fail("external PDFs must be uploaded as flat CI artifact filenames")
 
     locks = {lock["id"]: lock for lock in registry["release_locks"]}
+    publication_record = next(record for record in registry["change_records"] if record["id"] == external["publication_record"])
     publication_lock = locks.get(publication_record["release_lock"])
     if publication_lock is None or publication_lock["status"] != "locked":
         fail("published external documents must reference a locked release interval")
@@ -71,21 +91,15 @@ def main() -> None:
         else:
             fail("change records must be locked or unlocked")
 
-    markdown = ROOT / external["markdown_path"]
-    if not markdown.is_file():
-        fail("published external Markdown must exist")
-    if digest(markdown) != external["markdown_sha256"]:
-        fail("external document changed without a persisted version-registry update")
-    if Path(external["pdf_artifact_name"]).name != external["pdf_artifact_name"]:
-        fail("external PDF must be uploaded as a flat CI artifact filename")
     tracked_pdfs = subprocess.run(
         ["git", "ls-files", "--", "doc/tech/*.pdf"], cwd=ROOT, check=True, capture_output=True, text=True
     ).stdout.strip()
     if tracked_pdfs:
         fail("protocol PDFs must be CI artifacts, not repository files")
 
+    markdown = ROOT / external["markdown_path"]
     markdown_text = markdown.read_text(encoding="utf-8")
-    expected_title = f'# {external["title"]} v{external["version"]}'
+    expected_title = f'# {external_catalog["title"]} v{external["version"]}'
     if markdown_text.splitlines()[0] != expected_title:
         fail("external Markdown title does not match the version registry")
     if f'版本：v{external["version"]}' not in markdown_text:
@@ -109,7 +123,7 @@ def main() -> None:
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     markdown_link_paths = (external["markdown_path"], quote(external["markdown_path"]))
-    if f'{external["title"]} v{external["version"]}' not in readme or not any(path in readme for path in markdown_link_paths):
+    if f'{external_catalog["title"]} v{external["version"]}' not in readme or not any(path in readme for path in markdown_link_paths):
         fail("README must link B-side users to the registry-selected external protocol")
     if f'版本：v{internal["version"]}' not in (ROOT / internal["markdown_path"]).read_text(encoding="utf-8"):
         fail("internal northbound document version does not match the registry")

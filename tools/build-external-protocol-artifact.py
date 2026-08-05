@@ -6,18 +6,16 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import subprocess
-import tomllib
 
-
-ROOT = Path(__file__).resolve().parents[1]
+from external_protocol_registry import ROOT, load_registry, select_external_protocol
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--version", help="External protocol document version, for example 0.2 or v0.2")
     args = parser.parse_args()
-    registry = tomllib.loads((ROOT / "neurobridge" / "version_registry.toml").read_text(encoding="utf-8"))
-    external = registry["documents"]["external_northbound"]
+    external = select_external_protocol(load_registry(), args.version)
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     output_pdf = output_dir / external["pdf_artifact_name"]

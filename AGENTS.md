@@ -42,6 +42,7 @@
 ## 文档与提交
 
 - **版本台账与协议文档发布门禁：**[版本台账](neurobridge/version_registry.toml) 是应用版本、报文版本、内部基线版本、当前 B 端文档版本、文件路径、发布日期和外发文件摘要的唯一来源；不得在其他文件中直接修改版本号。每次改动前先读取台账，并用 `rg --files doc/tech` 查找同主题的所有协议版本，逐一确认文档首页的受众、状态、版本关系和旧版本的迁移说明。不得仅因旧版被列为实现依据或被需求文档引用，就将它当作当前对外协议。
+- **对外版本独立保存与 PDF 生成：**每个发布过的 B 端协议版本必须保留独立 Markdown 文件，并在台账 `documents.external_northbound.versions` 中单独登记；新版本只能新增条目和文件，禁止覆盖或改名历史版本。Codex 生成指定版本 PDF 时必须使用 `pdf` skill，执行 `python3 tools/build-external-protocol-artifact.py --version <版本号> --output-dir <目录>`，再按 skill 渲染检查全部页面。GitHub Actions 可通过 `workflow_dispatch` 的 `protocol_version` 输入生成指定版本的 PDF Artifact；两种方式共用同一构建脚本。
 - **默认只记录，不改对外文档：**除非用户在当前请求中明确要求“更新对外文档”或等效授权，否则不得修改台账指定的 B 端 Markdown，也不得更新其版本、发布日期或摘要；只在台账 `change_records` 与 `doc/tech/版本变更记录.md` 记录变更内容、影响和未发布原因。PDF 发布会锁定台账中对应的版本区间；被锁定区间的 Markdown、PDF Artifact、摘要和语义不得回写，之后的实现或协议变更必须以该锁定版本为锚点创建 `unlocked` 记录，不能伪装成已发布版本的一部分。对外版本更新必须同时落盘：下一版本的台账版本/日期/摘要、`explicit_user_authorized` 发布记录、锁定区间和对应 Markdown；CI 生成 PDF、渲染预览并上传 Artifact，PDF 不提交仓库。随后运行 `tools/check-external-protocol.sh`。历史版本和内部实现基线默认不改。若版本关系、签字状态、受众或授权无法从仓库确定，停止对协议文件的写入并请求用户确认。
 - **对外北向文档内容边界：**面向 B 端的协议标题使用“头环数据网关”，只描述 B 端可观察到的网络地址规则、WebSocket 契约、请求/响应、事件、字段、错误与验收；不得暴露或链接蓝牙/BLE、UUID、FFxx 特征值、设备扫描与连接策略、SDK、算法实现、原始帧格式、录制文件组织等网关内部细节。此类内容只能留在实现基线或内部技术文档中。提交前必须以关键字检索并人工复核对外 Markdown 和 PDF 的标题、目录、表格、示例与正文。
 - 在实现前先补全或确认北向契约；新字段应说明单位、范围、刷新频率、延迟和有效性含义。

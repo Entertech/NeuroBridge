@@ -18,10 +18,13 @@ audience = "internal"
 markdown_path = "doc/tech/头环蓝牙网关北向网络协议_v0.1.md"
 
 [documents.external_northbound]
-version = "0.2"
+current_version = "0.2"
 audience = "b_side"
-status = "published"
 title = "头环数据网关北向网络协议"
+
+[[documents.external_northbound.versions]]
+version = "0.2"
+status = "published"
 markdown_path = "doc/tech/头环数据网关北向网络协议_v0.2.md"
 pdf_artifact_name = "头环数据网关北向网络协议_v0.2.pdf"
 published_date = "2026-08-05"
