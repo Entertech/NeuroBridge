@@ -55,15 +55,16 @@ class AlgorithmRunner:
             return None, []
         if not self.available or not self.process or not self.process.stdin or not self.process.stdout:
             return None, ["ALGORITHM_NOT_READY"]
-        request = {"timestampMs": window.end_ms, "eegRawBase64": base64.b64encode(b"".join(x.value for x in window.eeg)).decode(), "hrRawBase64": base64.b64encode(b"".join(x.value for x in window.hr_raw)).decode()}
-        self.process.stdin.write((json.dumps(request) + "\n").encode())
-        await self.process.stdin.drain()
         try:
+            request = {"timestampMs": window.end_ms, "eegRawBase64": base64.b64encode(b"".join(x.value for x in window.eeg)).decode(), "hrRawBase64": base64.b64encode(b"".join(x.value for x in window.hr_raw)).decode()}
+            self.process.stdin.write((json.dumps(request) + "\n").encode())
+            await self.process.stdin.drain()
             response = await asyncio.wait_for(self.process.stdout.readline(), timeout=2)
             result = json.loads(response)
             if not isinstance(result.get("algorithm"), dict):
                 return None, ["ALGORITHM_OUTPUT_INVALID"]
             return result["algorithm"], []
-        except (asyncio.TimeoutError, json.JSONDecodeError) as exc:
+        except (asyncio.TimeoutError, json.JSONDecodeError, OSError, UnicodeError, ValueError) as exc:
             self.error = str(exc)
+            LOG.warning("Algorithm bridge evaluation failed: %s", exc)
             return None, ["ALGORITHM_ERROR"]

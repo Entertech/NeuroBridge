@@ -7,8 +7,9 @@ import tempfile
 import unittest
 
 from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, RecordingConfig, ServerConfig
-from neurobridge.ble.flowtime import FlowtimeAdapter
-from neurobridge.business.gateway import ClientSession, Gateway
+from neurobridge.algorithm.runner import AlgorithmRunner
+from neurobridge.ble.flowtime import FlowtimeAdapter, wear_state_from_packet
+from neurobridge.business.gateway import ClientSession, Gateway, REPLAY_NOT_AVAILABLE_REASON
 from neurobridge.ble.packets import DataWindow, EEG_PACKET_BYTES, HR_RAW_PACKET_BYTES, RawPacket, WindowAssembler
 from neurobridge.business.recording import RecordingStore
 
@@ -52,6 +53,31 @@ class FlowtimeSelectionTests(unittest.TestCase):
             Device("Flowtime Headband", ["0000ff10-1212-abcd-1523-785feabcd123"], -42),
         ])
         self.assertEqual(selected.rssi, -42)
+
+    def test_ff32_remains_unknown_until_its_values_are_poc_verified(self) -> None:
+        self.assertEqual(wear_state_from_packet(b"\x00\x00"), "unknown")
+        self.assertEqual(wear_state_from_packet(b"\x01\x02"), "unknown")
+
+
+class AlgorithmRunnerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_broken_algorithm_bridge_is_reported_without_raising(self) -> None:
+        class BrokenStdin:
+            def write(self, _: bytes) -> None:
+                pass
+            async def drain(self) -> None:
+                raise BrokenPipeError("bridge exited")
+        class Process:
+            returncode = None
+            stdin = BrokenStdin()
+            stdout = object()
+        runner = AlgorithmRunner(AlgorithmConfig(True, ("bridge",)))
+        runner.process = Process()  # type: ignore[assignment]
+        window = DataWindow(0, 600)
+        window.append(RawPacket("ff31", 100, b"x" * EEG_PACKET_BYTES))
+        payload, reasons = await runner.evaluate(window)
+        self.assertIsNone(payload)
+        self.assertEqual(reasons, ["ALGORITHM_ERROR"])
+        self.assertIn("bridge exited", runner.error or "")
 
 
 class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
@@ -107,6 +133,27 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sent[0]["code"], 400)
             self.assertEqual(sent[0]["data"]["reason"], "INVALID_REQUEST")
 
+    async def test_algorithm_failure_does_not_block_raw_recording(self) -> None:
+        class FailedAlgorithm:
+            available = False
+            error = "bridge exited"
+            async def evaluate(self, _: DataWindow) -> tuple[None, list[str]]:
+                return None, ["ALGORITHM_ERROR"]
+            async def stop(self) -> None:
+                pass
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway = Gateway(config(root))
+            gateway.algorithm = FailedAlgorithm()
+            await gateway.update_status("connectionState", "connected")
+            window = DataWindow(0, 600)
+            window.append(RawPacket("ff31", 100, b"x" * EEG_PACKET_BYTES))
+            await gateway.publish_window(window)
+            recording_id = gateway.store.recording_id
+            self.assertIsNotNone(recording_id)
+            self.assertTrue((root / "raw" / f"{recording_id}.jsonl").exists())
+            self.assertEqual(gateway.status["algorithmState"], "error")
+
     async def test_final_window_flushes_without_a_following_packet(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             gateway = Gateway(config(Path(directory)))
@@ -141,17 +188,19 @@ class RecordingTests(unittest.TestCase):
 
 
 class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
-    async def test_get_latest_is_invalid_before_this_session_has_replay_progress(self) -> None:
+    async def test_get_latest_uses_latest_valid_replay_result_without_subscription(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             replay_id = "rec-replay"
             gateway = Gateway(config(root, replay_id=replay_id))
             gateway.store.recording_id = replay_id
             gateway.store.save_algorithm(timestamp_ms=10_000, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            gateway.store.save_algorithm(timestamp_ms=20_000, valid=False, invalid_reasons=["ALGORITHM_ERROR"], algorithm={"attention": 2})
             gateway.store.stop()
             latest = gateway.get_latest(ClientSession(), {"streams": ["eeg"]})
-            self.assertFalse(latest["valid"])
-            self.assertEqual(latest["payload"], {})
+            self.assertTrue(latest["valid"])
+            self.assertEqual(latest["timestampMs"], 10_000)
+            self.assertEqual(latest["payload"]["algorithm"]["attention"], 1)
 
     async def test_get_latest_follows_replay_cursor_not_recording_end(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -177,3 +226,15 @@ class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(reached_four.wait(), timeout=1)
             self.assertEqual(observed, [4])
             await gateway.close_session(session)
+
+
+class ErrorContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_replay_unavailable_uses_the_locked_error_identifier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = Gateway(config(Path(directory)))
+            sent: list[dict] = []
+            async def send(item: dict) -> None:
+                sent.append(item)
+            await gateway.handle(ClientSession(), '{"protocolVersion":"1.0","messageType":"request","requestId":"latest-1","action":"getLatest","params":{"streams":["eeg"]}}', send)
+            self.assertEqual(sent[0]["code"], 503)
+            self.assertEqual(sent[0]["data"]["reason"], REPLAY_NOT_AVAILABLE_REASON)

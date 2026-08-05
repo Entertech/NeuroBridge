@@ -19,6 +19,10 @@ from .recording import RecordingStore
 LOG = logging.getLogger(__name__)
 PROTOCOL_VERSION = NORTHBOUND_PROTOCOL_VERSION
 STREAMS = frozenset({"eeg", "hr", "eeg.raw", "hr.raw", "status"})
+# These identifiers are part of the locked v0.2 B-side contract.  Keep them
+# stable until a later, explicitly published protocol version replaces them.
+REPLAY_NOT_AVAILABLE_REASON = "REPLAY_NOT_AVAILA设备"
+STREAM_NOT_AVAILABLE_REASON = "STREAM_NOT_AVAILA设备"
 
 
 def now_ms() -> int:
@@ -148,6 +152,8 @@ class Gateway:
         raw = window.raw_payload()
         reasons = list(window.reasons)
         algorithm_payload, algorithm_reasons = await self.algorithm.evaluate(window)
+        if self.algorithm.error and self.status["algorithmState"] != "error":
+            await self.update_status("algorithmState", "error")
         # A disabled/unready algorithm does not invalidate correctly received raw data.
         if self.algorithm.available:
             reasons.extend(algorithm_reasons)
@@ -155,8 +161,9 @@ class Gateway:
         if raw:
             self.store.save_raw(timestamp_ms=window.end_ms, valid=valid, invalid_reasons=reasons, payload=raw)
         if algorithm_payload:
-            self.latest_algorithm, self.latest_algorithm_timestamp = algorithm_payload, window.end_ms
             self.store.save_algorithm(timestamp_ms=window.end_ms, valid=valid, invalid_reasons=reasons, algorithm=algorithm_payload)
+            if valid:
+                self.latest_algorithm, self.latest_algorithm_timestamp = algorithm_payload, window.end_ms
         for session in tuple(self.sessions):
             for subscription in tuple(session.subscriptions.values()):
                 payload = self.filtered_payload(raw, algorithm_payload, subscription.streams)
@@ -262,16 +269,13 @@ class Gateway:
         streams = params.get("streams", ["eeg", "hr"])
         self.validate_streams(streams, allowed={"eeg", "hr"})
         if not self.live and not self.replay_available:
-            raise ProtocolError(503, "REPLAY_NOT_AVAILABLE", "No replay data is available.", True)
+            raise ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "No replay data is available.", True)
         unavailable = set(streams) - self.available_streams()
         if unavailable:
-            raise ProtocolError(409, "STREAM_NOT_AVAILABLE", "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
+            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
         algorithm, timestamp = self.latest_algorithm, self.latest_algorithm_timestamp
         if not self.live and self.replay_available:
-            # Do not look ahead to the final recording result. `getLatest` follows
-            # this WebSocket connection's replay cursor, updated immediately before
-            # each replay event is delivered to the connection.
-            algorithm, timestamp = session.replay_algorithm, session.replay_algorithm_timestamp
+            algorithm, timestamp = self.latest_replay_algorithm(session)
         if not algorithm or timestamp is None:
             return {"mode": self.mode(), "timestampMs": now_ms(), "valid": False, "payload": {}}
         return {"mode": self.mode(), "timestampMs": timestamp, "valid": True, "payload": self.filtered_payload({}, algorithm, frozenset(streams))}
@@ -282,8 +286,18 @@ class Gateway:
         unique = list(dict.fromkeys(streams))
         invalid = set(unique) - (allowed or STREAMS)
         if invalid:
-            raise ProtocolError(409, "STREAM_NOT_AVAILABLE", "One or more streams are unavailable.", details={"streams": sorted(invalid)})
+            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(invalid)})
         return unique
+
+    def latest_replay_algorithm(self, session: ClientSession) -> tuple[dict | None, int | None]:
+        """Use this connection's cursor when present, otherwise the latest valid recording."""
+        if session.replay_algorithm is not None and session.replay_algorithm_timestamp is not None:
+            return session.replay_algorithm, session.replay_algorithm_timestamp
+        for item in reversed(self.store.events(self.config.recording.replay_recording_id or "")):
+            algorithm = item["payload"].get("algorithm")
+            if item["valid"] and algorithm:
+                return algorithm, item["timestampMs"]
+        return None, None
 
     @staticmethod
     def validate_params(params: dict, allowed: set[str]) -> None:
@@ -303,10 +317,10 @@ class Gateway:
         if duplicate_streams:
             raise ProtocolError(429, "RATE_LIMITED", "A stream is already subscribed on this connection.", True, {"streams": sorted(duplicate_streams)})
         if not self.live and not self.replay_available:
-            raise ProtocolError(503, "REPLAY_NOT_AVAILABLE", "No replay data is available.", True)
+            raise ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "No replay data is available.", True)
         unavailable = set(streams) - self.available_streams()
         if unavailable:
-            raise ProtocolError(409, "STREAM_NOT_AVAILABLE", "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
+            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
         subscription = Subscription(f"sub-{uuid.uuid4().hex}", frozenset(streams), include_invalid, send)
         session.subscriptions[subscription.id] = subscription
         if not self.live:
@@ -332,7 +346,7 @@ class Gateway:
                 if previous is not None:
                     await asyncio.sleep(max(0, item["timestampMs"] - previous) / 1000 / self.config.recording.replay_speed)
                 previous = item["timestampMs"]
-                if "algorithm" in item["payload"]:
+                if item["valid"] and "algorithm" in item["payload"]:
                     # Multiple subscriptions on one connection must never make its
                     # `getLatest` cursor move backward.
                     if session.replay_algorithm_timestamp is None or item["timestampMs"] >= session.replay_algorithm_timestamp:

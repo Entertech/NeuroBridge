@@ -11,6 +11,11 @@ FF31, FF32, FF51, FF52, FF21 = (f"0000{name}{BASE}" for name in ("ff31", "ff32",
 BATTERY = "00002a19-0000-1000-8000-00805f9b34fb"
 
 
+def wear_state_from_packet(_value: bytes) -> str:
+    """FF32 state values require device-POC confirmation before interpretation."""
+    return "unknown"
+
+
 class FlowtimeAdapter:
     """Bleak adapter modeled on the PC SDK, with the confirmed v0.1 byte contract."""
     def __init__(self, config: BleConfig, packet: Callable[[str, bytes], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]]) -> None:
@@ -63,7 +68,7 @@ class FlowtimeAdapter:
         assert self._client
         async def notify(characteristic: str, _sender: int, value: bytearray) -> None:
             if characteristic == FF32:
-                await self.status("wearState", "worn" if value == b"\x00\x00" else ("notWorn" if len(value) == 2 else "unknown"))
+                await self.status("wearState", wear_state_from_packet(bytes(value)))
             elif characteristic == BATTERY:
                 # The profile's voltage-to-percent mapping still requires POC
                 # validation. Do not expose the raw byte as a percentage.
