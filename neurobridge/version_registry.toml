@@ -23,10 +23,9 @@ audience = "b_side"
 status = "published"
 title = "头环数据网关北向网络协议"
 markdown_path = "doc/tech/头环数据网关北向网络协议_v0.2.md"
-pdf_path = "doc/tech/头环数据网关北向网络协议_v0.2.pdf"
+pdf_artifact_name = "头环数据网关北向网络协议_v0.2.pdf"
 published_date = "2026-08-05"
 markdown_sha256 = "1c9ff5c543150e3cd7504328c2c4da5b76afc0954f04a7bd4fd1f63d79f21260"
-pdf_sha256 = "2bd29aa03aaf6094167f93fe0752d576d9b6b9535b0932d66df890d030ccf1af"
 publication_record = "2026-08-05-public-northbound-v0.2"
 
 [[release_locks]]

@@ -6,6 +6,7 @@ from __future__ import annotations
 from hashlib import sha256
 from pathlib import Path
 import re
+import subprocess
 import tomllib
 from urllib.parse import quote
 
@@ -71,11 +72,17 @@ def main() -> None:
             fail("change records must be locked or unlocked")
 
     markdown = ROOT / external["markdown_path"]
-    pdf = ROOT / external["pdf_path"]
-    if not markdown.is_file() or not pdf.is_file():
-        fail("published external Markdown and PDF must both exist")
-    if digest(markdown) != external["markdown_sha256"] or digest(pdf) != external["pdf_sha256"]:
+    if not markdown.is_file():
+        fail("published external Markdown must exist")
+    if digest(markdown) != external["markdown_sha256"]:
         fail("external document changed without a persisted version-registry update")
+    if Path(external["pdf_artifact_name"]).name != external["pdf_artifact_name"]:
+        fail("external PDF must be uploaded as a flat CI artifact filename")
+    tracked_pdfs = subprocess.run(
+        ["git", "ls-files", "--", "doc/tech/*.pdf"], cwd=ROOT, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    if tracked_pdfs:
+        fail("protocol PDFs must be CI artifacts, not repository files")
 
     markdown_text = markdown.read_text(encoding="utf-8")
     expected_title = f'# {external["title"]} v{external["version"]}'

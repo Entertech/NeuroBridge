@@ -17,6 +17,7 @@ h1, h2, h3, h4 {
 }
 
 h1 { font-size: 22pt; margin: 0 0 14pt; }
+h1.title { display: none; }
 h2 { font-size: 16pt; margin-top: 22pt; }
 h3 { font-size: 13pt; margin-top: 18pt; }
 
