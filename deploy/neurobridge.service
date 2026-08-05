@@ -1,0 +1,21 @@
+[Unit]
+Description=NeuroBridge Flowtime gateway
+After=network-online.target bluetooth.target
+Wants=network-online.target bluetooth.target
+
+[Service]
+Type=simple
+User=neurobridge
+Group=neurobridge
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/neurobridge/venv/bin/neurobridge --config /etc/neurobridge/gateway.toml
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/neurobridge /var/log/neurobridge
+
+[Install]
+WantedBy=multi-user.target

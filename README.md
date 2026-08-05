@@ -4,6 +4,32 @@ NeuroBridge 是将回车科技头环的 BLE 数据接入第三方 B 端主机的
 
 当前对接方案详见：[头环蓝牙网关对接方案 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%AF%B9%E6%8E%A5%E6%96%B9%E6%A1%88_v0.1.md)。
 
+## 可运行网关与部署
+
+仓库现已包含可部署的 Python 网关：`neurobridge/`。它按 v0.1 协议提供 WebSocket 服务、以 600 ms 窗口批量发送数据、管理订阅与自动录播，并将原始 BLE 窗口和算法结果分别持久化为 JSONL。网关不从旧 PC SDK 继承其错误的解包逻辑：`FF31`、`FF51`、`FF52` 都在落盘和算法调用前完整保留原始字节；北向仅按协议发送允许的原始流。
+
+在 Ubuntu x86_64 目标机上，从已审查的工作树以 root 执行：
+
+```bash
+./deploy/install-ubuntu.sh
+sudoedit /etc/neurobridge/gateway.toml
+systemctl restart neurobridge
+systemctl status neurobridge
+```
+
+部署脚本会创建 `neurobridge` 服务账户、运行目录、Python 虚拟环境和 systemd 服务。静态 IP、端口、设备地址或扫描匹配名、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install --no-deps -e .  # unit tests do not need BLE hardware
+.venv/bin/pip install websockets==12.0
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连，并按已确认 profile 订阅 `FF31`、`FF32`、`FF51`、`FF52`，在全部通知就绪后向 `FF21` 写入 `0x05`；停止时写入 `0x06`。算法 SDK 通过独立的行 JSON bridge 进程接入，避免 Python 进程直接依赖 C++ ABI。由于 SDK 默认输入包长与本项目确认的 `FF31=14`、`FF52=20` 不一致，`algorithm.enabled` 默认关闭；在真实录制字节完成输入分组与输出核验前，网关只发布已验证的原始流，不会生成伪算法指标。
+
+SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
+
 ## 首期交付结论
 
 - 目标硬件：N100/N150 x86 小主机，8 GB 内存、256 GB SSD、千兆网口（双网口优先）、经实机验证可稳定连接目标头环的蓝牙 5.x 芯片。

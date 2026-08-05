@@ -1,0 +1,45 @@
+# 算法 SDK 接入 POC
+
+版本：v0.1
+
+日期：2026-08-05
+
+## 当前实现结论
+
+NeuroBridge 已迁入 AffectiveCloud C++ SDK 的进程边界：网关在 `algorithm.enabled=true` 时启动配置的行 JSON bridge 进程，每个完整 BLE 窗口将原始 `FF31` 和 `FF52` 字节以 Base64 交给 bridge，bridge 返回已映射的 `algorithm` 对象。算法结果与原始窗口分别写入 `algorithm/`、`raw/` JSONL 文件，录播只读取两个文件，不重新调用算法。
+
+**这不是算法现场验收通过的声明。** 当前公开 SDK 的 `Affective.h` 注释默认双通道 EEG 每 0.6 秒为 50 个包、HR 为 3 个包；本项目确认的 Flowtime profile 是 `FF31=14` 字节、`FF52=20` 字节，包数、采样率及算法输入分组尚未验证。因此示例配置保持 `algorithm.enabled=false`，不会输出模拟的注意力、压力等值。
+
+## 固定来源
+
+SDK 的仓库、提交和版本锁定在仓库根目录的 [sdk.lock](../../sdk.lock)。使用 [prepare-algorithm-sdk.sh](../../tools/prepare-algorithm-sdk.sh) 下载到受控构建目录；不要把构建产物、录制人体数据或 SDK 缓存提交到本仓库。
+
+SDK 构建前在 Ubuntu x86_64 记录以下信息：Ubuntu 版本、`cmake --version`、`c++ --version`、Eigen3 版本、NumCpp 版本、SDK commit 和 bridge commit。C++ SDK 要求 C++17、Eigen3、NumCpp；其源码的 CMake 配置可作为构建入口。
+
+## bridge 合同
+
+网关通过标准输入输出与 bridge 通信，每行一个 UTF-8 JSON 对象。请求只含未经解包的窗口字节：
+
+```json
+{
+  "timestampMs": 1785800000600,
+  "eegRawBase64": "...",
+  "hrRawBase64": "..."
+}
+```
+
+成功响应必须是：
+
+```json
+{ "algorithm": { "eeg": {}, "hr": { "value": 72, "hrv": 0.0 } } }
+```
+
+bridge 必须仅在真实录制字节已验证的分组上调用 `appendEEG`/`appendHR`；不得补零、截断、重排字节或跨相邻窗口拼接。窗口不足、算法异常或返回不符合合同，bridge 或网关必须令该窗口 `valid=false` 并给出 `invalidReasons`。数值范围、单位和有效阈值须记录在验收报告后才向 B 端承诺。
+
+## POC 门槛
+
+1. 在目标 Ubuntu x86_64 上用实际头环采集连续原始 `FF31`、`FF51`、`FF52`，确认 14、16、20 字节长度以及每 600 ms 的实际包数。
+2. 使用同一录制数据验证 bridge 输入与 SDK 的每个算法调用：字节序、包数、完整性、触发条件和结果时序。
+3. 抽样比对 bridge 输出与 SDK 官方演示/参考实现；记录算法字段、单位、范围、延迟和无效条件。
+4. 启用 `algorithm.enabled` 后，分别验证实时、录播、设备断线重连、bridge 异常与恢复；录播不得重新计算算法。
+5. 通过上述项后，填写部署配置的 bridge 命令并更新此文档的 POC 结论为“POC 已验证”；现场演练通过后才可标为“现场验收通过”。

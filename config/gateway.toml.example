@@ -1,0 +1,27 @@
+# Copy to /etc/neurobridge/gateway.toml; do not put device addresses or recordings in git.
+[server]
+host = "192.168.88.10" # Gateway static IP, to be confirmed at deployment.
+port = 8765            # To be confirmed with B-end host.
+path = "/neurobridge/v1/ws"
+
+[ble]
+# Enabled only after a real headband POC on the target Ubuntu x86_64 host.
+enabled = false
+device_address = ""    # Linux BlueZ address, e.g. "AA:BB:CC:DD:EE:FF"
+device_name = "Flowtime Headband"
+scan_timeout_seconds = 5
+reconnect_delay_seconds = 3
+
+[recording]
+directory = "/var/lib/neurobridge/recordings"
+subject_id = ""
+# An existing recording ID to use when the headband is offline; empty disables replay.
+replay_recording_id = ""
+replay_speed = 1.0
+
+[algorithm]
+# The SDK default grouping does not match the confirmed FF31/FF52 profile. Keep false
+# until captured bytes have validated the bridge command and its output schema.
+enabled = false
+# Command receives one JSON object per line and emits one JSON object per line.
+# command = ["/opt/neurobridge/bin/affective-bridge"]
