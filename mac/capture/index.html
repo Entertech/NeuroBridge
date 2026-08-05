@@ -24,6 +24,7 @@
           <div><dt>算法 bridge</dt><dd id="algorithmState">—</dd></div>
           <div><dt>录制会话</dt><dd id="recordingId">等待连接</dd></div>
           <div><dt>WebSocket</dt><dd id="websocketUrl">—</dd></div>
+          <div class="connection-error"><dt>采集初始化</dt><dd id="connectionError">等待扫描</dd></div>
         </dl>
       </section>
 
@@ -37,6 +38,10 @@
         <p>本页仅绑定本机回环地址。B 端页面中订阅 <code>eeg.raw</code> 与 <code>hr.raw</code>；算法输入 bridge 只核验和审计原始窗口，不会生成未经验证的脑波或心率指标。</p>
       </section>
       <p id="message" class="message" role="status"></p>
+      <section class="logs" aria-label="本地运行日志">
+        <div class="logs-title"><h2>运行日志</h2><span>仅显示摘要，不含原始数据</span></div>
+        <pre id="logs" aria-live="polite">等待本地服务日志…</pre>
+      </section>
     </main>
     <script src="/capture/app.js"></script>
   </body>

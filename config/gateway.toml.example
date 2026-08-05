@@ -21,7 +21,7 @@ replay_recording_id = ""
 replay_speed = 1.0
 
 [algorithm]
-# The SDK default grouping does not match the confirmed FF31/FF52 profile. Keep false
+# The SDK default grouping has not been validated against real Flowtime recordings. Keep false
 # until captured bytes have validated the bridge command and its output schema.
 enabled = false
 # Command receives one JSON object per line and emits one JSON object per line.

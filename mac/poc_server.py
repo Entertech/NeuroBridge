@@ -9,6 +9,7 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 import ipaddress
 import json
 import logging
+from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,14 +29,47 @@ ROOT = Path(__file__).resolve().parent
 B_CLIENT_ROOT = ROOT.parent / "tools" / "b-client-test"
 
 
+class LogBuffer(logging.Handler):
+    """Keep a local, presentation-safe tail of operational log messages."""
+    def __init__(self, limit: int = 160) -> None:
+        super().__init__()
+        self.entries: deque[dict[str, Any]] = deque(maxlen=limit)
+        self.entries_lock = threading.Lock()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            entry = {
+                "timestampMs": int(record.created * 1000),
+                "level": record.levelname,
+                "message": record.getMessage(),
+            }
+            with self.entries_lock:
+                self.entries.append(entry)
+        except Exception:
+            self.handleError(record)
+
+    def snapshot(self) -> dict[str, list[dict[str, Any]]]:
+        with self.entries_lock:
+            return {"entries": list(self.entries)}
+
+
 class CaptureController:
     def __init__(self, config: GatewayConfig) -> None:
         self.gateway = Gateway(config)
-        self.adapter = FlowtimeAdapter(config.ble, self.gateway.receive_packet, self.gateway.update_status, self.gateway.on_device_ready)
+        self.connection_error: str | None = None
+        self.adapter = FlowtimeAdapter(config.ble, self.gateway.receive_packet, self.update_status, self.gateway.on_device_ready, self.update_connection_error)
         self.server: Any | None = None
         self.adapter_task: asyncio.Task[None] | None = None
         self.started = False
         self.lock = asyncio.Lock()
+
+    async def update_status(self, name: str, value: object) -> None:
+        if name == "connectionState" and value == "connected":
+            self.connection_error = None
+        await self.gateway.update_status(name, value)
+
+    async def update_connection_error(self, error: str) -> None:
+        self.connection_error = error
 
     async def start(self) -> dict[str, Any]:
         async with self.lock:
@@ -76,6 +110,7 @@ class CaptureController:
         return {
             "captureRunning": self.started,
             "recordingId": self.gateway.store.recording_id,
+            "connectionError": self.connection_error,
             "websocketUrl": f"ws://{self.gateway.config.server.host}:{self.gateway.config.server.port}{self.gateway.config.server.path}",
             **self.gateway.status_result(),
         }
@@ -95,17 +130,23 @@ def json_bytes(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
-def handler_factory(controller: CaptureController, loop: asyncio.AbstractEventLoop):
+def handler_factory(controller: CaptureController, loop: asyncio.AbstractEventLoop, logs: LogBuffer):
     class Handler(BaseHTTPRequestHandler):
         server_version = "NeuroBridgeMacPOC/1.0"
 
         def log_message(self, fmt: str, *args: object) -> None:
-            LOG.info("UI %s - %s", self.address_string(), fmt % args)
+            message = fmt % args
+            if "GET /api/status" in message or "GET /api/logs" in message:
+                return
+            LOG.info("UI %s - %s", self.address_string(), message)
 
         def do_GET(self) -> None:
             path = urlparse(self.path).path
             if path == "/api/status":
                 self.respond_json(self.run(controller.snapshot))
+                return
+            if path == "/api/logs":
+                self.respond_json(logs.snapshot())
                 return
             if path in {"/", "/index.html"}:
                 self.respond_file(ROOT / "capture" / "index.html")
@@ -178,8 +219,11 @@ async def run(args: argparse.Namespace) -> None:
     if not ipaddress.ip_address(config.server.host).is_loopback:
         raise ValueError("The macOS POC WebSocket server must use a loopback host")
     controller = CaptureController(config)
+    logs = LogBuffer()
+    root_logger = logging.getLogger()
+    root_logger.addHandler(logs)
     loop = asyncio.get_running_loop()
-    httpd = ThreadingHTTPServer((args.ui_host, args.ui_port), handler_factory(controller, loop))
+    httpd = ThreadingHTTPServer((args.ui_host, args.ui_port), handler_factory(controller, loop, logs))
     http_thread = threading.Thread(target=httpd.serve_forever, name="mac-poc-http", daemon=True)
     http_thread.start()
     LOG.info("Open http://%s:%s/ to start local headband capture", args.ui_host, args.ui_port)
@@ -192,6 +236,8 @@ async def run(args: argparse.Namespace) -> None:
         httpd.shutdown()
         httpd.server_close()
         await controller.stop()
+        root_logger.removeHandler(logs)
+        logs.close()
 
 
 def main() -> None:

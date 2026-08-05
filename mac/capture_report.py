@@ -13,9 +13,8 @@ from typing import Any
 
 
 STREAMS = {
-    "eegRaw": ("FF31", 14),
-    "nativeHr": ("FF51", 16),
-    "hrRaw": ("FF52", 20),
+    "eegRaw": ("FF31", 20),
+    "hrRaw": ("FF51", 1),
 }
 
 

@@ -7,8 +7,10 @@ from ..config import BleConfig
 
 LOG = logging.getLogger(__name__)
 BASE = "-1212-abcd-1523-785feabcd123"
-FF31, FF32, FF51, FF52, FF21 = (f"0000{name}{BASE}" for name in ("ff31", "ff32", "ff51", "ff52", "ff21"))
+FF31, FF32, FF51, FF21 = (f"0000{name}{BASE}" for name in ("ff31", "ff32", "ff51", "ff21"))
 BATTERY = "00002a19-0000-1000-8000-00805f9b34fb"
+REQUIRED_NOTIFICATION_CHARACTERISTICS = (FF31, FF32, FF51)
+OPTIONAL_NOTIFICATION_CHARACTERISTICS = (BATTERY,)
 
 
 def wear_state_from_packet(_value: bytes) -> str:
@@ -17,9 +19,10 @@ def wear_state_from_packet(_value: bytes) -> str:
 
 
 class FlowtimeAdapter:
-    """Bleak adapter modeled on the PC SDK, with the confirmed v0.1 byte contract."""
-    def __init__(self, config: BleConfig, packet: Callable[[str, bytes], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]]) -> None:
+    """Bleak adapter for the documented Flowtime FF31/FF32/FF51/FF21 profile."""
+    def __init__(self, config: BleConfig, packet: Callable[[str, bytes], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]], error: Callable[[str], Awaitable[None]] | None = None) -> None:
         self.config, self.packet, self.status, self.device_ready = config, packet, status, device_ready
+        self.error = error
         self._client = None
         self._stopping = False
 
@@ -46,7 +49,7 @@ class FlowtimeAdapter:
                 candidate = self.select_strongest(devices)
                 if candidate is None:
                     raise RuntimeError("No Flowtime headband matching the configured profile was found")
-                LOG.info("Connecting to Flowtime candidate %s (RSSI=%s)", candidate.address, getattr(candidate, "rssi", None))
+                LOG.info("Connecting to Flowtime candidate (RSSI=%s)", getattr(candidate, "rssi", None))
                 self._client = BleakClient(candidate, disconnected_callback=lambda _: asyncio.create_task(self.status("connectionState", "disconnected")))
                 await self._client.connect()
                 await self._subscribe()
@@ -59,10 +62,22 @@ class FlowtimeAdapter:
                 await self.status("connectionState", "connected")
                 while self._client.is_connected and not self._stopping:
                     await asyncio.sleep(1)
-            except Exception:
+            except Exception as exc:
                 LOG.exception("Flowtime connection failed")
+                if self.error:
+                    await self.error(str(exc))
+                await self._disconnect_after_failure()
                 await self.status("connectionState", "disconnected")
             await asyncio.sleep(self.config.reconnect_delay_seconds)
+
+    async def _disconnect_after_failure(self) -> None:
+        """Do not leave a device-side BLE link open after incomplete subscription."""
+        if self._client and self._client.is_connected:
+            try:
+                await self._client.disconnect()
+            except Exception:
+                LOG.exception("Failed to disconnect Flowtime after connection setup failure")
+        self._client = None
 
     async def _subscribe(self) -> None:
         assert self._client
@@ -74,12 +89,30 @@ class FlowtimeAdapter:
                 # validation. Do not expose the raw byte as a percentage.
                 await self.status("batteryPercent", None)
             else:
-                await self.packet({FF31: "ff31", FF51: "ff51", FF52: "ff52"}[characteristic], bytes(value))
-        for characteristic in (FF31, FF32, FF51, FF52, BATTERY):
+                await self.packet({FF31: "ff31", FF51: "ff51"}[characteristic], bytes(value))
+        for characteristic in REQUIRED_NOTIFICATION_CHARACTERISTICS:
             # Bleak notification callbacks are synchronous on all supported backends.
             # Schedule the async state update rather than relying on backend-specific
             # coroutine callback behavior.
             await self._client.start_notify(characteristic, lambda sender, value, c=characteristic: asyncio.create_task(notify(c, sender, value)))
+        for characteristic in OPTIONAL_NOTIFICATION_CHARACTERISTICS:
+            if not self._supports(characteristic):
+                LOG.info("Optional Flowtime notification is not exposed by this headband; continuing without it")
+                continue
+            await self._client.start_notify(characteristic, lambda sender, value, c=characteristic: asyncio.create_task(notify(c, sender, value)))
+        LOG.info("Subscribed to required Flowtime EEG, wear-state, and heart-rate notifications")
+
+    def _supports(self, characteristic: str) -> bool:
+        """Return whether a post-connect GATT characteristic is available.
+
+        Optional telemetry must never make an otherwise complete capture setup fail.
+        """
+        assert self._client
+        try:
+            return self._client.services.get_characteristic(characteristic) is not None
+        except Exception:
+            LOG.warning("Could not inspect optional Flowtime notification support; continuing without it")
+            return False
 
     async def stop(self) -> None:
         self._stopping = True

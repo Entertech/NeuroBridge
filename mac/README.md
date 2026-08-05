@@ -48,7 +48,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 /tmp/neurobridge-mac-venv/bin/python mac/poc_server.py --config /tmp/neurobridge-gateway.capture.toml
 ```
 
-浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载会立即发起本机扫描；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51`、`FF52` 与电量通知，启动算法输入 bridge，随后向 `FF21` 写入 `0x05` 启动采集。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
+浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载会立即发起本机扫描；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51` 与电量通知，启动算法输入 bridge，随后向 `FF21` 写入 `0x05` 启动采集。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
 
 成功连接后的原始记录会保存到 `/tmp/neurobridge-headband-poc/raw/rec-*.jsonl`。文件名中的 `rec-...` 是后续录播所需的 recording ID。请只记录 ID，不要复制 JSONL 中的 Base64 原始字节。
 
@@ -62,7 +62,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 
 报告会验证并汇总：
 
-- `FF31` 的 14 字节、`FF51` 的 16 字节、`FF52` 的 20 字节通知契约；
+- `FF31` 的 20 字节与 `FF51` 的 1 字节通知契约；
 - 每个 600 ms 窗口的包数、记录时间范围和窗口间隔；
 - 声明字节数与实际 Base64 解码后的长度是否一致；
 - 无效窗口和原因。
@@ -75,7 +75,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 
 ## 算法 bridge 的当前边界
 
-模板默认运行 `mac/algorithm_ingest_bridge.py`。每个完整窗口的原始 `FF31` 与 `FF52` 都会发送给它；它只验证 Base64 字节并写入不含原始数据的长度审计日志。它不会捏造注意力、频段或心率指标，因此 B 端当前只能订阅原始流。
+模板默认运行 `mac/algorithm_ingest_bridge.py`。每个完整窗口的原始 `FF31` 与 `FF51` 都会发送给它；它只验证 Base64 字节并写入不含原始数据的长度审计日志。它不会捏造注意力、频段或心率指标，因此 B 端当前只能订阅原始流。
 
 官方 C++ 算法 SDK 尚未在真实 Flowtime 录制数据上验证输入包数与分组，不能把它替换为生产算法或对 B 端承诺算法数值。完成该验证后，再将 `algorithm.command` 指向实际 SDK bridge。
 

@@ -6,7 +6,7 @@ NeuroBridge 是将回车科技头环的 BLE 数据接入第三方 B 端主机的
 
 ## 可运行网关与部署
 
-仓库现已包含可部署的 Python 网关：`neurobridge/`。它按 v0.1 协议提供 WebSocket 服务、以 600 ms 窗口批量发送数据、管理订阅与自动录播，并将原始 BLE 窗口和算法结果分别持久化为 JSONL。网关不从旧 PC SDK 继承其错误的解包逻辑：`FF31`、`FF51`、`FF52` 都在落盘和算法调用前完整保留原始字节；北向仅按协议发送允许的原始流。
+仓库现已包含可部署的 Python 网关：`neurobridge/`。它按 v0.1 协议提供 WebSocket 服务、以 600 ms 窗口批量发送数据、管理订阅与自动录播，并将原始 BLE 窗口和算法结果分别持久化为 JSONL。网关按当前 Flowtime 文档处理 `FF31`、`FF51` 原始字节，落盘和算法调用前不解包或改写；北向仅按协议发送允许的原始流。
 
 在 Ubuntu x86_64 目标机上，从已审查的工作树以 root 执行：
 
@@ -26,7 +26,7 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51`、`FF52` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。因此每个采集启动后的原始 EEG/HR 窗口都会自动进入算法 bridge。算法 SDK 通过独立的行 JSON bridge 进程接入，避免 Python 进程直接依赖 C++ ABI。由于 SDK 默认输入包长与本项目确认的 `FF31=14`、`FF52=20` 不一致，`algorithm.enabled` 默认关闭；在真实录制字节完成输入分组与输出核验前，网关只发布已验证的原始流，不会生成伪算法指标。
+Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。因此每个采集启动后的原始 EEG/HR 窗口都会自动进入算法 bridge。算法 SDK 通过独立的行 JSON bridge 进程接入，避免 Python 进程直接依赖 C++ ABI。SDK 的输入分组与当前设备录制字节尚未完成核验，`algorithm.enabled` 默认关闭；在完成真实数据比对前，网关只发布已验证的原始流，不会生成伪算法指标。
 
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
@@ -39,7 +39,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 - 链路：`头环 → BLE → 网关 → 有线以太网 → 第三方 B 端主机`。
 - 运行方式：实时模式和录播模式均为交付范围；头环未连接时，网关在 B 端 `subscribe` 或 `getLatest` 后自动使用已配置录播，并以 `mode="replay"` 标记数据来源。网关应开机自启，现场无需操作。
 - 演示范围：本次为单人；北向协议仅保留录播关联所需的 `subjectId`。
-- 已确认的首期 Flowtime BLE profile：EEG `FF31` 为 14 字节大端数据包，HR 原始 `FF52` 为 20 字节数据包，佩戴/接触状态 `FF32` 为 2 字节；北向仍最多按 600 ms 分组，但实际包数由网关运行时记录，不写死。
+- 当前 Flowtime 文档 profile：EEG `FF31` 为 20 字节大端数据包，HR `FF51` 为 1 字节数据包，佩戴/接触状态 `FF32` 为 2 字节；北向仍最多按 600 ms 分组，但实际包数由网关运行时记录，不写死。
 
 若现场禁止任何蓝牙，实时链路不能工作；只能改用有线采集、在允许蓝牙的区域采集后录播，或取得场地方对限制范围的书面确认。
 
@@ -64,7 +64,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 | SDK | 结论 | 依据与处理方式 |
 | --- | --- | --- |
-| [Enter-Biomodule-BLE-PC-SDK](https://github.com/Entertech/Enter-Biomodule-BLE-PC-SDK) | **适配，作为 BLE 接入层的首选 POC** | Python SDK 基于 Bleak 0.19，声明支持 macOS、Linux 和 Windows；可承担 Flowtime 的扫描、连接、通知、启动采集与断线回调。BLE UUID、14 字节 EEG 帧、20 字节 HR 原始帧等数据契约以 [头环蓝牙通信协议](https://entertech.feishu.cn/docs/doccnlmMLpxwY25gJQyiFQmBeRd?from=from_copylink) 为准，不能以 SDK 的旧解包示例推断。Linux 上仍须实机验证。 |
+| [Enter-Biomodule-BLE-PC-SDK](https://github.com/Entertech/Enter-Biomodule-BLE-PC-SDK) | **适配，作为 BLE 接入层的首选 POC** | Python SDK 基于 Bleak 0.19，声明支持 macOS、Linux 和 Windows；可承担 Flowtime 的扫描、连接、通知、启动采集与断线回调。BLE UUID 与数据契约以 [头环蓝牙通信协议](https://entertech.feishu.cn/docs/doccnlmMLpxwY25gJQyiFQmBeRd?from=from_copylink) 为准，不能以 SDK 的旧解包示例推断。Linux 上仍须实机验证。 |
 | [AffectiveCloud-Algorithm-SDK](https://github.com/Entertech/AffectiveCloud-Algorithm-SDK) | **适配 x86 Linux 网关的算法层，须完成构建 POC 后上线** | C++ SDK 提供双通道 `appendEEG`、单通道 `appendSCEEG`、`appendHR` 及注意力、放松度、脑波等报表；接口注释以 0.6 秒为默认触发周期，和本网关 600 ms 分组一致。它要求 C++17、Eigen3、NumCpp；仓库当前没有可直接交付的 Linux 产物，需在 Ubuntu x86_64 上补齐依赖、编译并用真实 BLE 原始字节流做结果比对。 |
 
 算法 SDK 还带有 Python 实现，但其依赖固定在 TensorFlow 1.8、Keras 2.2、NumPy 1.16 等较旧版本。首期网关优先选 C++ 实现；不要在未完成独立环境验证的情况下将该 Python 环境直接用于生产镜像。
@@ -79,7 +79,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 ## 上线前 POC 与验收
 
 1. 在目标 N100/N150 + Ubuntu LTS 上测试 PC BLE SDK：扫描、连接、订阅、断线重连、重启恢复和长时间运行。
-2. 在同一环境编译算法 C++ SDK，固定 Eigen3/NumCpp/CMake/编译器版本，并以录制的真实 `FF31`/`FF51`/`FF52` 原始字节验证算法输入长度、字节序、分组方式和 600 ms 触发节奏。
+2. 在同一环境编译算法 C++ SDK，固定 Eigen3/NumCpp/CMake/编译器版本，并以录制的真实 `FF31`/`FF51` 原始字节验证算法输入长度、字节序、分组方式和 600 ms 触发节奏。
 3. 完成北向模拟服务端和真实 B 端主机联调，覆盖实时、录播、网关/服务端离线、恢复补传和异常数据。
 4. 在展演网络完成一次全链路演练，交付版本号、配置备份、操作手册和问题日志。
 

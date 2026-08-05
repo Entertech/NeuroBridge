@@ -22,7 +22,7 @@ class PacketTests(unittest.TestCase):
     def test_window_keeps_original_bytes_and_counts(self) -> None:
         assembler = WindowAssembler()
         assembler.add("ff31", b"a" * EEG_PACKET_BYTES, 1000)
-        assembler.add("ff52", b"b" * HR_RAW_PACKET_BYTES, 1010)
+        assembler.add("ff51", b"b" * HR_RAW_PACKET_BYTES, 1010)
         windows = assembler.add("ff31", b"c" * EEG_PACKET_BYTES, 1601)
         self.assertEqual(len(windows), 1)
         payload = windows[0].raw_payload()
@@ -30,12 +30,12 @@ class PacketTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(payload["eegRaw"]["bytesBase64"]), b"a" * EEG_PACKET_BYTES)
         self.assertEqual(payload["hrRaw"]["packetCount"], 1)
 
-    def test_native_hr_is_persisted_but_not_a_northbound_stream(self) -> None:
+    def test_documented_hr_is_persisted_as_the_hr_raw_stream(self) -> None:
         assembler = WindowAssembler()
-        assembler.add("ff51", b"n" * 16, 1000)
-        window = assembler.add("ff31", b"e" * 14, 1601)[0]
-        self.assertIn("nativeHr", window.raw_payload())
-        self.assertEqual(window.raw_payload()["nativeHr"]["packetBytes"], 16)
+        assembler.add("ff51", b"n", 1000)
+        window = assembler.add("ff31", b"e" * EEG_PACKET_BYTES, 1601)[0]
+        self.assertIn("hrRaw", window.raw_payload())
+        self.assertEqual(window.raw_payload()["hrRaw"]["packetBytes"], 1)
 
 
 class FlowtimeSelectionTests(unittest.TestCase):
@@ -120,7 +120,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             event = next(item for item in sent if item["data"].get("event") == "data")
             self.assertEqual(set(event), {"protocolVersion", "code", "data", "message"})
             self.assertEqual(event["data"]["subscriptionId"], subscription_id)
-            self.assertEqual(event["data"]["payload"]["eegRaw"]["packetBytes"], 14)
+            self.assertEqual(event["data"]["payload"]["eegRaw"]["packetBytes"], EEG_PACKET_BYTES)
             await gateway.close_session(session)
 
     async def test_invalid_request_is_wrapped(self) -> None:
@@ -178,7 +178,7 @@ class RecordingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = RecordingStore(Path(directory))
             recording_id = store.start()
-            store.save_raw(timestamp_ms=1200, valid=True, invalid_reasons=[], payload={"eegRaw": {"packetBytes": 14}})
+            store.save_raw(timestamp_ms=1200, valid=True, invalid_reasons=[], payload={"eegRaw": {"packetBytes": EEG_PACKET_BYTES}})
             store.save_algorithm(timestamp_ms=1200, valid=True, invalid_reasons=[], algorithm={"attention": 7.0})
             self.assertTrue((Path(directory) / "raw" / f"{recording_id}.jsonl").exists())
             self.assertTrue((Path(directory) / "algorithm" / f"{recording_id}.jsonl").exists())

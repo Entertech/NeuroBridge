@@ -14,7 +14,7 @@ class AlgorithmRunner:
     """Isolates the C++ SDK behind a line-delimited JSON bridge.
 
     It intentionally does not call appendEEG/appendHR until the bridge command and
-    the Flowtime FF31/FF52 grouping have been validated with recorded device bytes.
+    the Flowtime FF31/FF51 grouping have been validated with recorded device bytes.
     """
     def __init__(self, config: AlgorithmConfig) -> None:
         self.config = config

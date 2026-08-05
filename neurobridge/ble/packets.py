@@ -4,9 +4,10 @@ from dataclasses import dataclass, field
 import base64
 import time
 
-EEG_PACKET_BYTES = 14
-NATIVE_HR_PACKET_BYTES = 16
-HR_RAW_PACKET_BYTES = 20
+# Flowtime headband 蓝牙通信协议（2023-06-19）：
+# FF31 = 2-byte serial + six 24-bit EEG values; FF51 = one heart-rate byte.
+EEG_PACKET_BYTES = 20
+HR_RAW_PACKET_BYTES = 1
 
 
 @dataclass(frozen=True)
@@ -22,14 +23,12 @@ class DataWindow:
     end_ms: int
     eeg: list[RawPacket] = field(default_factory=list)
     hr_raw: list[RawPacket] = field(default_factory=list)
-    native_hr: list[RawPacket] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
 
     def append(self, packet: RawPacket) -> None:
         target, expected, reason = {
             "ff31": (self.eeg, EEG_PACKET_BYTES, "EEG_PACKET_LENGTH_INVALID"),
-            "ff52": (self.hr_raw, HR_RAW_PACKET_BYTES, "HR_RAW_PACKET_LENGTH_INVALID"),
-            "ff51": (self.native_hr, NATIVE_HR_PACKET_BYTES, "NATIVE_HR_PACKET_LENGTH_INVALID"),
+            "ff51": (self.hr_raw, HR_RAW_PACKET_BYTES, "HR_PACKET_LENGTH_INVALID"),
         }[packet.characteristic]
         target.append(packet)
         if len(packet.value) != expected and reason not in self.reasons:
@@ -50,10 +49,6 @@ class DataWindow:
             payload["eegRaw"] = self._payload(self.eeg, EEG_PACKET_BYTES, self.start_ms, self.end_ms)
         if self.hr_raw:
             payload["hrRaw"] = self._payload(self.hr_raw, HR_RAW_PACKET_BYTES, self.start_ms, self.end_ms)
-        # FF51 is persisted for input verification, but is deliberately not a v0.1
-        # northbound stream and is never added by Gateway.filtered_payload().
-        if self.native_hr:
-            payload["nativeHr"] = self._payload(self.native_hr, NATIVE_HR_PACKET_BYTES, self.start_ms, self.end_ms)
         return payload
 
 
@@ -77,7 +72,7 @@ class WindowAssembler:
         while self._window is not None and timestamp_ms >= self._window.end_ms:
             finished = self._window
             self._window = DataWindow(finished.end_ms, finished.end_ms + self.interval_ms)
-            if finished.eeg or finished.hr_raw or finished.native_hr:
+            if finished.eeg or finished.hr_raw:
                 ready.append(finished)
         return ready
 
