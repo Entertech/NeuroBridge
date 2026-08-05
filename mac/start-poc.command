@@ -49,9 +49,9 @@ echo "正在构建本地 C++ 算法 bridge…"
 if [[ ! -f "$config_path" ]]; then
   cp mac/gateway.capture.toml.example "$config_path"
   echo "已创建本机配置：$config_path"
-elif rg --quiet 'mac/algorithm_ingest_bridge\.py' "$config_path"; then
+elif /usr/bin/grep -q 'mac/algorithm_ingest_bridge\.py' "$config_path"; then
   cp "$config_path" "${config_path}.pre-native-bridge.bak"
-  perl -0pi -e 's#command = \["/usr/bin/env", "python3", "mac/algorithm_ingest_bridge\.py", "--audit-file", "/tmp/neurobridge-headband-poc/algorithm-ingest-audit\.jsonl"\]#command = ["/tmp/neurobridge-affective-runtime/affective_bridge"]#' "$config_path"
+  perl -0pi -e 's#command = \[[^\r\n]*mac/algorithm_ingest_bridge\.py[^\r\n]*\]#command = ["/tmp/neurobridge-affective-runtime/affective_bridge"]#' "$config_path"
   echo "已将旧 POC 配置切换为 C++ 算法 bridge；原配置备份为：${config_path}.pre-native-bridge.bak"
 fi
 
