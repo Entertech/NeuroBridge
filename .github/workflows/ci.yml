@@ -22,3 +22,4 @@ jobs:
       - run: python -m pip install --no-deps -e .
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q neurobridge
+      - run: bash tools/check-external-protocol.sh
