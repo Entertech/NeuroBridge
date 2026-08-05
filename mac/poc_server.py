@@ -155,11 +155,22 @@ class CaptureController:
             LOG.info("Capture stopped")
             return self.snapshot()
 
+    async def export_current_recording(self) -> Path:
+        recording_id = self.gateway.store.recording_id or self.gateway.store.last_recording_id
+        if not recording_id:
+            raise ValueError("No recording is available to save yet.")
+        archive = self.gateway.store.export(recording_id)
+        LOG.info("Capture archive prepared for download: recordingId=%s", recording_id)
+        return archive
+
     def snapshot(self) -> dict[str, Any]:
+        export_recording_id = self.gateway.store.recording_id or self.gateway.store.last_recording_id
         return {
             "captureRunning": self.started,
             "recordingId": self.gateway.store.recording_id,
             "connectionError": self.connection_error,
+            "exportRecordingId": export_recording_id,
+            "exportUrl": "/api/recordings/current/download" if export_recording_id else None,
             "websocketUrl": f"ws://{self.gateway.config.server.host}:{self.gateway.config.server.port}{self.gateway.config.server.path}",
             **self.gateway.status_result(),
         }
@@ -196,6 +207,13 @@ def handler_factory(controller: CaptureController, loop: asyncio.AbstractEventLo
                 return
             if path == "/api/logs":
                 self.respond_json(logs.snapshot())
+                return
+            if path == "/api/recordings/current/download":
+                archive = self.run(controller.export_current_recording)
+                if isinstance(archive, Path):
+                    self.respond_download(archive)
+                else:
+                    self.respond_json(archive if isinstance(archive, dict) else {"error": "Cannot create capture archive."}, status=HTTPStatus.CONFLICT)
                 return
             if path in {"/", "/index.html"}:
                 self.respond_file(ROOT / "capture" / "index.html")
@@ -236,10 +254,28 @@ def handler_factory(controller: CaptureController, loop: asyncio.AbstractEventLo
                 LOG.exception("POC UI operation failed")
                 return {"error": str(error)}
 
-        def respond_json(self, payload: dict[str, Any]) -> None:
+        def respond_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
             body = json_bytes(payload)
-            self.send_response(HTTPStatus.OK)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def respond_download(self, archive: Path) -> None:
+            try:
+                allowed = (controller.gateway.config.recording.directory / "exports").resolve()
+                path = archive.resolve(strict=True)
+                if not path.is_relative_to(allowed) or path.suffix != ".zip":
+                    raise FileNotFoundError
+                body = path.read_bytes()
+            except (FileNotFoundError, OSError):
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()

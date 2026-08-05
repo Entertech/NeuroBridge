@@ -35,6 +35,7 @@ def main() -> None:
     external = select_external_protocol(registry)
     prerelease = select_prerelease_protocol(registry)
     integration = registry["documents"]["integration_plan"]
+    capture_package = registry["documents"].get("external_capture_package")
     wire_version = registry["northbound_wire_protocol"]["version"]
     application_version = registry["application"]["version"]
 
@@ -103,6 +104,29 @@ def main() -> None:
                 fail("unlocked changes must target the unified prerelease version")
         else:
             fail("change records must be locked or unlocked")
+
+    if capture_package:
+        if capture_package["audience"] != "data_recipient":
+            fail("external capture package document must target data recipients")
+        capture_markdown = ROOT / capture_package["markdown_path"]
+        if not capture_markdown.is_file():
+            fail("external capture package Markdown must exist")
+        if digest(capture_markdown) != capture_package["markdown_sha256"]:
+            fail("external capture package changed without a persisted version-registry update")
+        capture_text = capture_markdown.read_text(encoding="utf-8")
+        if capture_text.splitlines()[0] != f'# {capture_package["title"]} v{capture_package["version"]}':
+            fail("external capture package title does not match the version registry")
+        if f'版本：v{capture_package["version"]}' not in capture_text or f'日期：{capture_package["published_date"]}' not in capture_text:
+            fail("external capture package version or date does not match the version registry")
+        capture_records = [record for record in registry["change_records"] if record["id"] == capture_package["publication_record"]]
+        if len(capture_records) != 1:
+            fail("external capture package must reference one publication record")
+        capture_record = capture_records[0]
+        if capture_record["external_document_action"] != "explicit_user_authorized" or capture_record["change_state"] != "locked":
+            fail("external capture package requires an explicitly authorized locked publication record")
+        capture_lock = locks.get(capture_record.get("release_lock"))
+        if capture_lock is None or capture_lock["scope"] != "external_capture_package_document" or capture_lock["to_version"] != capture_package["version"]:
+            fail("external capture package publication lock is invalid")
 
     tracked_pdfs = subprocess.run(
         ["git", "ls-files", "--", "doc/tech/*.pdf"], cwd=ROOT, check=True, capture_output=True, text=True

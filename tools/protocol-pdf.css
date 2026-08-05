@@ -41,6 +41,7 @@ th, td {
 }
 
 th { background: #eaf2f8; color: #0b3b67; }
+thead { display: table-header-group; }
 tr { break-inside: avoid; }
 
 pre, code {

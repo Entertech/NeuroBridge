@@ -31,11 +31,12 @@
       <section class="actions" aria-label="采集操作">
         <button id="startButton" type="button">重新开始扫描</button>
         <button id="stopButton" class="secondary" type="button">停止采集</button>
+        <a id="saveButton" class="secondary" href="#" aria-disabled="true">一键保存 ZIP</a>
         <a class="b-client-link" href="/b-client/" target="_blank" rel="noopener">打开 B 端订阅页</a>
       </section>
 
       <section class="card note">
-        <p>本页仅绑定本机回环地址。B 端页面中订阅 <code>eeg.raw</code> 与 <code>hr.raw</code>；算法输入 bridge 只核验和审计原始窗口，不会生成未经验证的脑波或心率指标。</p>
+        <p>本页仅绑定本机回环地址。“一键保存 ZIP”会导出当前或最近一次采集会话的原始 EEG、原始心率、独立算法指标文件和清单；下载文件含敏感生理数据，请仅在已授权的受控设备上保存。</p>
       </section>
       <p id="message" class="message" role="status"></p>
       <section class="logs" aria-label="蓝牙接收数据日志">

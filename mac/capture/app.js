@@ -8,6 +8,7 @@ const fields = {
   message: document.querySelector('#message'),
   start: document.querySelector('#startButton'),
   stop: document.querySelector('#stopButton'),
+  save: document.querySelector('#saveButton'),
   dataLogs: document.querySelector('#dataLogs'),
   algorithmLogs: document.querySelector('#algorithmLogs'),
   systemLogs: document.querySelector('#systemLogs'),
@@ -26,6 +27,9 @@ function render(status) {
   fields.websocketUrl.textContent = status.websocketUrl || '—';
   fields.indicator.dataset.state = state;
   fields.stop.disabled = !status.captureRunning;
+  const canSave = Boolean(status.exportUrl);
+  fields.save.href = status.exportUrl || '#';
+  fields.save.setAttribute('aria-disabled', String(!canSave));
   fields.message.textContent = status.connectionError || '';
 }
 
@@ -69,6 +73,9 @@ async function refresh() {
 
 fields.start.addEventListener('click', () => request('/api/capture/start'));
 fields.stop.addEventListener('click', () => request('/api/capture/stop'));
+fields.save.addEventListener('click', (event) => {
+  if (fields.save.getAttribute('aria-disabled') === 'true') event.preventDefault();
+});
 
 request('/api/capture/start').catch(() => {
   fields.message.textContent = '无法启动本机扫描。请检查终端蓝牙授权。';

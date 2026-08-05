@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from hashlib import sha256
+import json
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 
 from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, RecordingConfig, ServerConfig
 from neurobridge.algorithm.runner import AlgorithmRunner
@@ -209,12 +212,13 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             gateway = Gateway(config(root))
             gateway.algorithm = FailedAlgorithm()
             await gateway.update_status("connectionState", "connected")
+            await gateway.receive_packet("ff31", b"x" * EEG_PACKET_BYTES)
             window = DataWindow(0, 600)
             window.append(RawPacket("ff31", 100, b"x" * EEG_PACKET_BYTES))
             await gateway.publish_window(window)
             recording_id = gateway.store.recording_id
             self.assertIsNotNone(recording_id)
-            self.assertTrue((root / "raw" / f"{recording_id}.jsonl").exists())
+            self.assertTrue((root / "sessions" / str(recording_id) / "raw" / "eeg.jsonl").exists())
             self.assertEqual(gateway.status["algorithmState"], "error")
 
     async def test_final_window_flushes_without_a_following_packet(self) -> None:
@@ -241,13 +245,65 @@ class RecordingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = RecordingStore(Path(directory))
             recording_id = store.start()
-            store.save_raw(timestamp_ms=1200, valid=True, invalid_reasons=[], payload={"eegRaw": {"packetBytes": EEG_PACKET_BYTES}})
-            store.save_algorithm(timestamp_ms=1200, valid=True, invalid_reasons=[], algorithm={"attention": 7.0})
-            self.assertTrue((Path(directory) / "raw" / f"{recording_id}.jsonl").exists())
-            self.assertTrue((Path(directory) / "algorithm" / f"{recording_id}.jsonl").exists())
+            store.save_raw_packet(stream="eeg", received_at_ms=1199, window_start_ms=600, window_end_ms=1200, value=b"e" * EEG_PACKET_BYTES)
+            source = {"receivedAtMsStart": 1199, "receivedAtMsEnd": 1200, "packetCount": 1, "windowStartMs": 600, "windowEndMs": 1200}
+            store.save_algorithm_events(algorithm={"attention": 7.0}, computed_at_ms=1201, eeg_source=source, hr_source=None, valid=True, invalid_reasons=[])
+            session = Path(directory) / "sessions" / recording_id
+            self.assertTrue((session / "raw" / "eeg.jsonl").exists())
+            self.assertTrue((session / "algorithm" / "attention.jsonl").exists())
             event = store.events(recording_id)[0]
             self.assertEqual(event["timestampMs"], 1200)
             self.assertEqual(event["payload"]["algorithm"]["attention"], 7.0)
+
+    def test_algorithm_metrics_are_written_to_independent_timestamped_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecordingStore(Path(directory))
+            recording_id = store.start()
+            eeg_source = {"receivedAtMsStart": 1000, "receivedAtMsEnd": 1010, "packetCount": 2, "windowStartMs": 600, "windowEndMs": 1200}
+            hr_source = {"receivedAtMsStart": 1020, "receivedAtMsEnd": 1025, "packetCount": 1, "windowStartMs": 600, "windowEndMs": 1200}
+            store.save_algorithm_events(
+                algorithm={
+                    "eeg": {"quality": 2}, "attention": 58.0, "flow": {"meditation": 22.0},
+                    "sleep": {"updated": False}, "hr": {"value": 59, "hrv": 12.3}, "pressure": 4.0,
+                },
+                computed_at_ms=1030,
+                eeg_source=eeg_source,
+                hr_source=hr_source,
+                valid=True,
+                invalid_reasons=[],
+            )
+            algorithm_dir = Path(directory) / "sessions" / recording_id / "algorithm"
+            attention = json.loads((algorithm_dir / "attention.jsonl").read_text(encoding="utf-8"))
+            hrv = json.loads((algorithm_dir / "hrv.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(attention["timestampMs"], 1010)
+            self.assertEqual(attention["value"], 58.0)
+            self.assertEqual(hrv["timestampMs"], 1025)
+            self.assertEqual(hrv["algorithm"], {"hr": {"hrv": 12.3}})
+            self.assertEqual((algorithm_dir / "sleep.jsonl").read_text(encoding="utf-8"), "")
+
+    def test_export_contains_split_data_files_and_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            documentation_pdf = Path(directory) / "头环数据采集包格式说明_v0.1.pdf"
+            documentation_pdf.write_bytes(b"%PDF-1.4\nCapture package documentation\n%%EOF\n")
+            store = RecordingStore(Path(directory), capture_package_pdf=documentation_pdf)
+            recording_id = store.start(started_at_ms=1000)
+            store.save_raw_packet(stream="eeg", received_at_ms=1100, window_start_ms=600, window_end_ms=1200, value=b"e" * EEG_PACKET_BYTES)
+            source = {"receivedAtMsStart": 1100, "receivedAtMsEnd": 1100, "packetCount": 1, "windowStartMs": 600, "windowEndMs": 1200}
+            store.save_algorithm_events(algorithm={"attention": 7.0}, computed_at_ms=1120, eeg_source=source, hr_source=None, valid=True, invalid_reasons=[])
+            archive = store.export(recording_id)
+            with zipfile.ZipFile(archive) as bundle:
+                names = set(bundle.namelist())
+                root = f"{recording_id}/"
+                self.assertIn(root + "raw/eeg.jsonl", names)
+                self.assertIn(root + "raw/hr.jsonl", names)
+                self.assertIn(root + "algorithm/attention.jsonl", names)
+                self.assertIn(root + documentation_pdf.name, names)
+                manifest = json.loads(bundle.read(root + "manifest.json"))
+            self.assertEqual(manifest["sessionId"], recording_id)
+            self.assertEqual(manifest["formatVersion"], "1.0")
+            self.assertEqual(manifest["documentation"]["path"], documentation_pdf.name)
+            self.assertEqual(manifest["documentation"]["version"], "0.1")
+            self.assertEqual(manifest["documentation"]["sha256"], sha256(documentation_pdf.read_bytes()).hexdigest())
 
 
 class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):

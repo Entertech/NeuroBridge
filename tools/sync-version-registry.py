@@ -28,6 +28,8 @@ def render_change_log(registry: dict) -> str:
         "",
     ]
     for lock in locks:
+        if lock["scope"] != "external_northbound_document":
+            continue
         lines.extend(
             [
                 f'### v{lock["from_version"]} → v{lock["to_version"]}',

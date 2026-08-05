@@ -6,7 +6,7 @@
 
 ## 当前实现结论
 
-NeuroBridge 已实现 AffectiveCloud C++ SDK 的进程边界：网关在 `algorithm.enabled=true` 时启动配置的行 JSON bridge 进程，每个完整 BLE 窗口将原始 `FF31` 和 `FF51` 字节以 Base64 交给 bridge。bridge 以双通道 `appendEEG` 和 `appendHR` 调用 SDK，显式启用 EEG、HR、放松、注意力、愉悦、睡眠、心流、压力、和谐度与激活度，并返回已映射的嵌套 `algorithm` 对象。算法结果与原始窗口分别写入 `algorithm/`、`raw/` JSONL 文件，录播只读取两个文件，不重新调用算法。
+NeuroBridge 已实现 AffectiveCloud C++ SDK 的进程边界：网关在 `algorithm.enabled=true` 时启动配置的行 JSON bridge 进程，每个完整 BLE 窗口将原始 `FF31` 和 `FF51` 字节以 Base64 交给 bridge。bridge 以双通道 `appendEEG` 和 `appendHR` 调用 SDK，显式启用 EEG、HR、放松、注意力、愉悦、睡眠、心流、压力、和谐度与激活度，并返回已映射的嵌套 `algorithm` 对象。原始 EEG、原始心率和每类算法指标以独立事件文件按会话保存；指标记录使用各自的输入接收时间和计算完成时间，录播只读取已保存事件，不重新调用算法。
 
 **这不是算法 POC 或现场验收通过的声明。** 当前公开 SDK 的 `Affective.h` 注释默认双通道 EEG 每 0.6 秒为 50 个包、HR 为 3 个包；当前接入的 Flowtime 文档 profile 是 `FF31=20` 字节、`FF51=1` 字节。macOS POC 已完成 SDK 源码构建与合成输入烟雾测试，未使用任何人体数据；真实数据的包数、采样率、字节序、输入分组及输出时序尚未完成验证。因此生产模板仍保持 `algorithm.enabled=false`，不得以 SDK 的零值或单个窗口作为有效算法结论。
 

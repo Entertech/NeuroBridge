@@ -99,7 +99,7 @@ class Gateway:
         previous = self.status.get(name)
         self.status[name] = value
         if name == "connectionState" and value == "connected" and previous != "connected":
-            self.store.start()
+            self.store.start(now_ms())
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
             await self._cancel_window_flush()
             last = self.assembler.flush()
@@ -112,7 +112,18 @@ class Gateway:
             await self.broadcast_status()
 
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
-        for window in self.assembler.add(characteristic, value):
+        received_at_ms = now_ms()
+        raw_stream = {"ff31": "eeg", "ff51": "hr"}.get(characteristic)
+        if raw_stream:
+            window_start_ms = received_at_ms - received_at_ms % self.assembler.interval_ms
+            self.store.save_raw_packet(
+                stream=raw_stream,
+                received_at_ms=received_at_ms,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_start_ms + self.assembler.interval_ms,
+                value=value,
+            )
+        for window in self.assembler.add(characteristic, value, received_at_ms):
             await self.publish_window(window)
         self._schedule_window_flush()
 
@@ -159,10 +170,15 @@ class Gateway:
         if self.algorithm.available:
             reasons.extend(algorithm_reasons)
         valid = not reasons
-        if raw:
-            self.store.save_raw(timestamp_ms=window.end_ms, valid=valid, invalid_reasons=reasons, payload=raw)
         if algorithm_payload:
-            self.store.save_algorithm(timestamp_ms=window.end_ms, valid=valid, invalid_reasons=reasons, algorithm=algorithm_payload)
+            self.store.save_algorithm_events(
+                algorithm=algorithm_payload,
+                computed_at_ms=now_ms(),
+                eeg_source=self.store.source_reference(window.eeg, window_start_ms=window.start_ms, window_end_ms=window.end_ms),
+                hr_source=self.store.source_reference(window.hr_raw, window_start_ms=window.start_ms, window_end_ms=window.end_ms),
+                valid=valid,
+                invalid_reasons=reasons,
+            )
             if valid:
                 self.latest_algorithm, self.latest_algorithm_timestamp = algorithm_payload, window.end_ms
         if self.window_observer:
