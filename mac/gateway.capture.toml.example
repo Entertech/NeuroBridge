@@ -1,0 +1,31 @@
+# macOS 头环原始数据采集 POC 配置。
+# 复制为 mac/gateway.capture.toml 后再运行；该文件已被 .gitignore 忽略。
+# 录制数据必须保留在项目目录外，且不得提交或共享未获授权的人体数据。
+
+[server]
+# 仅允许本机 B 端联调页访问。不要将 POC 服务暴露到公共网络。
+host = "127.0.0.1"
+port = 8765
+path = "/neurobridge/v1/ws"
+
+[ble]
+# 此 POC 会扫描、连接匹配头环、订阅通知，并向 FF21 写入 0x05 开始采集。
+enabled = true
+device_name = "Flowtime Headband"
+model_nbr_uuid = "0000ff10-1212-abcd-1523-785feabcd123"
+scan_timeout_seconds = 5
+reconnect_delay_seconds = 3
+
+[recording]
+# 使用项目外目录，避免原始人体数据误入 Git 工作区。
+directory = "/tmp/neurobridge-headband-poc"
+subject_id = "POC-LOCAL"
+# 首次采集时保持为空；采集结束后按 README 中的步骤填写实际 recording ID 才能录播。
+replay_recording_id = ""
+replay_speed = 1.0
+
+[algorithm]
+# 此 bridge 会接收每个完整窗口并记录仅含长度/时间戳的审计信息；不会生成算法指标。
+# 完成真实字节分组验证并构建官方 SDK 后，才能改为实际算法 bridge。
+enabled = true
+command = ["/usr/bin/env", "python3", "mac/algorithm_ingest_bridge.py", "--audit-file", "/tmp/neurobridge-headband-poc/algorithm-ingest-audit.jsonl"]

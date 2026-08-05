@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NeuroBridge · 头环采集 POC</title>
+    <link rel="stylesheet" href="/capture/styles.css" />
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">NEUROBRIDGE / MACOS POC</p>
+      <h1>头环采集控制台</h1>
+      <p class="intro">页面打开后将立即在本机扫描已配置头环。连接成功后，网关会订阅设备通知、启动采集，并把完整窗口交给本地算法输入 bridge。</p>
+
+      <section class="card status-card" aria-live="polite">
+        <div class="status-heading">
+          <div>
+            <p class="label">连接状态</p>
+            <p id="connectionState" class="state">正在准备扫描…</p>
+          </div>
+          <span id="indicator" class="indicator" aria-label="连接状态指示灯"></span>
+        </div>
+        <dl>
+          <div><dt>算法 bridge</dt><dd id="algorithmState">—</dd></div>
+          <div><dt>录制会话</dt><dd id="recordingId">等待连接</dd></div>
+          <div><dt>WebSocket</dt><dd id="websocketUrl">—</dd></div>
+        </dl>
+      </section>
+
+      <section class="actions" aria-label="采集操作">
+        <button id="startButton" type="button">重新开始扫描</button>
+        <button id="stopButton" class="secondary" type="button">停止采集</button>
+        <a class="b-client-link" href="/b-client/" target="_blank" rel="noopener">打开 B 端订阅页</a>
+      </section>
+
+      <section class="card note">
+        <p>本页仅绑定本机回环地址。B 端页面中订阅 <code>eeg.raw</code> 与 <code>hr.raw</code>；算法输入 bridge 只核验和审计原始窗口，不会生成未经验证的脑波或心率指标。</p>
+      </section>
+      <p id="message" class="message" role="status"></p>
+    </main>
+    <script src="/capture/app.js"></script>
+  </body>
+</html>
