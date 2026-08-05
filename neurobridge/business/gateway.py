@@ -45,6 +45,8 @@ class Subscription:
 @dataclass(eq=False)
 class ClientSession:
     subscriptions: dict[str, Subscription] = field(default_factory=dict)
+    replay_algorithm: dict | None = None
+    replay_algorithm_timestamp: int | None = None
 
 
 class Gateway:
@@ -239,7 +241,7 @@ class Gateway:
                 result = self.status_result()
             elif action == "getLatest":
                 self.validate_params(params, {"streams"})
-                result = self.get_latest(params)
+                result = self.get_latest(session, params)
             elif action == "subscribe":
                 self.validate_params(params, {"streams", "includeInvalid"})
                 result = await self.subscribe(session, params, send)
@@ -255,7 +257,7 @@ class Gateway:
             LOG.exception("Request handling failed")
             await send(self.error(request_id, ProtocolError(500, "INTERNAL_ERROR", "Gateway request failed.", True)))
 
-    def get_latest(self, params: dict) -> dict:
+    def get_latest(self, session: ClientSession, params: dict) -> dict:
         streams = params.get("streams", ["eeg", "hr"])
         self.validate_streams(streams, allowed={"eeg", "hr"})
         if not self.live and not self.replay_available:
@@ -265,10 +267,10 @@ class Gateway:
             raise ProtocolError(409, "STREAM_NOT_AVAILABLE", "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
         algorithm, timestamp = self.latest_algorithm, self.latest_algorithm_timestamp
         if not self.live and self.replay_available:
-            events = self.store.events(self.config.recording.replay_recording_id or "")
-            candidates = [event for event in events if "algorithm" in event["payload"]]
-            if candidates:
-                algorithm, timestamp = candidates[-1]["payload"]["algorithm"], candidates[-1]["timestampMs"]
+            # Do not look ahead to the final recording result. `getLatest` follows
+            # this WebSocket connection's replay cursor, updated immediately before
+            # each replay event is delivered to the connection.
+            algorithm, timestamp = session.replay_algorithm, session.replay_algorithm_timestamp
         if not algorithm or timestamp is None:
             return {"mode": self.mode(), "timestampMs": now_ms(), "valid": False, "payload": {}}
         return {"mode": self.mode(), "timestampMs": timestamp, "valid": True, "payload": self.filtered_payload({}, algorithm, frozenset(streams))}
@@ -307,7 +309,7 @@ class Gateway:
         subscription = Subscription(f"sub-{uuid.uuid4().hex}", frozenset(streams), include_invalid, send)
         session.subscriptions[subscription.id] = subscription
         if not self.live:
-            subscription.replay_task = asyncio.create_task(self.replay(subscription))
+            subscription.replay_task = asyncio.create_task(self.replay(session, subscription))
         return {"subscriptionId": subscription.id, "streams": streams, "mode": self.mode(), "intervalMs": 600}
 
     async def unsubscribe(self, session: ClientSession, params: dict) -> dict:
@@ -321,7 +323,7 @@ class Gateway:
             subscription.replay_task.cancel()
         return {"subscriptionId": subscription_id}
 
-    async def replay(self, subscription: Subscription) -> None:
+    async def replay(self, session: ClientSession, subscription: Subscription) -> None:
         events = self.store.events(self.config.recording.replay_recording_id or "")
         previous: int | None = None
         try:
@@ -329,6 +331,12 @@ class Gateway:
                 if previous is not None:
                     await asyncio.sleep(max(0, item["timestampMs"] - previous) / 1000 / self.config.recording.replay_speed)
                 previous = item["timestampMs"]
+                if "algorithm" in item["payload"]:
+                    # Multiple subscriptions on one connection must never make its
+                    # `getLatest` cursor move backward.
+                    if session.replay_algorithm_timestamp is None or item["timestampMs"] >= session.replay_algorithm_timestamp:
+                        session.replay_algorithm = item["payload"]["algorithm"]
+                        session.replay_algorithm_timestamp = item["timestampMs"]
                 payload = self.filtered_payload(item["payload"], item["payload"].get("algorithm"), subscription.streams)
                 if not payload or (not item["valid"] and not subscription.include_invalid):
                     continue

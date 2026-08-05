@@ -138,3 +138,42 @@ class RecordingTests(unittest.TestCase):
             event = store.events(recording_id)[0]
             self.assertEqual(event["timestampMs"], 1200)
             self.assertEqual(event["payload"]["algorithm"]["attention"], 7.0)
+
+
+class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
+    async def test_get_latest_is_invalid_before_this_session_has_replay_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay_id = "rec-replay"
+            gateway = Gateway(config(root, replay_id=replay_id))
+            gateway.store.recording_id = replay_id
+            gateway.store.save_algorithm(timestamp_ms=10_000, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            gateway.store.stop()
+            latest = gateway.get_latest(ClientSession(), {"streams": ["eeg"]})
+            self.assertFalse(latest["valid"])
+            self.assertEqual(latest["payload"], {})
+
+    async def test_get_latest_follows_replay_cursor_not_recording_end(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay_id = "rec-replay"
+            gateway = Gateway(config(root, replay_id=replay_id))
+            gateway.store.recording_id = replay_id
+            for value in range(1, 9):
+                gateway.store.save_algorithm(timestamp_ms=value * 10_000, valid=True, invalid_reasons=[], algorithm={"attention": value})
+            gateway.store.stop()
+            session = ClientSession()
+            reached_four = asyncio.Event()
+            observed: list[int] = []
+
+            async def send(item: dict) -> None:
+                payload = item["data"].get("payload", {})
+                if payload.get("algorithm", {}).get("attention") == 4:
+                    latest = gateway.get_latest(session, {"streams": ["eeg"]})
+                    observed.append(latest["payload"]["algorithm"]["attention"])
+                    reached_four.set()
+
+            await gateway.subscribe(session, {"streams": ["eeg"]}, send)
+            await asyncio.wait_for(reached_four.wait(), timeout=1)
+            self.assertEqual(observed, [4])
+            await gateway.close_session(session)
