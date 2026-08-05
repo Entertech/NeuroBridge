@@ -107,6 +107,24 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sent[0]["code"], 400)
             self.assertEqual(sent[0]["data"]["reason"], "INVALID_REQUEST")
 
+    async def test_final_window_flushes_without_a_following_packet(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = Gateway(config(Path(directory)))
+            gateway.assembler = WindowAssembler(interval_ms=10)
+            await gateway.update_status("connectionState", "connected")
+            sent: list[dict] = []
+            async def send(item: dict) -> None:
+                sent.append(item)
+            session = ClientSession()
+            gateway.sessions.add(session)
+            await gateway.handle(session, '{"protocolVersion":"1.0","messageType":"request","requestId":"timer-1","action":"subscribe","params":{"streams":["eeg.raw"]}}', send)
+            sent.clear()
+            await gateway.receive_packet("ff31", b"x" * EEG_PACKET_BYTES)
+            await asyncio.sleep(0.05)
+            self.assertTrue(any(item["data"].get("event") == "data" for item in sent))
+            await gateway.close_session(session)
+            await gateway.stop()
+
 
 class RecordingTests(unittest.TestCase):
     def test_raw_and_algorithm_are_separate_then_replay_merges_timestamp(self) -> None:

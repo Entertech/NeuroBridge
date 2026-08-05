@@ -84,3 +84,7 @@ class WindowAssembler:
     def flush(self) -> DataWindow | None:
         window, self._window = self._window, None
         return window
+
+    @property
+    def window_end_ms(self) -> int | None:
+        return self._window.end_ms if self._window else None

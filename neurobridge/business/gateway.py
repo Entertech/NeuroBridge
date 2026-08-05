@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
@@ -57,6 +58,8 @@ class Gateway:
         self.sessions: set[Any] = set()
         self.latest_algorithm: dict | None = None
         self.latest_algorithm_timestamp: int | None = None
+        self._window_flush_task: asyncio.Task | None = None
+        self._window_flush_deadline_ms: int | None = None
 
     @property
     def live(self) -> bool:
@@ -75,6 +78,7 @@ class Gateway:
         self.status["algorithmState"] = "unavailable"
 
     async def stop(self) -> None:
+        await self._cancel_window_flush()
         await self.algorithm.stop()
         self.store.stop()
 
@@ -89,6 +93,7 @@ class Gateway:
         if name == "connectionState" and value == "connected" and previous != "connected":
             self.store.start()
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
+            await self._cancel_window_flush()
             last = self.assembler.flush()
             if last:
                 await self.publish_window(last)
@@ -101,6 +106,40 @@ class Gateway:
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
         for window in self.assembler.add(characteristic, value):
             await self.publish_window(window)
+        self._schedule_window_flush()
+
+    def _schedule_window_flush(self) -> None:
+        deadline = self.assembler.window_end_ms
+        if deadline is None:
+            return
+        if self._window_flush_task and not self._window_flush_task.done() and self._window_flush_deadline_ms == deadline:
+            return
+        if self._window_flush_task and not self._window_flush_task.done():
+            self._window_flush_task.cancel()
+        self._window_flush_deadline_ms = deadline
+        self._window_flush_task = asyncio.create_task(self._flush_window_at(deadline))
+
+    async def _flush_window_at(self, deadline_ms: int) -> None:
+        try:
+            await asyncio.sleep(max(0, deadline_ms - now_ms()) / 1000)
+            if self._window_flush_deadline_ms != deadline_ms:
+                return
+            for window in self.assembler.flush_until(deadline_ms):
+                await self.publish_window(window)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._window_flush_task is asyncio.current_task():
+                self._window_flush_task = None
+                self._window_flush_deadline_ms = None
+
+    async def _cancel_window_flush(self) -> None:
+        task, self._window_flush_task = self._window_flush_task, None
+        self._window_flush_deadline_ms = None
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
     async def publish_window(self, window: DataWindow) -> None:
         raw = window.raw_payload()
