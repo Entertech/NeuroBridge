@@ -8,7 +8,7 @@ import unittest
 TOOLS_DIR = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
-from external_protocol_registry import load_registry, select_external_protocol  # noqa: E402
+from external_protocol_registry import load_registry, select_external_protocol, select_prerelease_protocol  # noqa: E402
 
 
 class ExternalProtocolRegistryTests(unittest.TestCase):
@@ -25,3 +25,8 @@ class ExternalProtocolRegistryTests(unittest.TestCase):
     def test_unknown_version_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown external protocol version"):
             select_external_protocol(load_registry(), "9.9")
+
+    def test_active_prerelease_is_resolved_separately_from_published_versions(self) -> None:
+        prerelease = select_prerelease_protocol(load_registry(), "v0.3")
+        self.assertEqual(prerelease["markdown_path"], "doc/tech/头环数据网关北向网络协议_预发布.md")
+        self.assertEqual(prerelease["status"], "prerelease")

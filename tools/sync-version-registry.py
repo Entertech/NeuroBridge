@@ -17,6 +17,7 @@ CHANGE_LOG_PATH = ROOT / "doc" / "tech" / "版本变更记录.md"
 
 def render_change_log(registry: dict) -> str:
     external = registry["documents"]["external_northbound"]
+    prerelease = registry["documents"]["internal_prerelease"]
     locks = registry["release_locks"]
     records = registry["change_records"]
     lines = [
@@ -38,6 +39,16 @@ def render_change_log(registry: dict) -> str:
                 "",
             ]
         )
+    lines.extend(
+        [
+            "## 当前内部预发布版本",
+            "",
+            f'- 版本：v{prerelease["version"]}；状态：`{prerelease["status"]}`。',
+            f'- 基线：v{prerelease["based_on_released_version"]}；仅保留此一份内部预发布 Markdown。',
+            "- 升格规则：收到明确发布指令后，将该文档转换为独立的对外版本 Markdown，更新台账和锁定记录；CI 成功生成该版本 PDF Artifact 后方可合入发布。",
+            "",
+        ]
+    )
     lines.extend(["## 未锁定变更", ""])
     unlocked = [record for record in records if record["change_state"] == "unlocked"]
     if not unlocked:

@@ -8,9 +8,17 @@ on:
   workflow_dispatch:
     inputs:
       protocol_version:
-        description: "要生成 PDF 的对外协议版本，例如 0.2 或 v0.2；留空则生成当前版本"
+        description: "要生成 PDF 的协议版本，例如 0.2 或 v0.2；留空则按文档阶段生成最新版本"
         required: false
         type: string
+      protocol_stage:
+        description: "published 为正式对外版本；prerelease 仅生成内部预发布验收稿"
+        required: false
+        default: published
+        type: choice
+        options:
+          - published
+          - prerelease
 
 permissions:
   contents: read
@@ -38,13 +46,14 @@ jobs:
       - name: Build external protocol PDF artifact and page previews
         env:
           PROTOCOL_VERSION: ${{ inputs.protocol_version }}
+          PROTOCOL_STAGE: ${{ inputs.protocol_stage || 'published' }}
         run: |
           mkdir -p artifacts/protocol-preview
           version_args=()
           if [[ -n "$PROTOCOL_VERSION" ]]; then
             version_args=(--version "$PROTOCOL_VERSION")
           fi
-          python tools/build-external-protocol-artifact.py --output-dir artifacts "${version_args[@]}"
+          python tools/build-external-protocol-artifact.py --output-dir artifacts --stage "$PROTOCOL_STAGE" "${version_args[@]}"
           pdf_path=$(find artifacts -maxdepth 1 -type f -name '*.pdf' -print -quit)
           test -n "$pdf_path"
           pdfinfo "$pdf_path"

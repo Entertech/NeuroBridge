@@ -89,4 +89,4 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 - [头环数据网关北向网络协议 v0.2](doc/tech/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%E5%8C%97%E5%90%91%E7%BD%91%E7%BB%9C%E5%8D%8F%E8%AE%AE_v0.2.md)：B 端 WS/JSON 接入契约与联调验收。
 - [B 端联调网页](tools/b-client-test/README.md)：零依赖的浏览器测试工具，可连接网关并测试 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。
 
-对外协议版本的 Markdown 独立保存在仓库，PDF 不提交仓库。可在 GitHub Actions 的 **Run workflow** 中填写 `protocol_version` 生成指定版本的 PDF Artifact；本地/Codex 使用同一入口：`python3 tools/build-external-protocol-artifact.py --version <版本号> --output-dir <目录>`。版本清单与当前版本见 [版本台账](neurobridge/version_registry.toml)。
+对外协议版本的 Markdown 独立保存在仓库，PDF 不提交仓库。可在 GitHub Actions 的 **Run workflow** 中填写 `protocol_version` 和 `protocol_stage`：`published` 生成已发布对外版本，`prerelease` 只生成当前内部预发布版本的评审 Artifact。本地/Codex 使用同一入口：`python3 tools/build-external-protocol-artifact.py --stage <published|prerelease> --version <版本号> --output-dir <目录>`。版本清单、已发布版本和预发布版本见 [版本台账](neurobridge/version_registry.toml)。

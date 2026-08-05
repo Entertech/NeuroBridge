@@ -10,7 +10,13 @@ import subprocess
 import tomllib
 from urllib.parse import quote
 
-from external_protocol_registry import ROOT, external_protocol_catalog, load_registry, select_external_protocol
+from external_protocol_registry import (
+    ROOT,
+    external_protocol_catalog,
+    load_registry,
+    select_external_protocol,
+    select_prerelease_protocol,
+)
 
 
 def fail(message: str) -> None:
@@ -24,9 +30,10 @@ def digest(path: Path) -> str:
 def main() -> None:
     registry = load_registry()
     policy = registry["change_policy"]
+    lifecycle = registry["protocol_lifecycle"]
     external_catalog = external_protocol_catalog(registry)
     external = select_external_protocol(registry)
-    internal = registry["documents"]["internal_northbound"]
+    prerelease = select_prerelease_protocol(registry)
     integration = registry["documents"]["integration_plan"]
     wire_version = registry["northbound_wire_protocol"]["version"]
     application_version = registry["application"]["version"]
@@ -37,6 +44,12 @@ def main() -> None:
         fail("the default external document action must be record_only")
     if external_catalog["audience"] != "b_side":
         fail("external_northbound must be a B-side document catalog")
+    if external_catalog["current_version"] != lifecycle["released_version"]:
+        fail("internal and external protocol lifecycle must share the released version")
+    if prerelease["version"] != lifecycle["prerelease_version"]:
+        fail("internal and external protocol lifecycle must share the prerelease version")
+    if prerelease["based_on_released_version"] != lifecycle["released_version"]:
+        fail("prerelease must be based on the current released version")
     known_versions = [protocol["version"] for protocol in external_catalog["versions"]]
     if len(known_versions) != len(set(known_versions)):
         fail("every external protocol version must be stored exactly once")
@@ -86,8 +99,8 @@ def main() -> None:
                 fail("unlocked changes must not modify external documents")
             if record["base_locked_release"] != external["version"]:
                 fail("unlocked changes must be anchored to the current locked release")
-            if record["target_external_release"] != "unassigned":
-                fail("unlocked changes must not claim an unpublished external version")
+            if record["target_external_release"] != prerelease["version"]:
+                fail("unlocked changes must target the unified prerelease version")
         else:
             fail("change records must be locked or unlocked")
 
@@ -96,6 +109,21 @@ def main() -> None:
     ).stdout.strip()
     if tracked_pdfs:
         fail("protocol PDFs must be CI artifacts, not repository files")
+
+    prerelease_markdown = ROOT / prerelease["markdown_path"]
+    if not prerelease_markdown.is_file():
+        fail("the active prerelease Markdown must exist")
+    prerelease_text = prerelease_markdown.read_text(encoding="utf-8")
+    expected_prerelease_title = f'# {external_catalog["title"]} 预发布 v{prerelease["version"]}'
+    if prerelease_text.splitlines()[0] != expected_prerelease_title:
+        fail("prerelease Markdown title does not match the unified protocol lifecycle")
+    if f'版本：v{prerelease["version"]}（预发布）' not in prerelease_text:
+        fail("prerelease Markdown version does not match the unified protocol lifecycle")
+    if "仅供内部评审，尚未对 B 端发布" not in prerelease_text:
+        fail("prerelease Markdown must remain internal until promotion")
+    legacy_internal_protocol = ROOT / "doc/tech/头环蓝牙网关北向网络协议_v0.1.md"
+    if legacy_internal_protocol.exists():
+        fail("only the latest internal prerelease protocol document may be retained")
 
     markdown = ROOT / external["markdown_path"]
     markdown_text = markdown.read_text(encoding="utf-8")
@@ -125,8 +153,6 @@ def main() -> None:
     markdown_link_paths = (external["markdown_path"], quote(external["markdown_path"]))
     if f'{external_catalog["title"]} v{external["version"]}' not in readme or not any(path in readme for path in markdown_link_paths):
         fail("README must link B-side users to the registry-selected external protocol")
-    if f'版本：v{internal["version"]}' not in (ROOT / internal["markdown_path"]).read_text(encoding="utf-8"):
-        fail("internal northbound document version does not match the registry")
     if f'v{integration["version"]}' not in (ROOT / integration["markdown_path"]).read_text(encoding="utf-8"):
         fail("integration plan version does not match the registry")
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))

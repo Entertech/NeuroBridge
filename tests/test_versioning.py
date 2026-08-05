@@ -16,3 +16,8 @@ class VersionRegistryTests(unittest.TestCase):
         policy = REGISTRY["change_policy"]
         self.assertTrue(policy["external_documents_require_explicit_user_request"])
         self.assertEqual(policy["default_external_document_action"], "record_only")
+
+    def test_protocol_lifecycle_uses_one_released_and_prerelease_version_sequence(self) -> None:
+        lifecycle = REGISTRY["protocol_lifecycle"]
+        self.assertEqual(REGISTRY["documents"]["external_northbound"]["current_version"], lifecycle["released_version"])
+        self.assertEqual(REGISTRY["documents"]["internal_prerelease"]["version"], lifecycle["prerelease_version"])

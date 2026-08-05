@@ -12,10 +12,17 @@ version = "0.1"
 audience = "internal"
 markdown_path = "doc/tech/头环蓝牙网关对接方案_v0.1.md"
 
-[documents.internal_northbound]
-version = "0.1"
+[protocol_lifecycle]
+released_version = "0.2"
+prerelease_version = "0.3"
+
+[documents.internal_prerelease]
+version = "0.3"
 audience = "internal"
-markdown_path = "doc/tech/头环蓝牙网关北向网络协议_v0.1.md"
+status = "prerelease"
+markdown_path = "doc/tech/头环数据网关北向网络协议_预发布.md"
+pdf_artifact_name = "头环数据网关北向网络协议_v0.3-预发布.pdf"
+based_on_released_version = "0.2"
 
 [documents.external_northbound]
 current_version = "0.2"
@@ -64,5 +71,5 @@ summary = "录播中 getLatest 按当前 WebSocket 连接已回放的算法结�
 external_document_action = "record_only"
 change_state = "unlocked"
 base_locked_release = "0.2"
-target_external_release = "unassigned"
+target_external_release = "0.3"
 reason = "未收到更新对外文档的明确指令。"
