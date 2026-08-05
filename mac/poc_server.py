@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import signal
 import threading
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -57,7 +58,9 @@ class CaptureController:
     def __init__(self, config: GatewayConfig) -> None:
         self.gateway = Gateway(config)
         self.connection_error: str | None = None
-        self.adapter = FlowtimeAdapter(config.ble, self.gateway.receive_packet, self.update_status, self.gateway.on_device_ready, self.update_connection_error)
+        self.packet_log_bucket: int | None = None
+        self.packet_log_summary: dict[str, dict[str, Any]] = {}
+        self.adapter = FlowtimeAdapter(config.ble, self.receive_packet, self.update_status, self.gateway.on_device_ready, self.update_connection_error)
         self.server: Any | None = None
         self.adapter_task: asyncio.Task[None] | None = None
         self.started = False
@@ -70,6 +73,30 @@ class CaptureController:
 
     async def update_connection_error(self, error: str) -> None:
         self.connection_error = error
+
+    async def receive_packet(self, characteristic: str, value: bytes) -> None:
+        """Forward a packet while adding a rate-limited, non-complete UI log.
+
+        The POC UI may show that data is arriving, but it must not retain full
+        physiological raw bytes in a browser-visible log.
+        """
+        self._summarize_packet(characteristic, value)
+        await self.gateway.receive_packet(characteristic, value)
+
+    def _summarize_packet(self, characteristic: str, value: bytes) -> None:
+        bucket = int(time.time() * 1000) // 600
+        if self.packet_log_bucket is not None and bucket != self.packet_log_bucket:
+            fields = []
+            for stream, summary in sorted(self.packet_log_summary.items()):
+                fields.append(f"{stream}: {summary['count']} packets × {summary['bytes']} B, preview={summary['preview']}")
+            if fields:
+                LOG.info("Received headband data (600 ms): %s", "; ".join(fields))
+            self.packet_log_summary.clear()
+        self.packet_log_bucket = bucket
+        summary = self.packet_log_summary.setdefault(characteristic, {"count": 0, "bytes": len(value), "preview": value[:8].hex(" ") or "empty"})
+        summary["count"] += 1
+        summary["bytes"] = len(value)
+        summary["preview"] = value[:8].hex(" ") or "empty"
 
     async def start(self) -> dict[str, Any]:
         async with self.lock:
@@ -157,6 +184,9 @@ def handler_factory(controller: CaptureController, loop: asyncio.AbstractEventLo
             if path == "/b-client" or path == "/b-client/":
                 self.respond_file(B_CLIENT_ROOT / "index.html")
                 return
+            if path == "/b-client/config.js":
+                self.respond_javascript("window.NEUROBRIDGE_B_CLIENT_ENDPOINT=" + json.dumps(controller.snapshot()["websocketUrl"]) + ";\n")
+                return
             if path.startswith("/b-client/"):
                 self.respond_file(B_CLIENT_ROOT / path.removeprefix("/b-client/"))
                 return
@@ -188,6 +218,15 @@ def handler_factory(controller: CaptureController, loop: asyncio.AbstractEventLo
             body = json_bytes(payload)
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def respond_javascript(self, source: str) -> None:
+            body = source.encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/javascript; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
