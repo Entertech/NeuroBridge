@@ -14,3 +14,6 @@ neurobridge = "neurobridge.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["neurobridge*"]
+
+[tool.setuptools.package-data]
+neurobridge = ["version_registry.toml"]

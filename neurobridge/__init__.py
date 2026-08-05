@@ -1,3 +1,5 @@
 """NeuroBridge gateway package."""
 
-__version__ = "0.1.0"
+from .versioning import APPLICATION_VERSION
+
+__version__ = APPLICATION_VERSION

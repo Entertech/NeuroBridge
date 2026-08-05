@@ -1,6 +1,6 @@
 "use strict";
 
-const PROTOCOL_VERSION = "1.0";
+const PROTOCOL_VERSION = window.NEUROBRIDGE_VERSION.protocolVersion;
 const SUBPROTOCOL = "neurobridge.v1";
 let socket = null;
 let subscriptions = new Map();

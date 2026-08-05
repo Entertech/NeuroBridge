@@ -13,10 +13,11 @@ from typing import Any
 from ..algorithm.runner import AlgorithmRunner
 from ..config import GatewayConfig
 from ..ble.packets import DataWindow, WindowAssembler
+from ..versioning import NORTHBOUND_PROTOCOL_VERSION
 from .recording import RecordingStore
 
 LOG = logging.getLogger(__name__)
-PROTOCOL_VERSION = "1.0"
+PROTOCOL_VERSION = NORTHBOUND_PROTOCOL_VERSION
 STREAMS = frozenset({"eeg", "hr", "eeg.raw", "hr.raw", "status"})
 
 

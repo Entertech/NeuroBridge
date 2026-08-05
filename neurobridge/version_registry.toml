@@ -1,0 +1,53 @@
+# 本文件是仓库版本号的唯一来源。不要在其他文件中直接修改版本号；
+# 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
+
+[application]
+version = "0.1.0"
+
+[northbound_wire_protocol]
+version = "1.0"
+
+[documents.integration_plan]
+version = "0.1"
+audience = "internal"
+markdown_path = "doc/tech/头环蓝牙网关对接方案_v0.1.md"
+
+[documents.internal_northbound]
+version = "0.1"
+audience = "internal"
+markdown_path = "doc/tech/头环蓝牙网关北向网络协议_v0.1.md"
+
+[documents.external_northbound]
+version = "0.2"
+audience = "b_side"
+status = "published"
+title = "头环数据网关北向网络协议"
+markdown_path = "doc/tech/头环数据网关北向网络协议_v0.2.md"
+pdf_path = "doc/tech/头环数据网关北向网络协议_v0.2.pdf"
+published_date = "2026-08-05"
+markdown_sha256 = "1c9ff5c543150e3cd7504328c2c4da5b76afc0954f04a7bd4fd1f63d79f21260"
+pdf_sha256 = "2bd29aa03aaf6094167f93fe0752d576d9b6b9535b0932d66df890d030ccf1af"
+publication_record = "2026-08-05-public-northbound-v0.2"
+
+[change_policy]
+external_documents_require_explicit_user_request = true
+default_external_document_action = "record_only"
+change_log_path = "doc/tech/版本变更记录.md"
+
+[[change_records]]
+id = "2026-08-05-public-northbound-v0.2"
+date = "2026-08-05"
+scope = "external_northbound_document"
+summary = "发布当前 B 端北向网络协议基线。"
+external_document_action = "explicit_user_authorized"
+external_document_version = "0.2"
+reason = "已发布基线，保留发布记录。"
+
+[[change_records]]
+id = "2026-08-05-replay-get-latest-cursor"
+date = "2026-08-05"
+scope = "gateway_behavior"
+summary = "录播中 getLatest 按当前 WebSocket 连接已回放的算法结果返回，不预读录制末尾。"
+external_document_action = "record_only"
+external_document_version = "0.2"
+reason = "未收到更新对外文档的明确指令。"
