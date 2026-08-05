@@ -29,6 +29,15 @@ markdown_sha256 = "1c9ff5c543150e3cd7504328c2c4da5b76afc0954f04a7bd4fd1f63d79f21
 pdf_sha256 = "2bd29aa03aaf6094167f93fe0752d576d9b6b9535b0932d66df890d030ccf1af"
 publication_record = "2026-08-05-public-northbound-v0.2"
 
+[[release_locks]]
+id = "northbound-v0.1-to-v0.2"
+scope = "external_northbound_document"
+from_version = "0.1"
+to_version = "0.2"
+status = "locked"
+locked_by = "2026-08-05-public-northbound-v0.2"
+locked_at = "2026-08-05"
+
 [change_policy]
 external_documents_require_explicit_user_request = true
 default_external_document_action = "record_only"
@@ -41,6 +50,8 @@ scope = "external_northbound_document"
 summary = "发布当前 B 端北向网络协议基线。"
 external_document_action = "explicit_user_authorized"
 external_document_version = "0.2"
+change_state = "locked"
+release_lock = "northbound-v0.1-to-v0.2"
 reason = "已发布基线，保留发布记录。"
 
 [[change_records]]
@@ -49,5 +60,7 @@ date = "2026-08-05"
 scope = "gateway_behavior"
 summary = "录播中 getLatest 按当前 WebSocket 连接已回放的算法结果返回，不预读录制末尾。"
 external_document_action = "record_only"
-external_document_version = "0.2"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "unassigned"
 reason = "未收到更新对外文档的明确指令。"

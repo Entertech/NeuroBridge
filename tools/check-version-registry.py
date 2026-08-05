@@ -6,7 +6,6 @@ from __future__ import annotations
 from hashlib import sha256
 from pathlib import Path
 import re
-import sys
 import tomllib
 from urllib.parse import quote
 
@@ -48,6 +47,28 @@ def main() -> None:
         fail("publication record version does not match the current external document")
     if publication_record["date"] != external["published_date"]:
         fail("publication record date does not match the current external document")
+    if publication_record["change_state"] != "locked":
+        fail("published external documents must have a locked publication record")
+
+    locks = {lock["id"]: lock for lock in registry["release_locks"]}
+    publication_lock = locks.get(publication_record["release_lock"])
+    if publication_lock is None or publication_lock["status"] != "locked":
+        fail("published external documents must reference a locked release interval")
+    if publication_lock["to_version"] != external["version"]:
+        fail("locked release interval must end at the published external version")
+    for record in registry["change_records"]:
+        if record["change_state"] == "locked":
+            if record.get("release_lock") not in locks:
+                fail("locked change records must reference a release lock")
+        elif record["change_state"] == "unlocked":
+            if record["external_document_action"] != "record_only":
+                fail("unlocked changes must not modify external documents")
+            if record["base_locked_release"] != external["version"]:
+                fail("unlocked changes must be anchored to the current locked release")
+            if record["target_external_release"] != "unassigned":
+                fail("unlocked changes must not claim an unpublished external version")
+        else:
+            fail("change records must be locked or unlocked")
 
     markdown = ROOT / external["markdown_path"]
     pdf = ROOT / external["pdf_path"]
@@ -97,6 +118,11 @@ def main() -> None:
     )
     if (ROOT / "tools" / "b-client-test" / "version.js").read_text(encoding="utf-8") != generated_client_version:
         fail("run tools/sync-version-registry.py after changing the version registry")
+    change_log = (ROOT / policy["change_log_path"]).read_text(encoding="utf-8")
+    if f'v{publication_lock["from_version"]} → v{publication_lock["to_version"]}' not in change_log:
+        fail("version change log must include the locked release interval")
+    if "## 未锁定变更" not in change_log:
+        fail("version change log must include the unlocked change section")
 
 
 if __name__ == "__main__":
