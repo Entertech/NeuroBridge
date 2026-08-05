@@ -44,7 +44,7 @@ th { background: #eaf2f8; color: #0b3b67; }
 tr { break-inside: avoid; }
 
 pre, code {
-  font-family: "SFMono-Regular", "Noto Sans Mono CJK SC", Menlo, monospace;
+  font-family: "Noto Sans Mono CJK SC", "Noto Sans CJK SC", "SFMono-Regular", Menlo, monospace;
 }
 
 pre {

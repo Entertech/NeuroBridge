@@ -32,7 +32,9 @@ jobs:
       - name: Install protocol PDF renderer
         run: |
           sudo apt-get update
-          sudo apt-get install -y pandoc poppler-utils
+          sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
+          fc-cache -f
+          fc-match "Noto Sans CJK SC" | rg -i "Noto.*CJK"
       - name: Build external protocol PDF artifact and page previews
         env:
           PROTOCOL_VERSION: ${{ inputs.protocol_version }}
@@ -46,6 +48,8 @@ jobs:
           pdf_path=$(find artifacts -maxdepth 1 -type f -name '*.pdf' -print -quit)
           test -n "$pdf_path"
           pdfinfo "$pdf_path"
+          pdffonts "$pdf_path" | tee artifacts/pdf-fonts.txt
+          rg -i "Noto.*CJK|NotoSansCJK" artifacts/pdf-fonts.txt
           pdftoppm -png -r 144 "$pdf_path" artifacts/protocol-preview/page
           test -n "$(find artifacts/protocol-preview -type f -name 'page-*.png' -print -quit)"
       - name: Upload external protocol PDF artifact
