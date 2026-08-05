@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 from ..config import BleConfig
 
 LOG = logging.getLogger(__name__)
@@ -13,11 +13,21 @@ BATTERY = "00002a19-0000-1000-8000-00805f9b34fb"
 
 class FlowtimeAdapter:
     """Bleak adapter modeled on the PC SDK, with the confirmed v0.1 byte contract."""
-    def __init__(self, config: BleConfig, packet: Callable[[str, bytes], Awaitable[None]], status: Callable[[str, object], Awaitable[None]]) -> None:
-        self.config, self.packet, self.status = config, packet, status
+    def __init__(self, config: BleConfig, packet: Callable[[str, bytes], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]]) -> None:
+        self.config, self.packet, self.status, self.device_ready = config, packet, status, device_ready
         self._client = None
         self._stopping = False
-        self._address = config.device_address
+
+    def select_strongest(self, devices: list[Any]) -> Any | None:
+        """Select the strongest advertisement matching the configured Flowtime profile."""
+        def matches(device: Any) -> bool:
+            name_matches = self.config.device_name is None or getattr(device, "name", None) == self.config.device_name
+            metadata = getattr(device, "metadata", {}) or {}
+            advertised_uuids = {str(item).lower() for item in metadata.get("uuids", [])}
+            return name_matches and self.config.model_nbr_uuid in advertised_uuids
+
+        candidates = [device for device in devices if matches(device)]
+        return max(candidates, key=lambda device: getattr(device, "rssi", None) if isinstance(getattr(device, "rssi", None), int | float) else float("-inf"), default=None)
 
     async def run(self) -> None:
         if not self.config.enabled:
@@ -26,16 +36,21 @@ class FlowtimeAdapter:
         while not self._stopping:
             try:
                 await self.status("connectionState", "connecting")
-                if not self._address:
-                    LOG.info("Scanning for Flowtime headband")
-                    devices = await BleakScanner.discover(timeout=self.config.scan_timeout_seconds)
-                    candidate = next((device for device in devices if self.config.device_name is None or device.name == self.config.device_name), None)
-                    if candidate is None:
-                        raise RuntimeError("Configured Flowtime headband was not found")
-                    self._address = candidate.address
-                self._client = BleakClient(self._address, disconnected_callback=lambda _: asyncio.create_task(self.status("connectionState", "disconnected")))
+                LOG.info("Scanning for Flowtime headband")
+                devices = await BleakScanner.discover(timeout=self.config.scan_timeout_seconds)
+                candidate = self.select_strongest(devices)
+                if candidate is None:
+                    raise RuntimeError("No Flowtime headband matching the configured profile was found")
+                LOG.info("Connecting to Flowtime candidate %s (RSSI=%s)", candidate.address, getattr(candidate, "rssi", None))
+                self._client = BleakClient(candidate, disconnected_callback=lambda _: asyncio.create_task(self.status("connectionState", "disconnected")))
                 await self._client.connect()
                 await self._subscribe()
+                # Do not start device capture until the algorithm has a clean session.
+                # This makes every post-FF21 packet eligible for automatic append.
+                await self.device_ready()
+                await self._client.write_gatt_char(FF21, b"\x05", response=True)
+                # A connection is only published after all notifications, the FF21
+                # start command, and the per-session algorithm initialization succeed.
                 await self.status("connectionState", "connected")
                 while self._client.is_connected and not self._stopping:
                     await asyncio.sleep(1)
@@ -60,7 +75,6 @@ class FlowtimeAdapter:
             # Schedule the async state update rather than relying on backend-specific
             # coroutine callback behavior.
             await self._client.start_notify(characteristic, lambda sender, value, c=characteristic: asyncio.create_task(notify(c, sender, value)))
-        await self._client.write_gatt_char(FF21, b"\x05", response=True)
 
     async def stop(self) -> None:
         self._stopping = True

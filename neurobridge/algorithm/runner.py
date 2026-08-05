@@ -37,10 +37,18 @@ class AlgorithmRunner:
             self.error = str(exc)
             LOG.exception("Cannot start algorithm bridge")
 
+    async def initialize(self) -> None:
+        """Create a clean SDK process for each new device connection/session."""
+        await self.stop()
+        self.process = None
+        self.error = None
+        await self.start()
+
     async def stop(self) -> None:
         if self.process and self.process.returncode is None:
             self.process.terminate()
             await self.process.wait()
+        self.process = None
 
     async def evaluate(self, window: DataWindow) -> tuple[dict | None, list[str]]:
         if not window.eeg and not window.hr_raw:

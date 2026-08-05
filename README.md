@@ -17,7 +17,7 @@ systemctl restart neurobridge
 systemctl status neurobridge
 ```
 
-部署脚本会创建 `neurobridge` 服务账户、运行目录、Python 虚拟环境和 systemd 服务。静态 IP、端口、设备地址或扫描匹配名、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
+部署脚本会创建 `neurobridge` 服务账户、运行目录、Python 虚拟环境和 systemd 服务。静态 IP、端口、Flowtime 扫描匹配条件、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
 
 ```bash
 python3 -m venv .venv
@@ -26,7 +26,7 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连，并按已确认 profile 订阅 `FF31`、`FF32`、`FF51`、`FF52`，在全部通知就绪后向 `FF21` 写入 `0x05`；停止时写入 `0x06`。算法 SDK 通过独立的行 JSON bridge 进程接入，避免 Python 进程直接依赖 C++ ABI。由于 SDK 默认输入包长与本项目确认的 `FF31=14`、`FF52=20` 不一致，`algorithm.enabled` 默认关闭；在真实录制字节完成输入分组与输出核验前，网关只发布已验证的原始流，不会生成伪算法指标。
+Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51`、`FF52` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。因此每个采集启动后的原始 EEG/HR 窗口都会自动进入算法 bridge。算法 SDK 通过独立的行 JSON bridge 进程接入，避免 Python 进程直接依赖 C++ ABI。由于 SDK 默认输入包长与本项目确认的 `FF31=14`、`FF52=20` 不一致，`algorithm.enabled` 默认关闭；在真实录制字节完成输入分组与输出核验前，网关只发布已验证的原始流，不会生成伪算法指标。
 
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 

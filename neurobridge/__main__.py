@@ -12,7 +12,7 @@ from .northbound.websocket import serve
 
 async def run(config_path: str) -> None:
     gateway = Gateway(load(config_path))
-    adapter = FlowtimeAdapter(gateway.config.ble, gateway.receive_packet, gateway.update_status)
+    adapter = FlowtimeAdapter(gateway.config.ble, gateway.receive_packet, gateway.update_status, gateway.on_device_ready)
     await gateway.start()
     try:
         async with asyncio.TaskGroup() as group:

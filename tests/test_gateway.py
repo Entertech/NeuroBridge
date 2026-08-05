@@ -7,13 +7,14 @@ import tempfile
 import unittest
 
 from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, RecordingConfig, ServerConfig
+from neurobridge.ble.flowtime import FlowtimeAdapter
 from neurobridge.business.gateway import ClientSession, Gateway
 from neurobridge.ble.packets import DataWindow, EEG_PACKET_BYTES, HR_RAW_PACKET_BYTES, RawPacket, WindowAssembler
 from neurobridge.business.recording import RecordingStore
 
 
 def config(root: Path, replay_id: str | None = None) -> GatewayConfig:
-    return GatewayConfig(ServerConfig("127.0.0.1", 8765, "/neurobridge/v1/ws"), BleConfig(False, "", None, 5, 3), RecordingConfig(root, "SUBJECT-001", replay_id, 1000), AlgorithmConfig(False, ()))
+    return GatewayConfig(ServerConfig("127.0.0.1", 8765, "/neurobridge/v1/ws"), BleConfig(False, "Flowtime Headband", "0000ff10-1212-abcd-1523-785feabcd123", 5, 3), RecordingConfig(root, "SUBJECT-001", replay_id, 1000), AlgorithmConfig(False, ()))
 
 
 class PacketTests(unittest.TestCase):
@@ -34,6 +35,45 @@ class PacketTests(unittest.TestCase):
         window = assembler.add("ff31", b"e" * 14, 1601)[0]
         self.assertIn("nativeHr", window.raw_payload())
         self.assertEqual(window.raw_payload()["nativeHr"]["packetBytes"], 16)
+
+
+class FlowtimeSelectionTests(unittest.TestCase):
+    def test_selects_matching_candidate_with_highest_rssi(self) -> None:
+        class Device:
+            def __init__(self, name: str, uuids: list[str], rssi: int) -> None:
+                self.name, self.metadata, self.rssi = name, {"uuids": uuids}, rssi
+        async def ignored_packet(_: str, __: bytes) -> None: pass
+        async def ignored_status(_: str, __: object) -> None: pass
+        async def ignored_ready() -> None: pass
+        adapter = FlowtimeAdapter(config(Path("/tmp")).ble, ignored_packet, ignored_status, ignored_ready)
+        selected = adapter.select_strongest([
+            Device("Other", ["0000ff10-1212-abcd-1523-785feabcd123"], -20),
+            Device("Flowtime Headband", ["0000ff10-1212-abcd-1523-785feabcd123"], -80),
+            Device("Flowtime Headband", ["0000ff10-1212-abcd-1523-785feabcd123"], -42),
+        ])
+        self.assertEqual(selected.rssi, -42)
+
+
+class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_algorithm_is_initialized_for_each_device_ready_event(self) -> None:
+        class FakeAlgorithm:
+            available = True
+            error = None
+            def __init__(self) -> None:
+                self.initializations = 0
+            async def initialize(self) -> None:
+                self.initializations += 1
+            async def stop(self) -> None:
+                pass
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = Gateway(config(Path(directory)))
+            fake = FakeAlgorithm()
+            gateway.algorithm = fake
+            await gateway.start()
+            self.assertEqual(fake.initializations, 0)
+            await gateway.on_device_ready()
+            self.assertEqual(fake.initializations, 1)
+            self.assertEqual(gateway.status["algorithmState"], "ready")
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):

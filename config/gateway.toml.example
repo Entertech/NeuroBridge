@@ -1,4 +1,4 @@
-# Copy to /etc/neurobridge/gateway.toml; do not put device addresses or recordings in git.
+# Copy to /etc/neurobridge/gateway.toml; do not put recordings in git.
 [server]
 host = "192.168.88.10" # Gateway static IP, to be confirmed at deployment.
 port = 8765            # To be confirmed with B-end host.
@@ -7,8 +7,9 @@ path = "/neurobridge/v1/ws"
 [ble]
 # Enabled only after a real headband POC on the target Ubuntu x86_64 host.
 enabled = false
-device_address = ""    # Linux BlueZ address, e.g. "AA:BB:CC:DD:EE:FF"
+# On every unconnected cycle, scan matching advertisements and connect the highest RSSI.
 device_name = "Flowtime Headband"
+model_nbr_uuid = "0000ff10-1212-abcd-1523-785feabcd123"
 scan_timeout_seconds = 5
 reconnect_delay_seconds = 3
 

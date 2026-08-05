@@ -70,14 +70,18 @@ class Gateway:
         return "live" if self.live else "replay"
 
     async def start(self) -> None:
-        await self.algorithm.start()
-        self.status["algorithmState"] = "ready" if self.algorithm.available else ("error" if self.algorithm.error else "unavailable")
-        if self.live:
-            self.store.start()
+        # The local algorithm is session scoped and must be initialized only after
+        # a Flowtime connection has subscribed all notifications and started capture.
+        self.status["algorithmState"] = "unavailable"
 
     async def stop(self) -> None:
         await self.algorithm.stop()
         self.store.stop()
+
+    async def on_device_ready(self) -> None:
+        """Start a fresh local algorithm session before publishing connected state."""
+        await self.algorithm.initialize()
+        self.status["algorithmState"] = "ready" if self.algorithm.available else ("error" if self.algorithm.error else "unavailable")
 
     async def update_status(self, name: str, value: object) -> None:
         previous = self.status.get(name)
@@ -88,6 +92,8 @@ class Gateway:
             last = self.assembler.flush()
             if last:
                 await self.publish_window(last)
+            await self.algorithm.stop()
+            self.status["algorithmState"] = "unavailable"
             self.store.stop()
         if previous != value:
             await self.broadcast_status()
