@@ -1,6 +1,6 @@
 # NeuroBridge
 
-NeuroBridge 是将回车科技头环的 BLE 数据接入第三方 B 端主机的 PC/Linux 蓝牙网关。网关负责 BLE 采集、数据与算法处理、北向协议适配、录播和运行维护；第三方 B 端主机负责展示与保存。
+NeuroBridge 是将回车科技头环数据接入第三方 B 端主机的跨平台 PC 网关。网关核心负责设备采集、数据与算法处理、北向协议适配、录播和运行维护；第三方 B 端主机负责展示与保存。首期交付目标是 Ubuntu x86_64，macOS 仅用于真实设备 POC，Windows 尚未完成网关运行验证。
 
 当前对接方案详见：[头环蓝牙网关对接方案 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%AF%B9%E6%8E%A5%E6%96%B9%E6%A1%88_v0.1.md)。
 
@@ -41,6 +41,24 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 - `windows/`：Windows 平台接入说明；当前没有经过验证的 Windows 服务启动器或部署脚本。
 
 网页不再放入平台目录。macOS POC 仍通过同样的 `/capture/` 与 `/b-client/` URL 提供页面，因此已有书签和使用流程不受影响。
+
+## 按平台使用
+
+| 场景 | 入口 | 当前状态 |
+| --- | --- | --- |
+| Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 首期部署入口；安装为 systemd 服务。 |
+| macOS 真实头环 POC | [`mac/start-poc.command`](mac/start-poc.command) | 一键启动本机采集、算法 bridge 和控制台；详见 [`mac/README.md`](mac/README.md)。 |
+| Windows 网关 | [`windows/README.md`](windows/README.md) | 尚未完成设备、算法和后台服务验证，不能作为交付部署入口。 |
+| 采集控制台网页 | [`web/capture/`](web/capture/) | 平台无关静态资源；由本地采集服务挂载到 `/capture/`。 |
+| B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 平台无关静态资源；可直接用任意静态服务器托管。 |
+
+例如，仅启动 B 端联调网页时可在仓库根目录运行：
+
+```bash
+python3 -m http.server 8088 --directory web/b-client-test
+```
+
+浏览器访问终端显示的地址后，填写专用有线网络内的网关 WebSocket 地址。该网页不代替网关进程，也不会访问本机蓝牙。
 
 ## 首期交付结论
 
