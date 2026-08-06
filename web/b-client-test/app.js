@@ -1,6 +1,6 @@
 "use strict";
 
-const PROTOCOL_VERSION = "1.0";
+const PROTOCOL_VERSION = window.NEUROBRIDGE_VERSION.protocolVersion;
 const SUBPROTOCOL = "neurobridge.v1";
 let socket = null;
 let subscriptions = new Map();
@@ -31,6 +31,10 @@ const elements = {
   timestampValue: document.querySelector("#timestampValue"),
   latestSummary: document.querySelector("#latestSummary"),
 };
+
+if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
+  elements.endpoint.value = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
+}
 
 function isConnected() {
   return socket && socket.readyState === WebSocket.OPEN;
@@ -250,4 +254,6 @@ elements.copyLogButton.addEventListener("click", async () => {
 });
 
 refreshSubscriptionSelect();
-appendLog("system", "SYSTEM", "B 端联调台已就绪；不会发送任何保活帧。");
+appendLog("system", "SYSTEM", window.NEUROBRIDGE_B_CLIENT_ENDPOINT
+  ? `B 端联调台已就绪；已使用本机采集服务地址 ${elements.endpoint.value}，不会发送任何保活帧。`
+  : "B 端联调台已就绪；不会发送任何保活帧。");

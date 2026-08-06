@@ -1,0 +1,148 @@
+# 本文件是仓库版本号的唯一来源。不要在其他文件中直接修改版本号；
+# 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
+
+[application]
+version = "0.1.0"
+
+[northbound_wire_protocol]
+version = "1.0"
+
+[documents.integration_plan]
+version = "0.1"
+audience = "internal"
+markdown_path = "doc/tech/头环蓝牙网关对接方案_v0.1.md"
+
+[protocol_lifecycle]
+released_version = "0.2"
+prerelease_version = "0.3"
+
+[documents.internal_prerelease]
+version = "0.3"
+audience = "internal"
+status = "prerelease"
+markdown_path = "doc/tech/头环数据网关北向网络协议_预发布.md"
+pdf_artifact_name = "头环数据网关北向网络协议_v0.3-预发布.pdf"
+based_on_released_version = "0.2"
+
+[documents.external_northbound]
+current_version = "0.2"
+audience = "b_side"
+title = "头环数据网关北向网络协议"
+
+[documents.external_capture_package]
+version = "0.1"
+audience = "data_recipient"
+title = "头环数据采集包格式说明"
+markdown_path = "doc/tech/对外/头环数据采集包格式说明/头环数据采集包格式说明_v0.1.md"
+published_date = "2026-08-05"
+markdown_sha256 = "1fe61a02d7f0d388087c1adf515d30696a796d03054a21f6aba782ad5b543682"
+publication_record = "2026-08-05-public-capture-package-v0.1"
+
+[[documents.external_northbound.versions]]
+version = "0.2"
+status = "published"
+markdown_path = "doc/tech/对外/头环数据网关北向网络协议/头环数据网关北向网络协议_v0.2.md"
+pdf_artifact_name = "头环数据网关北向网络协议_v0.2.pdf"
+published_date = "2026-08-05"
+markdown_sha256 = "1c9ff5c543150e3cd7504328c2c4da5b76afc0954f04a7bd4fd1f63d79f21260"
+publication_record = "2026-08-05-public-northbound-v0.2"
+
+[[release_locks]]
+id = "northbound-v0.1-to-v0.2"
+scope = "external_northbound_document"
+from_version = "0.1"
+to_version = "0.2"
+status = "locked"
+locked_by = "2026-08-05-public-northbound-v0.2"
+locked_at = "2026-08-05"
+
+[[release_locks]]
+id = "capture-package-v0.0-to-v0.1"
+scope = "external_capture_package_document"
+from_version = "0.0"
+to_version = "0.1"
+status = "locked"
+locked_by = "2026-08-05-public-capture-package-v0.1"
+locked_at = "2026-08-05"
+
+[change_policy]
+external_documents_require_explicit_user_request = true
+default_external_document_action = "record_only"
+change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
+
+[[change_records]]
+id = "2026-08-05-public-northbound-v0.2"
+date = "2026-08-05"
+scope = "external_northbound_document"
+summary = "发布当前 B 端北向网络协议基线。"
+external_document_action = "explicit_user_authorized"
+external_document_version = "0.2"
+change_state = "locked"
+release_lock = "northbound-v0.1-to-v0.2"
+reason = "已发布基线，保留发布记录。"
+
+[[change_records]]
+id = "2026-08-05-public-capture-package-v0.1"
+date = "2026-08-05"
+scope = "external_capture_package_document"
+summary = "发布采集数据包 ZIP 的文件与字段说明。"
+external_document_action = "explicit_user_authorized"
+external_document_version = "0.1"
+change_state = "locked"
+release_lock = "capture-package-v0.0-to-v0.1"
+reason = "用户明确要求提供对外文件与字段说明；该文档独立于已锁定的 B 端北向网络协议。"
+
+[[change_records]]
+id = "2026-08-05-capture-package-pdf-export"
+date = "2026-08-05"
+scope = "gateway_behavior"
+summary = "一键保存 ZIP 在会话根目录附带已发布的头环数据采集包格式说明 v0.1 PDF，并在 manifest 的 documentation 字段记录其路径、版本和 SHA-256。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求调整导出物；已发布的采集包格式说明 v0.1 保持锁定，未改写其 Markdown。"
+
+[[change_records]]
+id = "2026-08-05-replay-get-latest-cursor"
+date = "2026-08-05"
+scope = "gateway_behavior"
+summary = "录播中 getLatest 优先返回当前 WebSocket 连接已回放的有效算法结果；尚未订阅时返回录制中的最新有效算法结果。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "未收到更新对外文档的明确指令；运行时保持已发布 v0.2 的错误码兼容性。"
+
+[[change_records]]
+id = "2026-08-05-flowtime-document-profile-poc"
+date = "2026-08-05"
+scope = "gateway_behavior"
+summary = "macOS 采集 POC 按已核对的 Flowtime 文档订阅 FF31、FF32、FF51 并使用 FF21 启停；移除不存在的 FF52 订阅。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "已发布 v0.2 保持锁定；未收到更新对外文档的明确指令，且对外协议不应暴露设备 BLE 特征或固定包长。"
+
+[[change_records]]
+id = "2026-08-05-macos-native-affective-bridge-poc"
+date = "2026-08-05"
+scope = "gateway_behavior"
+summary = "macOS POC 接入锁定的 AffectiveCloud C++ SDK，构建本地算法 bridge 并输出既有算法字段结构；已完成源码构建和合成输入烟雾测试，未完成真实数据或 Ubuntu 验证。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "对外 v0.2 保持锁定，且未收到更新对外文档的明确指令；本变更不增加或修改 B 端可观察字段。"
+
+[[change_records]]
+id = "2026-08-06-confirmed-device-profile-restoration"
+date = "2026-08-06"
+scope = "gateway_behavior"
+summary = "恢复已确认的 FF31=14、FF51=16、FF52=20 字节 profile；订阅并持久化三类原始通知，FF52 用于北向 hr.raw。录播按各流的实际包长生成元数据。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "修复实现与已锁定 v0.2 原始数据字段契约不一致的问题；未改写已发布对外 Markdown。"
