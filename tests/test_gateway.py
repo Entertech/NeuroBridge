@@ -382,6 +382,57 @@ class RecordingTests(unittest.TestCase):
 
 
 class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
+    async def test_subscribe_confirmation_precedes_replay_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay_id = "rec-replay"
+            gateway = Gateway(config(root, replay_id=replay_id, replay_speed=1))
+            gateway.store.recording_id = replay_id
+            gateway.store.save_algorithm(timestamp_ms=1_000, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            gateway.store.stop()
+            sent: list[dict] = []
+            received_data = asyncio.Event()
+
+            async def send(item: dict) -> None:
+                sent.append(item)
+                if item["data"].get("event") == "data":
+                    received_data.set()
+
+            await gateway.handle(ClientSession(), '{"protocolVersion":"1.0","messageType":"request","requestId":"sub-1","action":"subscribe","params":{"streams":["eeg"]}}', send)
+            await asyncio.wait_for(received_data.wait(), timeout=1)
+            self.assertEqual(sent[0]["data"]["action"], "subscribe")
+            self.assertEqual(sent[1]["data"]["event"], "data")
+            await gateway.stop()
+
+    async def test_failed_replay_subscriber_does_not_stop_other_subscribers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay_id = "rec-replay"
+            gateway = Gateway(config(root, replay_id=replay_id, replay_speed=10))
+            gateway.store.recording_id = replay_id
+            for value in (1, 2, 3):
+                gateway.store.save_algorithm(timestamp_ms=value * 1_000, valid=True, invalid_reasons=[], algorithm={"attention": value})
+            gateway.store.stop()
+            received_second = asyncio.Event()
+            received: list[int] = []
+
+            async def failed_send(_: dict) -> None:
+                raise ConnectionResetError("B-side connection closed")
+
+            async def healthy_send(item: dict) -> None:
+                value = item["data"].get("payload", {}).get("algorithm", {}).get("attention")
+                if value is not None:
+                    received.append(value)
+                    if value == 2:
+                        received_second.set()
+
+            await gateway.subscribe(ClientSession(), {"streams": ["eeg"]}, failed_send)
+            await gateway.subscribe(ClientSession(), {"streams": ["eeg"]}, healthy_send)
+            await asyncio.wait_for(received_second.wait(), timeout=1)
+            self.assertEqual(received[:2], [1, 2])
+            self.assertIsNotNone(gateway._replay_task)
+            await gateway.stop()
+
     async def test_get_latest_starts_gateway_replay_without_a_subscription(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
