@@ -28,6 +28,14 @@ class DeploymentTests(unittest.TestCase):
             self.assertIn(package, install_script)
         self.assertIn('--user-data-dir="$chrome_profile"', renderer)
 
+    def test_dhcp_is_an_optional_isolated_service(self) -> None:
+        install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
+        service = (ROOT / "linux" / "systemd" / "neurobridge-dhcp.service").read_text(encoding="utf-8")
+        self.assertIn("dnsmasq", install_script)
+        self.assertIn("systemctl enable neurobridge-dhcp.service", install_script)
+        self.assertIn("ExecCondition=", service)
+        self.assertIn("--check-enabled", service)
+
     def test_web_assets_are_not_in_a_platform_directory(self) -> None:
         self.assertTrue((ROOT / "web" / "capture" / "index.html").is_file())
         self.assertTrue((ROOT / "web" / "b-client-test" / "index.html").is_file())

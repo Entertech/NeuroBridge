@@ -4,6 +4,19 @@ host = "192.168.88.10" # Gateway static IP, to be confirmed at deployment.
 port = 8765            # To be confirmed with B-end host.
 path = "/neurobridge/v1/ws"
 
+[network]
+# static: B-side host and gateway use preconfigured static addresses.
+# dhcp: the gateway retains server.host as its static link address and uses the
+# optional DHCP unit to assign the B-side address and advertise server.host as
+# the default gateway. The B-side then connects to the configured fixed port.
+mode = "static"
+# The following fields are required only when mode = "dhcp".
+# interface = "enp1s0"
+# subnet_cidr = "192.168.88.0/24"
+# dhcp_range_start = "192.168.88.20"
+# dhcp_range_end = "192.168.88.200"
+# dhcp_lease_time = "12h"
+
 [ble]
 # Enabled only after a real headband POC on the target Ubuntu x86_64 host.
 enabled = false

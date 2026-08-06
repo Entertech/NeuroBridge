@@ -26,7 +26,9 @@ browser_package=chromium
 if ! apt-cache show "$browser_package" >/dev/null 2>&1; then
   browser_package=chromium-browser
 fi
-apt-get install -y python3 python3-venv bluez rsync pandoc "$browser_package" fonts-noto-cjk
+# dnsmasq is only activated by neurobridge-dhcp.service when [network].mode is
+# dhcp. In static mode its NeuroBridge unit is skipped at boot.
+apt-get install -y python3 python3-venv bluez dnsmasq rsync pandoc "$browser_package" fonts-noto-cjk
 getent group neurobridge >/dev/null 2>&1 || groupadd --system neurobridge
 id -u neurobridge >/dev/null 2>&1 || useradd --system --gid neurobridge --home /nonexistent --shell /usr/sbin/nologin neurobridge
 getent group bluetooth >/dev/null && usermod -aG bluetooth neurobridge || true
@@ -45,7 +47,13 @@ else
   chmod 0640 "$config_dir/gateway.toml"
 fi
 install -m 0644 "$install_dir/linux/systemd/neurobridge.service" /etc/systemd/system/neurobridge.service
+install -m 0644 "$install_dir/linux/systemd/neurobridge-dhcp.service" /etc/systemd/system/neurobridge-dhcp.service
 install -m 0644 "$install_dir/linux/logrotate/neurobridge" /etc/logrotate.d/neurobridge
+# Do not allow the distribution-wide dnsmasq unit to serve an unintended
+# network. The dedicated unit uses a generated, interface-bound configuration.
+systemctl disable --now dnsmasq.service 2>/dev/null || true
+systemctl disable --now dnsmasq.socket 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable neurobridge.service
+systemctl enable neurobridge-dhcp.service
 echo "NeuroBridge is enabled for every boot. Confirm $config_dir/gateway.toml, then run: systemctl start neurobridge"

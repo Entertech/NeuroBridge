@@ -84,7 +84,7 @@ class Gateway:
         # The local algorithm is session scoped and must be initialized only after
         # a Flowtime connection has subscribed all notifications and started capture.
         self.status["algorithmState"] = "unavailable"
-        LOG.info("Gateway started: bootId=%s recordingDirectory=%s", self.boot_id, self.config.recording.directory)
+        LOG.info("Gateway started: bootId=%s recordingDirectory=%s networkMode=%s", self.boot_id, self.config.recording.directory, self.config.network.mode)
 
     async def stop(self) -> None:
         await self._cancel_window_flush()

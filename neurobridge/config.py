@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import ipaddress
 from pathlib import Path
+import re
 import tomllib
 
 
@@ -54,6 +55,18 @@ class LoggingConfig:
 
 
 @dataclass(frozen=True)
+class NetworkConfig:
+    """B-side endpoint allocation mode; DHCP remains an isolated opt-in service."""
+
+    mode: str = "static"
+    interface: str | None = None
+    subnet_cidr: str | None = None
+    dhcp_range_start: str | None = None
+    dhcp_range_end: str | None = None
+    dhcp_lease_time: str = "12h"
+
+
+@dataclass(frozen=True)
 class GatewayConfig:
     server: ServerConfig
     ble: BleConfig
@@ -61,12 +74,13 @@ class GatewayConfig:
     algorithm: AlgorithmConfig
     download: DownloadConfig = field(default_factory=DownloadConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    network: NetworkConfig = field(default_factory=NetworkConfig)
 
 
 def load(path: str | Path) -> GatewayConfig:
     with Path(path).open("rb") as file:
         raw = tomllib.load(file)
-    server, ble, recording, algorithm, download, logging = (raw.get(name, {}) for name in ("server", "ble", "recording", "algorithm", "download", "logging"))
+    server, ble, recording, algorithm, download, logging, network = (raw.get(name, {}) for name in ("server", "ble", "recording", "algorithm", "download", "logging", "network"))
     replay_speed = float(recording.get("replay_speed", 1))
     if replay_speed <= 0:
         raise ValueError("recording.replay_speed must be greater than zero")
@@ -93,6 +107,28 @@ def load(path: str | Path) -> GatewayConfig:
         raise ValueError("logging.filename must be a plain .log filename")
     if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise ValueError("logging.level is invalid")
+    network_mode = str(network.get("mode", "static"))
+    interface = network.get("interface") or None
+    subnet_cidr = network.get("subnet_cidr") or None
+    dhcp_range_start = network.get("dhcp_range_start") or None
+    dhcp_range_end = network.get("dhcp_range_end") or None
+    dhcp_lease_time = str(network.get("dhcp_lease_time", "12h"))
+    if network_mode not in {"static", "dhcp"}:
+        raise ValueError("network.mode must be static or dhcp")
+    if network_mode == "dhcp":
+        if not all((interface, subnet_cidr, dhcp_range_start, dhcp_range_end)):
+            raise ValueError("network.interface, subnet_cidr, and DHCP range are required in dhcp mode")
+        if not isinstance(interface, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}", interface) is None:
+            raise ValueError("network.interface is invalid")
+        try:
+            subnet = ipaddress.ip_network(str(subnet_cidr), strict=True)
+            range_start, range_end = ipaddress.ip_address(str(dhcp_range_start)), ipaddress.ip_address(str(dhcp_range_end))
+        except ValueError as exc:
+            raise ValueError("network DHCP subnet or range is invalid") from exc
+        if subnet.version != 4 or address not in subnet or range_start not in subnet or range_end not in subnet or int(range_start) > int(range_end) or address in {range_start, range_end, subnet.network_address, subnet.broadcast_address} or range_end in {subnet.network_address, subnet.broadcast_address}:
+            raise ValueError("network DHCP range must be IPv4, inside subnet, and exclude server.host")
+        if not dhcp_lease_time[:-1].isdigit() or dhcp_lease_time[-1:] not in {"m", "h", "d"} or int(dhcp_lease_time[:-1]) <= 0:
+            raise ValueError("network.dhcp_lease_time must use a positive m, h, or d duration")
     return GatewayConfig(
         server=ServerConfig(host, port, endpoint),
         ble=BleConfig(bool(ble.get("enabled", False)), ble.get("device_name") or None, str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(), int(ble.get("scan_timeout_seconds", 5)), int(ble.get("reconnect_delay_seconds", 3))),
@@ -100,4 +136,5 @@ def load(path: str | Path) -> GatewayConfig:
         algorithm=AlgorithmConfig(bool(algorithm.get("enabled", False)), tuple(algorithm.get("command", []))),
         download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path),
         logging=LoggingConfig(log_directory, log_filename, log_level),
+        network=NetworkConfig(network_mode, interface, subnet_cidr, dhcp_range_start, dhcp_range_end, dhcp_lease_time),
     )
