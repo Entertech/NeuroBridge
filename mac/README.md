@@ -2,6 +2,8 @@
 
 此目录用于在 Ubuntu 网关到货前，以 macOS 和现有头环验证真实 BLE 原始通知、600 ms 分窗、录制和北向录播。它不是 Ubuntu 部署验证，也不能代替目标机上的 BlueZ、蓝牙芯片或 systemd 验收。
 
+采集控制台和 B 端联调页是跨平台静态网页，源码位于仓库根目录的 `web/capture/` 与 `web/b-client-test/`；此目录只保留 macOS 专属的启动、蓝牙和算法桥接代码。
+
 仅在已获得受试者授权的受控环境采集。原始人体数据不得提交、发到聊天或接入公共网络。
 
 ## 一键启动
@@ -64,7 +66,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 
 浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载会立即发起本机扫描；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51` 与电量通知，启动算法输入 bridge，随后向 `FF21` 写入 `0x05` 启动采集。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
 
-成功连接后的原始记录会保存到 `/tmp/neurobridge-headband-poc/raw/rec-*.jsonl`。文件名中的 `rec-...` 是后续录播所需的 recording ID。请只记录 ID，不要复制 JSONL 中的 Base64 原始字节。
+成功连接后的记录会保存到 `/tmp/neurobridge-headband-poc/sessions/rec-.../`，其中原始 EEG、原始心率和各算法指标分别位于 `raw/`、`algorithm/` 子目录。目录名中的 `rec-...` 是后续录播所需的 recording ID。请只记录 ID，不要复制 JSONL 中的 Base64 原始字节。
 
 ## 3. 输出不泄露原始字节的采集报告
 

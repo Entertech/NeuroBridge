@@ -10,7 +10,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "neurobridge" / "version_registry.toml"
-CLIENT_VERSION_PATH = ROOT / "tools" / "b-client-test" / "version.js"
+CLIENT_VERSION_PATH = ROOT / "web" / "b-client-test" / "version.js"
 PYPROJECT_PATH = ROOT / "pyproject.toml"
 
 

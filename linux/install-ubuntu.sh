@@ -30,8 +30,8 @@ else
   chown root:neurobridge "$config_dir/gateway.toml"
   chmod 0640 "$config_dir/gateway.toml"
 fi
-install -m 0644 "$install_dir/deploy/neurobridge.service" /etc/systemd/system/neurobridge.service
-install -m 0644 "$install_dir/deploy/logrotate/neurobridge" /etc/logrotate.d/neurobridge
+install -m 0644 "$install_dir/linux/systemd/neurobridge.service" /etc/systemd/system/neurobridge.service
+install -m 0644 "$install_dir/linux/logrotate/neurobridge" /etc/logrotate.d/neurobridge
 systemctl daemon-reload
 systemctl enable neurobridge.service
 echo "Edit $config_dir/gateway.toml, then run: systemctl restart neurobridge"

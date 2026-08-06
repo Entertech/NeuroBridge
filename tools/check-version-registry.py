@@ -187,7 +187,7 @@ def main() -> None:
         "// Generated from neurobridge/version_registry.toml by tools/sync-version-registry.py.\n"
         f'window.NEUROBRIDGE_VERSION = Object.freeze({{ protocolVersion: "{wire_version}" }});\n'
     )
-    if (ROOT / "tools" / "b-client-test" / "version.js").read_text(encoding="utf-8") != generated_client_version:
+    if (ROOT / "web" / "b-client-test" / "version.js").read_text(encoding="utf-8") != generated_client_version:
         fail("run tools/sync-version-registry.py after changing the version registry")
     change_log = (ROOT / policy["change_log_path"]).read_text(encoding="utf-8")
     if f'v{publication_lock["from_version"]} → v{publication_lock["to_version"]}' not in change_log:

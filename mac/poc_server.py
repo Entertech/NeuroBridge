@@ -27,7 +27,9 @@ from neurobridge.northbound.websocket import create_server
 
 LOG = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent
-B_CLIENT_ROOT = ROOT.parent / "tools" / "b-client-test"
+PROJECT_ROOT = ROOT.parent
+CAPTURE_WEB_ROOT = PROJECT_ROOT / "web" / "capture"
+B_CLIENT_ROOT = PROJECT_ROOT / "web" / "b-client-test"
 
 
 class LogBuffer(logging.Handler):
@@ -216,10 +218,10 @@ def handler_factory(controller: CaptureController, loop: asyncio.AbstractEventLo
                     self.respond_json(archive if isinstance(archive, dict) else {"error": "Cannot create capture archive."}, status=HTTPStatus.CONFLICT)
                 return
             if path in {"/", "/index.html"}:
-                self.respond_file(ROOT / "capture" / "index.html")
+                self.respond_file(CAPTURE_WEB_ROOT / "index.html")
                 return
             if path.startswith("/capture/"):
-                self.respond_file(ROOT / "capture" / path.removeprefix("/capture/"))
+                self.respond_file(CAPTURE_WEB_ROOT / path.removeprefix("/capture/"))
                 return
             if path == "/b-client" or path == "/b-client/":
                 self.respond_file(B_CLIENT_ROOT / "index.html")
@@ -293,7 +295,7 @@ def handler_factory(controller: CaptureController, loop: asyncio.AbstractEventLo
         def respond_file(self, requested: Path) -> None:
             try:
                 path = requested.resolve(strict=True)
-                allowed = (ROOT / "capture").resolve() if path.is_relative_to((ROOT / "capture").resolve()) else B_CLIENT_ROOT.resolve()
+                allowed = CAPTURE_WEB_ROOT.resolve() if path.is_relative_to(CAPTURE_WEB_ROOT.resolve()) else B_CLIENT_ROOT.resolve()
                 if not path.is_relative_to(allowed) or not path.is_file():
                     raise FileNotFoundError
                 body = path.read_bytes()

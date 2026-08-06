@@ -11,7 +11,7 @@ NeuroBridge 是将回车科技头环的 BLE 数据接入第三方 B 端主机的
 在 Ubuntu x86_64 目标机上，从已审查的工作树以 root 执行：
 
 ```bash
-./deploy/install-ubuntu.sh
+./linux/install-ubuntu.sh
 sudoedit /etc/neurobridge/gateway.toml
 systemctl restart neurobridge
 systemctl status neurobridge
@@ -31,6 +31,16 @@ Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未�
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
 运行时代码按职责组织：`neurobridge/ble/` 负责 Flowtime 扫描、连接、通知与原始字节窗口；`neurobridge/algorithm/` 隔离算法 SDK bridge；`neurobridge/business/` 负责订阅、状态、录制与录播；`neurobridge/northbound/` 仅负责 WS/WebSocket 传输。
+
+## 仓库结构
+
+- `neurobridge/`：跨平台网关核心，不依赖 macOS、Windows 或 Linux 的启动方式。
+- `web/`：纯静态网页；`capture/` 是采集控制台，`b-client-test/` 是 B 端联调页，可由任意平台的本地服务或静态服务器托管。
+- `mac/`：仅 macOS POC 的启动器、蓝牙验证、原生算法 bridge 与本机配置模板。
+- `linux/`：Ubuntu 部署脚本、systemd 单元与日志轮转配置。
+- `windows/`：Windows 平台接入说明；当前没有经过验证的 Windows 服务启动器或部署脚本。
+
+网页不再放入平台目录。macOS POC 仍通过同样的 `/capture/` 与 `/b-client/` URL 提供页面，因此已有书签和使用流程不受影响。
 
 ## 首期交付结论
 
@@ -88,6 +98,6 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 - [头环蓝牙网关对接方案 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%AF%B9%E6%8E%A5%E6%96%B9%E6%A1%88_v0.1.md)：架构、边界、待决项和验收要求。
 - [头环数据网关北向网络协议 v0.2](doc/tech/%E5%AF%B9%E5%A4%96/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%E5%8C%97%E5%90%91%E7%BD%91%E7%BB%9C%E5%8D%8F%E8%AE%AE/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%E5%8C%97%E5%90%91%E7%BD%91%E7%BB%9C%E5%8D%8F%E8%AE%AE_v0.2.md)：B 端 WS/JSON 接入契约与联调验收。
 - [头环数据采集包格式说明 v0.1](doc/tech/%E5%AF%B9%E5%A4%96/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E9%87%87%E9%9B%86%E5%8C%85%E6%A0%BC%E5%BC%8F%E8%AF%B4%E6%98%8E/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E9%87%87%E9%9B%86%E5%8C%85%E6%A0%BC%E5%BC%8F%E8%AF%B4%E6%98%8E_v0.1.md)：一键保存 ZIP 的文件、字段和校验规则。
-- [B 端联调网页](tools/b-client-test/README.md)：零依赖的浏览器测试工具，可连接网关并测试 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。
+- [B 端联调网页](web/b-client-test/README.md)：零依赖的浏览器测试工具，可连接网关并测试 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。
 
 对外协议版本的 Markdown 独立保存在仓库，PDF 不提交仓库。可在 GitHub Actions 的 **Run workflow** 中填写 `protocol_version` 和 `protocol_stage`：`published` 生成已发布对外版本，`prerelease` 只生成当前内部预发布版本的评审 Artifact。本地/Codex 使用同一入口：`python3 tools/build-external-protocol-artifact.py --stage <published|prerelease> --version <版本号> --output-dir <目录>`。版本清单、已发布版本和预发布版本见 [版本台账](neurobridge/version_registry.toml)。
