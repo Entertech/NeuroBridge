@@ -487,7 +487,60 @@ class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
             await gateway.subscribe(ClientSession(), {"streams": ["eeg"]}, second_send)
             await asyncio.wait_for(second_received.wait(), timeout=1)
             self.assertEqual(first_values[:2], [1, 2])
-            self.assertEqual(second_values, [2])
+            self.assertEqual(second_values[:1], [2])
+            await gateway.stop()
+
+    async def test_last_b_side_disconnection_stops_replay_and_resets_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay_id = "rec-replay"
+            gateway = Gateway(config(root, replay_id=replay_id, replay_speed=1))
+            gateway.store.recording_id = replay_id
+            gateway.store.save_algorithm(timestamp_ms=1_000, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            gateway.store.save_algorithm(timestamp_ms=2_000, valid=True, invalid_reasons=[], algorithm={"attention": 2})
+            gateway.store.stop()
+            first_received = asyncio.Event()
+
+            async def send(item: dict) -> None:
+                if item["data"].get("payload", {}).get("algorithm", {}).get("attention") == 1:
+                    first_received.set()
+
+            session = ClientSession()
+            await gateway.subscribe(session, {"streams": ["eeg"]}, send)
+            await asyncio.wait_for(first_received.wait(), timeout=1)
+            await gateway.close_session(session)
+
+            self.assertFalse(gateway.sessions)
+            self.assertIsNone(gateway._replay_task)
+            self.assertIsNone(gateway._replay_algorithm)
+            self.assertIsNone(gateway._replay_algorithm_timestamp)
+
+    async def test_connected_b_side_restarts_replay_from_the_first_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay_id = "rec-replay"
+            gateway = Gateway(config(root, replay_id=replay_id, replay_speed=1_000))
+            gateway.store.recording_id = replay_id
+            for value in (1, 2):
+                gateway.store.save_algorithm(timestamp_ms=value * 1_000, valid=True, invalid_reasons=[], algorithm={"attention": value})
+            gateway.store.stop()
+            restarted = asyncio.Event()
+            values: list[int] = []
+
+            async def send(item: dict) -> None:
+                value = item["data"].get("payload", {}).get("algorithm", {}).get("attention")
+                if value is not None:
+                    values.append(value)
+                    if values[:3] == [1, 2, 1]:
+                        restarted.set()
+
+            session = ClientSession()
+            await gateway.subscribe(session, {"streams": ["eeg"]}, send)
+            await asyncio.wait_for(restarted.wait(), timeout=1)
+
+            self.assertIn(session, gateway.sessions)
+            self.assertIsNotNone(gateway._replay_task)
+            await gateway.close_session(session)
             await gateway.stop()
 
     async def test_device_connection_stops_the_active_gateway_replay(self) -> None:

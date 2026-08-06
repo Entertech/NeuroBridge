@@ -24,6 +24,9 @@ STREAMS = frozenset({"eeg", "hr", "eeg.raw", "hr.raw", "status"})
 REPLAY_NOT_AVAILABLE_REASON = "REPLAY_NOT_AVAILA设备"
 STREAM_NOT_AVAILABLE_REASON = "STREAM_NOT_AVAILA设备"
 REPLAY_DELIVERY_QUEUE_SIZE = 16
+# A recording containing one event has no source timestamp gap to pace a
+# restart. Yield briefly at the cycle boundary so it cannot become a busy loop.
+REPLAY_CYCLE_MIN_PAUSE_SECONDS = 0.001
 
 
 def now_ms() -> int:
@@ -274,6 +277,9 @@ class Gateway:
         return request
 
     async def handle(self, session: ClientSession, raw: str, send: Any) -> None:
+        # The WebSocket adapter registers sessions on connect.  Keeping this
+        # here as well makes the gateway API safe for other adapters and tests.
+        self.sessions.add(session)
         request_id: str | None = None
         try:
             request = self.parse_request(raw)
@@ -382,20 +388,27 @@ class Gateway:
 
     def _start_replay_if_needed(self) -> None:
         """Start one replay clock for the gateway after the first B-side data request."""
-        if self.live or not self.replay_available or (self._replay_task and not self._replay_task.done()):
+        if not self.sessions or self.live or not self.replay_available or (self._replay_task and not self._replay_task.done()):
             return
-        self._replay_algorithm = None
-        self._replay_algorithm_timestamp = None
+        self._reset_replay_progress()
         self._replay_task = asyncio.create_task(self._replay())
         LOG.info("Replay started: recordingId=%s", self.config.recording.replay_recording_id)
 
     async def _stop_replay(self) -> None:
         task, self._replay_task = self._replay_task, None
+        self._reset_replay_progress()
         if task and not task.done() and task is not asyncio.current_task():
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
             LOG.info("Replay stopped")
+
+    def _reset_replay_progress(self) -> None:
+        self._replay_algorithm = None
+        self._replay_algorithm_timestamp = None
+
+    def _replay_should_continue(self) -> bool:
+        return not self.live and bool(self.sessions)
 
     def _subscription_entries(self) -> tuple[tuple[ClientSession, Subscription], ...]:
         return tuple((session, subscription) for session in tuple(self.sessions) for subscription in tuple(session.subscriptions.values()))
@@ -423,8 +436,6 @@ class Gateway:
         finally:
             if session.subscriptions.get(subscription.id) is subscription:
                 session.subscriptions.pop(subscription.id, None)
-                if not session.subscriptions:
-                    self.sessions.discard(session)
 
     async def _remove_subscription(self, session: ClientSession, subscription: Subscription) -> None:
         if session.subscriptions.get(subscription.id) is subscription:
@@ -434,37 +445,53 @@ class Gateway:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
-        if not session.subscriptions:
-            self.sessions.discard(session)
 
     async def _replay(self) -> None:
         events = self.store.events(self.config.recording.replay_recording_id or "")
-        previous: int | None = None
         try:
-            for item in events:
-                if previous is not None:
-                    await asyncio.sleep(max(0, item["timestampMs"] - previous) / 1000 / self.config.recording.replay_speed)
-                previous = item["timestampMs"]
-                if item["valid"] and "algorithm" in item["payload"]:
-                    self._replay_algorithm = item["payload"]["algorithm"]
-                    self._replay_algorithm_timestamp = item["timestampMs"]
+            if not events:
+                LOG.warning("Replay recording contains no events: recordingId=%s", self.config.recording.replay_recording_id)
+                return
+            cycle = 0
+            while self._replay_should_continue():
+                cycle += 1
+                previous: int | None = None
+                self._reset_replay_progress()
+                for item in events:
+                    if not self._replay_should_continue():
+                        return
+                    if previous is not None:
+                        await asyncio.sleep(max(0, item["timestampMs"] - previous) / 1000 / self.config.recording.replay_speed)
+                    if not self._replay_should_continue():
+                        return
+                    previous = item["timestampMs"]
+                    if item["valid"] and "algorithm" in item["payload"]:
+                        self._replay_algorithm = item["payload"]["algorithm"]
+                        self._replay_algorithm_timestamp = item["timestampMs"]
+                    for session, subscription in self._subscription_entries():
+                        payload = self.filtered_payload(item["payload"], item["payload"].get("algorithm"), subscription.streams)
+                        if not payload or (not item["valid"] and not subscription.include_invalid):
+                            continue
+                        if not item["valid"]:
+                            payload["invalidReasons"] = item["invalidReasons"]
+                        self._queue_replay_message(session, subscription, envelope(200, self.event_data("data", subscription.id, item["timestampMs"], "replay", item["valid"], payload)))
+                if not self._replay_should_continue():
+                    return
+                ended = {"event": "replayEnded", "gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": "replay", "timestampMs": previous or now_ms(), "valid": True, "payload": {}, "recordingId": self.config.recording.replay_recording_id, "endedAtMs": now_ms()}
                 for session, subscription in self._subscription_entries():
-                    payload = self.filtered_payload(item["payload"], item["payload"].get("algorithm"), subscription.streams)
-                    if not payload or (not item["valid"] and not subscription.include_invalid):
-                        continue
-                    if not item["valid"]:
-                        payload["invalidReasons"] = item["invalidReasons"]
-                    self._queue_replay_message(session, subscription, envelope(200, self.event_data("data", subscription.id, item["timestampMs"], "replay", item["valid"], payload)))
-            ended = {"event": "replayEnded", "gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": "replay", "timestampMs": previous or now_ms(), "valid": True, "payload": {}, "recordingId": self.config.recording.replay_recording_id, "endedAtMs": now_ms()}
-            for session, subscription in self._subscription_entries():
-                self._queue_replay_message(session, subscription, envelope(200, ended))
-            LOG.info("Replay ended: recordingId=%s", self.config.recording.replay_recording_id)
+                    self._queue_replay_message(session, subscription, envelope(200, ended))
+                LOG.info("Replay cycle ended; restarting: recordingId=%s cycle=%s", self.config.recording.replay_recording_id, cycle)
+                await asyncio.sleep(REPLAY_CYCLE_MIN_PAUSE_SECONDS)
         except asyncio.CancelledError:
             return
         finally:
             if self._replay_task is asyncio.current_task():
                 self._replay_task = None
+            self._reset_replay_progress()
 
     async def close_session(self, session: ClientSession) -> None:
         for subscription in tuple(session.subscriptions.values()):
             await self._remove_subscription(session, subscription)
+        self.sessions.discard(session)
+        if not self.sessions:
+            await self._stop_replay()
