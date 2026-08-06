@@ -44,14 +44,11 @@ class Subscription:
     streams: frozenset[str]
     include_invalid: bool
     send: Any
-    replay_task: asyncio.Task | None = None
 
 
 @dataclass(eq=False)
 class ClientSession:
     subscriptions: dict[str, Subscription] = field(default_factory=dict)
-    replay_algorithm: dict | None = None
-    replay_algorithm_timestamp: int | None = None
 
 
 class Gateway:
@@ -68,6 +65,9 @@ class Gateway:
         self.window_observer: Callable[[DataWindow, dict | None, list[str], bool], Awaitable[None]] | None = None
         self._window_flush_task: asyncio.Task | None = None
         self._window_flush_deadline_ms: int | None = None
+        self._replay_task: asyncio.Task | None = None
+        self._replay_algorithm: dict | None = None
+        self._replay_algorithm_timestamp: int | None = None
 
     @property
     def live(self) -> bool:
@@ -88,6 +88,7 @@ class Gateway:
 
     async def stop(self) -> None:
         await self._cancel_window_flush()
+        await self._stop_replay()
         await self.algorithm.stop()
         self.store.stop()
         LOG.info("Gateway stopped: bootId=%s", self.boot_id)
@@ -102,6 +103,7 @@ class Gateway:
         previous = self.status.get(name)
         self.status[name] = value
         if name == "connectionState" and value == "connected" and previous != "connected":
+            await self._stop_replay()
             recording_id = self.store.start(now_ms())
             LOG.info("Headband connected; recording started: recordingId=%s", recording_id)
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
@@ -304,7 +306,8 @@ class Gateway:
             raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
         algorithm, timestamp = self.latest_algorithm, self.latest_algorithm_timestamp
         if not self.live and self.replay_available:
-            algorithm, timestamp = self.latest_replay_algorithm(session)
+            self._start_replay_if_needed()
+            algorithm, timestamp = self.latest_replay_algorithm()
         if not algorithm or timestamp is None:
             return {"mode": self.mode(), "timestampMs": now_ms(), "valid": False, "payload": {}}
         return {"mode": self.mode(), "timestampMs": timestamp, "valid": True, "payload": self.filtered_payload({}, algorithm, frozenset(streams))}
@@ -318,10 +321,10 @@ class Gateway:
             raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(invalid)})
         return unique
 
-    def latest_replay_algorithm(self, session: ClientSession) -> tuple[dict | None, int | None]:
-        """Use this connection's cursor when present, otherwise the latest valid recording."""
-        if session.replay_algorithm is not None and session.replay_algorithm_timestamp is not None:
-            return session.replay_algorithm, session.replay_algorithm_timestamp
+    def latest_replay_algorithm(self) -> tuple[dict | None, int | None]:
+        """Use the gateway's active replay cursor, or the latest valid result before it advances."""
+        if self._replay_algorithm is not None and self._replay_algorithm_timestamp is not None:
+            return self._replay_algorithm, self._replay_algorithm_timestamp
         for item in reversed(self.store.events(self.config.recording.replay_recording_id or "")):
             algorithm = item["payload"].get("algorithm")
             if item["valid"] and algorithm:
@@ -351,9 +354,10 @@ class Gateway:
         if unavailable:
             raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
         subscription = Subscription(f"sub-{uuid.uuid4().hex}", frozenset(streams), include_invalid, send)
+        self.sessions.add(session)
         session.subscriptions[subscription.id] = subscription
         if not self.live:
-            subscription.replay_task = asyncio.create_task(self.replay(session, subscription))
+            self._start_replay_if_needed()
         return {"subscriptionId": subscription.id, "streams": streams, "mode": self.mode(), "intervalMs": 600}
 
     async def unsubscribe(self, session: ClientSession, params: dict) -> dict:
@@ -363,11 +367,29 @@ class Gateway:
         subscription = session.subscriptions.pop(subscription_id, None)
         if not subscription:
             raise ProtocolError(404, "SUBSCRIPTION_NOT_FOUND", "Subscription does not exist.")
-        if subscription.replay_task:
-            subscription.replay_task.cancel()
         return {"subscriptionId": subscription_id}
 
-    async def replay(self, session: ClientSession, subscription: Subscription) -> None:
+    def _start_replay_if_needed(self) -> None:
+        """Start one replay clock for the gateway after the first B-side data request."""
+        if self.live or not self.replay_available or (self._replay_task and not self._replay_task.done()):
+            return
+        self._replay_algorithm = None
+        self._replay_algorithm_timestamp = None
+        self._replay_task = asyncio.create_task(self._replay())
+        LOG.info("Replay started: recordingId=%s", self.config.recording.replay_recording_id)
+
+    async def _stop_replay(self) -> None:
+        task, self._replay_task = self._replay_task, None
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+            LOG.info("Replay stopped")
+
+    def _subscriptions(self) -> tuple[Subscription, ...]:
+        return tuple(subscription for session in tuple(self.sessions) for subscription in tuple(session.subscriptions.values()))
+
+    async def _replay(self) -> None:
         events = self.store.events(self.config.recording.replay_recording_id or "")
         previous: int | None = None
         try:
@@ -376,24 +398,25 @@ class Gateway:
                     await asyncio.sleep(max(0, item["timestampMs"] - previous) / 1000 / self.config.recording.replay_speed)
                 previous = item["timestampMs"]
                 if item["valid"] and "algorithm" in item["payload"]:
-                    # Multiple subscriptions on one connection must never make its
-                    # `getLatest` cursor move backward.
-                    if session.replay_algorithm_timestamp is None or item["timestampMs"] >= session.replay_algorithm_timestamp:
-                        session.replay_algorithm = item["payload"]["algorithm"]
-                        session.replay_algorithm_timestamp = item["timestampMs"]
-                payload = self.filtered_payload(item["payload"], item["payload"].get("algorithm"), subscription.streams)
-                if not payload or (not item["valid"] and not subscription.include_invalid):
-                    continue
-                if not item["valid"]:
-                    payload["invalidReasons"] = item["invalidReasons"]
-                await subscription.send(envelope(200, self.event_data("data", subscription.id, item["timestampMs"], "replay", item["valid"], payload)))
-            await subscription.send(envelope(200, {"event": "replayEnded", "gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": "replay", "timestampMs": previous or now_ms(), "valid": True, "payload": {}, "recordingId": self.config.recording.replay_recording_id, "endedAtMs": now_ms()}))
+                    self._replay_algorithm = item["payload"]["algorithm"]
+                    self._replay_algorithm_timestamp = item["timestampMs"]
+                for subscription in self._subscriptions():
+                    payload = self.filtered_payload(item["payload"], item["payload"].get("algorithm"), subscription.streams)
+                    if not payload or (not item["valid"] and not subscription.include_invalid):
+                        continue
+                    if not item["valid"]:
+                        payload["invalidReasons"] = item["invalidReasons"]
+                    await subscription.send(envelope(200, self.event_data("data", subscription.id, item["timestampMs"], "replay", item["valid"], payload)))
+            ended = {"event": "replayEnded", "gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": "replay", "timestampMs": previous or now_ms(), "valid": True, "payload": {}, "recordingId": self.config.recording.replay_recording_id, "endedAtMs": now_ms()}
+            for subscription in self._subscriptions():
+                await subscription.send(envelope(200, ended))
+            LOG.info("Replay ended: recordingId=%s", self.config.recording.replay_recording_id)
         except asyncio.CancelledError:
             return
+        finally:
+            if self._replay_task is asyncio.current_task():
+                self._replay_task = None
 
     async def close_session(self, session: ClientSession) -> None:
-        for subscription in session.subscriptions.values():
-            if subscription.replay_task:
-                subscription.replay_task.cancel()
         session.subscriptions.clear()
         self.sessions.discard(session)

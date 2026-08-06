@@ -17,8 +17,8 @@ from neurobridge.ble.packets import DataWindow, EEG_PACKET_BYTES, HR_NATIVE_PACK
 from neurobridge.business.recording import RecordingStore
 
 
-def config(root: Path, replay_id: str | None = None) -> GatewayConfig:
-    return GatewayConfig(ServerConfig("127.0.0.1", 8765, "/neurobridge/v1/ws"), BleConfig(False, "Flowtime Headband", "0000ff10-1212-abcd-1523-785feabcd123", 5, 3), RecordingConfig(root, "SUBJECT-001", replay_id, 1000), AlgorithmConfig(False, ()))
+def config(root: Path, replay_id: str | None = None, replay_speed: float = 1000) -> GatewayConfig:
+    return GatewayConfig(ServerConfig("127.0.0.1", 8765, "/neurobridge/v1/ws"), BleConfig(False, "Flowtime Headband", "0000ff10-1212-abcd-1523-785feabcd123", 5, 3), RecordingConfig(root, "SUBJECT-001", replay_id, replay_speed), AlgorithmConfig(False, ()))
 
 
 class PacketTests(unittest.TestCase):
@@ -382,6 +382,83 @@ class RecordingTests(unittest.TestCase):
 
 
 class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
+    async def test_get_latest_starts_gateway_replay_without_a_subscription(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay_id = "rec-replay"
+            gateway = Gateway(config(root, replay_id=replay_id, replay_speed=1))
+            gateway.store.recording_id = replay_id
+            gateway.store.save_algorithm(timestamp_ms=1_000, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            gateway.store.save_algorithm(timestamp_ms=2_000, valid=True, invalid_reasons=[], algorithm={"attention": 2})
+            gateway.store.stop()
+            sent: list[dict] = []
+
+            async def send(item: dict) -> None:
+                sent.append(item)
+
+            await gateway.handle(ClientSession(), '{"protocolVersion":"1.0","messageType":"request","requestId":"latest-1","action":"getLatest","params":{"streams":["eeg"]}}', send)
+            self.assertEqual(sent[0]["data"]["result"]["payload"]["algorithm"]["attention"], 2)
+            self.assertIsNotNone(gateway._replay_task)
+            await asyncio.sleep(0)
+            self.assertEqual(gateway.latest_replay_algorithm()[0], {"attention": 1})
+            await gateway.stop()
+
+    async def test_late_subscription_joins_the_single_replay_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay_id = "rec-replay"
+            gateway = Gateway(config(root, replay_id=replay_id, replay_speed=10))
+            gateway.store.recording_id = replay_id
+            for value in (1, 2, 3):
+                gateway.store.save_algorithm(timestamp_ms=value * 1_000, valid=True, invalid_reasons=[], algorithm={"attention": value})
+            gateway.store.stop()
+            first_started = asyncio.Event()
+            second_received = asyncio.Event()
+            first_values: list[int] = []
+            second_values: list[int] = []
+
+            async def first_send(item: dict) -> None:
+                value = item["data"].get("payload", {}).get("algorithm", {}).get("attention")
+                if value is not None:
+                    first_values.append(value)
+                    if value == 1:
+                        first_started.set()
+
+            async def second_send(item: dict) -> None:
+                value = item["data"].get("payload", {}).get("algorithm", {}).get("attention")
+                if value is not None:
+                    second_values.append(value)
+                    if value == 2:
+                        second_received.set()
+
+            await gateway.subscribe(ClientSession(), {"streams": ["eeg"]}, first_send)
+            await asyncio.wait_for(first_started.wait(), timeout=1)
+            await gateway.subscribe(ClientSession(), {"streams": ["eeg"]}, second_send)
+            await asyncio.wait_for(second_received.wait(), timeout=1)
+            self.assertEqual(first_values[:2], [1, 2])
+            self.assertEqual(second_values, [2])
+            await gateway.stop()
+
+    async def test_device_connection_stops_the_active_gateway_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replay_id = "rec-replay"
+            gateway = Gateway(config(root, replay_id=replay_id, replay_speed=1))
+            gateway.store.recording_id = replay_id
+            gateway.store.save_algorithm(timestamp_ms=1_000, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            gateway.store.save_algorithm(timestamp_ms=2_000, valid=True, invalid_reasons=[], algorithm={"attention": 2})
+            gateway.store.stop()
+
+            async def ignored_send(_: dict) -> None:
+                pass
+
+            await gateway.subscribe(ClientSession(), {"streams": ["eeg"]}, ignored_send)
+            await asyncio.sleep(0)
+            self.assertIsNotNone(gateway._replay_task)
+            await gateway.update_status("connectionState", "connected")
+            self.assertIsNone(gateway._replay_task)
+            await gateway.stop()
+
     async def test_get_latest_uses_latest_valid_replay_result_without_subscription(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
