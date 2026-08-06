@@ -5,6 +5,7 @@ from collections import defaultdict
 from hashlib import sha256
 import json
 from pathlib import Path
+import re
 import subprocess
 import time
 import uuid
@@ -181,6 +182,32 @@ class RecordingStore:
         session = self._session_dir(recording_id)
         return session.is_dir() or (self.root / "raw" / f"{recording_id}.jsonl").exists() or (self.root / "algorithm" / f"{recording_id}.jsonl").exists()
 
+    @staticmethod
+    def _safe_recording_id(recording_id: str | None) -> bool:
+        """Keep recording identifiers inside the persistent recording root."""
+        return isinstance(recording_id, str) and re.fullmatch(r"rec-[0-9a-fA-F-]{1,64}", recording_id) is not None
+
+    def completed_recordings(self) -> list[dict]:
+        """Return completed session metadata suitable for the local download index."""
+        recordings: list[dict] = []
+        sessions = self.root / "sessions"
+        for session in sessions.iterdir():
+            if not session.is_dir() or not self._safe_recording_id(session.name) or session.name == self.recording_id:
+                continue
+            manifest = session / "manifest.json"
+            started_at_ms = None
+            if manifest.is_file():
+                try:
+                    started_at_ms = json.loads(manifest.read_text(encoding="utf-8")).get("startedAtMs")
+                except (OSError, json.JSONDecodeError):
+                    pass
+            recordings.append({
+                "recordingId": session.name,
+                "startedAtMs": started_at_ms,
+                "modifiedAtMs": int(session.stat().st_mtime * 1000),
+            })
+        return sorted(recordings, key=lambda item: item["modifiedAtMs"], reverse=True)
+
     def _new_events(self, recording_id: str) -> list[dict]:
         session = self._session_dir(recording_id)
         merged: dict[int, dict] = defaultdict(lambda: {"payload": {}, "valid": True, "invalidReasons": []})
@@ -319,7 +346,7 @@ class RecordingStore:
         return output
 
     def export(self, recording_id: str) -> Path:
-        if not self._session_dir(recording_id).is_dir():
+        if not self._safe_recording_id(recording_id) or not self._session_dir(recording_id).is_dir():
             raise FileNotFoundError(f"Recording {recording_id} is not available for export")
         session = self._session_dir(recording_id)
         documentation_pdf = self._export_documentation_pdf()

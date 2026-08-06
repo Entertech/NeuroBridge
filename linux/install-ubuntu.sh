@@ -5,6 +5,14 @@ if [[ ${EUID} -ne 0 ]]; then
   echo "Run as root on Ubuntu x86_64." >&2
   exit 1
 fi
+if [[ $(uname -m) != "x86_64" ]]; then
+  echo "NeuroBridge first-release deployment requires Ubuntu x86_64; detected $(uname -m)." >&2
+  exit 1
+fi
+if [[ ! -r /etc/os-release ]] || ! . /etc/os-release || [[ ${ID:-} != "ubuntu" ]]; then
+  echo "NeuroBridge first-release deployment requires Ubuntu LTS." >&2
+  exit 1
+fi
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 install_dir=/opt/neurobridge
@@ -40,4 +48,4 @@ install -m 0644 "$install_dir/linux/systemd/neurobridge.service" /etc/systemd/sy
 install -m 0644 "$install_dir/linux/logrotate/neurobridge" /etc/logrotate.d/neurobridge
 systemctl daemon-reload
 systemctl enable neurobridge.service
-echo "Edit $config_dir/gateway.toml, then run: systemctl restart neurobridge"
+echo "NeuroBridge is enabled for every boot. Confirm $config_dir/gateway.toml, then run: systemctl start neurobridge"

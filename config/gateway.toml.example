@@ -20,6 +20,21 @@ subject_id = ""
 replay_recording_id = ""
 replay_speed = 1.0
 
+[download]
+# This HTTP service is only for the dedicated wired deployment network. It has
+# no TLS or application authentication, so never expose it to a public or
+# unmanaged LAN. Confirm this static IP and port with the receiving host.
+enabled = true
+host = "192.168.88.10"
+port = 8766
+path = "/downloads"
+
+[logging]
+# Persisted operations log. Ubuntu logrotate retains 14 daily archives.
+directory = "/var/log/neurobridge"
+filename = "neurobridge.log"
+level = "INFO"
+
 [algorithm]
 # The SDK default grouping has not been validated against real Flowtime recordings. Keep false
 # until captured bytes have validated the bridge command and its output schema.

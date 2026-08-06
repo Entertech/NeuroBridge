@@ -84,22 +84,26 @@ class Gateway:
         # The local algorithm is session scoped and must be initialized only after
         # a Flowtime connection has subscribed all notifications and started capture.
         self.status["algorithmState"] = "unavailable"
+        LOG.info("Gateway started: bootId=%s recordingDirectory=%s", self.boot_id, self.config.recording.directory)
 
     async def stop(self) -> None:
         await self._cancel_window_flush()
         await self.algorithm.stop()
         self.store.stop()
+        LOG.info("Gateway stopped: bootId=%s", self.boot_id)
 
     async def on_device_ready(self) -> None:
         """Start a fresh local algorithm session before publishing connected state."""
         await self.algorithm.initialize()
         self.status["algorithmState"] = "ready" if self.algorithm.available else ("error" if self.algorithm.error else "unavailable")
+        LOG.info("Device capture initialized: algorithmState=%s", self.status["algorithmState"])
 
     async def update_status(self, name: str, value: object) -> None:
         previous = self.status.get(name)
         self.status[name] = value
         if name == "connectionState" and value == "connected" and previous != "connected":
-            self.store.start(now_ms())
+            recording_id = self.store.start(now_ms())
+            LOG.info("Headband connected; recording started: recordingId=%s", recording_id)
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
             await self._cancel_window_flush()
             last = self.assembler.flush()
@@ -108,7 +112,10 @@ class Gateway:
             await self.algorithm.stop()
             self.status["algorithmState"] = "unavailable"
             self.store.stop()
+            LOG.info("Headband disconnected; recording stopped")
         if previous != value:
+            if name != "connectionState":
+                LOG.info("Gateway status changed: %s=%s", name, value)
             await self.broadcast_status()
 
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
