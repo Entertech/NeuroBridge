@@ -4,10 +4,12 @@ from dataclasses import dataclass, field
 import base64
 import time
 
-# Flowtime headband 蓝牙通信协议（2023-06-19）：
-# FF31 = 2-byte serial + six 24-bit EEG values; FF51 = one heart-rate byte.
-EEG_PACKET_BYTES = 20
-HR_RAW_PACKET_BYTES = 1
+# Confirmed device profile. Keep these values separate from SDK examples: the
+# gateway must preserve the received bytes before an algorithm POC has proved
+# that they can be consumed by a particular SDK.
+EEG_PACKET_BYTES = 14
+HR_NATIVE_PACKET_BYTES = 16
+HR_RAW_PACKET_BYTES = 20
 
 
 @dataclass(frozen=True)
@@ -22,13 +24,15 @@ class DataWindow:
     start_ms: int
     end_ms: int
     eeg: list[RawPacket] = field(default_factory=list)
+    hr_native: list[RawPacket] = field(default_factory=list)
     hr_raw: list[RawPacket] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
 
     def append(self, packet: RawPacket) -> None:
         target, expected, reason = {
             "ff31": (self.eeg, EEG_PACKET_BYTES, "EEG_PACKET_LENGTH_INVALID"),
-            "ff51": (self.hr_raw, HR_RAW_PACKET_BYTES, "HR_PACKET_LENGTH_INVALID"),
+            "ff51": (self.hr_native, HR_NATIVE_PACKET_BYTES, "HR_NATIVE_PACKET_LENGTH_INVALID"),
+            "ff52": (self.hr_raw, HR_RAW_PACKET_BYTES, "HR_RAW_PACKET_LENGTH_INVALID"),
         }[packet.characteristic]
         target.append(packet)
         if len(packet.value) != expected and reason not in self.reasons:

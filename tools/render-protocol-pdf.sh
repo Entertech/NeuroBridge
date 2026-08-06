@@ -12,6 +12,7 @@ root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source_path=$(cd "$(dirname "$source_file")" && pwd)/$(basename "$source_file")
 output_path=$(cd "$(dirname "$output_file")" && pwd)/$(basename "$output_file")
 html_path=$(mktemp "${TMPDIR:-/tmp}/neurobridge-protocol.XXXXXX.html")
+chrome_profile=$(mktemp -d "${TMPDIR:-/tmp}/neurobridge-chrome-profile.XXXXXX")
 document_title=$(sed -n 's/^# //p' "$source_path" | head -n 1)
 
 if [[ -n "${CHROME_BIN:-}" ]]; then
@@ -34,11 +35,11 @@ fi
   exit 1
 }
 
-trap 'rm -f "$html_path"' EXIT
+trap 'rm -f "$html_path"; rm -rf "$chrome_profile"' EXIT
 pandoc "$source_path" --from gfm --to html5 --standalone \
   --metadata title="$document_title" \
   --css "file://${root_dir}/tools/protocol-pdf.css" \
   -o "$html_path"
-"$chrome_path" --headless --no-sandbox --allow-file-access-from-files \
+"$chrome_path" --headless --no-sandbox --allow-file-access-from-files --user-data-dir="$chrome_profile" \
   --print-to-pdf="$output_path" --no-pdf-header-footer "$html_path"
 echo "Generated $output_path"

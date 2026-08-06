@@ -15,6 +15,13 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("install -o root -g neurobridge -m 0640", install_script)
         self.assertIn("chown root:neurobridge \"$config_dir/gateway.toml\"", install_script)
 
+    def test_archive_export_dependencies_are_installed_on_ubuntu(self) -> None:
+        install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
+        renderer = (ROOT / "tools" / "render-protocol-pdf.sh").read_text(encoding="utf-8")
+        for package in ("pandoc", "chromium", "chromium-browser", "fonts-noto-cjk"):
+            self.assertIn(package, install_script)
+        self.assertIn('--user-data-dir="$chrome_profile"', renderer)
+
     def test_web_assets_are_not_in_a_platform_directory(self) -> None:
         self.assertTrue((ROOT / "web" / "capture" / "index.html").is_file())
         self.assertTrue((ROOT / "web" / "b-client-test" / "index.html").is_file())

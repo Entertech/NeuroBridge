@@ -11,7 +11,7 @@ import uuid
 import zipfile
 
 
-RAW_STREAMS = {"eeg": 20, "hr": 1}
+RAW_STREAMS = {"eeg": 14, "hr_native": 16, "hr": 20}
 ALGORITHM_FILES = (
     "bio", "hr", "hrv", "attention", "flow", "pressure", "relaxation",
     "pleasure", "coherence", "arousal", "sleep",
@@ -186,7 +186,7 @@ class RecordingStore:
         merged: dict[int, dict] = defaultdict(lambda: {"payload": {}, "valid": True, "invalidReasons": []})
         raw_windows: dict[int, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
 
-        for stream, expected_packet_bytes in RAW_STREAMS.items():
+        for stream in RAW_STREAMS:
             path = session / "raw" / f"{stream}.jsonl"
             if not path.exists():
                 continue
@@ -205,10 +205,14 @@ class RecordingStore:
                 rows.sort(key=lambda row: int(row["sequence"]))
                 raw = b"".join(base64.b64decode(row["bytesBase64"]) for row in rows)
                 first = rows[0]
+                # FF51 is persisted for traceability, but it is device-native
+                # telemetry rather than the FF52 byte stream exposed as hr.raw.
+                if stream == "hr_native":
+                    continue
                 item["payload"]["eegRaw" if stream == "eeg" else "hrRaw"] = {
                     "encoding": "base64",
                     "sampleFormat": "bytes",
-                    "packetBytes": expected_packet_bytes,
+                    "packetBytes": RAW_STREAMS[stream],
                     "packetCount": len(rows),
                     "byteLength": len(raw),
                     "windowStartMs": int(first["windowStartMs"]),

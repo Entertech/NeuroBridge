@@ -6,7 +6,7 @@ NeuroBridge 是将回车科技头环数据接入第三方 B 端主机的跨平�
 
 ## 可运行网关与部署
 
-仓库现已包含可部署的 Python 网关：`neurobridge/`。它按 v0.1 协议提供 WebSocket 服务、以 600 ms 窗口批量发送数据、管理订阅与自动录播。实时采集时，原始 EEG、原始心率和每类算法指标按会话分文件持久化；网页可将一个会话导出为 ZIP。网关按当前 Flowtime 文档处理 `FF31`、`FF51` 原始字节，落盘和算法调用前不解包或改写；北向仅按协议发送允许的原始流。
+仓库现已包含可部署的 Python 网关：`neurobridge/`。它按 v0.1 协议提供 WebSocket 服务、以 600 ms 窗口批量发送数据、管理订阅与自动录播。实时采集时，原始 EEG、设备原生心率、原始心率和每类算法指标按会话分文件持久化；网页可将一个会话导出为 ZIP。网关按已确认 profile 处理 `FF31`、`FF51`、`FF52` 原始字节，落盘和算法调用前不解包或改写；北向仅按协议发送允许的原始流。
 
 在 Ubuntu x86_64 目标机上，从已审查的工作树以 root 执行：
 
@@ -26,7 +26,7 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。因此每个采集启动后的原始 EEG/HR 窗口都会自动进入算法 bridge。算法 SDK 通过独立的行 JSON C++ bridge 接入，避免 Python 进程直接依赖 C++ ABI；bridge 调用 AffectiveCloud SDK 的双通道 EEG 和心率入口，输出与现有算法负载一致的嵌套字段。macOS 已完成源码构建及合成输入烟雾测试；SDK 输入分组、真实 Flowtime 数据输出和 Ubuntu x86_64 构建尚未验证，生产配置的 `algorithm.enabled` 必须继续保持关闭，直到完成真实数据比对。
+Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51`、`FF52` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。其中 FF51 设备原生心率会保留在录制中，FF52 原始心率用于北向 `hr.raw`。算法 SDK 通过独立的行 JSON C++ bridge 接入，避免 Python 进程直接依赖 C++ ABI；macOS 仅完成源码构建及合成输入烟雾测试；SDK 输入分组、真实 Flowtime 数据输出和 Ubuntu x86_64 构建尚未验证，生产配置的 `algorithm.enabled` 必须继续保持关闭，直到完成真实数据比对。
 
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
@@ -67,7 +67,7 @@ python3 -m http.server 8088 --directory web/b-client-test
 - 链路：`头环 → BLE → 网关 → 有线以太网 → 第三方 B 端主机`。
 - 运行方式：实时模式和录播模式均为交付范围；头环未连接时，网关在 B 端 `subscribe` 或 `getLatest` 后自动使用已配置录播，并以 `mode="replay"` 标记数据来源。网关应开机自启，现场无需操作。
 - 演示范围：本次为单人；北向协议仅保留录播关联所需的 `subjectId`。
-- 当前 Flowtime 文档 profile：EEG `FF31` 为 20 字节大端数据包，HR `FF51` 为 1 字节数据包，佩戴/接触状态 `FF32` 为 2 字节；北向仍最多按 600 ms 分组，但实际包数由网关运行时记录，不写死。
+- 当前确认的设备 profile：EEG `FF31` 为 14 字节大端数据包，设备原生心率 `FF51` 为 16 字节，HR 原始数据 `FF52` 为 20 字节，佩戴/接触状态 `FF32` 为 2 字节；北向仍最多按 600 ms 分组，但实际包数由网关运行时记录，不写死。
 
 若现场禁止任何蓝牙，实时链路不能工作；只能改用有线采集、在允许蓝牙的区域采集后录播，或取得场地方对限制范围的书面确认。
 
@@ -107,7 +107,7 @@ python3 -m http.server 8088 --directory web/b-client-test
 ## 上线前 POC 与验收
 
 1. 在目标 N100/N150 + Ubuntu LTS 上测试 PC BLE SDK：扫描、连接、订阅、断线重连、重启恢复和长时间运行。
-2. 在同一环境编译算法 C++ SDK，固定 Eigen3/NumCpp/CMake/编译器版本，并以录制的真实 `FF31`/`FF51` 原始字节验证算法输入长度、字节序、分组方式和 600 ms 触发节奏。
+2. 在同一环境编译算法 C++ SDK，固定 Eigen3/NumCpp/CMake/编译器版本，并以录制的真实 `FF31`/`FF51`/`FF52` 原始字节验证算法输入长度、字节序、分组方式和 600 ms 触发节奏。
 3. 完成北向模拟服务端和真实 B 端主机联调，覆盖实时、录播、网关/服务端离线、恢复补传和异常数据。
 4. 在展演网络完成一次全链路演练，交付版本号、配置备份、操作手册和问题日志。
 

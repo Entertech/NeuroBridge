@@ -25,7 +25,7 @@ replay_recording_id = ""
 replay_speed = 1.0
 
 [algorithm]
-# start-poc.command 会构建锁定的 C++ SDK，并启动实际算法 bridge。
-# bridge 从每个 600 ms 原始窗口计算脑电、心率和已启用的情感指标。
-enabled = true
+# 当前只完成合成数据构建，尚未用已确认的 FF31/FF52 原始字节验证 SDK
+# 输入分组。保持关闭，完成真实录制数据 POC 后才可启用。
+enabled = false
 command = ["/tmp/neurobridge-affective-runtime/affective_bridge"]

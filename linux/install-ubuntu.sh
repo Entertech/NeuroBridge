@@ -12,7 +12,13 @@ config_dir=/etc/neurobridge
 data_dir=/var/lib/neurobridge/recordings
 
 apt-get update
-apt-get install -y python3 python3-venv bluez rsync
+# Archive export renders the published capture-package document locally.  These
+# are runtime dependencies of RecordingStore.export(), not CI-only tools.
+browser_package=chromium
+if ! apt-cache show "$browser_package" >/dev/null 2>&1; then
+  browser_package=chromium-browser
+fi
+apt-get install -y python3 python3-venv bluez rsync pandoc "$browser_package" fonts-noto-cjk
 getent group neurobridge >/dev/null 2>&1 || groupadd --system neurobridge
 id -u neurobridge >/dev/null 2>&1 || useradd --system --gid neurobridge --home /nonexistent --shell /usr/sbin/nologin neurobridge
 getent group bluetooth >/dev/null && usermod -aG bluetooth neurobridge || true

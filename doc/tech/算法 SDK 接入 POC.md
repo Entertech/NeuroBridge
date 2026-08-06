@@ -6,9 +6,9 @@
 
 ## 当前实现结论
 
-NeuroBridge 已实现 AffectiveCloud C++ SDK 的进程边界：网关在 `algorithm.enabled=true` 时启动配置的行 JSON bridge 进程，每个完整 BLE 窗口将原始 `FF31` 和 `FF51` 字节以 Base64 交给 bridge。bridge 以双通道 `appendEEG` 和 `appendHR` 调用 SDK，显式启用 EEG、HR、放松、注意力、愉悦、睡眠、心流、压力、和谐度与激活度，并返回已映射的嵌套 `algorithm` 对象。原始 EEG、原始心率和每类算法指标以独立事件文件按会话保存；指标记录使用各自的输入接收时间和计算完成时间，录播只读取已保存事件，不重新调用算法。
+NeuroBridge 已实现 AffectiveCloud C++ SDK 的进程边界：网关在 `algorithm.enabled=true` 时启动配置的行 JSON bridge 进程，每个完整 BLE 窗口将原始 `FF31` 和 `FF52` 字节以 Base64 交给 bridge。`FF51` 设备原生心率单独持久化，不作为当前未验证的 bridge 输入。bridge 可调用 SDK 的双通道 `appendEEG` 和 `appendHR` 并返回既有嵌套 `algorithm` 对象；原始 EEG、设备原生心率、原始心率和每类算法指标以独立事件文件按会话保存；指标记录使用各自的输入接收时间和计算完成时间，录播只读取已保存事件，不重新调用算法。
 
-**这不是算法 POC 或现场验收通过的声明。** 当前公开 SDK 的 `Affective.h` 注释默认双通道 EEG 每 0.6 秒为 50 个包、HR 为 3 个包；当前接入的 Flowtime 文档 profile 是 `FF31=20` 字节、`FF51=1` 字节。macOS POC 已完成 SDK 源码构建与合成输入烟雾测试，未使用任何人体数据；真实数据的包数、采样率、字节序、输入分组及输出时序尚未完成验证。因此生产模板仍保持 `algorithm.enabled=false`，不得以 SDK 的零值或单个窗口作为有效算法结论。
+**这不是算法 POC 或现场验收通过的声明。** 当前公开 SDK 的 `Affective.h` 注释默认双通道 EEG 每 0.6 秒为 50 个包、HR 为 3 个包；已确认设备 profile 是 `FF31=14` 字节、`FF51=16` 字节、`FF52=20` 字节。macOS POC 已完成 SDK 源码构建与合成输入烟雾测试，未使用任何人体数据；真实数据的包数、采样率、字节序、输入分组及输出时序尚未完成验证。因此生产模板仍保持 `algorithm.enabled=false`，不得以 SDK 的零值或单个窗口作为有效算法结论。
 
 ## 固定来源
 
@@ -42,11 +42,11 @@ SDK 构建前在 Ubuntu x86_64 记录以下信息：Ubuntu 版本、`cmake --ver
 }
 ```
 
-bridge 保留每个窗口内的原始字节顺序，不补零、截断、重排或跨相邻窗口拼接；`FF31` 不是 20 字节整数倍时拒绝该窗口。窗口不足、算法异常或返回不符合合同时，bridge 或网关必须令该窗口 `valid=false` 并给出 `invalidReasons`。数值范围、单位和有效阈值须记录在验收报告后才向 B 端承诺。
+bridge 保留每个窗口内的原始字节顺序，不补零、截断、重排或跨相邻窗口拼接；不得以 SDK 示例的包长拒绝或重编码已确认的设备包。窗口不足、算法异常或返回不符合合同时，bridge 或网关必须令该算法结果无效并给出 `invalidReasons`。数值范围、单位和有效阈值须记录在验收报告后才向 B 端承诺。
 
 ## POC 门槛
 
-1. 在目标 Ubuntu x86_64 上用实际头环采集连续原始 `FF31`、`FF51`，确认 20、1 字节长度以及每 600 ms 的实际包数。
+1. 在目标 Ubuntu x86_64 上用实际头环采集连续原始 `FF31`、`FF51`、`FF52`，确认 14、16、20 字节长度以及每 600 ms 的实际包数。
 2. 使用同一录制数据验证 bridge 输入与 SDK 的每个算法调用：字节序、包数、完整性、触发条件和结果时序。
 3. 抽样比对 bridge 输出与 SDK 官方演示/参考实现；记录算法字段、单位、范围、延迟和无效条件。
 4. 启用 `algorithm.enabled` 后，分别验证实时、录播、设备断线重连、bridge 异常与恢复；录播不得重新计算算法。

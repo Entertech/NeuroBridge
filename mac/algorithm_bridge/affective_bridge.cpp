@@ -135,10 +135,6 @@ void enable_requested_algorithms(AffectiveAlgorithm& algorithm) {
 std::string evaluate(AffectiveAlgorithm& algorithm, const std::string& request) {
     const auto eeg = base64_decode(json_string_field(request, "eegRawBase64"));
     const auto hr = base64_decode(json_string_field(request, "hrRawBase64"));
-    if (!eeg.empty() && eeg.size() % 20 != 0) {
-        throw std::runtime_error("EEG byte length is not a multiple of the SDK's 20-byte packet");
-    }
-
     std::ostringstream result;
     result << "{\"algorithm\":{";
     bool first = true;

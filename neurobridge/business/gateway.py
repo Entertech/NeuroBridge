@@ -113,7 +113,7 @@ class Gateway:
 
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
         received_at_ms = now_ms()
-        raw_stream = {"ff31": "eeg", "ff51": "hr"}.get(characteristic)
+        raw_stream = {"ff31": "eeg", "ff51": "hr_native", "ff52": "hr"}.get(characteristic)
         if raw_stream:
             window_start_ms = received_at_ms - received_at_ms % self.assembler.interval_ms
             self.store.save_raw_packet(
