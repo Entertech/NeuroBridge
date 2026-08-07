@@ -65,6 +65,11 @@ class Gateway:
         self.store = RecordingStore(config.recording.directory)
         self.algorithm = AlgorithmRunner(config.algorithm)
         self.status: dict[str, Any] = {"connectionState": "disconnected", "wearState": "unknown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
+        # This is deliberately an operational-only field: the released B-side
+        # status contract is unchanged.  Linux operators can inspect it in the
+        # durable gateway log, matching the failure detail shown by the macOS
+        # POC control page.
+        self.connection_error: str | None = None
         self.sessions: set[Any] = set()
         self.latest_algorithm: dict | None = None
         self.latest_algorithm_timestamp: int | None = None
@@ -109,6 +114,7 @@ class Gateway:
         previous = self.status.get(name)
         self.status[name] = value
         if name == "connectionState" and value == "connected" and previous != "connected":
+            self.connection_error = None
             await self._stop_replay()
             recording_id = self.store.start(now_ms())
             LOG.info("Headband connected; recording started: recordingId=%s", recording_id)
@@ -125,6 +131,15 @@ class Gateway:
             if name != "connectionState":
                 LOG.info("Gateway status changed: %s=%s", name, value)
             await self.broadcast_status()
+
+    async def update_connection_error(self, error: str) -> None:
+        """Record the latest BLE setup failure for Linux operational diagnosis.
+
+        ``FlowtimeAdapter`` retries internally, so surfacing the exception here
+        must not terminate the gateway or alter the published northbound schema.
+        """
+        self.connection_error = error
+        LOG.warning("Headband connection attempt failed: %s", error)
 
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
         received_at_ms = now_ms()

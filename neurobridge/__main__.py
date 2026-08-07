@@ -15,7 +15,17 @@ async def run(config_path: str) -> None:
     config = load(config_path)
     configure_logging(config.logging)
     gateway = Gateway(config)
-    adapter = FlowtimeAdapter(gateway.config.ble, gateway.receive_packet, gateway.update_status, gateway.on_device_ready)
+    # Keep the production runtime on the same adapter-error path as the macOS
+    # POC.  The Linux deployment has no local control page, so the gateway
+    # records a concise, durable operational error instead of silently losing
+    # the reason after the adapter has scheduled its reconnect attempt.
+    adapter = FlowtimeAdapter(
+        gateway.config.ble,
+        gateway.receive_packet,
+        gateway.update_status,
+        gateway.on_device_ready,
+        gateway.update_connection_error,
+    )
     await gateway.start()
     try:
         async with asyncio.TaskGroup() as group:

@@ -169,6 +169,16 @@ class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_connection_error_is_retained_until_a_successful_connection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = Gateway(config(Path(directory)))
+            await gateway.update_connection_error("headband not found")
+            self.assertEqual(gateway.connection_error, "headband not found")
+
+            await gateway.update_status("connectionState", "connected")
+            self.assertIsNone(gateway.connection_error)
+            await gateway.stop()
+
     async def test_gateway_persists_all_confirmed_raw_characteristics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
