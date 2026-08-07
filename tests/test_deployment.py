@@ -76,6 +76,21 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("#include <limits>", header)
         self.assertIn("std::numeric_limits<double>", header)
 
+    def test_vendored_sdk_fft_tool_includes_its_cstring_dependency(self) -> None:
+        source = (
+            ROOT
+            / "third_party"
+            / "AffectiveCloud-Algorithm-SDK"
+            / "cpp"
+            / "package"
+            / "source"
+            / "BASIC"
+            / "TOOL"
+            / "FFTTool.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("#include <cstring>", source)
+        self.assertIn("std::memset(", source)
+
     def test_dhcp_is_an_optional_isolated_service(self) -> None:
         install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
         service = (ROOT / "linux" / "systemd" / "neurobridge-dhcp.service").read_text(encoding="utf-8")

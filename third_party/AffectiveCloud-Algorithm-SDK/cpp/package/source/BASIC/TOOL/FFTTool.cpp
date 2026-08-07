@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <algorithm>
+#include <cstring>
 #include "FFTTool.h"
 FFT0::FFT0()
 {
@@ -262,8 +263,8 @@ void FFT1::FFT(complex *dat)
         FFT0::FFT(dat);
         return;
     }                                                               // 下面我们将用Bluestein算法进行FFT
-    memset(tmp1, 0, sizeof(complex) * covSz);
-    memset(tmp2, 0, sizeof(complex) * covSz);
+    std::memset(tmp1, 0, sizeof(complex) * covSz);
+    std::memset(tmp2, 0, sizeof(complex) * covSz);
     tmp1[0].real = 1;
     tmp1[0].imag = 0;
     for (i = 1; i < fftSz; i++)                                     // w(n), n \in [1 - N, N - 1]
@@ -307,8 +308,8 @@ void FFT1::IFFT(complex *dat)
         FFT0::IFFT(dat);
         return;
     }
-    memset(tmp1, 0, sizeof(complex) * covSz);                       // 注意往下的所有的Wnk全部都是虚部取负数的
-    memset(tmp2, 0, sizeof(complex) * covSz);
+    std::memset(tmp1, 0, sizeof(complex) * covSz);                  // 注意往下的所有的Wnk全部都是虚部取负数的
+    std::memset(tmp2, 0, sizeof(complex) * covSz);
     tmp1[0].real = 1;
     tmp1[0].imag = 0;
     for (i = 1; i < fftSz; i++)                                     // w(n), n \in [1 - N, N - 1]
