@@ -4,6 +4,8 @@
 
 - `update-ubuntu.sh`：目标机一键部署入口；只使用当前源码目录，不执行 Git 或网络操作。
 - `prepare-ubuntu24.04-environment.sh`：一次性联网环境准备，安装系统包与锁定的 Python 运行依赖；完成后可断网。
+- `configure-ssh-operations.sh`：在已确认的私有运维网络上显式启用仅公钥的 SSH 运维入口。
+- `setup-ssh-operations.sh`：交互式一键 SSH 运维配置入口，调用严格的配置器。
 - `collect-ubuntu-build-diagnostics.sh`：收集编译日志、工具版本和 CMake 诊断，不包含现场配置或原始数据。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
@@ -22,6 +24,7 @@
 - 可联网时先运行一次 `./linux/prepare-ubuntu24.04-environment.sh`，它会安装 `python3`、`rsync`、CMake、C++17 编译器、Eigen3、BlueZ、dnsmasq，并创建 `/opt/neurobridge/venv`、安装锁定的 Python 运行依赖。完成后即可断开互联网；安装器只验证这些前提，绝不调用 APT、PyPI 或其他下载服务。
 - 网关与 B 端的专用有线链路。先确定网关地址、B 端地址、掩码、端口和网卡名。
 - 若要使用录播，准备好录制数据目录及要回放的 `recordingId`；若要使用算法，先完成该 Ubuntu 主机上的真实数据 POC。算法默认启用，但 POC 前可暂时设为 `false`。
+- 若要使用 SSH 运维，准备一台受控运维主机的 **SSH 公钥**、它的固定 IP/CIDR，以及网关用于运维的私有静态 IP。公钥可传入网关；私钥绝不能传入或保存到网关。
 
 在新主机上确认操作系统、CPU 架构、网卡及蓝牙设备：
 
@@ -95,6 +98,59 @@ ip -br addr show enp1s0
 | `/etc/neurobridge/gateway.toml` | 现场部署配置；root 可写，`neurobridge` 服务账户可读。 |
 | `/var/lib/neurobridge/recordings` | 实时录制和录播数据。 |
 | `/var/log/neurobridge/neurobridge.log` | 持久化运行日志；每天轮转，默认保留 14 份压缩归档。 |
+
+## 4.1 启用 SSH 运维入口（可选）
+
+SSH 只用于网关运维，**不**用于 B 端读取数据、控制采集或调用算法。`prepare-ubuntu24.04-environment.sh` 会安装 `openssh-server`，但会保持其停用；只有执行下面的显式配置命令后，SSH 才会启动并开机自启。
+
+在受控运维主机生成一对密钥，只把 `.pub` 公钥复制到网关。例如：
+
+```bash
+ssh-keygen -t ed25519 -a 64 -f ~/.ssh/neurobridge-ops
+scp ~/.ssh/neurobridge-ops.pub <现有管理员>@<网关私有IP>:/tmp/neurobridge-ops.pub
+```
+
+在网关的**本地控制台**执行下面的一键配置。它会自动给出唯一的本机私有 IP、当前 SSH 客户端 `/32`（如可识别）和常用公钥路径作为默认值，仍要求人工确认；私网来源、监听地址和公钥不能被脚本擅自猜测或放宽：
+
+```bash
+sudo ./linux/setup-ssh-operations.sh
+```
+
+若要在自动化部署中使用非交互方式，仍可直接调用严格配置器。以下 IP 和网段只是示例，必须替换为现场确认值：
+
+```bash
+sudo ./linux/configure-ssh-operations.sh \
+  --operator-user neuroops \
+  --authorized-key-file /tmp/neurobridge-ops.pub \
+  --listen-address 192.168.88.10 \
+  --allow-from 192.168.88.20/32
+```
+
+若必须通过现有 SSH 会话执行，现有登录用户名必须与新建的 `--operator-user` 相同，以避免访问策略切换时将当前管理员锁在门外。配置器要求监听地址已经配置在本机网卡上，且监听地址与允许来源均为 RFC1918 私有 IPv4 地址。它创建或更新单一 `neuroops` 本地账户，锁定密码、写入公钥，并安装 `/etc/ssh/sshd_config.d/00-neurobridge-operations.conf`：只监听指定地址，仅允许该账户使用公钥；禁止 root 登录、密码登录、端口转发、代理转发、隧道和 X11 转发。脚本会拒绝已有 SSH 配置留下的额外端口或监听地址。来源不在 `--allow-from` 范围内的连接即使通过认证也不能获得 shell 或执行命令。仍须保持网关只接入受控专用网络，并在现场防火墙中仅放行确认的运维来源与 SSH 端口。
+
+配置完成后，使用如下方式登录。`neurobridge-ops` 会自动使用受限的无密码 sudo 权限，适合日常值守而不会获得配置文件编辑、软件安装或任意 root shell 权限：
+
+```bash
+ssh -i ~/.ssh/neurobridge-ops neuroops@192.168.88.10
+neurobridge-ops status             # 当前服务状态 + 最近 200 条日志
+neurobridge-ops logs --lines 500   # 查询指定数量的历史日志，最大 1000 条
+neurobridge-ops logs --follow      # 实时追踪新日志，Ctrl-C 停止
+watch -n 2 neurobridge-ops status  # 每 2 秒刷新一次实时服务状态
+neurobridge-ops restart            # 重启网关
+neurobridge-ops stop
+neurobridge-ops start
+```
+
+`restart` 或 `stop` 会断开 B 端 WebSocket 连接；恢复后 B 端必须重新连接、调用 `getStatus` 并重新订阅。需要修改 `/etc/neurobridge/gateway.toml`、部署新版本或更改防火墙时，应由现场的独立系统管理员账户在本地控制台或已批准的更高权限运维流程执行，不能扩大 `neuroops` 的权限。
+
+应用后在本地控制台检查：
+
+```bash
+sudo sshd -t
+sudo systemctl --no-pager --full status ssh.service
+```
+
+如需撤销这个 SSH 运维入口，在本地控制台删除 `/etc/ssh/sshd_config.d/00-neurobridge-operations.conf`、`/etc/sudoers.d/neurobridge-operator`、`/usr/local/sbin/neurobridge-ops-status`、`/usr/local/sbin/neurobridge-ops-logs` 和 `/usr/local/bin/neurobridge-ops`，再执行 `sudo systemctl restart ssh.service`。是否停用 SSH 服务由现场运维策略决定。
 
 ## 5. 填写现场配置
 

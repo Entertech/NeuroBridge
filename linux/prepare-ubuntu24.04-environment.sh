@@ -32,11 +32,17 @@ apt-get install -y --no-install-recommends \
   dnsmasq \
   git \
   libeigen3-dev \
+  openssh-server \
   python3 \
   python3-dev \
   python3-pip \
   python3-venv \
   rsync
+
+# Do not expose the distribution-default SSH daemon. The explicit operations
+# setup script installs a key-only, address-bound configuration before enabling
+# this service.
+systemctl disable --now ssh.service 2>/dev/null || true
 
 install_dir=/opt/neurobridge
 install -d -m 0755 "$install_dir"

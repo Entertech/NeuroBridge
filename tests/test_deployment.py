@@ -39,6 +39,28 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('python3 -m venv "$install_dir/venv"', script)
         self.assertIn("Ubuntu 24.04", script)
 
+    def test_ssh_operations_are_explicitly_enabled_and_key_only(self) -> None:
+        preparation = (ROOT / "linux" / "prepare-ubuntu24.04-environment.sh").read_text(encoding="utf-8")
+        script = (ROOT / "linux" / "configure-ssh-operations.sh").read_text(encoding="utf-8")
+        wizard = (ROOT / "linux" / "setup-ssh-operations.sh").read_text(encoding="utf-8")
+        self.assertIn("openssh-server", preparation)
+        self.assertIn("systemctl disable --now ssh.service", preparation)
+        self.assertIn("--authorized-key-file", script)
+        self.assertIn("PermitRootLogin no", script)
+        self.assertIn("PasswordAuthentication no", script)
+        self.assertIn("AuthenticationMethods publickey", script)
+        self.assertIn("ListenAddress $listen_address", script)
+        self.assertIn("Match User $operator_user Address *,!$allow_from", script)
+        self.assertIn("AllowUsers $operator_user", script)
+        self.assertIn("00-neurobridge-operations.conf", script)
+        self.assertIn("unexpected listening ports", script)
+        self.assertIn("neurobridge-ops-status", script)
+        self.assertIn("neurobridge-ops-logs", script)
+        self.assertIn("neurobridge-ops logs --follow", script)
+        self.assertIn("systemctl restart neurobridge.service", script)
+        self.assertIn("NeuroBridge SSH 运维一键配置", wizard)
+        self.assertIn("输入 YES 确认", wizard)
+
     def test_installer_builds_and_installs_the_locked_algorithm_bridge(self) -> None:
         install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
         self.assertIn("--exclude venv", install_script)
