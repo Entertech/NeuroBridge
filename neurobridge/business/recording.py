@@ -12,7 +12,10 @@ import uuid
 import zipfile
 
 
-RAW_STREAMS = {"eeg": 14, "hr_native": 16, "hr": 20}
+RAW_STREAMS = {"eeg": 20, "hr": 1}
+# Kept only for reading sessions made by the superseded FF52 profile.  New
+# sessions never create this file and it remains hidden from northbound replay.
+LEGACY_REPLAY_STREAMS = {"hr_native": 16}
 ALGORITHM_FILES = (
     "bio", "hr", "hrv", "attention", "flow", "pressure", "relaxation",
     "pleasure", "coherence", "arousal", "sleep",
@@ -213,7 +216,7 @@ class RecordingStore:
         merged: dict[int, dict] = defaultdict(lambda: {"payload": {}, "valid": True, "invalidReasons": []})
         raw_windows: dict[int, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
 
-        for stream in RAW_STREAMS:
+        for stream in {**RAW_STREAMS, **LEGACY_REPLAY_STREAMS}:
             path = session / "raw" / f"{stream}.jsonl"
             if not path.exists():
                 continue
@@ -232,14 +235,15 @@ class RecordingStore:
                 rows.sort(key=lambda row: int(row["sequence"]))
                 raw = b"".join(base64.b64decode(row["bytesBase64"]) for row in rows)
                 first = rows[0]
-                # FF51 is persisted for traceability, but it is device-native
-                # telemetry rather than the FF52 byte stream exposed as hr.raw.
+                # A prior, incorrect profile created this trace-only stream.
+                # Preserve its files for historical recordings without exposing
+                # them as the current FF51-based hr.raw stream.
                 if stream == "hr_native":
                     continue
                 item["payload"]["eegRaw" if stream == "eeg" else "hrRaw"] = {
                     "encoding": "base64",
                     "sampleFormat": "bytes",
-                    "packetBytes": RAW_STREAMS[stream],
+                    "packetBytes": int(first["packetBytes"]),
                     "packetCount": len(rows),
                     "byteLength": len(raw),
                     "windowStartMs": int(first["windowStartMs"]),

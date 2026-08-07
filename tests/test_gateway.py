@@ -11,9 +11,9 @@ import zipfile
 
 from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, RecordingConfig, ServerConfig
 from neurobridge.algorithm.runner import AlgorithmRunner
-from neurobridge.ble.flowtime import FF52, REQUIRED_NOTIFICATION_CHARACTERISTICS, FlowtimeAdapter, wear_state_from_packet
+from neurobridge.ble.flowtime import FF51, REQUIRED_NOTIFICATION_CHARACTERISTICS, FlowtimeAdapter, wear_state_from_packet
 from neurobridge.business.gateway import ClientSession, Gateway, REPLAY_NOT_AVAILABLE_REASON
-from neurobridge.ble.packets import DataWindow, EEG_PACKET_BYTES, HR_NATIVE_PACKET_BYTES, HR_RAW_PACKET_BYTES, RawPacket, WindowAssembler
+from neurobridge.ble.packets import DataWindow, EEG_PACKET_BYTES, HR_PACKET_BYTES, RawPacket, WindowAssembler
 from neurobridge.business.recording import RecordingStore
 
 
@@ -25,8 +25,7 @@ class PacketTests(unittest.TestCase):
     def test_window_keeps_original_bytes_and_counts(self) -> None:
         assembler = WindowAssembler()
         assembler.add("ff31", b"a" * EEG_PACKET_BYTES, 1000)
-        assembler.add("ff51", b"n" * HR_NATIVE_PACKET_BYTES, 1010)
-        assembler.add("ff52", b"b" * HR_RAW_PACKET_BYTES, 1020)
+        assembler.add("ff51", b"h" * HR_PACKET_BYTES, 1010)
         windows = assembler.add("ff31", b"c" * EEG_PACKET_BYTES, 1601)
         self.assertEqual(len(windows), 1)
         payload = windows[0].raw_payload()
@@ -34,16 +33,15 @@ class PacketTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(payload["eegRaw"]["bytesBase64"]), b"a" * EEG_PACKET_BYTES)
         self.assertEqual(payload["hrRaw"]["packetCount"], 1)
 
-    def test_confirmed_packet_lengths_and_ff52_raw_stream_are_preserved(self) -> None:
-        self.assertEqual((EEG_PACKET_BYTES, HR_NATIVE_PACKET_BYTES, HR_RAW_PACKET_BYTES), (14, 16, 20))
-        self.assertIn(FF52, REQUIRED_NOTIFICATION_CHARACTERISTICS)
+    def test_specified_packet_lengths_and_ff51_raw_stream_are_preserved(self) -> None:
+        self.assertEqual((EEG_PACKET_BYTES, HR_PACKET_BYTES), (20, 1))
+        self.assertIn(FF51, REQUIRED_NOTIFICATION_CHARACTERISTICS)
         assembler = WindowAssembler()
-        assembler.add("ff51", b"n" * HR_NATIVE_PACKET_BYTES, 1000)
-        assembler.add("ff52", b"r" * HR_RAW_PACKET_BYTES, 1010)
+        assembler.add("ff51", b"r" * HR_PACKET_BYTES, 1010)
         window = assembler.add("ff31", b"e" * EEG_PACKET_BYTES, 1601)[0]
         self.assertIn("hrRaw", window.raw_payload())
-        self.assertEqual(window.raw_payload()["hrRaw"]["packetBytes"], HR_RAW_PACKET_BYTES)
-        self.assertEqual(window.hr_native[0].value, b"n" * HR_NATIVE_PACKET_BYTES)
+        self.assertEqual(window.raw_payload()["hrRaw"]["packetBytes"], HR_PACKET_BYTES)
+        self.assertEqual(window.hr[0].value, b"r" * HR_PACKET_BYTES)
 
 
 class FlowtimeSelectionTests(unittest.TestCase):
@@ -68,7 +66,7 @@ class FlowtimeSelectionTests(unittest.TestCase):
 
 
 class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_ff52_notification_is_subscribed_and_forwarded_as_raw_hr(self) -> None:
+    async def test_ff51_notification_is_subscribed_and_forwarded_as_raw_hr(self) -> None:
         received: list[tuple[str, bytes]] = []
 
         async def packet(characteristic: str, value: bytes) -> None:
@@ -98,9 +96,9 @@ class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         adapter._client = client
         await adapter._subscribe()
         self.assertEqual(set(client.handlers), set(REQUIRED_NOTIFICATION_CHARACTERISTICS))
-        client.handlers[FF52](0, bytearray(b"r" * HR_RAW_PACKET_BYTES))  # type: ignore[operator]
+        client.handlers[FF51](0, bytearray(b"r" * HR_PACKET_BYTES))  # type: ignore[operator]
         await asyncio.sleep(0)
-        self.assertEqual(received, [("ff52", b"r" * HR_RAW_PACKET_BYTES)])
+        self.assertEqual(received, [("ff51", b"r" * HR_PACKET_BYTES)])
 
 
 class AlgorithmRunnerTests(unittest.IsolatedAsyncioTestCase):
@@ -187,12 +185,11 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             recording_id = gateway.store.recording_id
             self.assertIsNotNone(recording_id)
             await gateway.receive_packet("ff31", b"e" * EEG_PACKET_BYTES)
-            await gateway.receive_packet("ff51", b"n" * HR_NATIVE_PACKET_BYTES)
-            await gateway.receive_packet("ff52", b"r" * HR_RAW_PACKET_BYTES)
+            await gateway.receive_packet("ff51", b"r" * HR_PACKET_BYTES)
             await gateway.update_status("connectionState", "disconnected")
 
             raw_dir = root / "sessions" / str(recording_id) / "raw"
-            for stream, value in (("eeg", b"e" * EEG_PACKET_BYTES), ("hr_native", b"n" * HR_NATIVE_PACKET_BYTES), ("hr", b"r" * HR_RAW_PACKET_BYTES)):
+            for stream, value in (("eeg", b"e" * EEG_PACKET_BYTES), ("hr", b"r" * HR_PACKET_BYTES)):
                 row = json.loads((raw_dir / f"{stream}.jsonl").read_text(encoding="utf-8"))
                 self.assertEqual(base64.b64decode(row["bytesBase64"]), value)
 
@@ -314,17 +311,40 @@ class RecordingTests(unittest.TestCase):
             store = RecordingStore(Path(directory))
             recording_id = store.start()
             store.save_raw_packet(stream="eeg", received_at_ms=1190, window_start_ms=600, window_end_ms=1200, value=b"e" * EEG_PACKET_BYTES)
-            store.save_raw_packet(stream="hr_native", received_at_ms=1195, window_start_ms=600, window_end_ms=1200, value=b"n" * HR_NATIVE_PACKET_BYTES)
-            store.save_raw_packet(stream="hr", received_at_ms=1199, window_start_ms=600, window_end_ms=1200, value=b"r" * HR_RAW_PACKET_BYTES)
+            store.save_raw_packet(stream="hr", received_at_ms=1199, window_start_ms=600, window_end_ms=1200, value=b"r" * HR_PACKET_BYTES)
 
             session = Path(directory) / "sessions" / recording_id
-            self.assertTrue((session / "raw" / "hr_native.jsonl").is_file())
+            self.assertTrue((session / "raw" / "hr.jsonl").is_file())
             event = store.events(recording_id)[0]
             self.assertTrue(event["valid"])
             self.assertEqual(event["payload"]["eegRaw"]["packetBytes"], EEG_PACKET_BYTES)
-            self.assertEqual(event["payload"]["hrRaw"]["packetBytes"], HR_RAW_PACKET_BYTES)
+            self.assertEqual(event["payload"]["hrRaw"]["packetBytes"], HR_PACKET_BYTES)
             self.assertEqual(base64.b64decode(event["payload"]["eegRaw"]["bytesBase64"]), b"e" * EEG_PACKET_BYTES)
-            self.assertEqual(base64.b64decode(event["payload"]["hrRaw"]["bytesBase64"]), b"r" * HR_RAW_PACKET_BYTES)
+            self.assertEqual(base64.b64decode(event["payload"]["hrRaw"]["bytesBase64"]), b"r" * HR_PACKET_BYTES)
+
+    def test_pre_correction_ff52_recording_remains_replayable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecordingStore(Path(directory))
+            recording_id = store.start()
+            session = Path(directory) / "sessions" / recording_id / "raw"
+            legacy_hr = {
+                "sessionId": recording_id,
+                "receivedAtMs": 1199,
+                "windowStartMs": 600,
+                "windowEndMs": 1200,
+                "sequence": 1,
+                "packetBytes": 20,
+                "encoding": "base64",
+                "bytesBase64": base64.b64encode(b"r" * 20).decode("ascii"),
+                "valid": True,
+                "invalidReasons": [],
+            }
+            (session / "hr.jsonl").write_text(json.dumps(legacy_hr) + "\n", encoding="utf-8")
+            (session / "hr_native.jsonl").write_text("", encoding="utf-8")
+
+            event = store.events(recording_id)[0]
+            self.assertEqual(event["payload"]["hrRaw"]["packetBytes"], 20)
+            self.assertEqual(base64.b64decode(event["payload"]["hrRaw"]["bytesBase64"]), b"r" * 20)
 
     def test_raw_and_algorithm_are_separate_then_replay_merges_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

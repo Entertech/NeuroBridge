@@ -14,7 +14,7 @@ class AlgorithmRunner:
     """Isolates the C++ SDK behind a line-delimited JSON bridge.
 
     It intentionally does not call appendEEG/appendHR until the bridge command and
-    the confirmed FF31/FF52 grouping has been validated with recorded device bytes.
+    the FF31/FF51 grouping has been validated with recorded device bytes.
     """
     def __init__(self, config: AlgorithmConfig) -> None:
         self.config = config
@@ -51,12 +51,12 @@ class AlgorithmRunner:
         self.process = None
 
     async def evaluate(self, window: DataWindow) -> tuple[dict | None, list[str]]:
-        if not window.eeg and not window.hr_raw:
+        if not window.eeg and not window.hr:
             return None, []
         if not self.available or not self.process or not self.process.stdin or not self.process.stdout:
             return None, ["ALGORITHM_NOT_READY"]
         try:
-            request = {"timestampMs": window.end_ms, "eegRawBase64": base64.b64encode(b"".join(x.value for x in window.eeg)).decode(), "hrRawBase64": base64.b64encode(b"".join(x.value for x in window.hr_raw)).decode()}
+            request = {"timestampMs": window.end_ms, "eegRawBase64": base64.b64encode(b"".join(x.value for x in window.eeg)).decode(), "hrRawBase64": base64.b64encode(b"".join(x.value for x in window.hr)).decode()}
             self.process.stdin.write((json.dumps(request) + "\n").encode())
             await self.process.stdin.drain()
             response = await asyncio.wait_for(self.process.stdout.readline(), timeout=2)

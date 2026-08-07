@@ -143,7 +143,7 @@ class Gateway:
 
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
         received_at_ms = now_ms()
-        raw_stream = {"ff31": "eeg", "ff51": "hr_native", "ff52": "hr"}.get(characteristic)
+        raw_stream = {"ff31": "eeg", "ff51": "hr"}.get(characteristic)
         if raw_stream:
             window_start_ms = received_at_ms - received_at_ms % self.assembler.interval_ms
             self.store.save_raw_packet(
@@ -205,7 +205,7 @@ class Gateway:
                 algorithm=algorithm_payload,
                 computed_at_ms=now_ms(),
                 eeg_source=self.store.source_reference(window.eeg, window_start_ms=window.start_ms, window_end_ms=window.end_ms),
-                hr_source=self.store.source_reference(window.hr_raw, window_start_ms=window.start_ms, window_end_ms=window.end_ms),
+                hr_source=self.store.source_reference(window.hr, window_start_ms=window.start_ms, window_end_ms=window.end_ms),
                 valid=valid,
                 invalid_reasons=reasons,
             )

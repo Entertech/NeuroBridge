@@ -25,7 +25,7 @@ replay_recording_id = ""
 replay_speed = 1.0
 
 [algorithm]
-# 当前只完成合成数据构建，尚未用已确认的 FF31/FF52 原始字节验证 SDK
+# 当前只完成合成数据构建，尚未用已确认的 FF31/FF51 原始字节验证 SDK
 # 输入分组。保持关闭，完成真实录制数据 POC 后才可启用。
 enabled = false
 command = ["/tmp/neurobridge-affective-runtime/affective_bridge"]

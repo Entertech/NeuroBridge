@@ -64,7 +64,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 /tmp/neurobridge-mac-venv/bin/python mac/poc_server.py --config /tmp/neurobridge-gateway.capture.toml
 ```
 
-浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载会立即发起本机扫描；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51`、`FF52` 与电量通知，随后向 `FF21` 写入 `0x05` 启动采集。模板默认不启动算法 bridge，直到真实录制数据已验证其输入分组。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
+浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载会立即发起本机扫描；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51` 与电量通知，随后向 `FF21` 写入 `0x05` 启动采集。模板默认不启动算法 bridge，直到真实录制数据已验证其输入分组。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
 
 成功连接后的记录会保存到 `/tmp/neurobridge-headband-poc/sessions/rec-.../`，其中原始 EEG、原始心率和各算法指标分别位于 `raw/`、`algorithm/` 子目录。目录名中的 `rec-...` 是后续录播所需的 recording ID。请只记录 ID，不要复制 JSONL 中的 Base64 原始字节。
 
@@ -78,7 +78,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 
 报告会验证并汇总：
 
-- `FF31` 的 14 字节、`FF51` 的 16 字节与 `FF52` 的 20 字节通知契约；
+- `FF31` 的 20 字节、`FF51` 的 1 字节通知契约；
 - 每个 600 ms 窗口的包数、记录时间范围和窗口间隔；
 - 声明字节数与实际 Base64 解码后的长度是否一致；
 - 无效窗口和原因。
