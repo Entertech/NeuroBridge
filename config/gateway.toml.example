@@ -53,4 +53,4 @@ level = "INFO"
 # until captured bytes have validated the bridge command and its output schema.
 enabled = false
 # Command receives one JSON object per line and emits one JSON object per line.
-# command = ["/opt/neurobridge/bin/affective-bridge"]
+# command = ["/usr/local/lib/neurobridge/neurobridge_affective_bridge"]

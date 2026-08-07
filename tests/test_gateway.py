@@ -35,6 +35,7 @@ class PacketTests(unittest.TestCase):
 
     def test_specified_packet_lengths_and_ff51_raw_stream_are_preserved(self) -> None:
         self.assertEqual((EEG_PACKET_BYTES, HR_PACKET_BYTES), (20, 1))
+        self.assertEqual(len(REQUIRED_NOTIFICATION_CHARACTERISTICS), 3)
         self.assertIn(FF51, REQUIRED_NOTIFICATION_CHARACTERISTICS)
         assembler = WindowAssembler()
         assembler.add("ff51", b"r" * HR_PACKET_BYTES, 1010)

@@ -119,6 +119,8 @@ sudo -u neurobridge /opt/neurobridge/venv/bin/python -c 'from neurobridge.config
 
 若采用 DHCP 模式，还要填写 `interface`、`subnet_cidr`、`dhcp_range_start`、`dhcp_range_end` 与 `dhcp_lease_time`。网关本身仍必须在该网卡使用 `[server].host` 作为静态地址；DHCP 只为 B 端分配地址，不提供 DNS，也不会让端口动态化。
 
+算法默认关闭不是部署故障：Ubuntu 目标机的 SDK 构建、真实录制字节验证和字段语义 POC 通过前，必须保持 `[algorithm].enabled = false`。受控的构建与真实数据 POC 操作见 [算法 SDK 接入 POC](../doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
+
 ## 6. 启动并验证
 
 配置完成后启动服务并确认它已设为开机自启：
