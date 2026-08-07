@@ -6,6 +6,7 @@
 #define AFFECTIVECPP_DSPBCG_H
 #include "TypeDefine.h"
 #include <climits>
+#include <limits>
 
 namespace basic::dsp
 {

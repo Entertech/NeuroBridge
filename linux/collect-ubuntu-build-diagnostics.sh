@@ -12,6 +12,8 @@ fail() {
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 result="/tmp/neurobridge-ubuntu-build-diagnostics-$stamp.tar.gz"
+archive_owner=${SUDO_USER:-$(id -un)}
+archive_group=$(id -gn "$archive_owner")
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT
 
@@ -47,5 +49,6 @@ if command -v journalctl >/dev/null 2>&1; then
 fi
 
 tar -C "$work_dir" -czf "$result" .
-chmod 0640 "$result"
+chown "$archive_owner:$archive_group" "$result"
+chmod 0600 "$result"
 echo "Diagnostics archive created: $result"

@@ -63,6 +63,19 @@ class DeploymentTests(unittest.TestCase):
         self.assertTrue((ROOT / "third_party" / "AffectiveCloud-Algorithm-SDK" / "cpp" / "package" / "CMakeLists.txt").is_file())
         self.assertTrue((ROOT / "third_party" / "NumCpp" / "CMakeLists.txt").is_file())
 
+    def test_vendored_sdk_header_includes_its_numeric_limits_dependency(self) -> None:
+        header = (
+            ROOT
+            / "third_party"
+            / "AffectiveCloud-Algorithm-SDK"
+            / "cpp"
+            / "package"
+            / "include"
+            / "DSPBCG.h"
+        ).read_text(encoding="utf-8")
+        self.assertIn("#include <limits>", header)
+        self.assertIn("std::numeric_limits<double>", header)
+
     def test_dhcp_is_an_optional_isolated_service(self) -> None:
         install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
         service = (ROOT / "linux" / "systemd" / "neurobridge-dhcp.service").read_text(encoding="utf-8")
@@ -80,5 +93,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("build.log", script)
         self.assertIn("CMakeError.log", script)
         self.assertIn("neurobridge-journal", script)
+        self.assertIn('chown "$archive_owner:$archive_group" "$result"', script)
+        self.assertIn('chmod 0600 "$result"', script)
         self.assertNotIn('"/etc/neurobridge/gateway.toml"', script)
         self.assertNotIn('"/var/lib/neurobridge/recordings"', script)
