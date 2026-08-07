@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configure a key-only, operations-only SSH entry point for a deployed gateway.
+# Configure a password-authenticated, operations-only SSH entry point for a deployed gateway.
 # It deliberately does not participate in the northbound B-end data protocol.
 set -euo pipefail
 
@@ -13,14 +13,14 @@ usage() {
 Usage:
   sudo ./linux/configure-ssh-operations.sh \
     --operator-user <local-user> \
-    --authorized-key-file <public-key-file> \
+    --operator-password-stdin \
     --listen-address <gateway-private-ip> \
     --allow-from <operator-ip-or-cidr> [--port <1-65535>]
 
-The public-key file may contain one or more OpenSSH public keys. Private keys
-are never copied to the gateway. This command restricts SSH to the named local
-operator account, disables password and root login, and binds sshd only to the
-specified gateway address. The account receives only NeuroBridge status, log,
+The password must be supplied as one line on standard input; it is never an
+argument, configuration value, or log entry. This command restricts SSH to the
+named local operator account, disables root and public-key login, and binds
+sshd only to the specified gateway address. The account receives only NeuroBridge status, log,
 approved staged-code update, start, stop, and restart privileges through sudo.
 The update command only runs a root-owned release staged at
 /srv/neurobridge-release; it never fetches code from a network or accepts a
@@ -29,7 +29,7 @@ EOF
 }
 
 operator_user=
-authorized_key_file=
+operator_password_stdin=false
 listen_address=
 allow_from=
 port=22
@@ -41,10 +41,9 @@ while [[ $# -gt 0 ]]; do
       operator_user=$2
       shift 2
       ;;
-    --authorized-key-file)
-      [[ $# -ge 2 ]] || fail "--authorized-key-file requires a value"
-      authorized_key_file=$2
-      shift 2
+    --operator-password-stdin)
+      operator_password_stdin=true
+      shift
       ;;
     --listen-address)
       [[ $# -ge 2 ]] || fail "--listen-address requires a value"
@@ -72,7 +71,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ ${EUID} -eq 0 ]] || fail "Run this command with sudo on the Ubuntu gateway."
-[[ -n "$operator_user" && -n "$authorized_key_file" && -n "$listen_address" && -n "$allow_from" ]] || {
+[[ -n "$operator_user" && "$operator_password_stdin" == true && -n "$listen_address" && -n "$allow_from" ]] || {
   usage >&2
   exit 1
 }
@@ -82,10 +81,10 @@ done
 . /etc/os-release
 [[ ${ID:-} == "ubuntu" && ${VERSION_ID:-} == "24.04" ]] || fail "SSH operations setup requires Ubuntu 24.04 LTS."
 command -v sshd >/dev/null 2>&1 || fail "openssh-server is missing. Run linux/prepare-ubuntu24.04-environment.sh while the gateway can access the approved package source."
-command -v ssh-keygen >/dev/null 2>&1 || fail "ssh-keygen is missing; openssh-client must be installed."
+command -v chpasswd >/dev/null 2>&1 || fail "chpasswd is missing; install the Ubuntu account-management prerequisites."
 command -v systemctl >/dev/null 2>&1 || fail "systemd is required."
-[[ -r "$authorized_key_file" ]] || fail "Cannot read the public-key file: $authorized_key_file"
-ssh-keygen -lf "$authorized_key_file" >/dev/null 2>&1 || fail "The public-key file is not valid OpenSSH public-key input."
+IFS= read -r operator_password || fail "--operator-password-stdin requires one password line on standard input."
+[[ ${#operator_password} -ge 12 ]] || fail "Operator password must contain at least 12 characters."
 
 python3 - "$listen_address" "$allow_from" <<'PY'
 from __future__ import annotations
@@ -113,12 +112,9 @@ fi
 if ! id -u "$operator_user" >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash "$operator_user"
 fi
-usermod --lock "$operator_user"
-
-operator_home=$(getent passwd "$operator_user" | cut -d: -f6)
-[[ -n "$operator_home" && "$operator_home" == /* && "$operator_home" != "/" ]] || fail "Cannot determine a safe home directory for $operator_user."
-install -d -o "$operator_user" -g "$operator_user" -m 0700 "$operator_home/.ssh"
-install -o "$operator_user" -g "$operator_user" -m 0600 "$authorized_key_file" "$operator_home/.ssh/authorized_keys"
+printf '%s:%s\n' "$operator_user" "$operator_password" | chpasswd
+unset operator_password
+usermod --unlock "$operator_user"
 
 config_dir=/etc/ssh/sshd_config.d
 # Ubuntu includes snippets before the main sshd_config. A low lexical prefix
@@ -161,11 +157,11 @@ AddressFamily inet
 ListenAddress $listen_address
 Port $port
 PermitRootLogin no
-PasswordAuthentication no
+PasswordAuthentication yes
 KbdInteractiveAuthentication no
 PermitEmptyPasswords no
-PubkeyAuthentication yes
-AuthenticationMethods publickey
+PubkeyAuthentication no
+AuthenticationMethods password
 X11Forwarding no
 AllowAgentForwarding no
 AllowTcpForwarding no
@@ -174,7 +170,7 @@ PermitTunnel no
 AllowUsers $operator_user
 
 # Connections outside the approved operations source range cannot obtain a
-# shell or execute a command even if they present an otherwise valid key.
+# shell or execute a command even if they provide otherwise valid credentials.
 Match User $operator_user Address *,!$allow_from
     ForceCommand /usr/bin/false
     PermitTTY no
@@ -357,5 +353,5 @@ if ! systemctl enable --now ssh.service || ! systemctl restart ssh.service; then
 fi
 
 echo "SSH operations access is ready: ssh -p $port $operator_user@$listen_address"
-echo "Allowed source: $allow_from. Password and root login are disabled."
+echo "Allowed source: $allow_from. Root and public-key login are disabled."
 echo "After login, use 'neurobridge-ops status', 'neurobridge-ops logs --follow', or 'neurobridge-ops update'."

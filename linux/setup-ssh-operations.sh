@@ -11,9 +11,9 @@ Usage:
   sudo ./linux/setup-ssh-operations.sh
   sudo ./linux/setup-ssh-operations.sh <configure-ssh-operations arguments>
 
-With no arguments, this starts an interactive setup wizard. It never creates
-or copies a private key: prepare the operator public key on the management
-computer and copy only that .pub file to the gateway first.
+With no arguments, this starts an interactive setup wizard. It securely asks
+for an operator account password on the gateway console; the password is never
+placed in a command-line argument, file, or log.
 EOF
 }
 
@@ -42,11 +42,21 @@ if [[ -n ${SSH_CONNECTION:-} ]]; then
 fi
 
 echo "NeuroBridge SSH 运维一键配置"
-echo "只会写入公钥；请不要把私钥复制到网关。"
+echo "将启用受限运维账户的密码登录；密码不会写入文件或日志。"
 read -r -p "运维账户 [neuroops]: " operator_user
 operator_user=${operator_user:-neuroops}
-read -r -p "运维公钥文件路径 [/tmp/neurobridge-ops.pub]: " authorized_key_file
-authorized_key_file=${authorized_key_file:-/tmp/neurobridge-ops.pub}
+read -r -s -p "运维账户密码（至少 12 位）: " operator_password
+echo
+read -r -s -p "再次输入运维账户密码: " operator_password_confirm
+echo
+[[ "$operator_password" == "$operator_password_confirm" ]] || {
+  echo "ERROR: 两次输入的密码不一致。" >&2
+  exit 1
+}
+[[ ${#operator_password} -ge 12 ]] || {
+  echo "ERROR: 运维账户密码至少需要 12 位。" >&2
+  exit 1
+}
 read -r -p "网关私有监听 IP${default_address:+ [$default_address]}: " listen_address
 listen_address=${listen_address:-$default_address}
 read -r -p "允许的运维主机 IP/CIDR${default_source:+ [$default_source]}: " allow_from
@@ -60,13 +70,16 @@ port=${port:-22}
 }
 
 echo
-echo "即将仅允许 $operator_user 从 $allow_from 通过 $listen_address:$port 使用公钥登录。"
+echo "即将仅允许 $operator_user 从 $allow_from 通过 $listen_address:$port 使用账号密码登录。"
 read -r -p "输入 YES 确认: " confirm
 [[ $confirm == YES ]] || { echo "已取消。"; exit 0; }
 
-exec "$configure" \
+printf '%s\n' "$operator_password" | "$configure" \
   --operator-user "$operator_user" \
-  --authorized-key-file "$authorized_key_file" \
+  --operator-password-stdin \
   --listen-address "$listen_address" \
   --allow-from "$allow_from" \
   --port "$port"
+configure_status=$?
+unset operator_password operator_password_confirm
+exit "$configure_status"

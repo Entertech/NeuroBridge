@@ -2,7 +2,7 @@
 
 本文是面向部署和联调人员的内部操作手册，适用于 Ubuntu 24.04 x86_64 网关与一台 B 端主机通过专用有线网络直连的场景。
 
-SSH 只用于网关运维；B 端取数、订阅和录播控制仍使用既有 WebSocket 北向协议。本文不修改 B 端协议，也不要求网关实现任何自定义加密、证书或 Token 逻辑。SSH 的公钥登录与传输保护由系统 OpenSSH 提供。
+SSH 只用于网关运维；B 端取数、订阅和录播控制仍使用既有 WebSocket 北向协议。本文不修改 B 端协议，也不要求网关实现任何自定义加密、证书或 Token 逻辑。账号密码认证和 SSH 传输保护均由系统 OpenSSH 提供。
 
 ## 1. 场景与边界
 
@@ -90,26 +90,9 @@ sudo systemctl --no-pager --full status neurobridge.service
 
 ## 4. 首次一键启用 SSH 运维
 
-首次 SSH 尚未启动时，必须给网关连接一次本地显示器和键盘，完成引导配置。不要为初次上传公钥开放临时的明文远程终端。
+首次 SSH 尚未启动时，必须给网关连接一次本地显示器和键盘，完成引导配置。不要为初次设置密码开放临时的明文远程终端。
 
-### 4.1 在 B 端主机生成运维密钥
-
-```bash
-ssh-keygen -t ed25519 -a 64 -f ~/.ssh/neurobridge-ops
-cat ~/.ssh/neurobridge-ops.pub
-```
-
-只复制 `.pub` 公钥内容；私钥 `~/.ssh/neurobridge-ops` 不得传入或保存到网关。
-
-### 4.2 在网关本地控制台保存公钥
-
-```bash
-sudoedit /tmp/neurobridge-ops.pub
-```
-
-粘贴上一步的单行公钥并保存。
-
-### 4.3 运行一键配置
+### 4.1 在网关本地控制台运行一键配置
 
 ```bash
 sudo ./linux/setup-ssh-operations.sh
@@ -119,21 +102,22 @@ sudo ./linux/setup-ssh-operations.sh
 
 ```text
 运维账户：neuroops
-运维公钥文件路径：/tmp/neurobridge-ops.pub
+运维账户密码（至少 12 位）：<隐藏输入>
+再次输入运维账户密码：<隐藏输入>
 网关私有监听 IP：192.168.88.10
 允许的运维主机 IP/CIDR：192.168.88.20/32
 SSH 端口：22
 确认：YES
 ```
 
-脚本会验证 IP 已配置在本机网卡、来源与监听地址均为私有 IPv4 地址，并写入受控 SSH 配置。它只监听指定 IP，关闭 root 登录、密码登录、X11/代理/端口转发和隧道；来源不在允许范围内的连接不能获得 shell 或执行命令。
+脚本以隐藏方式读取并二次确认密码，要求至少 12 位；密码不会写入参数、配置、日志或命令历史。脚本会验证 IP 已配置在本机网卡、来源与监听地址均为私有 IPv4 地址，并写入受控 SSH 配置。它只监听指定 IP，关闭 root 登录、公钥登录、X11/代理/端口转发和隧道；来源不在允许范围内的连接不能获得 shell 或执行命令。
 
-如果需要接入自动化部署，可使用非交互入口：
+如果需要接入自动化部署，可使用非交互入口。密码必须由受控的标准输入提供，不能出现在参数或版本库中：
 
 ```bash
-sudo ./linux/configure-ssh-operations.sh \
+printf '%s\\n' '<至少12位的密码>' | sudo ./linux/configure-ssh-operations.sh \
   --operator-user neuroops \
-  --authorized-key-file /tmp/neurobridge-ops.pub \
+  --operator-password-stdin \
   --listen-address 192.168.88.10 \
   --allow-from 192.168.88.20/32 \
   --port 22
@@ -149,7 +133,7 @@ sudo systemctl --no-pager --full status ssh.service
 ## 5. 从 B 端主机进行运维
 
 ```bash
-ssh -i ~/.ssh/neurobridge-ops -o IdentitiesOnly=yes neuroops@192.168.88.10
+ssh neuroops@192.168.88.10
 ```
 
 登录后使用 `neurobridge-ops`：
@@ -210,7 +194,7 @@ neurobridge-ops update
 | 现象 | 排查与处理 |
 | --- | --- |
 | SSH 连接被拒绝 | 在网关本地控制台运行 `sudo systemctl status ssh.service`；确认监听 IP、端口和网线连通。 |
-| SSH 显示 `Permission denied (publickey)` | 确认 B 端使用正确私钥和 `neuroops` 账户；确认来源 IP 与 `--allow-from` 一致。 |
+| SSH 显示 `Permission denied (password)` | 确认使用 `neuroops` 账户并输入配置时设置的密码；确认来源 IP 与 `--allow-from` 一致。密码遗失时只能在网关本地控制台重新运行一键配置重置。 |
 | 一键脚本拒绝已有监听地址或端口 | 这是防止意外暴露 SSH 的保护。回到本地控制台检查已有 `/etc/ssh/sshd_config` 与片段，不要直接覆盖。 |
 | B 端连接成功但没有录播数据 | 确认 `[ble].enabled = false`、录制目录有非空已完成会话，并执行 `neurobridge-ops logs --lines 500` 查看原因。 |
 | 重启后 B 端没有继续收数据 | B 端需要重新建立 WebSocket，调用 `getStatus`，再重新 `subscribe`。 |

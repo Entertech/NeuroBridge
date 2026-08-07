@@ -39,16 +39,18 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('python3 -m venv "$install_dir/venv"', script)
         self.assertIn("Ubuntu 24.04", script)
 
-    def test_ssh_operations_are_explicitly_enabled_and_key_only(self) -> None:
+    def test_ssh_operations_are_explicitly_enabled_and_password_authenticated(self) -> None:
         preparation = (ROOT / "linux" / "prepare-ubuntu24.04-environment.sh").read_text(encoding="utf-8")
         script = (ROOT / "linux" / "configure-ssh-operations.sh").read_text(encoding="utf-8")
         wizard = (ROOT / "linux" / "setup-ssh-operations.sh").read_text(encoding="utf-8")
         self.assertIn("openssh-server", preparation)
         self.assertIn("systemctl disable --now ssh.service", preparation)
-        self.assertIn("--authorized-key-file", script)
+        self.assertIn("--operator-password-stdin", script)
         self.assertIn("PermitRootLogin no", script)
-        self.assertIn("PasswordAuthentication no", script)
-        self.assertIn("AuthenticationMethods publickey", script)
+        self.assertIn("PasswordAuthentication yes", script)
+        self.assertIn("PubkeyAuthentication no", script)
+        self.assertIn("AuthenticationMethods password", script)
+        self.assertIn("Operator password must contain at least 12 characters", script)
         self.assertIn("ListenAddress $listen_address", script)
         self.assertIn("Match User $operator_user Address *,!$allow_from", script)
         self.assertIn("AllowUsers $operator_user", script)
@@ -63,6 +65,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("neurobridge-ops update", script)
         self.assertIn("systemctl restart neurobridge.service", script)
         self.assertIn("NeuroBridge SSH 运维一键配置", wizard)
+        self.assertIn("再次输入运维账户密码", wizard)
+        self.assertIn("--operator-password-stdin", wizard)
         self.assertIn("输入 YES 确认", wizard)
 
     def test_installer_builds_and_installs_the_locked_algorithm_bridge(self) -> None:
