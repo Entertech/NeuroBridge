@@ -285,7 +285,13 @@ class RecordingStore:
                 continue
             for line in path.read_text(encoding="utf-8").splitlines():
                 row = json.loads(line)
-                timestamp = int(row["timestampMs"])
+                source = row.get("source")
+                # Algorithm files preserve their individual input-receipt time
+                # in ``timestampMs``.  For replay, however, all results from
+                # one 600 ms capture window must be rebuilt into the same
+                # northbound event as live capture.  Older recordings without
+                # ``source.windowEndMs`` retain their original timestamp.
+                timestamp = int(source["windowEndMs"]) if isinstance(source, dict) and isinstance(source.get("windowEndMs"), int) else int(row["timestampMs"])
                 item = merged[timestamp]
                 item["timestampMs"] = timestamp
                 item["valid"] = item["valid"] and bool(row["valid"])

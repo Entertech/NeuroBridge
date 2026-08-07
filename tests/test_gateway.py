@@ -410,6 +410,12 @@ class RecordingTests(unittest.TestCase):
             self.assertEqual(hrv["timestampMs"], 1025)
             self.assertEqual(hrv["algorithm"], {"hr": {"hrv": 12.3}})
             self.assertEqual((algorithm_dir / "sleep.jsonl").read_text(encoding="utf-8"), "")
+            events = store.events(recording_id)
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["timestampMs"], 1200)
+            self.assertEqual(events[0]["payload"]["algorithm"]["attention"], 58.0)
+            self.assertEqual(events[0]["payload"]["algorithm"]["hr"]["value"], 59)
+
 
     def test_export_contains_split_data_files_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -475,6 +481,43 @@ class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(replay_ended.wait(), timeout=1)
             ended = next(item["data"] for item in received if item["data"].get("event") == "replayEnded")
             self.assertEqual(ended["recordingId"], recording_id)
+            await gateway.close_session(session)
+            await gateway.stop()
+
+    async def test_replay_rebuilds_one_live_shaped_event_per_capture_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway = Gateway(config(root, replay_speed=1_000))
+            gateway.store.start(1_000)
+            eeg_source = {"receivedAtMsStart": 1_000, "receivedAtMsEnd": 1_010, "packetCount": 2, "windowStartMs": 600, "windowEndMs": 1_200}
+            hr_source = {"receivedAtMsStart": 1_020, "receivedAtMsEnd": 1_025, "packetCount": 1, "windowStartMs": 600, "windowEndMs": 1_200}
+            gateway.store.save_algorithm_events(
+                algorithm={"attention": 58.0, "hr": {"value": 73, "hrv": 12.3}, "coherence": 21.67},
+                computed_at_ms=1_030,
+                eeg_source=eeg_source,
+                hr_source=hr_source,
+                valid=True,
+                invalid_reasons=[],
+            )
+            gateway.store.stop()
+            received = asyncio.Event()
+            data_events: list[dict] = []
+
+            async def send(item: dict) -> None:
+                data = item["data"]
+                if data.get("event") == "data":
+                    data_events.append(data)
+                    if data["payload"].get("algorithm", {}).get("hr", {}).get("value") == 73:
+                        received.set()
+
+            session = ClientSession()
+            await gateway.subscribe(session, {"streams": ["eeg", "hr"]}, send)
+            await asyncio.wait_for(received.wait(), timeout=1)
+            first = data_events[0]
+            self.assertEqual(first["timestampMs"], 1_200)
+            self.assertEqual(first["payload"]["algorithm"]["attention"], 58.0)
+            self.assertEqual(first["payload"]["algorithm"]["hr"]["value"], 73)
+            self.assertEqual(first["payload"]["algorithm"]["coherence"], 21.67)
             await gateway.close_session(session)
             await gateway.stop()
 
