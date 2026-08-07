@@ -21,7 +21,10 @@ The public-key file may contain one or more OpenSSH public keys. Private keys
 are never copied to the gateway. This command restricts SSH to the named local
 operator account, disables password and root login, and binds sshd only to the
 specified gateway address. The account receives only NeuroBridge status, log,
-start, stop, and restart privileges through sudo.
+approved staged-code update, start, stop, and restart privileges through sudo.
+The update command only runs a root-owned release staged at
+/srv/neurobridge-release; it never fetches code from a network or accepts a
+source path from the SSH user.
 EOF
 }
 
@@ -125,18 +128,24 @@ sudoers_path=/etc/sudoers.d/neurobridge-operator
 status_script=/usr/local/sbin/neurobridge-ops-status
 logs_script=/usr/local/sbin/neurobridge-ops-logs
 ops_cli=/usr/local/bin/neurobridge-ops
+update_source_dir=/srv/neurobridge-release
+update_script=/usr/local/sbin/neurobridge-ops-update
 install -d -o root -g root -m 0755 "$config_dir"
 install -d -o root -g root -m 0755 /run/sshd
+# A release administrator stages an approved complete checkout here. The SSH
+# operator cannot write this directory and can only trigger its reload.
+install -d -o root -g root -m 0750 "$update_source_dir"
 
 config_tmp=$(mktemp)
 sudoers_tmp=$(mktemp)
 status_tmp=$(mktemp)
 logs_tmp=$(mktemp)
 ops_cli_tmp=$(mktemp)
+update_tmp=$(mktemp)
 previous_config=$(mktemp)
 had_previous_config=false
 cleanup() {
-  rm -f "$config_tmp" "$sudoers_tmp" "$status_tmp" "$logs_tmp" "$ops_cli_tmp" "$previous_config"
+  rm -f "$config_tmp" "$sudoers_tmp" "$status_tmp" "$logs_tmp" "$ops_cli_tmp" "$update_tmp" "$previous_config"
 }
 trap cleanup EXIT
 
@@ -175,7 +184,7 @@ EOF
 
 cat >"$sudoers_tmp" <<EOF
 # Managed by linux/configure-ssh-operations.sh.
-Cmnd_Alias NEUROBRIDGE_OPERATIONS = /usr/local/sbin/neurobridge-ops-status, /usr/local/sbin/neurobridge-ops-logs, /usr/local/sbin/neurobridge-ops-logs *, /usr/bin/systemctl start neurobridge.service, /usr/bin/systemctl stop neurobridge.service, /usr/bin/systemctl restart neurobridge.service
+Cmnd_Alias NEUROBRIDGE_OPERATIONS = /usr/local/sbin/neurobridge-ops-status, /usr/local/sbin/neurobridge-ops-logs, /usr/local/sbin/neurobridge-ops-logs *, /usr/local/sbin/neurobridge-ops-update, /usr/bin/systemctl start neurobridge.service, /usr/bin/systemctl stop neurobridge.service, /usr/bin/systemctl restart neurobridge.service
 $operator_user ALL=(root) NOPASSWD: NEUROBRIDGE_OPERATIONS
 EOF
 
@@ -233,6 +242,7 @@ Commands:
   status                 Show current service state and the latest 200 logs.
   logs [--lines N]       Show recent logs (default 200, maximum 1000).
   logs --follow           Follow new gateway logs in real time; Ctrl-C stops it.
+  update                 Apply the root-owned staged release and reload the gateway.
   start | stop | restart  Control the NeuroBridge gateway service.
   help                   Show this help.
 USAGE
@@ -247,6 +257,10 @@ case "${1:-help}" in
     shift
     exec sudo -- /usr/local/sbin/neurobridge-ops-logs "$@"
     ;;
+  update)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    exec sudo -- /usr/local/sbin/neurobridge-ops-update
+    ;;
   start|stop|restart)
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }
     exec sudo -- /usr/bin/systemctl "$1" neurobridge.service
@@ -259,6 +273,37 @@ case "${1:-help}" in
     exit 2
     ;;
 esac
+EOF
+
+cat >"$update_tmp" <<'EOF'
+#!/usr/bin/env bash
+# Apply a pre-staged, administrator-owned release without network access.
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+[[ ${EUID} -eq 0 ]] || fail "This helper must run as root through sudo."
+source_dir=/srv/neurobridge-release
+[[ -d "$source_dir" ]] || fail "Missing staged release directory: $source_dir"
+for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/install-ubuntu.sh; do
+  [[ -f "$source_dir/$required" ]] || fail "Staged release is incomplete: missing $required"
+done
+[[ -x "$source_dir/linux/reload-ubuntu.sh" ]] || fail "Staged reload script is not executable."
+
+# The SSH operator must not be able to turn this controlled reload privilege
+# into arbitrary root execution. Reject symlinks, non-root ownership, and any
+# group- or world-writable path in the staged release.
+unsafe_link=$(find "$source_dir" -xdev -type l -print -quit)
+[[ -z "$unsafe_link" ]] || fail "Staged release contains a symlink: $unsafe_link"
+unsafe_path=$(find "$source_dir" -xdev \( -type f -o -type d \) \( ! -user root -o -perm -0022 \) -print -quit)
+[[ -z "$unsafe_path" ]] || fail "Staged release must be root-owned and not group/world writable: $unsafe_path"
+
+echo "Applying staged NeuroBridge release from $source_dir ..."
+exec /bin/bash "$source_dir/linux/reload-ubuntu.sh"
 EOF
 
 visudo -cf "$sudoers_tmp" >/dev/null || fail "Generated sudo policy did not validate."
@@ -298,6 +343,7 @@ effective_addresses=$(sshd -T -f /etc/ssh/sshd_config | awk '$1 == "listenaddres
 install -o root -g root -m 0755 "$status_tmp" "$status_script"
 install -o root -g root -m 0755 "$logs_tmp" "$logs_script"
 install -o root -g root -m 0755 "$ops_cli_tmp" "$ops_cli"
+install -o root -g root -m 0755 "$update_tmp" "$update_script"
 install -o root -g root -m 0440 "$sudoers_tmp" "$sudoers_path"
 
 if ! systemctl enable --now ssh.service || ! systemctl restart ssh.service; then
@@ -312,4 +358,4 @@ fi
 
 echo "SSH operations access is ready: ssh -p $port $operator_user@$listen_address"
 echo "Allowed source: $allow_from. Password and root login are disabled."
-echo "After login, use 'neurobridge-ops status' or 'neurobridge-ops logs --follow'."
+echo "After login, use 'neurobridge-ops status', 'neurobridge-ops logs --follow', or 'neurobridge-ops update'."
