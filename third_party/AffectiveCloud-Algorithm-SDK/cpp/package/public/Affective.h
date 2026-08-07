@@ -2,6 +2,9 @@
 #define AFFECTIVE_GUARD_EXPORT_H
 #include "Define.h"
 
+#include <cstdint>
+#include <vector>
+
 class AffectiveAlgorithm
 {
 public:
@@ -13,7 +16,7 @@ public:
      * @param isEar 是否是耳道脑电
      * @return EEGAffectiveRes 实时值
      */
-    EEGAffectiveRes appendEEG(const std::vector<uint8_t> &eegRaw, bool isEar = false);
+    EEGAffectiveRes appendEEG(const std::vector<std::uint8_t> &eegRaw, bool isEar = false);
 
     /**
      * @brief 单通道脑电, 每个算法周期到了就触发算法,默认0.6秒触发一次相当于蓝牙接收30个脑电包
@@ -21,7 +24,7 @@ public:
      * @param eegRaw 每个周期的脑电数组
      * @return EEGAffectiveRes 实时值
      */
-    SCEEGAffectiveRes appendSCEEG(const std::vector<uint8_t> &eegRaw);
+    SCEEGAffectiveRes appendSCEEG(const std::vector<std::uint8_t> &eegRaw);
 
     /**
      * @brief 每个算法周期到了就触发算法,默认0.6秒触发一次相当于蓝牙接收3个心率包
@@ -29,12 +32,12 @@ public:
      * @param hrRaw  每个周期的心率数组
      * @return HRAffectiveRes 实时值
      */
-    HRAffectiveRes appendHR(const std::vector<uint8_t> &hrRaw);
+    HRAffectiveRes appendHR(const std::vector<std::uint8_t> &hrRaw);
 
     /// @brief 坐垫算法,每个算法周期到了就触发算法,默认0.6秒触发一次相当于蓝牙接收15个压力包
     /// \param peprRaw
     /// \return
-    PEPRAffectiveRes appendPEPR(const std::vector<uint8_t> &peprRaw);
+    PEPRAffectiveRes appendPEPR(const std::vector<std::uint8_t> &peprRaw);
 
     /**
      * @brief 获取激活度报表
@@ -162,8 +165,8 @@ private:
 #define EXPORT extern "C" __declspec(dllexport)
 EXPORT AffectiveAlgorithm *charpInit();
 EXPORT void charpDeinit(AffectiveAlgorithm *p);
-EXPORT void csharpAppendHR(AffectiveAlgorithm *p, uint8_t *hrRaw, int rawLen, CSharpHRAffectiveRes *res);
-EXPORT void csharpAppendEEG(AffectiveAlgorithm *p, uint8_t *eegRaw, int rawLen, CSharpEEGAffectiveRes *res, double *leftWave, double *rightWave);
+EXPORT void csharpAppendHR(AffectiveAlgorithm *p, std::uint8_t *hrRaw, int rawLen, CSharpHRAffectiveRes *res);
+EXPORT void csharpAppendEEG(AffectiveAlgorithm *p, std::uint8_t *eegRaw, int rawLen, CSharpEEGAffectiveRes *res, double *leftWave, double *rightWave);
 EXPORT int csharpGetEEGLength(AffectiveAlgorithm *p);
 EXPORT int csharpGetHRLength(AffectiveAlgorithm *p);
 EXPORT int csharpGetSleepLength(AffectiveAlgorithm* p);
