@@ -30,7 +30,18 @@ numcpp_dir="$sdk_root/NumCpp"
 [[ -f "$sdk_dir/cpp/package/CMakeLists.txt" ]] || fail "Vendored AffectiveCloud SDK source is missing from this checkout."
 [[ -f "$numcpp_dir/CMakeLists.txt" ]] || fail "Vendored NumCpp source is missing from this checkout."
 
+mkdir -p "$output_dir"
+build_log="$output_dir/build.log"
 build_root="$output_dir/build"
+[[ "$build_root" == "$output_dir/build" && "$output_dir" != / ]] || fail "Refusing to clear an unsafe build directory."
+# CMake caches compiler, package-discovery and host-specific results. Never
+# reuse a cache created by a different Ubuntu image or an earlier failed run.
+rm -rf "$build_root"
+exec > >(tee "$build_log") 2>&1
+echo "NeuroBridge algorithm bridge build started: $(date --iso-8601=seconds)"
+echo "Output log: $build_log"
+echo "CMake: $(cmake --version | head -n 1)"
+echo "Compiler: $(c++ --version | head -n 1)"
 numcpp_prefix="$build_root/numcpp-prefix"
 cmake -Wno-dev -S "$numcpp_dir" -B "$build_root/numcpp" \
   -DCMAKE_BUILD_TYPE=Release -DNUMCPP_NO_USE_BOOST=ON -DCMAKE_INSTALL_PREFIX="$numcpp_prefix"
@@ -44,7 +55,6 @@ cmake -Wno-dev -S "$repo_root/mac/algorithm_bridge" -B "$build_root/bridge" \
   -DCMAKE_PREFIX_PATH="/usr;$numcpp_prefix"
 cmake --build "$build_root/bridge" --parallel 2
 
-mkdir -p "$output_dir"
 install -m 0755 "$build_root/bridge/bin/neurobridge_affective_bridge" "$output_dir/neurobridge_affective_bridge"
 sha256sum "$output_dir/neurobridge_affective_bridge"
 echo "Bridge built: $output_dir/neurobridge_affective_bridge"

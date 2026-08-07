@@ -58,6 +58,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('sdk_dir="$sdk_root/AffectiveCloud-Algorithm-SDK"', script)
         self.assertIn('numcpp_dir="$sdk_root/NumCpp"', script)
         self.assertEqual(script.count("-DNUMCPP_NO_USE_BOOST=ON"), 2)
+        self.assertIn('rm -rf "$build_root"', script)
+        self.assertIn('tee "$build_log"', script)
         self.assertTrue((ROOT / "third_party" / "AffectiveCloud-Algorithm-SDK" / "cpp" / "package" / "CMakeLists.txt").is_file())
         self.assertTrue((ROOT / "third_party" / "NumCpp" / "CMakeLists.txt").is_file())
 
@@ -72,3 +74,11 @@ class DeploymentTests(unittest.TestCase):
         self.assertTrue((ROOT / "web" / "capture" / "index.html").is_file())
         self.assertTrue((ROOT / "web" / "b-client-test" / "index.html").is_file())
         self.assertFalse((ROOT / "mac" / "capture").exists())
+
+    def test_diagnostic_collector_excludes_sensitive_gateway_inputs(self) -> None:
+        script = (ROOT / "linux" / "collect-ubuntu-build-diagnostics.sh").read_text(encoding="utf-8")
+        self.assertIn("build.log", script)
+        self.assertIn("CMakeError.log", script)
+        self.assertIn("neurobridge-journal", script)
+        self.assertNotIn('"/etc/neurobridge/gateway.toml"', script)
+        self.assertNotIn('"/var/lib/neurobridge/recordings"', script)

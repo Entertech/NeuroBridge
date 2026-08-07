@@ -4,6 +4,7 @@
 
 - `update-ubuntu.sh`：目标机一键部署入口；只使用当前源码目录，不执行 Git 或网络操作。
 - `prepare-ubuntu24.04-environment.sh`：一次性联网环境准备，安装系统包与锁定的 Python 运行依赖；完成后可断网。
+- `collect-ubuntu-build-diagnostics.sh`：收集编译日志、工具版本和 CMake 诊断，不包含现场配置或原始数据。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。
@@ -210,5 +211,11 @@ git pull --ff-only
 | 未收到实时数据 | 确认 `[ble].enabled = true`、蓝牙适配器可见、设备名称/UUID 与已确认 profile 一致。通过网关日志查看扫描或连接失败原因；不要仅凭服务进程存活判断头环已连接。 |
 | 离线时没有录播数据 | 检查 `[recording].replay_recording_id` 是否对应 `/var/lib/neurobridge/recordings` 下的已完成会话。未配置或不存在时，离线 `getLatest`/`subscribe` 不会凭空生成录播。 |
 | 下载接口不可用 | 确认 `[download].enabled = true`、监听 IP/端口与防火墙配置一致；只有已结束的录制会话能导出。 |
+
+如果 `update-ubuntu.sh` 在编译 bridge 时失败，先不要反复修改依赖或安装额外库。运行下面命令并将生成的压缩包上传给开发人员；包内只有 CMake/build 日志、系统与工具版本、当前源码 revision 和最近的服务日志，不包含 `gateway.toml`、录播或原始 BLE 数据：
+
+```bash
+sudo ./linux/collect-ubuntu-build-diagnostics.sh
+```
 
 部署或修改设备接入、算法、网络依赖后，至少重新验证实时采集、录播、头环断线重连、B 端不可达与恢复五个场景。所有日志、配置和录播数据均应仅保留在受控环境中。
