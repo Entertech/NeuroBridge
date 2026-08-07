@@ -40,6 +40,7 @@ cmake --install "$build_root/numcpp"
 cmake -Wno-dev -S "$repo_root/mac/algorithm_bridge" -B "$build_root/bridge" \
   -DCMAKE_BUILD_TYPE=Release \
   -DAFFECTIVE_SDK_SOURCE_DIR="$sdk_dir" \
+  -DNUMCPP_NO_USE_BOOST=ON \
   -DCMAKE_PREFIX_PATH="/usr;$numcpp_prefix"
 cmake --build "$build_root/bridge" --parallel 2
 

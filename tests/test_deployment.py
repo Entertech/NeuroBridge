@@ -57,6 +57,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("prepare-algorithm-sdk", script)
         self.assertIn('sdk_dir="$sdk_root/AffectiveCloud-Algorithm-SDK"', script)
         self.assertIn('numcpp_dir="$sdk_root/NumCpp"', script)
+        self.assertEqual(script.count("-DNUMCPP_NO_USE_BOOST=ON"), 2)
         self.assertTrue((ROOT / "third_party" / "AffectiveCloud-Algorithm-SDK" / "cpp" / "package" / "CMakeLists.txt").is_file())
         self.assertTrue((ROOT / "third_party" / "NumCpp" / "CMakeLists.txt").is_file())
 
