@@ -3,6 +3,9 @@
 //
 
 #include "WaveletTool.h"
+#include <cctype>
+#include <cstring>
+#include <stdexcept>
 #include <vector>
 #include <string>
 
@@ -183,7 +186,7 @@ namespace basic::mathtool::wavelet
                     throw std::invalid_argument("type not support");;;
             }
         }
-        else if (!strcmp(strWaveName, "db4"))
+        else if (!std::strcmp(strWaveName, "db4"))
         {
             switch(type)
             {
