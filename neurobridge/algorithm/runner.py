@@ -23,19 +23,27 @@ class AlgorithmRunner:
 
     @property
     def available(self) -> bool:
-        return self.process is not None and self.process.returncode is None
+        if self.process is None:
+            return False
+        if self.process.returncode is None:
+            return True
+        if self.error is None:
+            self.error = f"algorithm bridge exited with code {self.process.returncode}"
+            LOG.error("Algorithm bridge is unavailable: %s", self.error)
+        return False
 
     async def start(self) -> None:
         if not self.config.enabled:
             return
         if not self.config.command:
             self.error = "algorithm.enabled requires algorithm.command"
+            LOG.error("Cannot start algorithm bridge: %s", self.error)
             return
         try:
             self.process = await asyncio.create_subprocess_exec(*self.config.command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
         except OSError as exc:
             self.error = str(exc)
-            LOG.exception("Cannot start algorithm bridge")
+            LOG.exception("Cannot start algorithm bridge: %s", self.error)
 
     async def initialize(self) -> None:
         """Create a clean SDK process for each new device connection/session."""
@@ -60,6 +68,8 @@ class AlgorithmRunner:
             self.process.stdin.write((json.dumps(request) + "\n").encode())
             await self.process.stdin.drain()
             response = await asyncio.wait_for(self.process.stdout.readline(), timeout=2)
+            if not response:
+                raise RuntimeError("algorithm bridge closed stdout without a response")
             result = json.loads(response)
             bridge_error = result.get("bridgeError") or result.get("pocError")
             if bridge_error:
@@ -67,7 +77,7 @@ class AlgorithmRunner:
             if not isinstance(result.get("algorithm"), dict):
                 return None, ["ALGORITHM_OUTPUT_INVALID"]
             return result["algorithm"], []
-        except (asyncio.TimeoutError, json.JSONDecodeError, OSError, UnicodeError, ValueError) as exc:
+        except (asyncio.TimeoutError, json.JSONDecodeError, OSError, UnicodeError, ValueError, RuntimeError) as exc:
             self.error = str(exc)
             LOG.warning("Algorithm bridge evaluation failed: %s", exc)
             return None, ["ALGORITHM_ERROR"]

@@ -28,6 +28,13 @@ class DeploymentTests(unittest.TestCase):
             self.assertIn(package, install_script)
         self.assertIn('--user-data-dir="$chrome_profile"', renderer)
 
+    def test_installer_builds_and_installs_the_locked_algorithm_bridge(self) -> None:
+        install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
+        for package in ("build-essential", "cmake", "git", "libeigen3-dev"):
+            self.assertIn(package, install_script)
+        self.assertIn('runuser -u neurobridge -- "$install_dir/linux/build-algorithm-bridge.sh"', install_script)
+        self.assertIn('/usr/local/lib/neurobridge', install_script)
+
     def test_dhcp_is_an_optional_isolated_service(self) -> None:
         install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
         service = (ROOT / "linux" / "systemd" / "neurobridge-dhcp.service").read_text(encoding="utf-8")

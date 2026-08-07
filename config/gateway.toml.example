@@ -49,8 +49,8 @@ filename = "neurobridge.log"
 level = "INFO"
 
 [algorithm]
-# The SDK default grouping has not been validated against real Flowtime recordings. Keep false
-# until captured bytes have validated the bridge command and its output schema.
-enabled = false
-# Command receives one JSON object per line and emits one JSON object per line.
-# command = ["/usr/local/lib/neurobridge/neurobridge_affective_bridge"]
+# Ubuntu installation builds the locked bridge automatically at
+# /usr/local/lib/neurobridge/neurobridge_affective_bridge; no command needs to
+# be entered here. The default is enabled; use false only for a deliberate
+# raw-data-only POC or maintenance window.
+enabled = true

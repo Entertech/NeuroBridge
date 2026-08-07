@@ -18,6 +18,9 @@ root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 install_dir=/opt/neurobridge
 config_dir=/etc/neurobridge
 data_dir=/var/lib/neurobridge/recordings
+algorithm_build_dir=/var/lib/neurobridge/algorithm-build
+algorithm_bridge_dir=/usr/local/lib/neurobridge
+algorithm_bridge_path=$algorithm_bridge_dir/neurobridge_affective_bridge
 
 apt-get update
 # Archive export renders the published capture-package document locally.  These
@@ -28,11 +31,11 @@ if ! apt-cache show "$browser_package" >/dev/null 2>&1; then
 fi
 # dnsmasq is only activated by neurobridge-dhcp.service when [network].mode is
 # dhcp. In static mode its NeuroBridge unit is skipped at boot.
-apt-get install -y python3 python3-venv bluez dnsmasq rsync pandoc "$browser_package" fonts-noto-cjk
+apt-get install -y python3 python3-venv bluez dnsmasq rsync pandoc "$browser_package" fonts-noto-cjk build-essential cmake git libeigen3-dev
 getent group neurobridge >/dev/null 2>&1 || groupadd --system neurobridge
 id -u neurobridge >/dev/null 2>&1 || useradd --system --gid neurobridge --home /nonexistent --shell /usr/sbin/nologin neurobridge
 getent group bluetooth >/dev/null && usermod -aG bluetooth neurobridge || true
-install -d -o neurobridge -g neurobridge -m 0750 "$data_dir" /var/log/neurobridge
+install -d -o neurobridge -g neurobridge -m 0750 /var/lib/neurobridge "$data_dir" "$algorithm_build_dir" /var/log/neurobridge
 install -d -m 0755 "$install_dir"
 install -d -o root -g neurobridge -m 0750 "$config_dir"
 rsync -a --delete --exclude .git --exclude .venv "$root_dir/" "$install_dir/"
@@ -40,6 +43,12 @@ python3 -m venv "$install_dir/venv"
 "$install_dir/venv/bin/pip" install --upgrade pip
 "$install_dir/venv/bin/pip" install -r "$install_dir/requirements.lock"
 "$install_dir/venv/bin/pip" install --no-deps "$install_dir"
+# Build the same locked C++ bridge used by the macOS POC, but do it as the
+# unprivileged service account.  The service never needs a per-host command in
+# gateway.toml: config.py resolves the installed fixed path automatically.
+runuser -u neurobridge -- "$install_dir/linux/build-algorithm-bridge.sh" "$algorithm_build_dir/sdk" "$algorithm_build_dir/output"
+install -d -o root -g root -m 0755 "$algorithm_bridge_dir"
+install -o root -g root -m 0755 "$algorithm_build_dir/output/neurobridge_affective_bridge" "$algorithm_bridge_path"
 if [[ ! -e "$config_dir/gateway.toml" ]]; then
   install -o root -g neurobridge -m 0640 "$install_dir/config/gateway.toml.example" "$config_dir/gateway.toml"
 else

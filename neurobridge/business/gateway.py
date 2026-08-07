@@ -108,7 +108,10 @@ class Gateway:
         """Start a fresh local algorithm session before publishing connected state."""
         await self.algorithm.initialize()
         self.status["algorithmState"] = "ready" if self.algorithm.available else ("error" if self.algorithm.error else "unavailable")
-        LOG.info("Device capture initialized: algorithmState=%s", self.status["algorithmState"])
+        if self.status["algorithmState"] == "error":
+            LOG.error("Device capture initialized: algorithmState=error reason=%s", self.algorithm.error)
+        else:
+            LOG.info("Device capture initialized: algorithmState=%s", self.status["algorithmState"])
 
     async def update_status(self, name: str, value: object) -> None:
         previous = self.status.get(name)

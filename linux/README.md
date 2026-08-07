@@ -2,7 +2,7 @@
 
 本目录保存 Ubuntu x86_64 网关的部署专属内容：
 
-- `install-ubuntu.sh`：安装 Python 运行环境、BlueZ、服务账户和 systemd 服务，并启用开机自启。
+- `install-ubuntu.sh`：安装 Python 运行环境、BlueZ、锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `reload-ubuntu.sh`：将已安装网关更新到当前源码版本并重启服务。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。
@@ -109,7 +109,7 @@ sudoedit /etc/neurobridge/gateway.toml
 | `[recording] subject_id` | 填写演示或采集使用的受试者标识；无值可留空。 |
 | `[recording] replay_recording_id` | 仅需要离线录播时填写一个已经存在的录制会话 ID；没有录播文件时留空。 |
 | `[download]` | 仅在专用有线网络确有导出需求时启用；`host` 必须是网关静态 IP，端口由双方确认。 |
-| `[algorithm] enabled` | 首次部署必须保持 `false`。算法输入分组与输出尚须在 Ubuntu x86_64 上用真实数据验证。 |
+| `[algorithm] enabled` | 默认 `true`。安装器已提供 bridge，无需填写路径；需要仅采集原始数据或维护时才改为 `false`。 |
 
 配置语法和权限可先由服务账户验证：
 
@@ -119,7 +119,7 @@ sudo -u neurobridge /opt/neurobridge/venv/bin/python -c 'from neurobridge.config
 
 若采用 DHCP 模式，还要填写 `interface`、`subnet_cidr`、`dhcp_range_start`、`dhcp_range_end` 与 `dhcp_lease_time`。网关本身仍必须在该网卡使用 `[server].host` 作为静态地址；DHCP 只为 B 端分配地址，不提供 DNS，也不会让端口动态化。
 
-算法默认关闭不是部署故障：Ubuntu 目标机的 SDK 构建、真实录制字节验证和字段语义 POC 通过前，必须保持 `[algorithm].enabled = false`。受控的构建与真实数据 POC 操作见 [算法 SDK 接入 POC](../doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
+算法默认开启：安装器会使用锁定的 SDK 和依赖自动构建 bridge，并安装到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`；网关在未配置 `algorithm.command` 时自动使用该路径。受控的真实数据 POC 可临时将 `[algorithm].enabled = false`，以录制只含原始数据的基线；算法结果的字段语义和有效性仍须以实际数据验证。详情见 [算法 SDK 接入 POC](../doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
 ## 6. 启动并验证
 

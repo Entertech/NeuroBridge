@@ -93,7 +93,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 
 `start-poc.command` 会先运行 `build-algorithm-bridge.command`，从锁定的 AffectiveCloud C++ SDK 和 NumCpp 2.11.0 构建本机 bridge；产物仅位于 `/tmp/neurobridge-affective-runtime/affective_bridge`。它将每个完整窗口的原始字节不经重排地交给 SDK 的双通道 EEG 与心率入口，并返回现有算法数据结构中的脑波、频段、睡眠、注意力/放松度/愉悦度/心流、心率/HRV、压力、和谐度和激活度。采集页的“算法输出”会显示这些标量和频段；为避免在浏览器日志中保留第二份生理时序，页面日志不会显示处理后的波形数组。
 
-本机已完成 C++ SDK 的构建和合成输入烟雾测试，证明 bridge 调用链和输出字段可用；**这不等于真实头环算法结果已验收。** SDK 在预热、信号质量不佳或尚未形成结果时可能输出 `0`，不能把单个窗口的数值当作有效性结论。Ubuntu x86_64 构建、真实 Flowtime 原始字节对比、字段范围/单位/延迟确认以及现场验收仍未完成；生产配置须继续保持 `algorithm.enabled=false`，直至这些验证完成。
+本机已完成 C++ SDK 的构建和合成输入烟雾测试，证明 bridge 调用链和输出字段可用；**这不等于真实头环算法结果已验收。** SDK 在预热、信号质量不佳或尚未形成结果时可能输出 `0`，不能把单个窗口的数值当作有效性结论。Ubuntu x86_64 构建、真实 Flowtime 原始字节对比、字段范围/单位/延迟确认以及现场验收仍未完成；macOS POC 模板默认关闭算法，可按 POC 需要显式启用。
 
 ## POC 结束时应保存的非敏感结果
 

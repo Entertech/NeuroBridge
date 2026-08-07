@@ -103,6 +103,13 @@ class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AlgorithmRunnerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_bridge_command_is_logged_as_the_error_reason(self) -> None:
+        runner = AlgorithmRunner(AlgorithmConfig(True, ()))
+        with self.assertLogs("neurobridge.algorithm.runner", level="ERROR") as logs:
+            await runner.start()
+        self.assertEqual(runner.error, "algorithm.enabled requires algorithm.command")
+        self.assertIn(runner.error, "\n".join(logs.output))
+
     async def test_broken_algorithm_bridge_is_reported_without_raising(self) -> None:
         class BrokenStdin:
             def write(self, _: bytes) -> None:

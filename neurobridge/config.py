@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 import tomllib
 
+DEFAULT_ALGORITHM_COMMAND = ("/usr/local/lib/neurobridge/neurobridge_affective_bridge",)
+
 
 @dataclass(frozen=True)
 class ServerConfig:
@@ -133,7 +135,14 @@ def load(path: str | Path) -> GatewayConfig:
         server=ServerConfig(host, port, endpoint),
         ble=BleConfig(bool(ble.get("enabled", False)), ble.get("device_name") or None, str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(), int(ble.get("scan_timeout_seconds", 5)), int(ble.get("reconnect_delay_seconds", 3))),
         recording=RecordingConfig(Path(recording.get("directory", "./recordings")), recording.get("subject_id") or None, recording.get("replay_recording_id") or None, replay_speed),
-        algorithm=AlgorithmConfig(bool(algorithm.get("enabled", False)), tuple(algorithm.get("command", []))),
+        # Ubuntu installation places the locked native bridge at this fixed path.
+        # ``enabled`` is therefore the only setting an operator needs to change
+        # after the bridge's real-data POC has been approved.  An explicit command
+        # remains available for controlled development or recovery overrides.
+        algorithm=AlgorithmConfig(
+            bool(algorithm.get("enabled", True)),
+            tuple(algorithm.get("command") or DEFAULT_ALGORITHM_COMMAND),
+        ),
         download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path),
         logging=LoggingConfig(log_directory, log_filename, log_level),
         network=NetworkConfig(network_mode, interface, subnet_cidr, dhcp_range_start, dhcp_range_end, dhcp_lease_time),
