@@ -12,9 +12,9 @@ NeuroBridge 已实现 AffectiveCloud C++ SDK 的进程边界：网关在 `algori
 
 ## 固定来源
 
-SDK 的仓库、提交和版本锁定在仓库根目录的 [sdk.lock](../../sdk.lock)。macOS POC 使用 [build-algorithm-bridge.command](../../mac/build-algorithm-bridge.command) 将源码和 NumCpp 2.11.0 构建在 `/tmp/neurobridge-affective-runtime`；Ubuntu 24.04 的受控构建机使用 [create-offline-bundle-ubuntu24.04.sh](../../linux/create-offline-bundle-ubuntu24.04.sh) 将同一锁定版本打入离线交付包，目标网关只读取该本地包，不访问 GitHub。不要把构建产物、录制人体数据或 SDK 缓存提交到本仓库。
+SDK 的仓库、提交和版本锁定在仓库根目录的 [sdk.lock](../../sdk.lock)。Ubuntu 24.04 所需的 AffectiveCloud C++ package 与 NumCpp 锁定源码已随仓库保存在 [`third_party/`](../../third_party/)，因此完成 NeuroBridge 源码 checkout 后，bridge 构建不需要再访问 GitHub 或下载 SDK。macOS POC 仍可使用 [build-algorithm-bridge.command](../../mac/build-algorithm-bridge.command) 构建合成输入烟雾测试。不要把构建产物、录制人体数据或 SDK 缓存提交到本仓库。
 
-Ubuntu 24.04 安装器会验证离线包中的 SDK source archive 和 [`sdk.lock`](../../sdk.lock) 的固定 commit 一致，再以 `neurobridge` 服务账户调用 [`linux/build-algorithm-bridge.sh`](../../linux/build-algorithm-bridge.sh) 构建，并以 root 所有、只读的形式安装到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`。网关未配置 `algorithm.command` 时自动使用该固定路径。目标机不运行 `git`、`git clone` 或网络下载。SDK 构建与固定路径安装不代表算法 POC 或现场验收通过；启用前仍须在 Ubuntu x86_64 记录 Ubuntu 版本、`cmake --version`、`c++ --version`、Eigen3 版本、NumCpp 版本、SDK commit 和 bridge SHA-256。C++ SDK 要求 C++17、Eigen3、NumCpp。
+Ubuntu 24.04 安装器以 `neurobridge` 服务账户调用 [`linux/build-algorithm-bridge.sh`](../../linux/build-algorithm-bridge.sh)，从当前 checkout 的 `third_party/` 构建，并以 root 所有、只读的形式安装到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`。网关未配置 `algorithm.command` 时自动使用该固定路径。目标机可匿名使用 Git 获取 NeuroBridge 源码；源码到位后的安装、bridge 构建和运行不执行 `git` 或网络下载。SDK 构建与固定路径安装不代表算法 POC 或现场验收通过；启用前仍须在 Ubuntu x86_64 记录 Ubuntu 版本、`cmake --version`、`c++ --version`、Eigen3 版本、NumCpp 版本、SDK commit 和 bridge SHA-256。C++ SDK 要求 C++17、Eigen3、NumCpp。
 
 ## bridge 合同
 
@@ -50,17 +50,17 @@ bridge 保留每个窗口内的原始字节顺序，不补零、截断、重排�
 2. 使用同一录制数据运行 [`tools/run-algorithm-poc.py`](../../tools/run-algorithm-poc.py)，验证 bridge 获得的 `FF31`/`FF51` 输入字节序、包数、完整性、启动和响应时序；报告不得包含原始字节或算法数值。
 3. 抽样比对 bridge 输出与 SDK 官方演示/参考实现；记录算法字段、单位、范围、延迟和无效条件。
 4. 启用 `algorithm.enabled` 后，分别验证实时、录播、设备断线重连、bridge 异常与恢复；录播不得重新计算算法。
-5. 通过上述项后，填写部署配置的 bridge 命令并更新此文档的 POC 结论为“POC 已验证”；现场演练通过后才可标为“现场验收通过”。
+5. 通过上述项后，确认固定 bridge 路径可用并更新此文档的 POC 结论为“POC 已验证”；现场演练通过后才可标为“现场验收通过”。
 
 ## Ubuntu x86_64 受控执行流程
 
 以下操作只能在目标 Ubuntu x86_64、已获得受试者授权的受控环境执行。全程不打印、复制或提交 JSONL 中的 Base64 原始数据；报告只保存包数、异常计数、bridge 摘要和输出字段名。
 
 1. 先以 `algorithm.enabled=false` 完成一次真实头环采集，并停止网关使会话成为已结束录制。记录 `recordingId`，但不要导出或传输原始 JSONL。
-2. 首次离线安装会从受控介质中的 Ubuntu 24.04 离线包安装构建依赖、验证锁定源码、以服务账户构建 bridge，并安装至固定服务路径。目标机不得执行 `apt-get update`、`git clone` 或网络下载。若需要重建，使用新的离线包重新运行安装器：
+2. 从当前 checkout 运行安装器，以服务账户使用仓库内锁定源码构建 bridge 并安装至固定服务路径。该步骤不执行 `apt-get`、`git` 或网络下载；Ubuntu 基础镜像须已具备 Python 运行环境、CMake、C++17 编译器和 Eigen3：
 
    ```bash
-   sudo ./linux/install-ubuntu.sh --offline-bundle /media/neurobridge/neurobridge-ubuntu24.04-offline-bundle
+   ./linux/update-ubuntu.sh
    ```
 
 3. 使用 `neurobridge` 服务账户运行一次离线 bridge 传输验证。摘要文件放在受控录制目录中，权限为 `0640`：

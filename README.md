@@ -8,24 +8,25 @@ NeuroBridge 是将回车科技头环数据接入第三方 B 端主机的跨平�
 
 仓库现已包含可部署的 Python 网关：`neurobridge/`。它按 v0.1 协议提供 WebSocket 服务、以 600 ms 窗口批量发送数据、管理订阅与自动录播。实时采集时，原始 EEG、心率和每类算法指标按会话分文件持久化；网页可将一个会话导出为 ZIP。网关按设备通信规范处理 `FF31`、`FF51` 原始字节，落盘和算法调用前不解包或改写；北向仅按协议发送允许的原始流。
 
-在离线 Ubuntu 24.04 x86_64 目标机上，从受控介质中的已审查工作树执行。目标机不访问 GitHub、APT 或 PyPI：
+Ubuntu 24.04 x86_64 网关可先用公开 HTTPS 地址匿名获取本仓库源码，不需要 GitHub 账号或密码：
 
 ```bash
-./linux/install-offline-ubuntu24.04.sh
+git clone https://github.com/Entertech/NeuroBridge.git
+cd NeuroBridge
+./linux/update-ubuntu.sh
 sudoedit /etc/neurobridge/gateway.toml
-systemctl restart neurobridge
-systemctl status neurobridge
 ```
 
-代码修改后的部署与重启可直接在仓库根目录执行：
+`git clone`/`git pull` 仅用于人为获取新版本源码。源码已在目标机后，安装、C++ bridge 构建、Python 包更新和运行均不访问 GitHub、APT、PyPI 或其他互联网服务。`update-ubuntu.sh` 只部署当前目录已有的源码；更新代码时，先自行执行匿名 `git pull --ff-only`，再运行该脚本：
 
 ```bash
-./linux/reload-ubuntu.sh
+git pull --ff-only
+./linux/update-ubuntu.sh
 ```
 
-脚本会自动申请 `sudo` 权限，将当前工作树同步到 `/opt/neurobridge`、更新 Python 包、重新加载 systemd 单元并重启网关。它会拒绝首次安装、非 Ubuntu x86_64/systemd 环境、缺失配置、Python 依赖变更及 Ubuntu 安装脚本变更，并提示改走 `./linux/install-ubuntu.sh`；首次安装仍使用该安装脚本。网关重启会使现有 B 端连接断开，B 端需重新建连并订阅。
+脚本会自动申请 `sudo` 权限，将当前工作树同步到 `/opt/neurobridge`、从本地源码更新 Python 包、重建算法 bridge、重新加载 systemd 单元并重启网关。网关重启会使现有 B 端连接断开，B 端需重新建连并订阅。
 
-部署脚本会创建 `neurobridge` 服务账户、运行目录、Python 虚拟环境和 systemd 服务。它只读取离线包内的 Ubuntu 24.04 `.deb`、Python wheels 和锁定 SDK 源码，任何缺件都会失败而不会回退到网络。离线包必须在受控且联网的 Ubuntu 24.04 构建机上使用 [`create-offline-bundle-ubuntu24.04.sh`](linux/create-offline-bundle-ubuntu24.04.sh) 生成，并以 `neurobridge-ubuntu24.04-offline-bundle` 名称放在源码目录同级；一键脚本也可接受离线包目录作为唯一参数。静态 IP、端口、Flowtime 扫描匹配条件、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
+部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。Ubuntu 基础镜像须预先具备 Python 运行环境（含 `bleak`、`websockets`）、`rsync`、CMake、C++17 编译器和 Eigen3；缺少任一项时脚本会明确失败，不会自动联网安装。静态 IP、端口、Flowtime 扫描匹配条件、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
 
 ```bash
 python3 -m venv .venv

@@ -2,13 +2,12 @@
 
 本目录保存 Ubuntu x86_64 网关的部署专属内容：
 
-- `install-offline-ubuntu24.04.sh`：目标机一键入口，自动寻找同级离线包并申请管理员权限。
-- `install-ubuntu.sh`：离线安装实现，安装 Python 运行环境、BlueZ、锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
-- `reload-ubuntu.sh`：将已安装网关更新到当前源码版本并重启服务。
+- `update-ubuntu.sh`：目标机一键部署入口；只使用当前源码目录，不执行 Git 或网络操作。
+- `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。
 
-本文用于在一台**全新 Ubuntu 24.04 LTS x86_64** 主机上首次部署 NeuroBridge。首期部署目标是 N100/N150 等 x86_64 小主机；不要在 ARM、Windows、macOS 或非 systemd 环境上使用这些脚本。目标网关完全离线安装：不登录 GitHub、不访问 GitHub、APT 或 PyPI。网关和 B 端主机必须只接入双方确认的专用有线网络，不能暴露到公网、无线网络或不受控局域网。
+本文用于在一台**Ubuntu 24.04 LTS x86_64** 主机上部署 NeuroBridge。首期部署目标是 N100/N150 等 x86_64 小主机；不要在 ARM、Windows、macOS 或非 systemd 环境上使用这些脚本。目标机可匿名从 GitHub 公开 HTTPS 地址获取本仓库源码，无需登录；源码到位后，所有部署、bridge 构建和运行步骤均不访问互联网。网关和 B 端主机必须只接入双方确认的专用有线网络，不能暴露到公网、无线网络或不受控局域网。
 
 > 文中的 `192.168.88.10`、`192.168.88.20`、端口和网卡名只是示例。安装前必须由双方确认实际静态 IP、子网掩码、WebSocket 端口、下载端口和网卡名；不要把示例值直接用于现场。
 
@@ -17,10 +16,10 @@
 准备好以下内容：
 
 - Ubuntu **24.04 LTS** x86_64，使用 systemd 启动；安装账户具有 `sudo` 权限。
-- 已审查的 NeuroBridge 源码版本（建议固定到已确认的 tag 或 commit），以及可连接头环的已验证蓝牙 5.x 适配器（仅实时采集需要）。
-- 由受控、联网的 Ubuntu 24.04 构建机生成的离线包，包含锁定 SDK 源码、Python wheels 和全部 Ubuntu `.deb` 依赖。
+- 已审查的 NeuroBridge 源码版本（建议固定到已确认的 tag 或 commit），以及可连接头环的已验证蓝牙 5.x 适配器（仅实时采集需要）。可直接匿名获取：`git clone https://github.com/Entertech/NeuroBridge.git`。
+- Ubuntu 基础镜像中已安装：`python3`、NeuroBridge 既有虚拟环境 `/opt/neurobridge/venv`（其中含 `bleak` 和 `websockets`）、`rsync`、`cmake`、C++17 编译器和 `libeigen3-dev`。安装器只验证这些前提，绝不调用 APT、PyPI 或其他下载服务。
 - 网关与 B 端的专用有线链路。先确定网关地址、B 端地址、掩码、端口和网卡名。
-- 若要使用录播，准备好录制数据目录及要回放的 `recordingId`；若要使用算法，先完成该 Ubuntu 主机上的真实数据 POC。首次部署不要启用算法。
+- 若要使用录播，准备好录制数据目录及要回放的 `recordingId`；若要使用算法，先完成该 Ubuntu 主机上的真实数据 POC。算法默认启用，但 POC 前可暂时设为 `false`。
 
 在新主机上确认操作系统、CPU 架构、网卡及蓝牙设备：
 
@@ -35,15 +34,16 @@ bluetoothctl list
 
 `uname -m` 必须输出 `x86_64`，`/etc/os-release` 中的 `ID` 必须是 `ubuntu`。`systemctl is-system-running` 输出 `running` 或 `degraded` 均表示 systemd 已运行；若为 `offline`，先修复主机启动环境。
 
-## 2. 准备并转移离线交付物
+## 2. 获取源码
 
-在受控且联网的 Ubuntu 24.04 构建机，从已审查源码运行：
+目标机首次获取源码时，可使用公开 HTTPS Git 仓库；此操作不需要 GitHub 账号、密码或令牌：
 
 ```bash
-./linux/create-offline-bundle-ubuntu24.04.sh /absolute/neurobridge-ubuntu24.04-offline-bundle
+git clone https://github.com/Entertech/NeuroBridge.git
+cd NeuroBridge
 ```
 
-将已审查的 NeuroBridge 源码目录和生成的 `neurobridge-ubuntu24.04-offline-bundle` 一并通过受控介质带到目标机，并放在同一级目录。目标机无需安装或登录 GitHub；以下所有安装与更新命令均从源码根目录执行。
+之后的部署命令只读取当前目录中的源码。`third_party/` 已包含构建算法 bridge 所需的锁定 SDK 与 NumCpp 源码；不要在目标机上执行 SDK 的 `git clone` 或下载。
 
 ## 3. 先配置专用有线网络
 
@@ -71,10 +71,10 @@ ip -br addr show enp1s0
 
 ## 4. 安装网关
 
-首次安装脚本会安装 Python、BlueZ、dnsmasq、渲染导出物所需的组件，创建 `neurobridge` 服务账户，将源码同步至 `/opt/neurobridge`，并安装与启用 systemd 单元。它需要 root 权限：
+安装脚本会创建 `neurobridge` 服务账户，将源码同步至 `/opt/neurobridge`，在本地构建并安装算法 bridge，并安装与启用 systemd 单元。它不会安装系统包或 Python 包，缺少基础镜像前提时会失败。使用一键入口：
 
 ```bash
-./linux/install-offline-ubuntu24.04.sh
+./linux/update-ubuntu.sh
 ```
 
 安装后会创建但**不会自动启动**网关，避免使用未确认的示例网络参数。关键位置如下：
@@ -179,18 +179,14 @@ sudo systemctl stop neurobridge.service
 
 `restart` 和 `stop` 会断开所有 B 端 WebSocket 连接；B 端恢复连接后必须重新执行 `getStatus` 和订阅流程。服务已在首次安装时启用，正常重启主机后会自动启动。
 
-更新代码前先备份现场配置与录播数据，并确认当前没有需要保持的 B 端连接。离线环境中，将新的已审查源码和对应的 Ubuntu 24.04 离线包通过受控介质带到目标机；安装器变更或 bridge 更新时使用完整离线安装：
+更新代码前先备份现场配置与录播数据，并确认当前没有需要保持的 B 端连接。若要从 GitHub 获取新的已审查代码，在源码目录中执行匿名拉取；随后的一键部署完全不访问网络：
 
 ```bash
-./linux/install-offline-ubuntu24.04.sh
+git pull --ff-only
+./linux/update-ubuntu.sh
 ```
 
-`reload-ubuntu.sh` 只适用于已完成首次离线安装、且不涉及依赖或 bridge 更新的 Python 代码更新；它会自动申请管理员权限、同步当前工作树到 `/opt/neurobridge`、重装本地 Python 包、重载 systemd 并重启网关。若 `requirements.lock`、`linux/install-ubuntu.sh` 或 bridge 有变更，使用完整离线安装流程：
-
-```bash
-./linux/install-offline-ubuntu24.04.sh
-sudo systemctl restart neurobridge.service
-```
+也可以由其他受控流程将新的源码工作树放到目标机，然后直接运行 `./linux/update-ubuntu.sh`。该脚本适用于 Python、安装器和 bridge 的全部代码更新：它会保留 `/etc/neurobridge/gateway.toml`、`/var/lib/neurobridge/recordings` 与现有 Python 虚拟环境，并从当前源码的 `third_party/` 本地重建 bridge。缺少 Ubuntu 基础镜像依赖或既有虚拟环境时，它会失败而不会尝试联网修复。
 
 完整安装会保留已有的 `/etc/neurobridge/gateway.toml`，但仍应在执行前按现场运维要求备份该文件和 `/var/lib/neurobridge/recordings`。不要将录播数据、日志或现场配置提交到 Git。
 
