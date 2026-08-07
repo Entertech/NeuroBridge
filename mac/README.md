@@ -64,7 +64,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 /tmp/neurobridge-mac-venv/bin/python mac/poc_server.py --config /tmp/neurobridge-gateway.capture.toml
 ```
 
-浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载会立即发起本机扫描；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51`、`FF52` 与电量通知，随后向 `FF21` 写入 `0x05` 启动采集。模板默认不启动算法 bridge，直到真实录制数据已验证其输入分组。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
+浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载会立即发起本机扫描；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51` 与电量通知，随后向 `FF21` 写入 `0x05` 启动采集。模板默认不启动算法 bridge，直到真实录制数据已验证其输入分组。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
 
 成功连接后的记录会保存到 `/tmp/neurobridge-headband-poc/sessions/rec-.../`，其中原始 EEG、原始心率和各算法指标分别位于 `raw/`、`algorithm/` 子目录。目录名中的 `rec-...` 是后续录播所需的 recording ID。请只记录 ID，不要复制 JSONL 中的 Base64 原始字节。
 
@@ -78,7 +78,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 
 报告会验证并汇总：
 
-- `FF31` 的 14 字节、`FF51` 的 16 字节与 `FF52` 的 20 字节通知契约；
+- `FF31` 的 20 字节、`FF51` 的 1 字节通知契约；
 - 每个 600 ms 窗口的包数、记录时间范围和窗口间隔；
 - 声明字节数与实际 Base64 解码后的长度是否一致；
 - 无效窗口和原因。
@@ -93,7 +93,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 
 `start-poc.command` 会先运行 `build-algorithm-bridge.command`，从锁定的 AffectiveCloud C++ SDK 和 NumCpp 2.11.0 构建本机 bridge；产物仅位于 `/tmp/neurobridge-affective-runtime/affective_bridge`。它将每个完整窗口的原始字节不经重排地交给 SDK 的双通道 EEG 与心率入口，并返回现有算法数据结构中的脑波、频段、睡眠、注意力/放松度/愉悦度/心流、心率/HRV、压力、和谐度和激活度。采集页的“算法输出”会显示这些标量和频段；为避免在浏览器日志中保留第二份生理时序，页面日志不会显示处理后的波形数组。
 
-本机已完成 C++ SDK 的构建和合成输入烟雾测试，证明 bridge 调用链和输出字段可用；**这不等于真实头环算法结果已验收。** SDK 在预热、信号质量不佳或尚未形成结果时可能输出 `0`，不能把单个窗口的数值当作有效性结论。Ubuntu x86_64 构建、真实 Flowtime 原始字节对比、字段范围/单位/延迟确认以及现场验收仍未完成；生产配置须继续保持 `algorithm.enabled=false`，直至这些验证完成。
+本机已完成 C++ SDK 的构建和合成输入烟雾测试，证明 bridge 调用链和输出字段可用；**这不等于真实头环算法结果已验收。** SDK 在预热、信号质量不佳或尚未形成结果时可能输出 `0`，不能把单个窗口的数值当作有效性结论。Ubuntu x86_64 构建、真实 Flowtime 原始字节对比、字段范围/单位/延迟确认以及现场验收仍未完成；macOS POC 模板默认关闭算法，可按 POC 需要显式启用。
 
 ## POC 结束时应保存的非敏感结果
 

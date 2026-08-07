@@ -57,12 +57,16 @@ fi
 git -C "$numcpp_dir" checkout --detach --quiet "$numcpp_commit"
 
 eigen_prefix="$(brew --prefix eigen)"
-cmake -Wno-dev -S "$numcpp_dir" -B "$numcpp_build_dir" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$numcpp_prefix"
+cmake -Wno-dev -S "$numcpp_dir" -B "$numcpp_build_dir" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DNUMCPP_NO_USE_BOOST=ON \
+  -DCMAKE_INSTALL_PREFIX="$numcpp_prefix"
 cmake --build "$numcpp_build_dir" --parallel 2
 cmake --install "$numcpp_build_dir" >/dev/null
 cmake -Wno-dev -S "$repo_root/mac/algorithm_bridge" -B "$bridge_build_dir" \
   -DCMAKE_BUILD_TYPE=Release \
   -DAFFECTIVE_SDK_SOURCE_DIR="$sdk_dir" \
+  -DNUMCPP_NO_USE_BOOST=ON \
   -DCMAKE_PREFIX_PATH="$eigen_prefix;$numcpp_prefix"
 cmake --build "$bridge_build_dir" --parallel 2
 cp "$bridge_build_dir/bin/neurobridge_affective_bridge" "$bridge_path"

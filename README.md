@@ -6,18 +6,29 @@ NeuroBridge 是将回车科技头环数据接入第三方 B 端主机的跨平�
 
 ## 可运行网关与部署
 
-仓库现已包含可部署的 Python 网关：`neurobridge/`。它按 v0.1 协议提供 WebSocket 服务、以 600 ms 窗口批量发送数据、管理订阅与自动录播。实时采集时，原始 EEG、设备原生心率、原始心率和每类算法指标按会话分文件持久化；网页可将一个会话导出为 ZIP。网关按已确认 profile 处理 `FF31`、`FF51`、`FF52` 原始字节，落盘和算法调用前不解包或改写；北向仅按协议发送允许的原始流。
+仓库现已包含可部署的 Python 网关：`neurobridge/`。它按 v0.1 协议提供 WebSocket 服务、以 600 ms 窗口批量发送数据、管理订阅与自动录播。实时采集时，原始 EEG、心率和每类算法指标按会话分文件持久化；网页可将一个会话导出为 ZIP。网关按设备通信规范处理 `FF31`、`FF51` 原始字节，落盘和算法调用前不解包或改写；北向仅按协议发送允许的原始流。
 
-在 Ubuntu x86_64 目标机上，从已审查的工作树以 root 执行：
+Ubuntu 24.04 x86_64 网关可先用公开 HTTPS 地址匿名获取本仓库源码，不需要 GitHub 账号或密码：
 
 ```bash
-./linux/install-ubuntu.sh
+git clone https://github.com/Entertech/NeuroBridge.git
+cd NeuroBridge
+./linux/prepare-ubuntu24.04-environment.sh  # 一次性联网准备
+# 此处可断开互联网
+./linux/update-ubuntu.sh
 sudoedit /etc/neurobridge/gateway.toml
-systemctl restart neurobridge
-systemctl status neurobridge
 ```
 
-部署脚本会创建 `neurobridge` 服务账户、运行目录、Python 虚拟环境和 systemd 服务。静态 IP、端口、Flowtime 扫描匹配条件、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
+`git clone`/`git pull` 仅用于人为获取新版本源码。源码已在目标机后，安装、C++ bridge 构建、Python 包更新和运行均不访问 GitHub、APT、PyPI 或其他互联网服务。`update-ubuntu.sh` 只部署当前目录已有的源码；更新代码时，先自行执行匿名 `git pull --ff-only`，再运行该脚本：
+
+```bash
+git pull --ff-only
+./linux/update-ubuntu.sh
+```
+
+脚本会自动申请 `sudo` 权限，将当前工作树同步到 `/opt/neurobridge`、从本地源码更新 Python 包、重建算法 bridge、重新加载 systemd 单元并重启网关。网关重启会使现有 B 端连接断开，B 端需重新建连并订阅。
+
+部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。静态 IP、端口、Flowtime 扫描匹配条件、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
 
 ```bash
 python3 -m venv .venv
@@ -26,7 +37,7 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51`、`FF52` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。其中 FF51 设备原生心率会保留在录制中，FF52 原始心率用于北向 `hr.raw`。算法 SDK 通过独立的行 JSON C++ bridge 接入，避免 Python 进程直接依赖 C++ ABI；macOS 仅完成源码构建及合成输入烟雾测试；SDK 输入分组、真实 Flowtime 数据输出和 Ubuntu x86_64 构建尚未验证，生产配置的 `algorithm.enabled` 必须继续保持关闭，直到完成真实数据比对。
+Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。`FF31` 原始 EEG 与 `FF51` 原始心率均会持久化，`FF51` 用于北向 `hr.raw`；算法输入保留原始字节序和完整窗口。首次 Ubuntu 安装会以锁定版本自动构建并安装行 JSON C++ bridge 到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`，因此部署配置不需要填写算法命令；`algorithm.enabled` 默认开启，也是唯一启停项。macOS 仅完成源码构建及合成输入烟雾测试；SDK 输入分组、真实 Flowtime 数据输出和 Ubuntu x86_64 构建尚未验证，现场仍须根据状态、日志和真实数据验证算法结果。
 
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
@@ -65,9 +76,10 @@ python3 -m http.server 8088 --directory web/b-client-test
 - 目标硬件：N100/N150 x86 小主机，8 GB 内存、256 GB SSD、千兆网口（双网口优先）、经实机验证可稳定连接目标头环的蓝牙 5.x 芯片。
 - 目标系统：Ubuntu LTS/Linux。网关不需要运行 Android；Android 或浏览器仅作为第三方展示端。
 - 链路：`头环 → BLE → 网关 → 有线以太网 → 第三方 B 端主机`。
-- 运行方式：实时模式和录播模式均为交付范围；头环未连接时，网关在 B 端 `subscribe` 或 `getLatest` 后自动使用已配置录播，并以 `mode="replay"` 标记数据来源。网关应开机自启，现场无需操作。
+- 运行方式：实时模式和录播模式均为交付范围；头环未连接时，B 端首次 `subscribe` 或 `getLatest` 会启动网关级录播流程，并以 `mode="replay"` 标记数据来源；后续订阅加入该流程的当前进度。最后一个 B 端 WebSocket 连接断开时，网关停止录播并重置进度；仍有连接时，文件播放到末尾会从首条重新循环。头环重连时自动停止录播并回到实时。网关应开机自启，现场无需操作。
+- 运维与交付：Ubuntu 安装脚本将网关注册为 systemd 开机自启服务；运行日志持久化并每日轮转。受控专用有线网络上的下载服务可导出已结束录播 ZIP 与运行日志快照，地址和端口由部署配置确认。B 端地址分配可选静态地址（默认）或独立 DHCP 单元；后者仅自动分配 B 端地址并发布固定网关地址，端口保持固定。
 - 演示范围：本次为单人；北向协议仅保留录播关联所需的 `subjectId`。
-- 当前确认的设备 profile：EEG `FF31` 为 14 字节大端数据包，设备原生心率 `FF51` 为 16 字节，HR 原始数据 `FF52` 为 20 字节，佩戴/接触状态 `FF32` 为 2 字节；北向仍最多按 600 ms 分组，但实际包数由网关运行时记录，不写死。
+- 当前设备通信规范定义：EEG `FF31` 为 20 字节大端数据包（2 字节序号与 6 个 24 位采样），心率 `FF51` 为 1 字节，佩戴/接触状态 `FF32` 为 2 字节；北向仍最多按 600 ms 分组，但实际包数由网关运行时记录，不写死。
 
 若现场禁止任何蓝牙，实时链路不能工作；只能改用有线采集、在允许蓝牙的区域采集后录播，或取得场地方对限制范围的书面确认。
 
@@ -107,7 +119,7 @@ python3 -m http.server 8088 --directory web/b-client-test
 ## 上线前 POC 与验收
 
 1. 在目标 N100/N150 + Ubuntu LTS 上测试 PC BLE SDK：扫描、连接、订阅、断线重连、重启恢复和长时间运行。
-2. 在同一环境编译算法 C++ SDK，固定 Eigen3/NumCpp/CMake/编译器版本，并以录制的真实 `FF31`/`FF51`/`FF52` 原始字节验证算法输入长度、字节序、分组方式和 600 ms 触发节奏。
+2. 在同一环境编译算法 C++ SDK，固定 Eigen3/NumCpp/CMake/编译器版本，并以录制的真实 `FF31`/`FF51` 原始字节验证算法输入长度、字节序、分组方式和 600 ms 触发节奏。
 3. 完成北向模拟服务端和真实 B 端主机联调，覆盖实时、录播、网关/服务端离线、恢复补传和异常数据。
 4. 在展演网络完成一次全链路演练，交付版本号、配置备份、操作手册和问题日志。
 

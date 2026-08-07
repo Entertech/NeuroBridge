@@ -7,9 +7,9 @@ from ..config import BleConfig
 
 LOG = logging.getLogger(__name__)
 BASE = "-1212-abcd-1523-785feabcd123"
-FF31, FF32, FF51, FF52, FF21 = (f"0000{name}{BASE}" for name in ("ff31", "ff32", "ff51", "ff52", "ff21"))
+FF31, FF32, FF51, FF21 = (f"0000{name}{BASE}" for name in ("ff31", "ff32", "ff51", "ff21"))
 BATTERY = "00002a19-0000-1000-8000-00805f9b34fb"
-REQUIRED_NOTIFICATION_CHARACTERISTICS = (FF31, FF32, FF51, FF52)
+REQUIRED_NOTIFICATION_CHARACTERISTICS = (FF31, FF32, FF51)
 OPTIONAL_NOTIFICATION_CHARACTERISTICS = (BATTERY,)
 
 
@@ -19,7 +19,7 @@ def wear_state_from_packet(_value: bytes) -> str:
 
 
 class FlowtimeAdapter:
-    """Bleak adapter for the confirmed FF31/FF32/FF51/FF52/FF21 profile."""
+    """Bleak adapter for the FF31/FF32/FF51/FF21 profile in the device specification."""
     def __init__(self, config: BleConfig, packet: Callable[[str, bytes], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]], error: Callable[[str], Awaitable[None]] | None = None) -> None:
         self.config, self.packet, self.status, self.device_ready = config, packet, status, device_ready
         self.error = error
@@ -89,7 +89,7 @@ class FlowtimeAdapter:
                 # validation. Do not expose the raw byte as a percentage.
                 await self.status("batteryPercent", None)
             else:
-                await self.packet({FF31: "ff31", FF51: "ff51", FF52: "ff52"}[characteristic], bytes(value))
+                await self.packet({FF31: "ff31", FF51: "ff51"}[characteristic], bytes(value))
         for characteristic in REQUIRED_NOTIFICATION_CHARACTERISTICS:
             # Bleak notification callbacks are synchronous on all supported backends.
             # Schedule the async state update rather than relying on backend-specific

@@ -30,6 +30,8 @@ async def create_server(gateway: Gateway):
             return
         session = ClientSession()
         gateway.sessions.add(session)
+        peer = websocket.remote_address
+        LOG.info("B-side WebSocket client connected: peer=%s", peer)
         async def send(message: dict) -> None:
             await websocket.send(json.dumps(message, separators=(",", ":"), ensure_ascii=False))
         try:
@@ -40,6 +42,7 @@ async def create_server(gateway: Gateway):
                 await gateway.handle(session, message, send)
         finally:
             await gateway.close_session(session)
+            LOG.info("B-side WebSocket client disconnected: peer=%s", peer)
 
     return await websockets.serve(handler, gateway.config.server.host, gateway.config.server.port, subprotocols=[SUBPROTOCOL], process_request=require_subprotocol, ping_interval=None, ping_timeout=None, max_size=256 * 1024, compression=None)
 

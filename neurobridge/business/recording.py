@@ -5,13 +5,17 @@ from collections import defaultdict
 from hashlib import sha256
 import json
 from pathlib import Path
+import re
 import subprocess
 import time
 import uuid
 import zipfile
 
 
-RAW_STREAMS = {"eeg": 14, "hr_native": 16, "hr": 20}
+RAW_STREAMS = {"eeg": 20, "hr": 1}
+# Kept only for reading sessions made by the superseded FF52 profile.  New
+# sessions never create this file and it remains hidden from northbound replay.
+LEGACY_REPLAY_STREAMS = {"hr_native": 16}
 ALGORITHM_FILES = (
     "bio", "hr", "hrv", "attention", "flow", "pressure", "relaxation",
     "pleasure", "coherence", "arousal", "sleep",
@@ -181,12 +185,38 @@ class RecordingStore:
         session = self._session_dir(recording_id)
         return session.is_dir() or (self.root / "raw" / f"{recording_id}.jsonl").exists() or (self.root / "algorithm" / f"{recording_id}.jsonl").exists()
 
+    @staticmethod
+    def _safe_recording_id(recording_id: str | None) -> bool:
+        """Keep recording identifiers inside the persistent recording root."""
+        return isinstance(recording_id, str) and re.fullmatch(r"rec-[0-9a-fA-F-]{1,64}", recording_id) is not None
+
+    def completed_recordings(self) -> list[dict]:
+        """Return completed session metadata suitable for the local download index."""
+        recordings: list[dict] = []
+        sessions = self.root / "sessions"
+        for session in sessions.iterdir():
+            if not session.is_dir() or not self._safe_recording_id(session.name) or session.name == self.recording_id:
+                continue
+            manifest = session / "manifest.json"
+            started_at_ms = None
+            if manifest.is_file():
+                try:
+                    started_at_ms = json.loads(manifest.read_text(encoding="utf-8")).get("startedAtMs")
+                except (OSError, json.JSONDecodeError):
+                    pass
+            recordings.append({
+                "recordingId": session.name,
+                "startedAtMs": started_at_ms,
+                "modifiedAtMs": int(session.stat().st_mtime * 1000),
+            })
+        return sorted(recordings, key=lambda item: item["modifiedAtMs"], reverse=True)
+
     def _new_events(self, recording_id: str) -> list[dict]:
         session = self._session_dir(recording_id)
         merged: dict[int, dict] = defaultdict(lambda: {"payload": {}, "valid": True, "invalidReasons": []})
         raw_windows: dict[int, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
 
-        for stream in RAW_STREAMS:
+        for stream in {**RAW_STREAMS, **LEGACY_REPLAY_STREAMS}:
             path = session / "raw" / f"{stream}.jsonl"
             if not path.exists():
                 continue
@@ -205,14 +235,15 @@ class RecordingStore:
                 rows.sort(key=lambda row: int(row["sequence"]))
                 raw = b"".join(base64.b64decode(row["bytesBase64"]) for row in rows)
                 first = rows[0]
-                # FF51 is persisted for traceability, but it is device-native
-                # telemetry rather than the FF52 byte stream exposed as hr.raw.
+                # A prior, incorrect profile created this trace-only stream.
+                # Preserve its files for historical recordings without exposing
+                # them as the current FF51-based hr.raw stream.
                 if stream == "hr_native":
                     continue
                 item["payload"]["eegRaw" if stream == "eeg" else "hrRaw"] = {
                     "encoding": "base64",
                     "sampleFormat": "bytes",
-                    "packetBytes": RAW_STREAMS[stream],
+                    "packetBytes": int(first["packetBytes"]),
                     "packetCount": len(rows),
                     "byteLength": len(raw),
                     "windowStartMs": int(first["windowStartMs"]),
@@ -319,7 +350,7 @@ class RecordingStore:
         return output
 
     def export(self, recording_id: str) -> Path:
-        if not self._session_dir(recording_id).is_dir():
+        if not self._safe_recording_id(recording_id) or not self._session_dir(recording_id).is_dir():
             raise FileNotFoundError(f"Recording {recording_id} is not available for export")
         session = self._session_dir(recording_id)
         documentation_pdf = self._export_documentation_pdf()
