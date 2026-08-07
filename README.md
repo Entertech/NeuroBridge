@@ -17,6 +17,14 @@ systemctl restart neurobridge
 systemctl status neurobridge
 ```
 
+代码修改后的部署与重启可直接在仓库根目录执行：
+
+```bash
+./linux/reload-ubuntu.sh
+```
+
+脚本会自动申请 `sudo` 权限，将当前工作树同步到 `/opt/neurobridge`、更新 Python 包、重新加载 systemd 单元并重启网关。它会拒绝首次安装、非 Ubuntu x86_64/systemd 环境、缺失配置、Python 依赖变更及 Ubuntu 安装脚本变更，并提示改走 `./linux/install-ubuntu.sh`；首次安装仍使用该安装脚本。网关重启会使现有 B 端连接断开，B 端需重新建连并订阅。
+
 部署脚本会创建 `neurobridge` 服务账户、运行目录、Python 虚拟环境和 systemd 服务。静态 IP、端口、Flowtime 扫描匹配条件、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
 
 ```bash
