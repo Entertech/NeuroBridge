@@ -61,15 +61,9 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 | macOS 真实头环 POC | [`mac/start-poc.command`](mac/start-poc.command) | 一键启动本机采集、算法 bridge 和控制台；详见 [`mac/README.md`](mac/README.md)。 |
 | Windows 网关 | [`windows/README.md`](windows/README.md) | 尚未完成设备、算法和后台服务验证，不能作为交付部署入口。 |
 | 采集控制台网页 | [`web/capture/`](web/capture/) | 平台无关静态资源；由本地采集服务挂载到 `/capture/`。 |
-| B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 平台无关静态资源；可直接用任意静态服务器托管。 |
+| B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 平台无关纯静态资源；直接打开 `index.html` 即可使用。 |
 
-例如，仅启动 B 端联调网页时可在仓库根目录运行：
-
-```bash
-python3 -m http.server 8088 --directory web/b-client-test
-```
-
-浏览器访问终端显示的地址后，填写专用有线网络内的网关 WebSocket 地址。该网页不代替网关进程，也不会访问本机蓝牙。
+仅使用 B 端联调网页时，直接双击 [`web/b-client-test/index.html`](web/b-client-test/index.html) 或将其拖入浏览器；无需启动 HTTP 服务。然后填写专用有线网络内的网关 WebSocket 地址。该网页不代替网关进程，也不会访问本机蓝牙。
 
 ## 首期交付结论
 
