@@ -7,7 +7,7 @@
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。
 
-本文用于在一台**全新 Ubuntu LTS x86_64** 主机上首次部署 NeuroBridge。首期部署目标是 N100/N150 等 x86_64 小主机；不要在 ARM、Windows、macOS 或非 systemd 环境上使用这些脚本。网关和 B 端主机必须只接入双方确认的专用有线网络，不能暴露到公网、无线网络或不受控局域网。
+本文用于在一台**全新 Ubuntu 24.04 LTS x86_64** 主机上首次部署 NeuroBridge。首期部署目标是 N100/N150 等 x86_64 小主机；不要在 ARM、Windows、macOS 或非 systemd 环境上使用这些脚本。目标网关完全离线安装：不登录 GitHub、不访问 GitHub、APT 或 PyPI。网关和 B 端主机必须只接入双方确认的专用有线网络，不能暴露到公网、无线网络或不受控局域网。
 
 > 文中的 `192.168.88.10`、`192.168.88.20`、端口和网卡名只是示例。安装前必须由双方确认实际静态 IP、子网掩码、WebSocket 端口、下载端口和网卡名；不要把示例值直接用于现场。
 
@@ -15,8 +15,9 @@
 
 准备好以下内容：
 
-- Ubuntu LTS x86_64，使用 systemd 启动；安装账户具有 `sudo` 权限。
+- Ubuntu **24.04 LTS** x86_64，使用 systemd 启动；安装账户具有 `sudo` 权限。
 - 已审查的 NeuroBridge 源码版本（建议固定到已确认的 tag 或 commit），以及可连接头环的已验证蓝牙 5.x 适配器（仅实时采集需要）。
+- 由受控、联网的 Ubuntu 24.04 构建机生成的离线包，包含锁定 SDK 源码、Python wheels 和全部 Ubuntu `.deb` 依赖。
 - 网关与 B 端的专用有线链路。先确定网关地址、B 端地址、掩码、端口和网卡名。
 - 若要使用录播，准备好录制数据目录及要回放的 `recordingId`；若要使用算法，先完成该 Ubuntu 主机上的真实数据 POC。首次部署不要启用算法。
 
@@ -33,20 +34,15 @@ bluetoothctl list
 
 `uname -m` 必须输出 `x86_64`，`/etc/os-release` 中的 `ID` 必须是 `ubuntu`。`systemctl is-system-running` 输出 `running` 或 `degraded` 均表示 systemd 已运行；若为 `offline`，先修复主机启动环境。
 
-## 2. 获取已审查的源码
+## 2. 准备并转移离线交付物
 
-可通过受控介质复制已审查的源码目录，或从项目远程仓库拉取后固定到双方确认的版本。例如：
+在受控且联网的 Ubuntu 24.04 构建机，从已审查源码运行：
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y git
-git clone https://github.com/Entertech/NeuroBridge.git
-cd NeuroBridge
-git checkout <已确认的-tag-或-commit>
-git status --short
+./linux/create-offline-bundle-ubuntu24.04.sh /absolute/neurobridge-ubuntu24.04-offline-bundle
 ```
 
-最后一条命令应没有意外的本地修改。以下所有安装与更新命令均从仓库根目录执行。
+将已审查的 NeuroBridge 源码目录和生成的 `neurobridge-ubuntu24.04-offline-bundle` 一并通过受控介质带到目标机，例如挂载在 `/media/neurobridge/`。目标机无需安装或登录 GitHub；以下所有安装与更新命令均从源码根目录执行。
 
 ## 3. 先配置专用有线网络
 
@@ -77,7 +73,7 @@ ip -br addr show enp1s0
 首次安装脚本会安装 Python、BlueZ、dnsmasq、渲染导出物所需的组件，创建 `neurobridge` 服务账户，将源码同步至 `/opt/neurobridge`，并安装与启用 systemd 单元。它需要 root 权限：
 
 ```bash
-sudo ./linux/install-ubuntu.sh
+sudo ./linux/install-ubuntu.sh --offline-bundle /media/neurobridge/neurobridge-ubuntu24.04-offline-bundle
 ```
 
 安装后会创建但**不会自动启动**网关，避免使用未确认的示例网络参数。关键位置如下：
@@ -182,19 +178,16 @@ sudo systemctl stop neurobridge.service
 
 `restart` 和 `stop` 会断开所有 B 端 WebSocket 连接；B 端恢复连接后必须重新执行 `getStatus` 和订阅流程。服务已在首次安装时启用，正常重启主机后会自动启动。
 
-更新代码前先备份现场配置与录播数据，并确认当前没有需要保持的 B 端连接。常规代码更新流程如下：
+更新代码前先备份现场配置与录播数据，并确认当前没有需要保持的 B 端连接。离线环境中，将新的已审查源码和对应的 Ubuntu 24.04 离线包通过受控介质带到目标机；安装器变更或 bridge 更新时使用完整离线安装：
 
 ```bash
-git fetch origin
-git checkout <已确认的-tag-或-commit>
-git status --short
-./linux/reload-ubuntu.sh
+sudo ./linux/install-ubuntu.sh --offline-bundle /media/neurobridge/neurobridge-ubuntu24.04-offline-bundle
 ```
 
-`reload-ubuntu.sh` 会自动申请管理员权限、同步当前工作树到 `/opt/neurobridge`、重装本地 Python 包、重载 systemd 并重启网关。它只适用于已完成首次安装的 Ubuntu x86_64 主机；若 `requirements.lock` 或 `linux/install-ubuntu.sh` 有变更，脚本会停止并要求使用完整安装流程：
+`reload-ubuntu.sh` 只适用于已完成首次离线安装、且不涉及依赖或 bridge 更新的 Python 代码更新；它会自动申请管理员权限、同步当前工作树到 `/opt/neurobridge`、重装本地 Python 包、重载 systemd 并重启网关。若 `requirements.lock`、`linux/install-ubuntu.sh` 或 bridge 有变更，使用完整离线安装流程：
 
 ```bash
-sudo ./linux/install-ubuntu.sh
+sudo ./linux/install-ubuntu.sh --offline-bundle /media/neurobridge/neurobridge-ubuntu24.04-offline-bundle
 sudo systemctl restart neurobridge.service
 ```
 

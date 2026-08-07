@@ -12,9 +12,9 @@ NeuroBridge 已实现 AffectiveCloud C++ SDK 的进程边界：网关在 `algori
 
 ## 固定来源
 
-SDK 的仓库、提交和版本锁定在仓库根目录的 [sdk.lock](../../sdk.lock)。macOS POC 使用 [build-algorithm-bridge.command](../../mac/build-algorithm-bridge.command) 将源码和 NumCpp 2.11.0 构建在 `/tmp/neurobridge-affective-runtime`；Ubuntu 可使用 [prepare-algorithm-sdk.sh](../../tools/prepare-algorithm-sdk.sh) 下载到受控构建目录后按同一锁定版本构建。不要把构建产物、录制人体数据或 SDK 缓存提交到本仓库。
+SDK 的仓库、提交和版本锁定在仓库根目录的 [sdk.lock](../../sdk.lock)。macOS POC 使用 [build-algorithm-bridge.command](../../mac/build-algorithm-bridge.command) 将源码和 NumCpp 2.11.0 构建在 `/tmp/neurobridge-affective-runtime`；Ubuntu 24.04 的受控构建机使用 [create-offline-bundle-ubuntu24.04.sh](../../linux/create-offline-bundle-ubuntu24.04.sh) 将同一锁定版本打入离线交付包，目标网关只读取该本地包，不访问 GitHub。不要把构建产物、录制人体数据或 SDK 缓存提交到本仓库。
 
-Ubuntu 安装器会以 `neurobridge` 服务账户自动调用 [`linux/build-algorithm-bridge.sh`](../../linux/build-algorithm-bridge.sh)，从 [`sdk.lock`](../../sdk.lock) 的固定来源构建，并以 root 所有、只读的形式安装到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`。网关未配置 `algorithm.command` 时自动使用该固定路径。SDK 构建与固定路径安装不代表算法 POC 或现场验收通过；启用前仍须在 Ubuntu x86_64 记录 Ubuntu 版本、`cmake --version`、`c++ --version`、Eigen3 版本、NumCpp 版本、SDK commit 和 bridge SHA-256。C++ SDK 要求 C++17、Eigen3、NumCpp。
+Ubuntu 24.04 安装器会验证离线包中的 SDK source archive 和 [`sdk.lock`](../../sdk.lock) 的固定 commit 一致，再以 `neurobridge` 服务账户调用 [`linux/build-algorithm-bridge.sh`](../../linux/build-algorithm-bridge.sh) 构建，并以 root 所有、只读的形式安装到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`。网关未配置 `algorithm.command` 时自动使用该固定路径。目标机不运行 `git`、`git clone` 或网络下载。SDK 构建与固定路径安装不代表算法 POC 或现场验收通过；启用前仍须在 Ubuntu x86_64 记录 Ubuntu 版本、`cmake --version`、`c++ --version`、Eigen3 版本、NumCpp 版本、SDK commit 和 bridge SHA-256。C++ SDK 要求 C++17、Eigen3、NumCpp。
 
 ## bridge 合同
 
@@ -57,15 +57,10 @@ bridge 保留每个窗口内的原始字节顺序，不补零、截断、重排�
 以下操作只能在目标 Ubuntu x86_64、已获得受试者授权的受控环境执行。全程不打印、复制或提交 JSONL 中的 Base64 原始数据；报告只保存包数、异常计数、bridge 摘要和输出字段名。
 
 1. 先以 `algorithm.enabled=false` 完成一次真实头环采集，并停止网关使会话成为已结束录制。记录 `recordingId`，但不要导出或传输原始 JSONL。
-2. 首次安装会自动安装构建依赖、以服务账户在受控路径构建锁定 bridge，并安装至固定服务路径。若需要在不重装网关的受控 POC 环境中单独复建，可由 POC 操作员执行：
+2. 首次离线安装会从受控介质中的 Ubuntu 24.04 离线包安装构建依赖、验证锁定源码、以服务账户构建 bridge，并安装至固定服务路径。目标机不得执行 `apt-get update`、`git clone` 或网络下载。若需要重建，使用新的离线包重新运行安装器：
 
    ```bash
-   sudo apt-get update
-   sudo apt-get install -y build-essential cmake git libeigen3-dev
-   sudo install -d -o "$USER" -g "$(id -gn)" -m 0750 /srv/neurobridge-poc /srv/neurobridge-poc/sdk /srv/neurobridge-poc/bridge
-   ./linux/build-algorithm-bridge.sh /srv/neurobridge-poc/sdk /srv/neurobridge-poc/bridge
-   sudo install -d -o root -g root -m 0755 /usr/local/lib/neurobridge
-   sudo install -o root -g root -m 0755 /srv/neurobridge-poc/bridge/neurobridge_affective_bridge /usr/local/lib/neurobridge/neurobridge_affective_bridge
+   sudo ./linux/install-ubuntu.sh --offline-bundle /media/neurobridge/neurobridge-ubuntu24.04-offline-bundle
    ```
 
 3. 使用 `neurobridge` 服务账户运行一次离线 bridge 传输验证。摘要文件放在受控录制目录中，权限为 `0640`：
