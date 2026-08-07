@@ -29,7 +29,9 @@ reconnect_delay_seconds = 3
 [recording]
 directory = "/var/lib/neurobridge/recordings"
 subject_id = ""
-# An existing recording ID to use when the headband is offline; empty disables replay.
+# Optional pinned recording ID for offline replay. When empty, missing, or no
+# longer valid, the gateway automatically selects the newest non-empty saved
+# session below recording.directory.
 replay_recording_id = ""
 replay_speed = 1.0
 

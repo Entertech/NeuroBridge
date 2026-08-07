@@ -77,6 +77,7 @@ class Gateway:
         self._window_flush_task: asyncio.Task | None = None
         self._window_flush_deadline_ms: int | None = None
         self._replay_task: asyncio.Task | None = None
+        self._active_replay_recording_id: str | None = None
         self._replay_algorithm: dict | None = None
         self._replay_algorithm_timestamp: int | None = None
 
@@ -86,7 +87,11 @@ class Gateway:
 
     @property
     def replay_available(self) -> bool:
-        return self.store.has_recording(self.config.recording.replay_recording_id)
+        return self.replay_recording_id is not None
+
+    @property
+    def replay_recording_id(self) -> str | None:
+        return self._active_replay_recording_id or self.store.replay_recording_id(self.config.recording.replay_recording_id)
 
     def mode(self) -> str:
         return "live" if self.live else "replay"
@@ -259,8 +264,9 @@ class Gateway:
             available.update({"eeg.raw", "hr.raw"})
         if self.algorithm.available:
             available.update({"eeg", "hr"})
-        if not self.live and self.replay_available:
-            for event in self.store.events(self.config.recording.replay_recording_id or ""):
+        recording_id = self.replay_recording_id
+        if not self.live and recording_id:
+            for event in self.store.events(recording_id):
                 algorithm = event["payload"].get("algorithm", {})
                 if any(key in algorithm for key in ("eeg", "sleep", "relaxation", "pleasure", "attention", "flow")):
                     available.add("eeg")
@@ -358,7 +364,10 @@ class Gateway:
         """Use the gateway's active replay cursor, or the latest valid result before it advances."""
         if self._replay_algorithm is not None and self._replay_algorithm_timestamp is not None:
             return self._replay_algorithm, self._replay_algorithm_timestamp
-        for item in reversed(self.store.events(self.config.recording.replay_recording_id or "")):
+        recording_id = self.replay_recording_id
+        if not recording_id:
+            return None, None
+        for item in reversed(self.store.events(recording_id)):
             algorithm = item["payload"].get("algorithm")
             if item["valid"] and algorithm:
                 return algorithm, item["timestampMs"]
@@ -406,15 +415,20 @@ class Gateway:
 
     def _start_replay_if_needed(self) -> None:
         """Start one replay clock for the gateway after the first B-side data request."""
-        if not self.sessions or self.live or not self.replay_available or (self._replay_task and not self._replay_task.done()):
+        if not self.sessions or self.live or (self._replay_task and not self._replay_task.done()):
+            return
+        recording_id = self.store.replay_recording_id(self.config.recording.replay_recording_id)
+        if not recording_id:
             return
         self._reset_replay_progress()
+        self._active_replay_recording_id = recording_id
         self._replay_task = asyncio.create_task(self._replay())
-        LOG.info("Replay started: recordingId=%s", self.config.recording.replay_recording_id)
+        LOG.info("Replay started: recordingId=%s", recording_id)
 
     async def _stop_replay(self) -> None:
         task, self._replay_task = self._replay_task, None
         self._reset_replay_progress()
+        self._active_replay_recording_id = None
         if task and not task.done() and task is not asyncio.current_task():
             task.cancel()
             with suppress(asyncio.CancelledError):
@@ -465,10 +479,13 @@ class Gateway:
                 await task
 
     async def _replay(self) -> None:
-        events = self.store.events(self.config.recording.replay_recording_id or "")
+        recording_id = self._active_replay_recording_id
+        if not recording_id:
+            return
+        events = self.store.events(recording_id)
         try:
             if not events:
-                LOG.warning("Replay recording contains no events: recordingId=%s", self.config.recording.replay_recording_id)
+                LOG.warning("Replay recording contains no events: recordingId=%s", recording_id)
                 return
             cycle = 0
             while self._replay_should_continue():
@@ -495,10 +512,10 @@ class Gateway:
                         self._queue_replay_message(session, subscription, envelope(200, self.event_data("data", subscription.id, item["timestampMs"], "replay", item["valid"], payload)))
                 if not self._replay_should_continue():
                     return
-                ended = {"event": "replayEnded", "gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": "replay", "timestampMs": previous or now_ms(), "valid": True, "payload": {}, "recordingId": self.config.recording.replay_recording_id, "endedAtMs": now_ms()}
+                ended = {"event": "replayEnded", "gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": "replay", "timestampMs": previous or now_ms(), "valid": True, "payload": {}, "recordingId": recording_id, "endedAtMs": now_ms()}
                 for session, subscription in self._subscription_entries():
                     self._queue_replay_message(session, subscription, envelope(200, ended))
-                LOG.info("Replay cycle ended; restarting: recordingId=%s cycle=%s", self.config.recording.replay_recording_id, cycle)
+                LOG.info("Replay cycle ended; restarting: recordingId=%s cycle=%s", recording_id, cycle)
                 await asyncio.sleep(REPLAY_CYCLE_MIN_PAUSE_SECONDS)
         except asyncio.CancelledError:
             return
@@ -506,6 +523,7 @@ class Gateway:
             if self._replay_task is asyncio.current_task():
                 self._replay_task = None
             self._reset_replay_progress()
+            self._active_replay_recording_id = None
 
     async def close_session(self, session: ClientSession) -> None:
         for subscription in tuple(session.subscriptions.values()):

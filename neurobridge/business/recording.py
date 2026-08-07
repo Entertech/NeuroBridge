@@ -185,6 +185,34 @@ class RecordingStore:
         session = self._session_dir(recording_id)
         return session.is_dir() or (self.root / "raw" / f"{recording_id}.jsonl").exists() or (self.root / "algorithm" / f"{recording_id}.jsonl").exists()
 
+    def replay_recording_id(self, preferred_recording_id: str | None = None) -> str | None:
+        """Resolve an explicit replay session or the newest non-empty saved session.
+
+        Recordings live below one configured directory.  A deployment can still
+        pin a particular session, but an empty, removed, or omitted pin must not
+        make an otherwise usable historical recording invisible to offline
+        replay.  The active capture session is always excluded.
+        """
+        if preferred_recording_id and self.has_recording(preferred_recording_id) and self.events(preferred_recording_id):
+            return preferred_recording_id
+
+        candidates: dict[str, tuple[int, int]] = {}
+        for item in self.completed_recordings():
+            recording_id = item["recordingId"]
+            candidates[recording_id] = (item["startedAtMs"] or item["modifiedAtMs"], item["modifiedAtMs"])
+        for category in ("raw", "algorithm"):
+            for path in (self.root / category).glob("rec-*.jsonl"):
+                recording_id = path.stem
+                if recording_id == self.recording_id or not self._safe_recording_id(recording_id):
+                    continue
+                modified_at_ms = int(path.stat().st_mtime * 1000)
+                candidates[recording_id] = max(candidates.get(recording_id, (0, 0)), (modified_at_ms, modified_at_ms))
+
+        for recording_id in sorted(candidates, key=lambda item: (candidates[item], item), reverse=True):
+            if self.events(recording_id):
+                return recording_id
+        return None
+
     @staticmethod
     def _safe_recording_id(recording_id: str | None) -> bool:
         """Keep recording identifiers inside the persistent recording root."""

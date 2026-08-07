@@ -114,7 +114,7 @@ sudoedit /etc/neurobridge/gateway.toml
 | `[ble] enabled` | 无头环/冒烟验证时保持 `false`；完成该 Ubuntu 主机的真实头环 POC 后才改为 `true`，同时确认扫描匹配字段。 |
 | `[recording] directory` | 保持默认的 `/var/lib/neurobridge/recordings`，除非已按权限和容量要求另行配置。 |
 | `[recording] subject_id` | 填写演示或采集使用的受试者标识；无值可留空。 |
-| `[recording] replay_recording_id` | 仅需要离线录播时填写一个已经存在的录制会话 ID；没有录播文件时留空。 |
+| `[recording] replay_recording_id` | 可选：填写一个存在且非空的录制会话 ID 以固定回放目标；留空、填写已删除 ID 或空会话时，离线录播自动选择该目录中最新的非空历史会话。 |
 | `[download]` | 仅在专用有线网络确有导出需求时启用；`host` 必须是网关静态 IP，端口由双方确认。 |
 | `[algorithm] enabled` | 默认 `true`。安装器已提供 bridge，无需填写路径；需要仅采集原始数据或维护时才改为 `false`。 |
 
@@ -147,7 +147,7 @@ sudo ss -lntp
 
 从 B 端主机使用已确认的 WebSocket 地址连接，并在握手中提供子协议 `neurobridge.v1`。连接后先调用 `getStatus`，再调用 `getLatest` 或 `subscribe`；断线重连后必须重新订阅，不能复用旧 `subscriptionId`。可用仓库的 [B 端联调网页](../web/b-client-test/README.md) 做人工验证。
 
-首次无头环冒烟验证可保持 `[ble].enabled = false`，此时 `getStatus` 应显示未连接；只有配置了存在的 `replay_recording_id` 时，离线 `getLatest` 或 `subscribe` 才会产生 `mode="replay"` 数据。实时采集验收还应覆盖头环连接、数据到达、断线重连和服务重启后的恢复。
+首次无头环冒烟验证可保持 `[ble].enabled = false`，此时 `getStatus` 应显示未连接；只要 `[recording].directory` 下存在非空历史会话，离线 `getLatest` 或 `subscribe` 就会自动选择最新会话并产生 `mode="replay"` 数据。若填写有效的 `replay_recording_id`，则该会话优先。实时采集验收还应覆盖头环连接、数据到达、断线重连和服务重启后的恢复。
 
 如果 `[download].enabled = true`，可从专用有线网络的 B 端访问 `http://<网关IP>:<下载端口><下载路径>` 查看已结束会话的下载索引。该接口没有 TLS 或应用层认证，绝不能暴露到公共或不受控网络。
 
@@ -209,7 +209,7 @@ git pull --ff-only
 | B 端无法建立 WebSocket | 确认网线、两端 IP/掩码、专用网卡防火墙、端口和 `path`；握手必须提供 `neurobridge.v1` 子协议。连接恢复后先 `getStatus`，再重新订阅。 |
 | `neurobridge-dhcp.service` 显示未运行 | 在 `static` 模式下这是预期行为：其 `ExecCondition` 会跳过 DHCP 服务。只有配置为 `dhcp` 并填写完整 DHCP 参数后才应运行。 |
 | 未收到实时数据 | 确认 `[ble].enabled = true`、蓝牙适配器可见、设备名称/UUID 与已确认 profile 一致。通过网关日志查看扫描或连接失败原因；不要仅凭服务进程存活判断头环已连接。 |
-| 离线时没有录播数据 | 检查 `[recording].replay_recording_id` 是否对应 `/var/lib/neurobridge/recordings` 下的已完成会话。未配置或不存在时，离线 `getLatest`/`subscribe` 不会凭空生成录播。 |
+| 离线时没有录播数据 | 检查 `[recording].directory` 是否指向存放历史会话的目录，并确认其中至少有一个非空会话；网关会自动选择最新会话。若填写了 `replay_recording_id`，该会话无效时会回退到自动选择。 |
 | 下载接口不可用 | 确认 `[download].enabled = true`、监听 IP/端口与防火墙配置一致；只有已结束的录制会话能导出。 |
 
 如果 `update-ubuntu.sh` 在编译 bridge 时失败，先不要反复修改依赖或安装额外库。运行下面命令并将生成的压缩包上传给开发人员；包内只有 CMake/build 日志、系统与工具版本、当前源码 revision 和最近的服务日志，不包含 `gateway.toml`、录播或原始 BLE 数据：

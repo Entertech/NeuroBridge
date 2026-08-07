@@ -314,6 +314,23 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RecordingTests(unittest.TestCase):
+    def test_replay_automatically_selects_newest_nonempty_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecordingStore(Path(directory))
+            empty = store.start(1_000)
+            store.stop()
+            older = store.start(2_000)
+            store.save_algorithm(timestamp_ms=2_100, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            store.stop()
+            newest = store.start(3_000)
+            store.save_algorithm(timestamp_ms=3_100, valid=True, invalid_reasons=[], algorithm={"attention": 2})
+            store.stop()
+
+            self.assertNotEqual(empty, newest)
+            self.assertEqual(store.replay_recording_id(), newest)
+            self.assertEqual(store.replay_recording_id(older), older)
+            self.assertEqual(store.replay_recording_id("rec-missing"), newest)
+
     def test_confirmed_raw_profiles_are_persisted_and_replayed_with_correct_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = RecordingStore(Path(directory))
@@ -420,6 +437,47 @@ class RecordingTests(unittest.TestCase):
 
 
 class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
+    async def test_get_latest_automatically_uses_newest_recording_when_no_id_is_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway = Gateway(config(root))
+            gateway.store.start(1_000)
+            gateway.store.save_algorithm(timestamp_ms=1_100, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            gateway.store.stop()
+            newest = gateway.store.start(2_000)
+            gateway.store.save_algorithm(timestamp_ms=2_100, valid=True, invalid_reasons=[], algorithm={"attention": 2})
+            gateway.store.stop()
+
+            self.assertEqual(gateway.replay_recording_id, newest)
+            self.assertEqual(gateway.status_result()["mode"], "replay")
+            latest = gateway.get_latest(ClientSession(), {"streams": ["eeg"]})
+            self.assertTrue(latest["valid"])
+            self.assertEqual(latest["timestampMs"], 2_100)
+            self.assertEqual(latest["payload"]["algorithm"]["attention"], 2)
+
+    async def test_automatic_replay_reports_the_selected_recording_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway = Gateway(config(root, replay_speed=1_000))
+            recording_id = gateway.store.start(1_000)
+            gateway.store.save_algorithm(timestamp_ms=1_100, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            gateway.store.stop()
+            replay_ended = asyncio.Event()
+            received: list[dict] = []
+
+            async def send(item: dict) -> None:
+                received.append(item)
+                if item["data"].get("event") == "replayEnded":
+                    replay_ended.set()
+
+            session = ClientSession()
+            await gateway.subscribe(session, {"streams": ["eeg"]}, send)
+            await asyncio.wait_for(replay_ended.wait(), timeout=1)
+            ended = next(item["data"] for item in received if item["data"].get("event") == "replayEnded")
+            self.assertEqual(ended["recordingId"], recording_id)
+            await gateway.close_session(session)
+            await gateway.stop()
+
     async def test_subscribe_confirmation_precedes_replay_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
