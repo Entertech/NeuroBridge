@@ -23,6 +23,12 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('"--offline-bundle"', install_script)
         self.assertIn("systemctl enable neurobridge.service", install_script)
 
+    def test_one_command_offline_installer_discovers_a_sibling_bundle(self) -> None:
+        script = (ROOT / "linux" / "install-offline-ubuntu24.04.sh").read_text(encoding="utf-8")
+        self.assertIn("neurobridge-ubuntu24.04-offline-bundle", script)
+        self.assertIn('exec sudo --preserve-env=PATH bash "$0" "$@"', script)
+        self.assertIn('install-ubuntu.sh" --offline-bundle', script)
+
     def test_archive_export_dependencies_are_installed_on_ubuntu(self) -> None:
         bundle_builder = (ROOT / "linux" / "create-offline-bundle-ubuntu24.04.sh").read_text(encoding="utf-8")
         renderer = (ROOT / "tools" / "render-protocol-pdf.sh").read_text(encoding="utf-8")

@@ -11,7 +11,7 @@ NeuroBridge 是将回车科技头环数据接入第三方 B 端主机的跨平�
 在离线 Ubuntu 24.04 x86_64 目标机上，从受控介质中的已审查工作树执行。目标机不访问 GitHub、APT 或 PyPI：
 
 ```bash
-sudo ./linux/install-ubuntu.sh --offline-bundle /media/neurobridge/ubuntu24.04-offline-bundle
+./linux/install-offline-ubuntu24.04.sh
 sudoedit /etc/neurobridge/gateway.toml
 systemctl restart neurobridge
 systemctl status neurobridge
@@ -25,7 +25,7 @@ systemctl status neurobridge
 
 脚本会自动申请 `sudo` 权限，将当前工作树同步到 `/opt/neurobridge`、更新 Python 包、重新加载 systemd 单元并重启网关。它会拒绝首次安装、非 Ubuntu x86_64/systemd 环境、缺失配置、Python 依赖变更及 Ubuntu 安装脚本变更，并提示改走 `./linux/install-ubuntu.sh`；首次安装仍使用该安装脚本。网关重启会使现有 B 端连接断开，B 端需重新建连并订阅。
 
-部署脚本会创建 `neurobridge` 服务账户、运行目录、Python 虚拟环境和 systemd 服务。它只读取离线包内的 Ubuntu 24.04 `.deb`、Python wheels 和锁定 SDK 源码，任何缺件都会失败而不会回退到网络。离线包必须在受控且联网的 Ubuntu 24.04 构建机上使用 [`create-offline-bundle-ubuntu24.04.sh`](linux/create-offline-bundle-ubuntu24.04.sh) 生成。静态 IP、端口、Flowtime 扫描匹配条件、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
+部署脚本会创建 `neurobridge` 服务账户、运行目录、Python 虚拟环境和 systemd 服务。它只读取离线包内的 Ubuntu 24.04 `.deb`、Python wheels 和锁定 SDK 源码，任何缺件都会失败而不会回退到网络。离线包必须在受控且联网的 Ubuntu 24.04 构建机上使用 [`create-offline-bundle-ubuntu24.04.sh`](linux/create-offline-bundle-ubuntu24.04.sh) 生成，并以 `neurobridge-ubuntu24.04-offline-bundle` 名称放在源码目录同级；一键脚本也可接受离线包目录作为唯一参数。静态 IP、端口、Flowtime 扫描匹配条件、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
 
 ```bash
 python3 -m venv .venv
