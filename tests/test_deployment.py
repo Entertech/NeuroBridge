@@ -31,6 +31,14 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("git fetch", script)
         self.assertNotIn("git clone", script)
 
+    def test_online_environment_preparation_is_separate_from_offline_deployment(self) -> None:
+        script = (ROOT / "linux" / "prepare-ubuntu24.04-environment.sh").read_text(encoding="utf-8")
+        self.assertIn("apt-get update", script)
+        self.assertIn("apt-get install", script)
+        self.assertIn('pip install -r "$root_dir/requirements.lock"', script)
+        self.assertIn('python3 -m venv "$install_dir/venv"', script)
+        self.assertIn("Ubuntu 24.04", script)
+
     def test_installer_builds_and_installs_the_locked_algorithm_bridge(self) -> None:
         install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
         self.assertIn("--exclude venv", install_script)

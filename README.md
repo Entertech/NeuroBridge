@@ -13,6 +13,8 @@ Ubuntu 24.04 x86_64 网关可先用公开 HTTPS 地址匿名获取本仓库源�
 ```bash
 git clone https://github.com/Entertech/NeuroBridge.git
 cd NeuroBridge
+./linux/prepare-ubuntu24.04-environment.sh  # 一次性联网准备
+# 此处可断开互联网
 ./linux/update-ubuntu.sh
 sudoedit /etc/neurobridge/gateway.toml
 ```
@@ -26,7 +28,7 @@ git pull --ff-only
 
 脚本会自动申请 `sudo` 权限，将当前工作树同步到 `/opt/neurobridge`、从本地源码更新 Python 包、重建算法 bridge、重新加载 systemd 单元并重启网关。网关重启会使现有 B 端连接断开，B 端需重新建连并订阅。
 
-部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。Ubuntu 基础镜像须预先具备 Python 运行环境（含 `bleak`、`websockets`）、`rsync`、CMake、C++17 编译器和 Eigen3；缺少任一项时脚本会明确失败，不会自动联网安装。静态 IP、端口、Flowtime 扫描匹配条件、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
+部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。静态 IP、端口、Flowtime 扫描匹配条件、录播文件和回放倍率必须在 `/etc/neurobridge/gateway.toml` 中填入双方确认值；示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
 
 ```bash
 python3 -m venv .venv

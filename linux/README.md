@@ -3,6 +3,7 @@
 本目录保存 Ubuntu x86_64 网关的部署专属内容：
 
 - `update-ubuntu.sh`：目标机一键部署入口；只使用当前源码目录，不执行 Git 或网络操作。
+- `prepare-ubuntu24.04-environment.sh`：一次性联网环境准备，安装系统包与锁定的 Python 运行依赖；完成后可断网。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。
@@ -17,7 +18,7 @@
 
 - Ubuntu **24.04 LTS** x86_64，使用 systemd 启动；安装账户具有 `sudo` 权限。
 - 已审查的 NeuroBridge 源码版本（建议固定到已确认的 tag 或 commit），以及可连接头环的已验证蓝牙 5.x 适配器（仅实时采集需要）。可直接匿名获取：`git clone https://github.com/Entertech/NeuroBridge.git`。
-- Ubuntu 基础镜像中已安装：`python3`、NeuroBridge 既有虚拟环境 `/opt/neurobridge/venv`（其中含 `bleak` 和 `websockets`）、`rsync`、`cmake`、C++17 编译器和 `libeigen3-dev`。安装器只验证这些前提，绝不调用 APT、PyPI 或其他下载服务。
+- 可联网时先运行一次 `./linux/prepare-ubuntu24.04-environment.sh`，它会安装 `python3`、`rsync`、CMake、C++17 编译器、Eigen3、BlueZ、dnsmasq，并创建 `/opt/neurobridge/venv`、安装锁定的 Python 运行依赖。完成后即可断开互联网；安装器只验证这些前提，绝不调用 APT、PyPI 或其他下载服务。
 - 网关与 B 端的专用有线链路。先确定网关地址、B 端地址、掩码、端口和网卡名。
 - 若要使用录播，准备好录制数据目录及要回放的 `recordingId`；若要使用算法，先完成该 Ubuntu 主机上的真实数据 POC。算法默认启用，但 POC 前可暂时设为 `false`。
 
@@ -44,6 +45,14 @@ cd NeuroBridge
 ```
 
 之后的部署命令只读取当前目录中的源码。`third_party/` 已包含构建算法 bridge 所需的锁定 SDK 与 NumCpp 源码；不要在目标机上执行 SDK 的 `git clone` 或下载。
+
+在仍可联网时，先运行一次环境准备脚本：
+
+```bash
+./linux/prepare-ubuntu24.04-environment.sh
+```
+
+脚本成功后可断开互联网；后续使用 `./linux/update-ubuntu.sh` 即可完成安装、更新和 bridge 重建。
 
 ## 3. 先配置专用有线网络
 
