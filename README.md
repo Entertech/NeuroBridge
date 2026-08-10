@@ -133,4 +133,4 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 - [B 端联调网页](web/b-client-test/README.md)：零依赖的浏览器测试工具，可连接网关并测试 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。
 
-对外协议版本的 Markdown 独立保存在仓库，PDF 不提交仓库。可在 GitHub Actions 的 **Run workflow** 中填写 `protocol_version` 和 `protocol_stage`：`published` 生成已发布对外版本，`prerelease` 只生成当前内部预发布版本的评审 Artifact。本地/Codex 使用同一入口：`python3 tools/build-external-protocol-artifact.py --stage <published|prerelease> --version <版本号> --output-dir <目录>`。版本清单、已发布版本和预发布版本见 [版本台账](neurobridge/version_registry.toml)。
+对外文档的 Markdown 独立保存在仓库，PDF 不提交仓库。GitHub Actions 手工执行时选择 `external_document_mode=publish`：工作流从版本台账读取当前三份对外文档，已发布文档保留既有版本，未发布文档也按其当前版本纳入交付；全部 Markdown 转为 PDF 后，连同可直接双击打开的 `b-client-test/index.html` 联调网页一起打包为 `neurobridge-external-documents.zip` 并上传 Artifact。ZIP 内的 `release-manifest.json` 记录该次交付的发布状态、版本判定与网页入口；工作流不提交或回写 Markdown、版本台账及其状态。`candidate` 仅生成候选包。PR 与普通 push 始终生成候选包。如需额外生成某个历史正式版本或内部预发布版的北向协议 PDF，可填写 `protocol_version` 和 `protocol_stage`。版本清单见 [版本台账](neurobridge/version_registry.toml)。
