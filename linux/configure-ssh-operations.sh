@@ -84,12 +84,16 @@ command -v chpasswd >/dev/null 2>&1 || fail "chpasswd is missing; install the Ub
 command -v systemctl >/dev/null 2>&1 || fail "systemd is required."
 command -v rsync >/dev/null 2>&1 || fail "rsync is required to initialize the operator project directory."
 command -v ss >/dev/null 2>&1 || fail "ss is required to verify that the SSH port is released."
+[[ -x /usr/bin/git ]] || fail "git is required for controlled SSH updates. Run linux/prepare-ubuntu24.04-environment.sh while the gateway can access the approved package source."
+command -v runuser >/dev/null 2>&1 || fail "runuser is required for controlled SSH updates."
 IFS= read -r operator_password || fail "--operator-password-stdin requires one password line on standard input."
 [[ "$operator_password" =~ ^[0-9]{6,}$ ]] || fail "Operator password must contain at least 6 digits."
 setup_source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/install-ubuntu.sh; do
   [[ -f "$setup_source_dir/$required" ]] || fail "SSH setup must run from a complete NeuroBridge checkout: missing $required"
 done
+/usr/bin/git -C "$setup_source_dir" rev-parse --is-inside-work-tree 2>/dev/null | grep -qx true \
+  || fail "SSH setup requires a Git working tree so neurobridge-ops can switch to master and pull approved updates."
 if id -u "$operator_user" >/dev/null 2>&1; then
   operator_home=$(getent passwd "$operator_user" | cut -d: -f6)
 else
@@ -457,7 +461,7 @@ Commands:
   logs [--lines N]       Show recent logs (default 200, maximum 1000).
   logs --follow           Follow new gateway logs in real time; Ctrl-C stops it.
   audit [--lines N]      Show SSH operations audit events (default 200, maximum 1000).
-  update                 Deploy the current project working tree and reload the gateway.
+  update                 Switch to master, fast-forward approved source, and reload the gateway.
   start | stop | restart  Control the NeuroBridge gateway service.
   help                   Show this help.
 USAGE
@@ -570,7 +574,7 @@ case "${1:-}" in
     ;;
   update)
     [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops update"
-    run_and_audit update project-tree /usr/local/sbin/neurobridge-ops-update
+    run_and_audit update master-pull-and-deploy /usr/local/sbin/neurobridge-ops-update
     ;;
   start|stop|restart)
     [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops start|stop|restart"
@@ -606,6 +610,26 @@ if [[ ${1:-} == --print-project && $# -eq 1 ]]; then
 fi
 [[ $# -eq 0 ]] || fail "This helper does not accept a source path."
 [[ -d "$source_dir" ]] || fail "Missing NeuroBridge project directory: $source_dir"
+
+run_as_project_owner() {
+  runuser -u "$project_owner" -- /usr/bin/git -C "$source_dir" "$@"
+}
+
+if ! is_work_tree=$(run_as_project_owner rev-parse --is-inside-work-tree 2>/dev/null); then
+  fail "Cannot inspect the managed source repository."
+fi
+[[ "$is_work_tree" == true ]] || fail "Managed source directory is not a Git working tree."
+if ! work_tree_changes=$(run_as_project_owner status --porcelain); then
+  fail "Cannot check managed source changes."
+fi
+[[ -z "$work_tree_changes" ]] || fail "Managed source has local changes. Resolve them through the approved delivery process before updating."
+if ! run_as_project_owner switch master; then
+  fail "Cannot switch the managed source to master."
+fi
+if ! run_as_project_owner pull --ff-only; then
+  fail "Cannot fast-forward master from its approved upstream."
+fi
+
 for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/install-ubuntu.sh; do
   [[ -f "$source_dir/$required" ]] || fail "Project working tree is incomplete: missing $required"
 done
@@ -678,9 +702,9 @@ printf '%s:%s\n' "$operator_user" "$operator_password" | chpasswd --crypt-method
 unset operator_password
 usermod --unlock "$operator_user"
 
-# Keep one canonical working tree under the SSH operator's home. It includes
-# .git when the setup source is a clone, so later maintenance can happen after
-# login with cd, git status/pull, and neurobridge-ops update.
+# Keep one canonical Git working tree under the SSH operator's home.
+# neurobridge-ops update is the only supported SSH update entry point: it
+# switches this checkout to master, fast-forwards it, then deploys it.
 install -d -o "$operator_user" -g "$operator_user" -m 0750 "$project_dir"
 if [[ "$setup_source_dir" != "$project_dir" ]]; then
   rsync -a --delete \
