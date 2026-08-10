@@ -4,6 +4,8 @@ set -euo pipefail
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 configure="$root_dir/linux/configure-ssh-operations.sh"
+quick_config="$root_dir/config/ssh-operations.txt"
+quick_config_template="$root_dir/config/ssh-operations.example.txt"
 
 usage() {
   cat <<'EOF'
@@ -17,9 +19,19 @@ for an operator account password on the gateway console; the password is never
 placed in a command-line argument, file, or log.
 
 Quick mode keeps the safe password prompts and final confirmation, but fixes the
-operator account to neuroops, the port to 22, the listener to the detected
-gateway private IP, and the allowed source to one operator IP with a /32 mask.
+allowed source to one operator IP with a /32 mask. It reads values from
+config/ssh-operations.txt and prompts only for missing or empty values.
+The optional operator-ip keeps compatibility and overrides allow_from in the
+file. A plaintext password is supported, so this file must stay out of Git and
+be readable only by its owner.
 EOF
+}
+
+trim_whitespace() {
+  local value=$1
+  value=${value#"${value%%[![:space:]]*}"}
+  value=${value%"${value##*[![:space:]]}"}
+  printf '%s' "$value"
 }
 
 [[ -x "$configure" ]] || { echo "ERROR: Missing executable configurator: $configure" >&2; exit 1; }
@@ -69,21 +81,95 @@ if [[ -n ${SSH_CONNECTION:-} ]]; then
 fi
 
 echo "NeuroBridge SSH 运维一键配置"
-echo "将启用受限运维账户的密码登录；密码不会写入文件或日志。"
+echo "将启用受限运维账户的密码登录；密码不会回显或写入日志。"
 
 if [[ "$quick_mode" == true ]]; then
-  [[ -n "$default_address" ]] || {
-    echo "ERROR: 未检测到可用的网关私有 IPv4；请使用完整模式手工填写监听 IP。" >&2
+  operator_user=
+  operator_password=
+  listen_address=
+  operator_host=
+  port=
+  [[ ! -L "$quick_config" ]] || {
+    echo "ERROR: 快速配置文件不能是符号链接：${quick_config}" >&2
     exit 1
   }
-  operator_user=neuroops
-  listen_address=$default_address
-  port=22
-  operator_host=$quick_operator_host
+  [[ ! -e "$quick_config" || -f "$quick_config" ]] || {
+    echo "ERROR: 快速配置路径不是普通文件：${quick_config}" >&2
+    exit 1
+  }
+  if [[ ! -e "$quick_config" && -f "$quick_config_template" ]]; then
+    install -m 0600 "$quick_config_template" "$quick_config"
+    echo "已创建快速配置文件：${quick_config}"
+  fi
+  if [[ -f "$quick_config" ]]; then
+    config_line_number=0
+    while IFS= read -r config_line || [[ -n "$config_line" ]]; do
+      config_line_number=$((config_line_number + 1))
+      config_line=${config_line%$'\r'}
+      config_line=$(trim_whitespace "$config_line")
+      [[ -z "$config_line" || "$config_line" == \#* ]] && continue
+      [[ "$config_line" == *=* ]] || {
+        echo "ERROR: $quick_config:$config_line_number 必须使用 key=value 格式。" >&2
+        exit 1
+      }
+      config_key=$(trim_whitespace "${config_line%%=*}")
+      config_value=$(trim_whitespace "${config_line#*=}")
+      case "$config_key" in
+        operator_user) operator_user=$config_value ;;
+        password) operator_password=$config_value ;;
+        listen_address) listen_address=$config_value ;;
+        allow_from) operator_host=$config_value ;;
+        port) port=$config_value ;;
+        *)
+          echo "ERROR: $quick_config:$config_line_number 包含未知参数：$config_key" >&2
+          exit 1
+          ;;
+      esac
+    done <"$quick_config"
+    if [[ -n "$operator_password" ]]; then
+      python3 - "$quick_config" <<'PY'
+from __future__ import annotations
+
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+mode = stat.S_IMODE(os.stat(path).st_mode)
+if mode & 0o077:
+    raise SystemExit(
+        "SSH quick config contains a plaintext password and must not grant "
+        f"group/other permissions; run chmod 600: {path}"
+    )
+PY
+    fi
+    echo "快速模式已读取配置文件：${quick_config}"
+  else
+    echo "WARNING: 快速配置文件不存在，将逐项询问：${quick_config}" >&2
+  fi
+
+  [[ -z "$quick_operator_host" ]] || operator_host=$quick_operator_host
+
+  if [[ -z "$operator_user" ]]; then
+    read -r -p "运维账户 [neuroops]: " operator_user
+    operator_user=${operator_user:-neuroops}
+  fi
+  if [[ -z "$listen_address" ]]; then
+    read -r -p "网关私有监听 IP${default_address:+ [$default_address]}: " listen_address
+    listen_address=${listen_address:-$default_address}
+  fi
   if [[ -z "$operator_host" ]]; then
     read -r -p "B 端运维主机 IP${default_operator_host:+ [$default_operator_host]}: " operator_host
     operator_host=${operator_host:-$default_operator_host}
   fi
+  if [[ -z "$port" ]]; then
+    read -r -p "SSH 端口 [22]: " port
+    port=${port:-22}
+  fi
+  [[ -n "$listen_address" ]] || {
+    echo "ERROR: 快速模式必须提供网关私有监听 IP；当前设备未检测到可用默认值。" >&2
+    exit 1
+  }
   [[ -n "$operator_host" ]] || {
     echo "ERROR: 快速模式必须提供 B 端运维主机 IP。" >&2
     exit 1
@@ -113,21 +199,24 @@ if (
 print(f"{address}/32")
 PY
   )
-  echo "快速模式：账号 neuroops，监听 ${listen_address}，来源 ${allow_from}，端口 22。"
-  echo "如需修改账号、监听地址、来源网段或端口，请使用无参数完整模式。"
+  echo "快速模式：账号 ${operator_user}，监听 ${listen_address}，来源 ${allow_from}，端口 ${port}。"
+  echo "修改常用参数请编辑 ${quick_config}；需要允许来源网段时请使用无参数完整模式。"
 else
   read -r -p "运维账户 [neuroops]: " operator_user
   operator_user=${operator_user:-neuroops}
+  operator_password=
 fi
 
-read -r -s -p "运维账户密码（至少 6 位数字）: " operator_password
-echo
-read -r -s -p "再次输入运维账户密码: " operator_password_confirm
-echo
-[[ "$operator_password" == "$operator_password_confirm" ]] || {
-  echo "ERROR: 两次输入的密码不一致。" >&2
-  exit 1
-}
+if [[ -z "$operator_password" ]]; then
+  read -r -s -p "运维账户密码（至少 6 位数字）: " operator_password
+  echo
+  read -r -s -p "再次输入运维账户密码: " operator_password_confirm
+  echo
+  [[ "$operator_password" == "$operator_password_confirm" ]] || {
+    echo "ERROR: 两次输入的密码不一致。" >&2
+    exit 1
+  }
+fi
 [[ "$operator_password" =~ ^[0-9]{6,}$ ]] || {
   echo "ERROR: 运维账户密码必须是至少 6 位数字。" >&2
   exit 1

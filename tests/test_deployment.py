@@ -46,6 +46,8 @@ class DeploymentTests(unittest.TestCase):
         preparation = (ROOT / "linux" / "prepare-ubuntu24.04-environment.sh").read_text(encoding="utf-8")
         script = (ROOT / "linux" / "configure-ssh-operations.sh").read_text(encoding="utf-8")
         wizard = (ROOT / "linux" / "setup-ssh-operations.sh").read_text(encoding="utf-8")
+        quick_template = (ROOT / "config" / "ssh-operations.example.txt").read_text(encoding="utf-8")
+        gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("openssh-server", preparation)
         self.assertIn("systemctl disable --now ssh.socket", preparation)
         self.assertIn("systemctl disable --now ssh.service", preparation)
@@ -114,8 +116,16 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("NeuroBridge SSH 运维一键配置", wizard)
         self.assertIn("--quick [operator-ip]", wizard)
         self.assertIn("quick_mode=false", wizard)
-        self.assertIn("operator_user=neuroops", wizard)
-        self.assertIn("listen_address=$default_address", wizard)
+        self.assertIn('quick_config="$root_dir/config/ssh-operations.txt"', wizard)
+        self.assertIn('quick_config_template="$root_dir/config/ssh-operations.example.txt"', wizard)
+        self.assertIn('install -m 0600 "$quick_config_template" "$quick_config"', wizard)
+        self.assertIn('while IFS= read -r config_line', wizard)
+        self.assertIn('operator_user) operator_user=$config_value', wizard)
+        self.assertIn('password) operator_password=$config_value', wizard)
+        self.assertIn('listen_address) listen_address=$config_value', wizard)
+        self.assertIn('allow_from) operator_host=$config_value', wizard)
+        self.assertIn('port) port=$config_value', wizard)
+        self.assertNotIn('source "$quick_config"', wizard)
         self.assertIn("allow_from=$(python3 - \"$operator_host\"", wizard)
         self.assertIn('print(f"{address}/32")', wizard)
         self.assertIn("Quick mode accepts one operator IPv4 address", wizard)
@@ -132,14 +142,22 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("输入 YES 确认（不区分大小写）", wizard)
         self.assertIn('[Yy][Ee][Ss])', wizard)
         self.assertIn('exec "$configure" "$@"', wizard)
+        self.assertIn("operator_user=neuroops", quick_template)
+        self.assertIn("password=", quick_template)
+        self.assertIn("listen_address=", quick_template)
+        self.assertIn("allow_from=", quick_template)
+        self.assertIn("port=22", quick_template)
+        self.assertIn("config/ssh-operations.txt", gitignore)
 
     def test_ssh_setup_supports_quick_and_full_modes(self) -> None:
         source = (ROOT / "linux" / "setup-ssh-operations.sh").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
             linux_dir = temporary_root / "linux"
+            config_dir = temporary_root / "config"
             bin_dir = temporary_root / "bin"
             linux_dir.mkdir()
+            config_dir.mkdir()
             bin_dir.mkdir()
 
             wizard = linux_dir / "setup-ssh-operations.sh"
@@ -156,6 +174,17 @@ class DeploymentTests(unittest.TestCase):
             )
             configurator.chmod(0o755)
 
+            quick_config = config_dir / "ssh-operations.txt"
+            quick_config.write_text(
+                "operator_user=fieldops\n"
+                "password=654321\n"
+                "listen_address=192.168.88.10\n"
+                "allow_from=192.168.88.30\n"
+                "port=2222\n",
+                encoding="utf-8",
+            )
+            quick_config.chmod(0o600)
+
             ip_command = bin_dir / "ip"
             ip_command.write_text(
                 "#!/usr/bin/env bash\n"
@@ -168,7 +197,7 @@ class DeploymentTests(unittest.TestCase):
             environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
             result = subprocess.run(
                 ["bash", str(wizard), "--quick", "192.168.88.20"],
-                input="123456\n123456\nyes\n",
+                input="yes\n",
                 encoding="utf-8",
                 errors="replace",
                 capture_output=True,
@@ -177,11 +206,50 @@ class DeploymentTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("password=123456", result.stdout)
+            self.assertIn("password=654321", result.stdout)
+            self.assertIn(
+                "args=--operator-user fieldops --operator-password-stdin "
+                "--listen-address 192.168.88.10 --allow-from 192.168.88.20/32 --port 2222",
+                result.stdout,
+            )
+
+            quick_config.chmod(0o644)
+            insecure_result = subprocess.run(
+                ["bash", str(wizard), "--quick"],
+                input="yes\n",
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+
+            self.assertNotEqual(insecure_result.returncode, 0)
+            self.assertIn("run chmod 600", insecure_result.stderr)
+
+            quick_config.write_text(
+                "password=\n"
+                "listen_address=\n"
+                "allow_from=192.168.88.21\n",
+                encoding="utf-8",
+            )
+            quick_config.chmod(0o600)
+            prompted_result = subprocess.run(
+                ["bash", str(wizard), "--quick"],
+                input="\n\n\n123456\n123456\nyes\n",
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+
+            self.assertEqual(prompted_result.returncode, 0, prompted_result.stderr)
+            self.assertIn("password=123456", prompted_result.stdout)
             self.assertIn(
                 "args=--operator-user neuroops --operator-password-stdin "
-                "--listen-address 192.168.88.10 --allow-from 192.168.88.20/32 --port 22",
-                result.stdout,
+                "--listen-address 192.168.88.10 --allow-from 192.168.88.21/32 --port 22",
+                prompted_result.stdout,
             )
 
             full_result = subprocess.run(

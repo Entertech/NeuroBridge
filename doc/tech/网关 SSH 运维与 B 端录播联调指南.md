@@ -24,6 +24,7 @@ SSH 运维入口由下列文件提供：
 
 - `linux/setup-ssh-operations.sh`：交互式一键配置入口；
 - `linux/configure-ssh-operations.sh`：可自动化调用的严格配置器；
+- `config/ssh-operations.example.txt`：快速模式配置模板；首次运行时据此生成 Git 忽略的 `config/ssh-operations.txt`；
 - 运行时命令：`neurobridge-ops`。
 
 一键 SSH 配置会把执行配置时的完整源码同步到 SSH 运维账号固定的 `~/NeuroBridge` 项目目录。SSH 登录后可通过 `neurobridge-ops project` 查看实际绝对路径，后续代码更新、部署、状态和日志操作都以该目录为准，不再创建单独的版本暂存目录。
@@ -33,6 +34,7 @@ SSH 运维入口由下列文件提供：
 ```bash
 test -x linux/setup-ssh-operations.sh
 test -x linux/configure-ssh-operations.sh
+test -f config/ssh-operations.example.txt
 ```
 
 首次准备环境时必须完成：
@@ -162,26 +164,43 @@ SSH 监听地址：192.168.88.10
 
 ### 4.1 推荐：快速一键配置
 
-常规单网卡、单 B 端、默认账号和端口场景，在网关本地控制台执行：
+快速模式固定读取项目目录下的 `config/ssh-operations.txt`。该文件不存在时，脚本会从 `config/ssh-operations.example.txt` 自动创建一份权限为 `600` 的空白现场配置；实际文件已被 Git 忽略，不会随正常代码提交上传。配置格式为简单的 `key=value`，不执行其中的任何 Shell 命令：
+
+```text
+operator_user=neuroops
+password=
+listen_address=
+allow_from=
+port=22
+```
+
+字段含义如下：
+
+| 字段 | 含义 | 为空或缺失时 |
+| --- | --- | --- |
+| `operator_user` | SSH 运维账号 | 提示输入，直接回车使用 `neuroops` |
+| `password` | 至少 6 位纯数字密码，支持明文保存 | 隐藏输入并要求再次确认 |
+| `listen_address` | 网关 SSH 监听的私有 IPv4 | 提示输入；检测到当前设备私有 IP 时作为默认值 |
+| `allow_from` | 唯一允许登录的 B 端或运维电脑私有 IPv4 | 提示输入，随后强制规范为单机 `/32` |
+| `port` | SSH 监听端口 | 提示输入，直接回车使用 `22` |
+
+如需提前填好全部参数，先在网关项目目录创建并编辑实际配置：
+
+```bash
+install -m 600 config/ssh-operations.example.txt config/ssh-operations.txt
+nano config/ssh-operations.txt
+sudo ./linux/setup-ssh-operations.sh --quick
+```
+
+也可以直接执行最后一条命令；脚本会自动创建配置文件，并逐项询问其中缺少的值。配置完整时，`--quick` 只显示参数摘要并要求输入最终 `YES` 确认。密码值不会回显、进入命令参数或写入日志，但它在该 TXT 中是明文，因此必须保持权限 `600`，不得复制到现场记录、聊天、日志或版本库。配置文件含明文密码但权限允许组或其他用户读取时，脚本会拒绝继续。
+
+原快速命令仍兼容；命令中的 IP 会覆盖文件里的 `allow_from`：
 
 ```bash
 sudo ./linux/setup-ssh-operations.sh --quick 192.168.88.20
 ```
 
-命令中的 IP 是唯一允许登录的 B 端或临时运维电脑 IP。也可以省略 IP，由脚本单独询问：
-
-```bash
-sudo ./linux/setup-ssh-operations.sh --quick
-```
-
-快速模式自动使用：
-
-- 运维账户 `neuroops`；
-- SSH 端口 `22`；
-- 当前设备检测到的网关私有 IPv4 作为监听地址；
-- B 端 IP `/32` 作为唯一允许来源。
-
-现场只需确认脚本显示的自动参数，隐藏输入并二次确认至少 6 位数字密码，最后输入任意大小写组合的 `YES`。密码仍不会进入命令参数、文件或日志。若未检测到网关私有 IP，快速模式会停止并提示使用完整模式；若检测到的 IP 不是目标网卡，也应取消并改用完整模式，不能让脚本猜测网卡。
+配置中没有监听 IP、并且设备也未检测到可用私有 IP 时，脚本会提示输入且不展示默认值。网关有多块私网网卡时，应在文件中明确填写目标地址，不能依赖脚本选择第一个地址。快速模式只接受单台来源；需要允许一个来源网段时使用完整模式。
 
 ### 4.2 完整交互配置（保留）
 
@@ -203,7 +222,7 @@ SSH 端口：22
 确认：YES
 ```
 
-脚本以隐藏方式读取并二次确认密码，要求至少 6 位纯数字；密码不会写入参数、配置、日志或命令历史。配置器仅为该专用运维账户使用系统 `chpasswd` 支持的 SHA512 加盐哈希写入方式，从而不经过 PAM 的最短 8 位检查；不会修改整机 PAM 密码策略，其他账户不受影响。最终输入 `YES` 确认时不区分大小写。数字密码正式部署只允许用于本文限定的专用网线直连和固定来源 IP 场景；临时局域网验证必须限制为受控网络和单机 `/32` 来源，并在验证后切换到直连配置。禁止将 SSH 接入公网、无线网或不受控局域网。脚本会验证 IP 已配置在本机网卡、来源与监听地址均为私有 IPv4 地址，并在写入 sshd 前规范化来源：单台 B 端填写 `192.168.88.20/32`，整个网段必须使用其网络地址；例如 `192.168.88.20/23` 会规范化为 `192.168.88.0/23`。它只监听指定 IP，关闭 root 登录、公钥登录、X11/代理/端口转发和隧道；来源不在允许范围内的连接不能获得 shell 或执行命令。
+完整模式以隐藏方式读取并二次确认密码，要求至少 6 位纯数字；不会把密码写入参数、配置、日志或命令历史。快速模式则按第 4.1 节允许从权限为 `600`、已被 Git 忽略的现场 TXT 中读取明文密码。两种模式最终输入 `YES` 确认时均不区分大小写。配置器仅为该专用运维账户使用系统 `chpasswd` 支持的 SHA512 加盐哈希写入系统账号数据库，从而不经过 PAM 的最短 8 位检查；这不代表自定义加密逻辑，也不会修改整机 PAM 密码策略，其他账户不受影响。数字密码正式部署只允许用于本文限定的专用网线直连和固定来源 IP 场景；临时局域网验证必须限制为受控网络和单机 `/32` 来源，并在验证后切换到直连配置。禁止将 SSH 接入公网、无线网或不受控局域网。脚本会验证 IP 已配置在本机网卡、来源与监听地址均为私有 IPv4 地址，并在写入 sshd 前规范化来源：单台 B 端填写 `192.168.88.20/32`，整个网段必须使用其网络地址；例如 `192.168.88.20/23` 会规范化为 `192.168.88.0/23`。它只监听指定 IP，关闭 root 登录、公钥登录、X11/代理/端口转发和隧道；来源不在允许范围内的连接不能获得 shell 或执行命令。
 
 Ubuntu 24.04 可能同时提供 `ssh.socket` 和 `ssh.service`。配置器会在 SSH 配置通过语法和监听检查后，停用可能占用 22 端口或绕过指定监听 IP 的 `ssh.socket`，停止 `ssh.service` 控制组内可能遗留的旧 sshd 监听进程，确认端口已经释放，再启用地址受限的 `ssh.service`。清理控制组会断开已有 SSH 会话；若远程执行时发现残留监听，脚本会拒绝强制清理并要求改用网关本地控制台。配置失败时会恢复执行前的 SSH 配置以及 service/socket 启用和运行状态，不需要手工清理半成品。
 
@@ -397,6 +416,8 @@ sudo ss -ltnp 'sport = :22'
 
 | 现象 | 排查与处理 |
 | --- | --- |
+| 快速模式提示配置文件必须使用 `mode 600` | 文件中存在明文密码且组或其他用户可读。执行 `chmod 600 config/ssh-operations.txt` 后重试；不要通过放宽权限解决。 |
+| 快速模式提示未知参数或不是 `key=value` | 对照 `config/ssh-operations.example.txt` 检查键名和格式；支持的键仅为 `operator_user`、`password`、`listen_address`、`allow_from`、`port`。 |
 | SSH 连接被拒绝 | 在网关本地控制台运行 `sudo systemctl status ssh.service`；确认监听 IP、端口和网线连通。 |
 | 一键配置提示 `ssh.service` 启动失败 | 新版脚本会自动处理 Ubuntu 24.04 的 `ssh.socket` 以及旧 sshd 残留监听并回滚；确认使用最新项目代码后，在网关本地控制台重新执行。仍失败时运行 `sudo journalctl -u ssh.service -n 50 --no-pager` 和 `sudo ss -ltnp 'sport = :22'` 查看具体原因。 |
 | sshd 提示 `Invalid Match address argument` | 使用新版脚本重新配置；脚本会把来源 IP/CIDR 规范化。单台 B 端优先填写实际地址加 `/32`。 |
