@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from typing import Callable
 
 from neurobridge.config import load
 
@@ -138,6 +139,73 @@ def ensure_output_is_safe(output: Path, interface: str) -> None:
         )
 
 
+CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def active_network_state(
+    interface: str,
+    expected_address: ipaddress.IPv4Interface,
+    run: CommandRunner = subprocess.run,
+) -> tuple[set[ipaddress.IPv4Interface], bool]:
+    """Return global IPv4 addresses and whether the link has a default route.
+
+    A carrier is deliberately not inspected: a direct B-side cable also has a
+    carrier. Existing layer-3 state is the reliable indication that the host
+    has already put this interface into service for another network.
+    """
+    try:
+        addresses_result = run(
+            ["ip", "-o", "-4", "addr", "show", "dev", interface, "scope", "global"],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        routes_result = run(
+            ["ip", "-4", "route", "show", "default", "dev", interface],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except OSError as exc:
+        raise ValueError("cannot inspect the current network state; refusing to reconfigure the interface") from exc
+    if addresses_result.returncode != 0 or routes_result.returncode != 0:
+        raise ValueError("cannot inspect the current network state; refusing to reconfigure the interface")
+    addresses: set[ipaddress.IPv4Interface] = set()
+    for match in re.finditer(r"\binet\s+([^\s]+)", addresses_result.stdout):
+        try:
+            addresses.add(ipaddress.IPv4Interface(match.group(1)))
+        except ipaddress.AddressValueError:
+            continue
+    has_default_route = bool(routes_result.stdout.strip())
+    return addresses, has_default_route
+
+
+def ensure_interface_is_available(
+    interface: str,
+    address: ipaddress.IPv4Address,
+    subnet: ipaddress.IPv4Network,
+    force: bool,
+    run: CommandRunner = subprocess.run,
+) -> None:
+    """Refuse to disturb a live management or deployment network by default."""
+    expected = ipaddress.IPv4Interface(f"{address}/{subnet.prefixlen}")
+    addresses, has_default_route = active_network_state(interface, expected, run)
+    other_addresses = addresses - {expected}
+    if not has_default_route and not other_addresses:
+        return
+    if force:
+        return
+    details: list[str] = []
+    if other_addresses:
+        details.append("existing IPv4 address " + ", ".join(str(item) for item in sorted(other_addresses, key=str)))
+    if has_default_route:
+        details.append("an existing default route")
+    raise ValueError(
+        f"refusing to reconfigure active interface {interface} ({'; '.join(details)}). "
+        "Disconnect it from the current network or rerun manually with --replace-active after confirming this is the dedicated B-side link"
+    )
+
+
 def write_then_apply(output: Path, content: str) -> None:
     """Generate first and restore the prior file if Netplan rejects or cannot apply it."""
     previous = output.read_bytes() if output.exists() else None
@@ -168,9 +236,16 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--config", default="/etc/neurobridge/gateway.toml")
     parser.add_argument("--output", default="/etc/netplan/99-neurobridge-b-side.yaml")
     parser.add_argument("--apply", action="store_true", help="write the managed Netplan file and apply it")
+    parser.add_argument(
+        "--replace-active",
+        action="store_true",
+        help="allow replacement of an interface that already has IPv4 state; requires --apply",
+    )
     arguments = parser.parse_args(argv)
     if arguments.apply and os.geteuid() != 0:
         raise SystemExit("Run with sudo when using --apply.")
+    if arguments.replace_active and not arguments.apply:
+        raise SystemExit("--replace-active requires --apply.")
 
     config = load(arguments.config)
     # Preserve upgraded deployments that predate automatic link management:
@@ -185,6 +260,7 @@ def main(argv: list[str] | None = None) -> None:
     interface = resolve_interface(config.network.interface)
     subnet_cidr = config.network.subnet_cidr or DEFAULT_SUBNET_CIDR
     address, subnet = validate_address(config.server.host, subnet_cidr)
+    ensure_interface_is_available(interface, address, subnet, arguments.replace_active)
     output = Path(arguments.output)
     ensure_output_is_safe(output, interface)
     content = render_netplan(interface, address, subnet)

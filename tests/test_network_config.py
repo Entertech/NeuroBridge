@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
 from neurobridge.network_config import (
     MANAGED_MARKER,
+    ensure_interface_is_available,
     declared_interfaces,
     ensure_output_is_safe,
     render_netplan,
@@ -68,3 +71,44 @@ class DedicatedNetworkConfigurationTests(unittest.TestCase):
             output = Path(directory) / "99-neurobridge-b-side.yaml"
             output.write_text(f"{MANAGED_MARKER}\nnetwork:\n", encoding="utf-8")
             ensure_output_is_safe(output, "enp1s0")
+
+    def test_refuses_to_replace_an_interface_with_an_existing_ipv4_address(self) -> None:
+        def runner(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            output = "2: enp1s0    inet 10.0.0.25/24 scope global enp1s0\n" if arguments[1] == "-o" else ""
+            return subprocess.CompletedProcess(arguments, 0, output)
+
+        with self.assertRaisesRegex(ValueError, "existing IPv4 address"):
+            ensure_interface_is_available(
+                "enp1s0",
+                ipaddress.IPv4Address("192.168.88.10"),
+                ipaddress.IPv4Network("192.168.88.0/24"),
+                False,
+                runner,
+            )
+
+    def test_allows_a_repeat_application_when_only_the_managed_address_exists(self) -> None:
+        def runner(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            output = "2: enp1s0    inet 192.168.88.10/24 scope global enp1s0\n" if arguments[1] == "-o" else ""
+            return subprocess.CompletedProcess(arguments, 0, output)
+
+        ensure_interface_is_available(
+            "enp1s0",
+            ipaddress.IPv4Address("192.168.88.10"),
+            ipaddress.IPv4Network("192.168.88.0/24"),
+            False,
+            runner,
+        )
+
+    def test_refuses_to_replace_an_interface_with_a_default_route(self) -> None:
+        def runner(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            output = "default via 10.0.0.1 dev enp1s0\n" if arguments[1] == "-4" else ""
+            return subprocess.CompletedProcess(arguments, 0, output)
+
+        with self.assertRaisesRegex(ValueError, "default route"):
+            ensure_interface_is_available(
+                "enp1s0",
+                ipaddress.IPv4Address("192.168.88.10"),
+                ipaddress.IPv4Network("192.168.88.0/24"),
+                False,
+                runner,
+            )
