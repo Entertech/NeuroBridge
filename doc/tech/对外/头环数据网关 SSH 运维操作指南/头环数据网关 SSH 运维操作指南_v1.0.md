@@ -208,6 +208,17 @@ neurobridge-ops audit --lines 200
 
 旧连接的 `subscriptionId` 不可复用。SSH 服务独立于网关业务服务；网关业务服务重启不代表 SSH 配置发生变化。
 
+### 7.1 更新完成后的核验
+
+`neurobridge-ops update` 返回成功后，运维人员应先确认网关服务已恢复，并保留最少必要的审计摘要：
+
+```bash
+neurobridge-ops status
+neurobridge-ops audit --lines 20
+```
+
+确认服务状态正常后，再通知 B 端按本节步骤重新建立业务连接、调用 `getStatus` 并重新创建订阅。若 `update`、`status` 或审计记录显示失败，不要重复执行更新或替换项目文件；记录命令输出中的错误摘要并联系网关交付方。
+
 ## 8. 常见问题
 
 | 现象 | 建议处理 |
