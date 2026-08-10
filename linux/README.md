@@ -4,6 +4,9 @@
 
 - `update-ubuntu.sh`：目标机一键部署入口；只使用当前源码目录，不执行 Git 或网络操作。
 - `prepare-ubuntu24.04-environment.sh`：一次性联网环境准备，安装系统包与锁定的 Python 运行依赖；完成后可断网。
+- `configure-ssh-operations.sh`：在已确认的私有运维网络上显式启用账号密码 SSH 运维入口。
+- `setup-ssh-operations.sh`：一键 SSH 运维配置入口；快速模式读取现场 TXT，缺少的字段才交互询问。
+- `../config/ssh-operations.example.txt`：快速模式模板；实际 `ssh-operations.txt` 被 Git 忽略，可按现场要求保存明文密码。
 - `collect-ubuntu-build-diagnostics.sh`：收集编译日志、工具版本和 CMake 诊断，不包含现场配置或原始数据。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
@@ -22,6 +25,7 @@
 - 可联网时先运行一次 `./linux/prepare-ubuntu24.04-environment.sh`，它会安装 `python3`、`rsync`、CMake、C++17 编译器、Eigen3、BlueZ、dnsmasq，并创建 `/opt/neurobridge/venv`、安装锁定的 Python 运行依赖。完成后即可断开互联网；安装器只验证这些前提，绝不调用 APT、PyPI 或其他下载服务。
 - 网关与 B 端的专用有线链路。先确定网关地址、B 端地址、掩码、端口和网卡名。
 - 若要使用录播，准备好录制数据目录及要回放的 `recordingId`；若要使用算法，先完成该 Ubuntu 主机上的真实数据 POC。算法默认启用，但 POC 前可暂时设为 `false`。
+- 若要使用 SSH 运维，确认运维账户名、至少 6 位数字的密码、运维主机固定 IP/CIDR，以及网关用于运维的私有静态 IP。快速模式允许把明文密码保存在 Git 忽略且权限为 `600` 的现场 TXT 中，但不得写入现场文档、命令历史、日志或版本库。数字密码正式部署仅适用于专用网线直连和固定来源 IP 的封闭现场；短时局域网验证必须限制为受控网络和单机 `/32` 来源，禁止把 SSH 接入公网、无线网或不受控局域网。
 
 在新主机上确认操作系统、CPU 架构、网卡及蓝牙设备：
 
@@ -95,6 +99,97 @@ ip -br addr show enp1s0
 | `/etc/neurobridge/gateway.toml` | 现场部署配置；root 可写，`neurobridge` 服务账户可读。 |
 | `/var/lib/neurobridge/recordings` | 实时录制和录播数据。 |
 | `/var/log/neurobridge/neurobridge.log` | 持久化运行日志；每天轮转，默认保留 14 份压缩归档。 |
+
+## 4.1 启用 SSH 运维入口（可选）
+
+SSH 只用于网关运维，**不**用于 B 端读取数据、控制采集或调用算法。`prepare-ubuntu24.04-environment.sh` 会安装 `openssh-server`，但会停用 Ubuntu 可能自动开启的 `ssh.socket` 和 `ssh.service`；只有执行下面的显式配置命令后，SSH 才会按指定地址启动并开机自启。
+
+网关与 B 端主机通过单根专用网线直连、头环离线时的完整引导、录播联调、审核版本的一键更新重载与排障步骤，见 [网关 SSH 运维与 B 端录播联调指南](../doc/tech/%E7%BD%91%E5%85%B3%20SSH%20%E8%BF%90%E7%BB%B4%E4%B8%8E%20B%20%E7%AB%AF%E5%BD%95%E6%92%AD%E8%81%94%E8%B0%83%E6%8C%87%E5%8D%97.md)。指南同时记录临时局域网到最终直连的配置切换、SSH 验收清单，以及用户名、CIDR、PAM 密码策略、`ssh.socket` 和残留 sshd 端口冲突的现场排查过程。
+
+常规单网卡、单 B 端场景，在网关的**本地控制台**使用快速模式。它读取 Git 忽略的 `config/ssh-operations.txt`；首次运行时会从模板自动创建权限为 `600` 的实际文件，某个字段为空或缺失时才提示输入：
+
+```bash
+sudo ./linux/setup-ssh-operations.sh --quick
+```
+
+配置文件支持 `operator_user`、`password`、`listen_address`、`allow_from` 和 `port`。其中 `password` 可以是至少 6 位数字明文；存在时直接使用，不回显或写入日志，缺失时隐藏输入并二次确认。配置含明文密码时必须保持权限 `600`。`allow_from` 只接受单台私有 IPv4 并自动收紧为 `/32`。原 `--quick 192.168.88.20` 仍兼容，并覆盖文件中的 `allow_from`。
+
+需要允许来源网段，或不希望使用 TXT 时，继续使用保留的完整交互模式：
+
+```bash
+sudo ./linux/setup-ssh-operations.sh
+```
+
+完整模式会从当前设备已配置的全局私有 IPv4 中选择默认监听 IP；若通过已有 SSH 会话执行，优先使用该会话连接到的网关本地 IP，否则使用检测到的第一个地址。检测不到符合条件的地址时，提示中不显示默认值并要求手工输入。当前 SSH 客户端 `/32`（如可识别）仍作为允许来源默认值，所有值在应用前都要求人工确认。
+
+完整模式会隐藏输入并要求再次确认至少 6 位纯数字密码；快速模式可从上述权限受限的现场 TXT 读取明文密码。两者都不会在命令行或日志中输出密码。配置器仅为该专用运维账户显式选择系统 `chpasswd` 支持的 SHA512 加盐哈希写入方式，从而不经过 PAM 的最短 8 位检查；不会修改整机 PAM 密码策略，其他账户不受影响。最终输入 `YES` 确认时不区分大小写。若要在自动化部署中使用非交互方式，通过标准输入提供密码；以下 IP 和网段只是示例，必须替换为现场确认值：
+
+```bash
+printf '%s\n' '<至少6位数字密码>' | sudo ./linux/configure-ssh-operations.sh \
+  --operator-user neuroops \
+  --operator-password-stdin \
+  --listen-address 192.168.88.10 \
+  --allow-from 192.168.88.20/32
+```
+
+配置器要求监听地址已经配置在本机网卡上，且监听地址与允许来源均为 RFC1918 私有 IPv4 地址。单个来源可写成 `192.168.88.20` 或 `192.168.88.20/32`；网段输入会在写入 sshd 前自动规范化，例如 `192.168.88.20/23` 会转换为其所属网段 `192.168.88.0/23`。它创建或更新单一 `neuroops` 本地账户并设置其密码，安装 `/etc/ssh/sshd_config.d/00-neurobridge-operations.conf`：只监听指定地址，仅允许该账户使用账号密码；禁止 root 登录、公钥登录、端口转发、代理转发、隧道和 X11 转发。启用前会关闭 Ubuntu 的 `ssh.socket` 通配监听，并停止 `ssh.service` 控制组内可能遗留的旧监听进程，确认端口释放后再启动新服务；失败时恢复原有 service/socket 状态。清理残留进程会中断已有 SSH 会话，因此发现端口残留时只允许在网关本地控制台执行，不会在远程会话中强制清理。脚本会拒绝已有 SSH 配置留下的额外端口或监听地址。来源不在 `--allow-from` 范围内的连接即使通过认证也不能获得 shell 或执行命令。仍须保持网关只接入受控专用网络，并在现场防火墙中仅放行确认的运维来源与 SSH 端口。
+
+一键配置成功后，`ssh.service` 会被 systemd 设为开机自启，且独立于 `neurobridge.service`：启动、停止或重启网关业务服务不会关闭 SSH。`config/ssh-operations.txt` 不会在开机时自动重读；修改账号、密码、监听 IP、允许来源或端口后，必须重新执行 `sudo ./linux/setup-ssh-operations.sh --quick`。网关重启时还必须保证监听 IP 已配置在网卡上。详细启动状态表和重启验收命令见上述联调指南第 4.4 节。
+
+配置完成后，现场只使用这一个受信任的 SSH 运维账号。一键配置会把当前源码同步到该账号固定的 `~/NeuroBridge` 项目目录；登录后先进入该目录，后续代码和运维操作都以它为准：
+
+```bash
+ssh neuroops@192.168.88.10
+neurobridge-ops project            # 显示固定项目目录
+cd "$(neurobridge-ops project)"
+git status --short --branch
+neurobridge-ops status             # 当前服务状态 + 最近 200 条日志
+neurobridge-ops logs --lines 500   # 查询指定数量的历史日志，最大 1000 条
+neurobridge-ops logs --follow      # 实时追踪新日志，Ctrl-C 停止
+neurobridge-ops audit --lines 500  # 查询 SSH 运维操作审计，最大 1000 条
+watch -n 2 neurobridge-ops status  # 每 2 秒刷新一次实时服务状态
+neurobridge-ops update             # 应用已同步的完整版本并重新加载
+neurobridge-ops restart            # 重启网关
+neurobridge-ops stop
+neurobridge-ops start
+```
+
+每次 `status`、`logs`、`audit`、`update`、`start`、`stop` 或 `restart` 都会写入系统日志标识 `neurobridge-ops-audit`，记录系统时间、`sudo` 确认的运维账户、受限动作、参数摘要和开始/成功/失败结果；`logs --follow` 是持续命令，只记录开始。日志不包含账号密码、SSH 会话内容、网关配置或业务原始数据。使用 `neurobridge-ops audit` 查询；SSH 认证来源仍以系统 `sshd` 日志为准。
+
+如果网关在更新时能够访问批准的代码源，可在 SSH 登录后的项目目录直接更新并部署：
+
+```bash
+cd "$(neurobridge-ops project)"
+git pull --ff-only
+neurobridge-ops update
+```
+
+现场隔离、网关无法访问代码源时，先从 B 端把完整新版本同步到同一个项目目录，再 SSH 登录执行 `update`。默认路径如下：
+
+```bash
+rsync -a --delete \
+  --exclude '.git/' --exclude '.venv/' --exclude '__pycache__/' --exclude 'build/' \
+  '<新版本源码目录>/' \
+  neuroops@192.168.88.10:/home/neuroops/NeuroBridge/
+ssh neuroops@192.168.88.10
+cd "$(neurobridge-ops project)"
+neurobridge-ops update
+```
+
+`neurobridge-ops update` 固定使用 `neurobridge-ops project` 显示的目录，不接受临时源码路径。更新前仍会检查完整性、文件归属、组/其他用户写权限和符号链接。因为该账号维护的脚本随后会以 root 安装，所以该账号在权限意义上属于网关管理员账号；密码和允许来源 IP 必须按管理员凭据管理。
+
+已经启用旧版 SSH 运维的网关升级到本方案后，需要从当前完整源码目录在网关本地重新运行一次 `sudo ./linux/setup-ssh-operations.sh`，脚本会初始化 `~/NeuroBridge`；之后直接维护这个项目目录。
+
+`restart`、`stop` 或 `update` 会断开 B 端 WebSocket 连接；恢复后 B 端必须重新连接、调用 `getStatus` 并重新订阅。
+
+应用后在本地控制台检查：
+
+```bash
+sudo sshd -t
+sudo systemctl --no-pager --full status ssh.service
+```
+
+如需撤销这个 SSH 运维入口，在本地控制台删除 `/etc/ssh/sshd_config.d/00-neurobridge-operations.conf`、`/etc/sudoers.d/neurobridge-operator`、`/usr/local/sbin/neurobridge-ops-status`、`/usr/local/sbin/neurobridge-ops-logs`、`/usr/local/sbin/neurobridge-ops-update`、`/usr/local/sbin/neurobridge-ops-command` 和 `/usr/local/bin/neurobridge-ops`，再执行 `sudo systemctl restart ssh.service`。是否停用 SSH 服务由现场运维策略决定。
 
 ## 5. 填写现场配置
 

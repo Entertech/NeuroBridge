@@ -32,11 +32,18 @@ apt-get install -y --no-install-recommends \
   dnsmasq \
   git \
   libeigen3-dev \
+  openssh-server \
   python3 \
   python3-dev \
   python3-pip \
   python3-venv \
   rsync
+
+# Do not expose the distribution-default SSH daemon or Ubuntu's socket-activated
+# listener. The explicit operations setup installs a password-authenticated,
+# address-bound configuration before enabling ssh.service.
+systemctl disable --now ssh.socket 2>/dev/null || true
+systemctl disable --now ssh.service 2>/dev/null || true
 
 install_dir=/opt/neurobridge
 install -d -m 0755 "$install_dir"

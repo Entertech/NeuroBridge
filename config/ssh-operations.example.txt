@@ -1,0 +1,13 @@
+# NeuroBridge SSH quick setup configuration template.
+#
+# Copying is automatic on the first --quick run. The actual file is
+# config/ssh-operations.txt, is excluded from Git, and may contain a plaintext
+# password. Keep it readable only by its owner (mode 600). A missing or empty
+# value is prompted. allow_from must be one private operator/B-side IPv4
+# address; quick mode restricts it to that single host with a /32 mask.
+
+operator_user=neuroops
+password=
+listen_address=
+allow_from=
+port=22
