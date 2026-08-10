@@ -20,11 +20,10 @@ Usage:
 The password must be supplied as one line on standard input; it is never an
 argument, configuration value, or log entry. This command restricts SSH to the
 named local operator account, disables root and public-key login, and binds
-sshd only to the specified gateway address. The account receives only NeuroBridge status, log,
-staged-code update, start, stop, and restart privileges through sudo. The same
-trusted operator account can upload a complete release to
-/srv/neurobridge-release and apply it; the update command never fetches code
-from a network or accepts another source path.
+sshd only to the specified gateway address. The account receives NeuroBridge
+project-path, status, log, update, start, stop, and restart operations. Setup
+copies the current checkout to the operator's ~/NeuroBridge directory; later
+updates run directly from that fixed project working tree.
 EOF
 }
 
@@ -83,8 +82,20 @@ done
 command -v sshd >/dev/null 2>&1 || fail "openssh-server is missing. Run linux/prepare-ubuntu24.04-environment.sh while the gateway can access the approved package source."
 command -v chpasswd >/dev/null 2>&1 || fail "chpasswd is missing; install the Ubuntu account-management prerequisites."
 command -v systemctl >/dev/null 2>&1 || fail "systemd is required."
+command -v rsync >/dev/null 2>&1 || fail "rsync is required to initialize the operator project directory."
 IFS= read -r operator_password || fail "--operator-password-stdin requires one password line on standard input."
 [[ ${#operator_password} -ge 12 ]] || fail "Operator password must contain at least 12 characters."
+setup_source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/install-ubuntu.sh; do
+  [[ -f "$setup_source_dir/$required" ]] || fail "SSH setup must run from a complete NeuroBridge checkout: missing $required"
+done
+if id -u "$operator_user" >/dev/null 2>&1; then
+  operator_home=$(getent passwd "$operator_user" | cut -d: -f6)
+else
+  operator_home=/home/$operator_user
+fi
+[[ -n "$operator_home" && "$operator_home" == /* && "$operator_home" != / ]] || fail "Cannot determine a safe home directory for $operator_user."
+project_dir=$operator_home/NeuroBridge
 
 python3 - "$listen_address" "$allow_from" <<'PY'
 from __future__ import annotations
@@ -117,14 +128,10 @@ sudoers_path=/etc/sudoers.d/neurobridge-operator
 status_script=/usr/local/sbin/neurobridge-ops-status
 logs_script=/usr/local/sbin/neurobridge-ops-logs
 ops_cli=/usr/local/bin/neurobridge-ops
-update_source_dir=/srv/neurobridge-release
 update_script=/usr/local/sbin/neurobridge-ops-update
 command_script=/usr/local/sbin/neurobridge-ops-command
 install -d -o root -g root -m 0755 "$config_dir"
 install -d -o root -g root -m 0755 /run/sshd
-# The directory is initially root-owned. After the trusted operator account is
-# ready, setup transfers this directory to that account for release uploads.
-install -d -o root -g root -m 0750 "$update_source_dir"
 
 config_tmp=$(mktemp)
 sudoers_tmp=$(mktemp)
@@ -321,17 +328,22 @@ usage() {
 Usage: neurobridge-ops <command>
 
 Commands:
+  project                Show the fixed NeuroBridge project working directory.
   status                 Show current service state and the latest 200 logs.
   logs [--lines N]       Show recent logs (default 200, maximum 1000).
   logs --follow           Follow new gateway logs in real time; Ctrl-C stops it.
   audit [--lines N]      Show SSH operations audit events (default 200, maximum 1000).
-  update                 Apply the operator-staged release and reload the gateway.
+  update                 Deploy the current project working tree and reload the gateway.
   start | stop | restart  Control the NeuroBridge gateway service.
   help                   Show this help.
 USAGE
 }
 
 case "${1:-help}" in
+  project)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command project
+    ;;
   status)
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }
     exec sudo -- /usr/local/sbin/neurobridge-ops-command status
@@ -407,6 +419,10 @@ parse_lines() {
 }
 
 case "${1:-}" in
+  project)
+    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops project"
+    run_and_audit project path /usr/local/sbin/neurobridge-ops-update --print-project
+    ;;
   status)
     [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops status"
     run_and_audit status status /usr/local/sbin/neurobridge-ops-status
@@ -430,21 +446,22 @@ case "${1:-}" in
     ;;
   update)
     [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops update"
-    run_and_audit update staged-release /usr/local/sbin/neurobridge-ops-update
+    run_and_audit update project-tree /usr/local/sbin/neurobridge-ops-update
     ;;
   start|stop|restart)
     [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops start|stop|restart"
     run_and_audit "$1" neurobridge.service /usr/bin/systemctl "$1" neurobridge.service
     ;;
   *)
-    fail "Usage: neurobridge-ops {status|logs|audit|update|start|stop|restart}"
+    fail "Usage: neurobridge-ops {project|status|logs|audit|update|start|stop|restart}"
     ;;
 esac
 EOF
 
-cat >"$update_tmp" <<'EOF'
+{
+cat <<'EOF'
 #!/usr/bin/env bash
-# Apply a complete release staged by the trusted SSH operator without network access.
+# Deploy the trusted SSH operator's fixed project working tree.
 set -euo pipefail
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -454,25 +471,37 @@ fail() {
 }
 
 [[ ${EUID} -eq 0 ]] || fail "This helper must run as root through sudo."
-release_owner=${SUDO_USER:-}
-[[ -n "$release_owner" && "$release_owner" != root ]] || fail "Cannot identify the trusted SSH operator."
-source_dir=/srv/neurobridge-release
-[[ -d "$source_dir" ]] || fail "Missing staged release directory: $source_dir"
+project_owner=${SUDO_USER:-}
+[[ -n "$project_owner" && "$project_owner" != root ]] || fail "Cannot identify the trusted SSH operator."
+EOF
+printf 'source_dir=%q\n' "$project_dir"
+cat <<'EOF'
+if [[ ${1:-} == --print-project && $# -eq 1 ]]; then
+  printf '%s\n' "$source_dir"
+  exit 0
+fi
+[[ $# -eq 0 ]] || fail "This helper does not accept a source path."
+[[ -d "$source_dir" ]] || fail "Missing NeuroBridge project directory: $source_dir"
 for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/install-ubuntu.sh; do
-  [[ -f "$source_dir/$required" ]] || fail "Staged release is incomplete: missing $required"
+  [[ -f "$source_dir/$required" ]] || fail "Project working tree is incomplete: missing $required"
 done
-[[ -x "$source_dir/linux/reload-ubuntu.sh" ]] || fail "Staged reload script is not executable."
+[[ -x "$source_dir/linux/reload-ubuntu.sh" ]] || fail "Project reload script is not executable."
 
-# Keep the upload predictable: only the authenticated operator may own staged
-# content, and symlinks or group/world-writable paths are rejected.
-unsafe_link=$(find "$source_dir" -xdev -type l -print -quit)
-[[ -z "$unsafe_link" ]] || fail "Staged release contains a symlink: $unsafe_link"
-unsafe_path=$(find "$source_dir" -xdev \( -type f -o -type d \) \( ! -user "$release_owner" -o -perm -0022 \) -print -quit)
-[[ -z "$unsafe_path" ]] || fail "Staged release must be owned by $release_owner and not group/world writable: $unsafe_path"
+# Keep the project tree predictable: only the authenticated operator may own
+# source content, and symlinks or group/world-writable paths are rejected.
+unsafe_link=$(find "$source_dir" -xdev \
+  \( -path "$source_dir/.git" -o -path "$source_dir/.venv" -o -path "$source_dir/venv" \) -prune -o \
+  -type l -print -quit)
+[[ -z "$unsafe_link" ]] || fail "Project working tree contains a symlink: $unsafe_link"
+unsafe_path=$(find "$source_dir" -xdev \
+  \( -path "$source_dir/.git" -o -path "$source_dir/.venv" -o -path "$source_dir/venv" \) -prune -o \
+  \( -type f -o -type d \) \( ! -user "$project_owner" -o -perm -0022 \) -print -quit)
+[[ -z "$unsafe_path" ]] || fail "Project working tree must be owned by $project_owner and not group/world writable: $unsafe_path"
 
-echo "Applying staged NeuroBridge release from $source_dir ..."
+echo "Deploying NeuroBridge project from $source_dir ..."
 exec /bin/bash "$source_dir/linux/reload-ubuntu.sh"
 EOF
+} >"$update_tmp"
 
 visudo -cf "$sudoers_tmp" >/dev/null || fail "Generated sudo policy did not validate."
 install -o root -g root -m 0644 "$config_tmp" "$config_path"
@@ -505,20 +534,28 @@ printf '%s:%s\n' "$operator_user" "$operator_password" | chpasswd
 unset operator_password
 usermod --unlock "$operator_user"
 
+# Keep one canonical working tree under the SSH operator's home. It includes
+# .git when the setup source is a clone, so later maintenance can happen after
+# login with cd, git status/pull, and neurobridge-ops update.
+install -d -o "$operator_user" -g "$operator_user" -m 0750 "$project_dir"
+if [[ "$setup_source_dir" != "$project_dir" ]]; then
+  rsync -a --delete \
+    --exclude .venv --exclude venv --exclude build --exclude __pycache__ \
+    "$setup_source_dir/" "$project_dir/"
+fi
+chown -R --no-dereference "$operator_user:$operator_user" "$project_dir"
+chmod -R go-w "$project_dir"
+
 install -o root -g root -m 0755 "$status_tmp" "$status_script"
 install -o root -g root -m 0755 "$logs_tmp" "$logs_script"
 install -o root -g root -m 0755 "$ops_cli_tmp" "$ops_cli"
 install -o root -g root -m 0755 "$update_tmp" "$update_script"
 install -o root -g root -m 0755 "$command_tmp" "$command_script"
 install -o root -g root -m 0440 "$sudoers_tmp" "$sudoers_path"
-# This is a single-role deployment: the trusted SSH operator both uploads and
-# applies the release. Because uploaded code is later installed as root, treat
-# this account as a gateway administrator credential.
-chown "$operator_user:$operator_user" "$update_source_dir"
-chmod 0750 "$update_source_dir"
 
 transaction_active=false
 
 echo "SSH operations access is ready: ssh -p $port $operator_user@$listen_address"
+echo "Project directory: $project_dir"
 echo "Allowed source: $allow_from. Root and public-key login are disabled."
 echo "After login, use 'neurobridge-ops status', 'neurobridge-ops audit', or 'neurobridge-ops update'."

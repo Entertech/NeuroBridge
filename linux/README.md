@@ -123,10 +123,13 @@ printf '%s\n' '<至少12位的密码>' | sudo ./linux/configure-ssh-operations.s
 
 若必须通过现有 SSH 会话执行，现有登录用户名必须与新建的 `--operator-user` 相同，以避免访问策略切换时将当前管理员锁在门外。配置器要求监听地址已经配置在本机网卡上，且监听地址与允许来源均为 RFC1918 私有 IPv4 地址。它创建或更新单一 `neuroops` 本地账户并设置其密码，安装 `/etc/ssh/sshd_config.d/00-neurobridge-operations.conf`：只监听指定地址，仅允许该账户使用账号密码；禁止 root 登录、公钥登录、端口转发、代理转发、隧道和 X11 转发。脚本会拒绝已有 SSH 配置留下的额外端口或监听地址。来源不在 `--allow-from` 范围内的连接即使通过认证也不能获得 shell 或执行命令。仍须保持网关只接入受控专用网络，并在现场防火墙中仅放行确认的运维来源与 SSH 端口。
 
-配置完成后，现场只使用这一个受信任的 SSH 运维账号，不再区分发布管理员和普通运维。该账号既可以同步待更新版本，也可以通过 `neurobridge-ops` 查询、更新和重启网关：
+配置完成后，现场只使用这一个受信任的 SSH 运维账号。一键配置会把当前源码同步到该账号固定的 `~/NeuroBridge` 项目目录；登录后先进入该目录，后续代码和运维操作都以它为准：
 
 ```bash
 ssh neuroops@192.168.88.10
+neurobridge-ops project            # 显示固定项目目录
+cd "$(neurobridge-ops project)"
+git status --short --branch
 neurobridge-ops status             # 当前服务状态 + 最近 200 条日志
 neurobridge-ops logs --lines 500   # 查询指定数量的历史日志，最大 1000 条
 neurobridge-ops logs --follow      # 实时追踪新日志，Ctrl-C 停止
@@ -140,20 +143,29 @@ neurobridge-ops start
 
 每次 `status`、`logs`、`audit`、`update`、`start`、`stop` 或 `restart` 都会写入系统日志标识 `neurobridge-ops-audit`，记录系统时间、`sudo` 确认的运维账户、受限动作、参数摘要和开始/成功/失败结果；`logs --follow` 是持续命令，只记录开始。日志不包含账号密码、SSH 会话内容、网关配置或业务原始数据。使用 `neurobridge-ops audit` 查询；SSH 认证来源仍以系统 `sshd` 日志为准。
 
-更新时，先从存放完整新版本源码的目录执行以下命令。`<新版本源码目录>` 必须替换成实际路径，末尾的 `/` 不能省略：
+如果网关在更新时能够访问批准的代码源，可在 SSH 登录后的项目目录直接更新并部署：
+
+```bash
+cd "$(neurobridge-ops project)"
+git pull --ff-only
+neurobridge-ops update
+```
+
+现场隔离、网关无法访问代码源时，先从 B 端把完整新版本同步到同一个项目目录，再 SSH 登录执行 `update`。默认路径如下：
 
 ```bash
 rsync -a --delete \
   --exclude '.git/' --exclude '.venv/' --exclude '__pycache__/' --exclude 'build/' \
   '<新版本源码目录>/' \
-  neuroops@192.168.88.10:/srv/neurobridge-release/
+  neuroops@192.168.88.10:/home/neuroops/NeuroBridge/
 ssh neuroops@192.168.88.10
+cd "$(neurobridge-ops project)"
 neurobridge-ops update
 ```
 
-配置脚本会把 `/srv/neurobridge-release` 交给该 SSH 账号管理。更新前仍会检查完整性、文件归属、组/其他用户写权限和符号链接。因为该账号上传的脚本随后会以 root 安装，所以该账号在权限意义上属于网关管理员账号；密码和允许来源 IP 必须按管理员凭据管理。
+`neurobridge-ops update` 固定使用 `neurobridge-ops project` 显示的目录，不接受临时源码路径。更新前仍会检查完整性、文件归属、组/其他用户写权限和符号链接。因为该账号维护的脚本随后会以 root 安装，所以该账号在权限意义上属于网关管理员账号；密码和允许来源 IP 必须按管理员凭据管理。
 
-已经启用旧版 SSH 运维的网关升级到本方案后，需要在网关本地重新运行一次 `sudo ./linux/setup-ssh-operations.sh`，让固定暂存目录转交给同一个 SSH 运维账号；之后的版本同步和更新均由该账号完成。
+已经启用旧版 SSH 运维的网关升级到本方案后，需要从当前完整源码目录在网关本地重新运行一次 `sudo ./linux/setup-ssh-operations.sh`，脚本会初始化 `~/NeuroBridge`；之后直接维护这个项目目录。
 
 `restart`、`stop` 或 `update` 会断开 B 端 WebSocket 连接；恢复后 B 端必须重新连接、调用 `getStatus` 并重新订阅。
 
