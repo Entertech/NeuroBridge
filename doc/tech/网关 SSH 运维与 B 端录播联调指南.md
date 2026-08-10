@@ -1,6 +1,6 @@
 # 网关 SSH 运维与 B 端录播联调指南
 
-本文是面向部署和联调人员的内部操作手册，适用于 Ubuntu 24.04 x86_64 网关与一台 B 端主机通过专用有线网络直连的场景。
+本文是面向部署和联调人员的内部操作手册，适用于 Ubuntu 24.04 x86_64 网关与一台 B 端主机通过专用有线网络直连的场景。B 端主机大概率采用麒麟国产操作系统；其具体产品、版本和 CPU 架构仍须在进场前确认。
 
 SSH 只用于网关运维；B 端取数、订阅和录播控制仍使用既有 WebSocket 北向协议。本文不修改 B 端协议，也不要求网关实现任何自定义加密、证书或 Token 逻辑。账号密码认证和 SSH 传输保护均由系统 OpenSSH 提供。
 
@@ -42,6 +42,54 @@ sudo ./linux/prepare-ubuntu24.04-environment.sh
 ```
 
 该命令在可访问受控软件源时安装 `openssh-server`，但会保持 `ssh.service` 停用。现场已经隔离、只剩网关与 B 端直连时，不能再依赖该直连网络临时安装缺失的 OpenSSH 包；应在隔离前完成准备，或按现场受控的软件交付流程补齐系统包。
+
+### 2.1 麒麟 B 端主机准备
+
+麒麟系统只承担 B 端 WebSocket 客户端、浏览器联调页和 SSH 运维终端，不运行 NeuroBridge 网关服务。B 端是 x86_64 还是 ARM64 不改变北向协议和 SSH 命令，也不改变网关继续使用 Ubuntu 24.04 x86_64 的部署边界。
+
+进场前在 B 端执行以下只读检查，并将输出中的系统产品、版本、CPU 架构和网卡名写入现场记录：
+
+```bash
+cat /etc/os-release
+uname -m
+ip -br link
+command -v ssh && ssh -V
+command -v python3 || true
+```
+
+至少需要：
+
+- OpenSSH 客户端，用于账号密码登录网关；
+- 支持 WebSocket 的现代浏览器，例如麒麟系统实际提供的 Chromium、Chrome 或 Firefox 兼容浏览器；
+- 一块可配置静态 IPv4 地址的有线网卡；
+- 可选的 Python 3，仅在浏览器不允许直接打开本地联调页时用于启动只监听本机的静态文件服务。
+
+若缺少 SSH 客户端，必须在接入隔离网络前通过现场批准的软件源安装。不同麒麟产品可能使用 `apt`、`dnf` 或 `yum`，对应包名也可能是 `openssh-client` 或 `openssh-clients`；应先依据 `/etc/os-release` 和现场软件管理规范确认，不能在隔离网络中临时访问公网安装。
+
+建议优先通过麒麟桌面的网络设置界面，为接入网关的专用有线网卡配置现场确认的静态地址，例如 `192.168.88.20/24`，不填写公网网关和 DNS。若该版本由 NetworkManager 管理，也可由系统管理员在确认连接名称后配置：
+
+```bash
+nmcli connection show
+sudo nmcli connection modify '<专用有线连接名称>' \
+  ipv4.method manual \
+  ipv4.addresses 192.168.88.20/24 \
+  ipv4.gateway '' \
+  ipv4.dns '' \
+  ipv4.never-default yes
+sudo nmcli connection up '<专用有线连接名称>'
+```
+
+不要照抄连接名称，也不要修改承载其他业务的网卡。配置后检查地址和路由，确认该专用网口没有获得默认路由：
+
+```bash
+ip -br addr
+ip route
+ping -c 4 192.168.88.10
+```
+
+系统防火墙或终端安全软件如限制出站连接，应按现场审批仅允许 B 端访问网关确认后的 SSH 和 WebSocket 端口；不要直接关闭整机防火墙。
+
+当前结论仅为源码和文档层面的兼容性说明，不能写成“麒麟已完成 POC”或“现场验收通过”。正式交付前仍需在实际麒麟版本和 CPU 架构上完成本文第 6 节的联调验收。
 
 ## 3. 配置网关网络与录播
 
@@ -115,7 +163,7 @@ SSH 端口：22
 如果需要接入自动化部署，可使用非交互入口。密码必须由受控的标准输入提供，不能出现在参数或版本库中：
 
 ```bash
-printf '%s\\n' '<至少12位的密码>' | sudo ./linux/configure-ssh-operations.sh \
+printf '%s\n' '<至少12位的密码>' | sudo ./linux/configure-ssh-operations.sh \
   --operator-user neuroops \
   --operator-password-stdin \
   --listen-address 192.168.88.10 \
@@ -179,7 +227,12 @@ neurobridge-ops update
 
 ## 6. B 端录播联调步骤
 
-1. 在 B 端主机直接打开 `web/b-client-test/index.html`，或按现场方式托管联调页。
+1. 在 B 端主机直接打开 `web/b-client-test/index.html`。若麒麟浏览器限制 `file://` 本地页面，且系统已有 Python 3，则在源码根目录执行以下命令，只在 B 端本机托管联调页，然后访问 `http://127.0.0.1:8080/`：
+
+   ```bash
+   python3 -m http.server 8080 --bind 127.0.0.1 --directory web/b-client-test
+   ```
+
 2. 填入确认后的 WebSocket 地址，例如 `ws://192.168.88.10:8765/neurobridge/v1/ws`。
 3. 建立连接并调用 `getStatus`，确认头环未连接。
 4. 调用 `getLatest` 或 `subscribe`。
@@ -198,6 +251,9 @@ neurobridge-ops update
 | --- | --- |
 | SSH 连接被拒绝 | 在网关本地控制台运行 `sudo systemctl status ssh.service`；确认监听 IP、端口和网线连通。 |
 | SSH 显示 `Permission denied (password)` | 确认使用 `neuroops` 账户并输入配置时设置的密码；确认来源 IP 与 `--allow-from` 一致。密码遗失时只能在网关本地控制台重新运行一键配置重置。 |
+| 麒麟 B 端没有 `ssh` 命令 | 在接入隔离网络前，按实际麒麟版本和现场批准的软件源安装 OpenSSH 客户端；不要直接假定包管理器或包名。 |
+| 麒麟浏览器无法直接打开联调页 | 确认已安装 Python 3，使用第 6 节的 `127.0.0.1:8080` 本地静态服务；不要绑定 B 端有线网卡地址。 |
+| 麒麟 B 端能 ping 网关但 WebSocket 或 SSH 失败 | 检查系统防火墙、终端安全软件和端口策略，仅放行 B 端到网关确认后的 SSH/WebSocket 端口。 |
 | 需要确认是否执行过重启或更新 | 执行 `neurobridge-ops audit --lines 500`；以 `action=restart` 或 `action=update` 的 `result=success`/`failed:<退出码>` 判断结果。 |
 | 一键脚本拒绝已有监听地址或端口 | 这是防止意外暴露 SSH 的保护。回到本地控制台检查已有 `/etc/ssh/sshd_config` 与片段，不要直接覆盖。 |
 | B 端连接成功但没有录播数据 | 确认 `[ble].enabled = false`、录制目录有非空已完成会话，并执行 `neurobridge-ops logs --lines 500` 查看原因。 |
