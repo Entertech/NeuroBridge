@@ -279,6 +279,34 @@ neurobridge-ops audit --lines 20
 
 `whoami` 应输出 `neuroops`，其余命令应能读取项目目录、网关状态和运维审计记录。截至 2026-08-10，已根据现场反馈完成一次同一受控局域网内的账号密码 SSH 登录验证；该结论只覆盖 SSH 登录链路，不代表最终麒麟 B 端网线直连、WebSocket 录播或头环与算法链路已完成现场验收。
 
+### 4.4 开机自启动与配置生效规则
+
+这里的“网关开启”指 Ubuntu 操作系统启动，不是 `neurobridge.service` 业务进程启动。首次运行环境准备脚本后，`ssh.socket` 和 `ssh.service` 均保持停用；只有快速模式或完整模式成功配置一次，配置器才会停用通配监听的 `ssh.socket`，启用并立即启动地址受限的 `ssh.service`。以后网关重新开机时，systemd 会直接根据 `/etc/ssh/sshd_config.d/00-neurobridge-operations.conf` 自动启动 SSH，无需再次运行一键配置。
+
+各操作的实际影响如下：
+
+| 操作或事件 | SSH 行为 |
+| --- | --- |
+| 首次执行 `prepare-ubuntu24.04-environment.sh` | 安装 OpenSSH，但保持 `ssh.socket` 和 `ssh.service` 停用，不对外监听 |
+| 首次成功执行 `setup-ssh-operations.sh --quick` 或完整模式 | 写入系统 sshd 配置，启用并立即启动 `ssh.service` |
+| Ubuntu 网关重新开机 | systemd 自动启动已启用的 `ssh.service` |
+| 启动、停止或重启 `neurobridge.service` | 不影响 SSH；业务服务异常时仍可通过 SSH 排障 |
+| 修改 `config/ssh-operations.txt` | 不会自动生效，也不会在开机时自动重读 |
+| 修改 TXT 后再次执行 `setup-ssh-operations.sh --quick` | 重新校验并应用 SSH 参数，然后重启为新的受限监听配置 |
+
+网关重启前应确认 `listen_address` 对应的静态 IP 已写入现场 Netplan，并且启动后仍配置在目标网卡上。若 IP 已变化或启动时不存在，sshd 可能因无法绑定地址而启动失败；此时必须从网关本地控制台修正网络或 TXT，再重新运行 `--quick`。
+
+配置完成后以及每次现场重启验收时，在网关本地检查：
+
+```bash
+systemctl is-enabled ssh.service
+systemctl is-active ssh.service
+systemctl is-enabled ssh.socket
+sudo ss -ltnp 'sport = :22'
+```
+
+预期依次得到 `enabled`、`active`、`disabled`，并且 SSH 端口只监听配置的网关 IP。随后从 B 端实际执行一次 `ssh neuroops@<网关IP>`。如果状态不符合预期，先运行 `sudo systemctl status ssh.service --no-pager -l` 和 `sudo journalctl -u ssh.service -b -n 80 --no-pager` 查明原因；不要通过重新启用 `ssh.socket` 绕过指定地址限制。
+
 ## 5. 从 B 端主机进行运维
 
 ```bash
