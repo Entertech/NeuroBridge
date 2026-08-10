@@ -57,6 +57,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("AuthenticationMethods password", script)
         self.assertIn("Operator password must contain exactly 6 digits", script)
         self.assertIn('[[ "$operator_password" =~ ^[0-9]{6}$ ]]', script)
+        self.assertIn("chpasswd --crypt-method SHA512", script)
         self.assertIn("ListenAddress $listen_address", script)
         self.assertIn("Match User $operator_user Address *,!$allow_from", script)
         self.assertIn("print(allowed.with_prefixlen)", script)
@@ -101,10 +102,10 @@ class DeploymentTests(unittest.TestCase):
         )
         self.assertLess(
             script.index('if ! systemctl enable ssh.service'),
-            script.index('printf \'%s:%s\\n\' "$operator_user" "$operator_password" | chpasswd'),
+            script.index('printf \'%s:%s\\n\' "$operator_user" "$operator_password" | chpasswd --crypt-method SHA512'),
         )
         self.assertLess(
-            script.index('printf \'%s:%s\\n\' "$operator_user" "$operator_password" | chpasswd'),
+            script.index('printf \'%s:%s\\n\' "$operator_user" "$operator_password" | chpasswd --crypt-method SHA512'),
             script.index('install -o root -g root -m 0440 "$sudoers_tmp" "$sudoers_path"'),
         )
         self.assertIn("NeuroBridge SSH 运维一键配置", wizard)

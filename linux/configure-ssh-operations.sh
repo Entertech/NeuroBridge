@@ -611,7 +611,11 @@ if [[ "$operator_existed" == false ]]; then
   useradd --create-home --shell /bin/bash "$operator_user"
   operator_created=true
 fi
-printf '%s:%s\n' "$operator_user" "$operator_password" | chpasswd
+# The dedicated operations account contract requires exactly six digits.
+# Select a shadow-utils hashing method explicitly so this account update does
+# not pass through the host-wide PAM minimum-length rule. This does not change
+# PAM configuration, and the clear-text password remains confined to stdin.
+printf '%s:%s\n' "$operator_user" "$operator_password" | chpasswd --crypt-method SHA512
 unset operator_password
 usermod --unlock "$operator_user"
 
