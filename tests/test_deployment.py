@@ -23,6 +23,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('uname -m) != "x86_64"', install_script)
         self.assertIn('ID:-} != "ubuntu"', install_script)
         self.assertIn('VERSION_ID:-} != "24.04"', install_script)
+        self.assertIn("python3 rsync cmake c++ netplan", install_script)
         self.assertIn('[[ $# -eq 0 ]]', install_script)
         self.assertIn("systemctl enable neurobridge.service", install_script)
 
@@ -49,6 +50,7 @@ class DeploymentTests(unittest.TestCase):
         quick_template = (ROOT / "config" / "ssh-operations.example.txt").read_text(encoding="utf-8")
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("openssh-server", preparation)
+        self.assertIn("netplan.io", preparation)
         self.assertIn("systemctl disable --now ssh.socket", preparation)
         self.assertIn("systemctl disable --now ssh.service", preparation)
         self.assertLess(
@@ -377,6 +379,13 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("systemctl enable neurobridge-dhcp.service", install_script)
         self.assertIn("ExecCondition=", service)
         self.assertIn("--check-enabled", service)
+
+    def test_installer_applies_the_dedicated_link_configuration_before_startup(self) -> None:
+        install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
+        example = (ROOT / "config" / "gateway.toml.example").read_text(encoding="utf-8")
+        self.assertIn('interface = "auto"', example)
+        self.assertIn('subnet_cidr = "192.168.88.0/24"', example)
+        self.assertIn('neurobridge-network-config" --config "$config_dir/gateway.toml" --apply', install_script)
 
     def test_web_assets_are_not_in_a_platform_directory(self) -> None:
         self.assertTrue((ROOT / "web" / "capture" / "index.html").is_file())
