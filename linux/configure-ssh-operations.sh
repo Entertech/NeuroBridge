@@ -109,13 +109,6 @@ if [[ -n ${SSH_CONNECTION:-} && ${SUDO_USER:-root} != "$operator_user" ]]; then
   fail "This SSH session belongs to ${SUDO_USER:-root}, not $operator_user. Run from the local console or reconnect as the operator user before applying the access policy."
 fi
 
-if ! id -u "$operator_user" >/dev/null 2>&1; then
-  useradd --create-home --shell /bin/bash "$operator_user"
-fi
-printf '%s:%s\n' "$operator_user" "$operator_password" | chpasswd
-unset operator_password
-usermod --unlock "$operator_user"
-
 config_dir=/etc/ssh/sshd_config.d
 # Ubuntu includes snippets before the main sshd_config. A low lexical prefix
 # makes these restrictive values win over any later cloud-init/default value.
@@ -139,16 +132,103 @@ logs_tmp=$(mktemp)
 ops_cli_tmp=$(mktemp)
 update_tmp=$(mktemp)
 previous_config=$(mktemp)
+previous_sudoers=$(mktemp)
+previous_status=$(mktemp)
+previous_logs=$(mktemp)
+previous_ops_cli=$(mktemp)
+previous_update=$(mktemp)
 had_previous_config=false
-cleanup() {
-  rm -f "$config_tmp" "$sudoers_tmp" "$status_tmp" "$logs_tmp" "$ops_cli_tmp" "$update_tmp" "$previous_config"
-}
-trap cleanup EXIT
+had_previous_sudoers=false
+had_previous_status=false
+had_previous_logs=false
+had_previous_ops_cli=false
+had_previous_update=false
+operator_existed=false
+operator_created=false
+operator_shadow_before=
+ssh_was_enabled=false
+ssh_was_active=false
+transaction_active=false
 
-if [[ -e "$config_path" ]]; then
-  cp -p "$config_path" "$previous_config"
-  had_previous_config=true
+cleanup() {
+  rm -f "$config_tmp" "$sudoers_tmp" "$status_tmp" "$logs_tmp" "$ops_cli_tmp" "$update_tmp" \
+    "$previous_config" "$previous_sudoers" "$previous_status" "$previous_logs" "$previous_ops_cli" "$previous_update"
+}
+
+backup_path() {
+  local path=$1 backup=$2 existed_name=$3
+  if [[ -e "$path" ]]; then
+    cp -p "$path" "$backup"
+    printf -v "$existed_name" '%s' true
+  fi
+}
+
+restore_path() {
+  local path=$1 backup=$2 existed=$3
+  if [[ "$existed" == true ]]; then
+    cp -p "$backup" "$path"
+  else
+    rm -f "$path"
+  fi
+}
+
+rollback() {
+  set +e
+  restore_path "$sudoers_path" "$previous_sudoers" "$had_previous_sudoers"
+  restore_path "$status_script" "$previous_status" "$had_previous_status"
+  restore_path "$logs_script" "$previous_logs" "$had_previous_logs"
+  restore_path "$ops_cli" "$previous_ops_cli" "$had_previous_ops_cli"
+  restore_path "$update_script" "$previous_update" "$had_previous_update"
+
+  if [[ "$operator_created" == true ]]; then
+    userdel --remove "$operator_user" 2>/dev/null || userdel "$operator_user" 2>/dev/null || true
+  elif [[ "$operator_existed" == true ]]; then
+    shadow_hash_before=${operator_shadow_before#*:}
+    shadow_hash_before=${shadow_hash_before%%:*}
+    usermod --password "$shadow_hash_before" "$operator_user" 2>/dev/null || true
+  fi
+
+  restore_path "$config_path" "$previous_config" "$had_previous_config"
+  if [[ "$ssh_was_enabled" == true ]]; then
+    systemctl enable ssh.service >/dev/null 2>&1 || true
+  else
+    systemctl disable ssh.service >/dev/null 2>&1 || true
+  fi
+  if [[ "$ssh_was_active" == true ]]; then
+    systemctl restart ssh.service >/dev/null 2>&1 || true
+  else
+    systemctl stop ssh.service >/dev/null 2>&1 || true
+  fi
+}
+
+on_exit() {
+  local status=$?
+  if [[ "$transaction_active" == true ]]; then
+    rollback
+  fi
+  cleanup
+  trap - EXIT
+  exit "$status"
+}
+trap on_exit EXIT
+
+backup_path "$config_path" "$previous_config" had_previous_config
+backup_path "$sudoers_path" "$previous_sudoers" had_previous_sudoers
+backup_path "$status_script" "$previous_status" had_previous_status
+backup_path "$logs_script" "$previous_logs" had_previous_logs
+backup_path "$ops_cli" "$previous_ops_cli" had_previous_ops_cli
+backup_path "$update_script" "$previous_update" had_previous_update
+if id -u "$operator_user" >/dev/null 2>&1; then
+  operator_existed=true
+  operator_shadow_before=$(getent shadow "$operator_user") || fail "Cannot back up the existing operator account."
 fi
+if systemctl is-enabled --quiet ssh.service; then
+  ssh_was_enabled=true
+fi
+if systemctl is-active --quiet ssh.service; then
+  ssh_was_active=true
+fi
+transaction_active=true
 
 cat >"$config_tmp" <<EOF
 # Managed by linux/configure-ssh-operations.sh. Do not edit in place.
@@ -306,11 +386,6 @@ visudo -cf "$sudoers_tmp" >/dev/null || fail "Generated sudo policy did not vali
 install -o root -g root -m 0644 "$config_tmp" "$config_path"
 
 if ! sshd -t -f /etc/ssh/sshd_config; then
-  if [[ $had_previous_config == true ]]; then
-    install -o root -g root -m 0644 "$previous_config" "$config_path"
-  else
-    rm -f "$config_path"
-  fi
   fail "Generated sshd configuration did not validate; previous SSH configuration was restored."
 fi
 
@@ -319,22 +394,24 @@ fi
 # the service through a pre-existing SSH policy.
 effective_ports=$(sshd -T -f /etc/ssh/sshd_config | awk '$1 == "port" {print $2}' | sort -u)
 [[ "$effective_ports" == "$port" ]] || {
-  if [[ $had_previous_config == true ]]; then
-    install -o root -g root -m 0644 "$previous_config" "$config_path"
-  else
-    rm -f "$config_path"
-  fi
   fail "Existing SSH configuration leaves unexpected listening ports: ${effective_ports:-none}. Resolve the conflict before enabling operations SSH."
 }
 effective_addresses=$(sshd -T -f /etc/ssh/sshd_config | awk '$1 == "listenaddress" {print $2}' | sort -u)
 [[ "$effective_addresses" == "$listen_address:$port" ]] || {
-  if [[ $had_previous_config == true ]]; then
-    install -o root -g root -m 0644 "$previous_config" "$config_path"
-  else
-    rm -f "$config_path"
-  fi
   fail "Existing SSH configuration leaves unexpected listening addresses: ${effective_addresses:-none}. Resolve the conflict before enabling operations SSH."
 }
+
+if ! systemctl enable --now ssh.service || ! systemctl restart ssh.service; then
+  fail "Could not start the hardened SSH service; previous SSH configuration was restored."
+fi
+
+if [[ "$operator_existed" == false ]]; then
+  useradd --create-home --shell /bin/bash "$operator_user"
+  operator_created=true
+fi
+printf '%s:%s\n' "$operator_user" "$operator_password" | chpasswd
+unset operator_password
+usermod --unlock "$operator_user"
 
 install -o root -g root -m 0755 "$status_tmp" "$status_script"
 install -o root -g root -m 0755 "$logs_tmp" "$logs_script"
@@ -342,15 +419,7 @@ install -o root -g root -m 0755 "$ops_cli_tmp" "$ops_cli"
 install -o root -g root -m 0755 "$update_tmp" "$update_script"
 install -o root -g root -m 0440 "$sudoers_tmp" "$sudoers_path"
 
-if ! systemctl enable --now ssh.service || ! systemctl restart ssh.service; then
-  if [[ $had_previous_config == true ]]; then
-    install -o root -g root -m 0644 "$previous_config" "$config_path"
-  else
-    rm -f "$config_path"
-  fi
-  systemctl restart ssh.service || true
-  fail "Could not start the hardened SSH service; previous SSH configuration was restored."
-fi
+transaction_active=false
 
 echo "SSH operations access is ready: ssh -p $port $operator_user@$listen_address"
 echo "Allowed source: $allow_from. Root and public-key login are disabled."

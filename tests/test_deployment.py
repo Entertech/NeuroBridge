@@ -64,6 +64,17 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("Staged release must be root-owned", script)
         self.assertIn("neurobridge-ops update", script)
         self.assertIn("systemctl restart neurobridge.service", script)
+        self.assertIn("operator_shadow_before", script)
+        self.assertIn("rollback()", script)
+        self.assertIn("transaction_active=true", script)
+        self.assertLess(
+            script.index('if ! systemctl enable --now ssh.service'),
+            script.index('printf \'%s:%s\\n\' "$operator_user" "$operator_password" | chpasswd'),
+        )
+        self.assertLess(
+            script.index('printf \'%s:%s\\n\' "$operator_user" "$operator_password" | chpasswd'),
+            script.index('install -o root -g root -m 0440 "$sudoers_tmp" "$sudoers_path"'),
+        )
         self.assertIn("NeuroBridge SSH 运维一键配置", wizard)
         self.assertIn("再次输入运维账户密码", wizard)
         self.assertIn("--operator-password-stdin", wizard)
