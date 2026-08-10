@@ -17,8 +17,8 @@ Usage:
     --listen-address <gateway-private-ip> \
     --allow-from <operator-ip-or-cidr> [--port <1-65535>]
 
-The password must be supplied as one line on standard input; it is never an
-argument, configuration value, or log entry. This command restricts SSH to the
+The password must be exactly six ASCII digits supplied as one line on standard
+input; it is never an argument, configuration value, or log entry. This command restricts SSH to the
 named local operator account, disables root and public-key login, and binds
 sshd only to the specified gateway address. The account receives NeuroBridge
 project-path, status, log, update, start, stop, and restart operations. Setup
@@ -84,7 +84,7 @@ command -v chpasswd >/dev/null 2>&1 || fail "chpasswd is missing; install the Ub
 command -v systemctl >/dev/null 2>&1 || fail "systemd is required."
 command -v rsync >/dev/null 2>&1 || fail "rsync is required to initialize the operator project directory."
 IFS= read -r operator_password || fail "--operator-password-stdin requires one password line on standard input."
-[[ ${#operator_password} -ge 12 ]] || fail "Operator password must contain at least 12 characters."
+[[ "$operator_password" =~ ^[0-9]{6}$ ]] || fail "Operator password must contain exactly 6 digits."
 setup_source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/install-ubuntu.sh; do
   [[ -f "$setup_source_dir/$required" ]] || fail "SSH setup must run from a complete NeuroBridge checkout: missing $required"

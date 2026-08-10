@@ -50,7 +50,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("PasswordAuthentication yes", script)
         self.assertIn("PubkeyAuthentication no", script)
         self.assertIn("AuthenticationMethods password", script)
-        self.assertIn("Operator password must contain at least 12 characters", script)
+        self.assertIn("Operator password must contain exactly 6 digits", script)
+        self.assertIn('[[ "$operator_password" =~ ^[0-9]{6}$ ]]', script)
         self.assertIn("ListenAddress $listen_address", script)
         self.assertIn("Match User $operator_user Address *,!$allow_from", script)
         self.assertIn("AllowUsers $operator_user", script)
@@ -89,6 +90,8 @@ class DeploymentTests(unittest.TestCase):
         )
         self.assertIn("NeuroBridge SSH 运维一键配置", wizard)
         self.assertIn("再次输入运维账户密码", wizard)
+        self.assertIn("运维账户密码（6 位数字）", wizard)
+        self.assertIn('[[ "$operator_password" =~ ^[0-9]{6}$ ]]', wizard)
         self.assertIn("--operator-password-stdin", wizard)
         self.assertIn("输入 YES 确认", wizard)
 
