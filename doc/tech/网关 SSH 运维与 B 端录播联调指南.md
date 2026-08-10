@@ -142,6 +142,7 @@ ssh neuroops@192.168.88.10
 neurobridge-ops status             # 服务状态和最近 200 条日志
 neurobridge-ops logs --lines 500   # 查询历史日志，最多 1000 条
 neurobridge-ops logs --follow      # 实时追踪运行日志；Ctrl-C 停止
+neurobridge-ops audit --lines 500  # 查询 SSH 运维操作审计，最多 1000 条
 watch -n 2 neurobridge-ops status  # 每 2 秒刷新服务状态
 neurobridge-ops update             # 应用已暂存的审核版本并重新加载
 neurobridge-ops restart            # 重启网关服务
@@ -150,6 +151,8 @@ neurobridge-ops start
 ```
 
 运维账户只有上述状态、日志和 `neurobridge.service` 启停权限，不能编辑 `/etc/neurobridge/gateway.toml`、安装软件或获得任意 root shell。配置变更、软件升级和防火墙调整应由现场独立系统管理员在本地控制台或已批准的高权限流程中执行。
+
+每次 `status`、`logs`、`audit`、`update`、`start`、`stop` 或 `restart` 都会写入系统日志标识 `neurobridge-ops-audit`。日志包含系统时间、`sudo` 确认的运维账户、受限动作、参数摘要和开始/成功/失败结果；`logs --follow` 是持续命令，只记录开始。不记录账号密码、SSH 会话内容、网关配置或业务原始数据。用 `neurobridge-ops audit` 查询这份审计日志；SSH 登录来源仍以系统 `sshd` 日志为准。
 
 `restart` 或 `stop` 会中断 B 端 WebSocket。服务恢复后，B 端必须重新连接，先调用 `getStatus`，再重新订阅；旧 `subscriptionId` 不可复用。
 
@@ -195,6 +198,7 @@ neurobridge-ops update
 | --- | --- |
 | SSH 连接被拒绝 | 在网关本地控制台运行 `sudo systemctl status ssh.service`；确认监听 IP、端口和网线连通。 |
 | SSH 显示 `Permission denied (password)` | 确认使用 `neuroops` 账户并输入配置时设置的密码；确认来源 IP 与 `--allow-from` 一致。密码遗失时只能在网关本地控制台重新运行一键配置重置。 |
+| 需要确认是否执行过重启或更新 | 执行 `neurobridge-ops audit --lines 500`；以 `action=restart` 或 `action=update` 的 `result=success`/`failed:<退出码>` 判断结果。 |
 | 一键脚本拒绝已有监听地址或端口 | 这是防止意外暴露 SSH 的保护。回到本地控制台检查已有 `/etc/ssh/sshd_config` 与片段，不要直接覆盖。 |
 | B 端连接成功但没有录播数据 | 确认 `[ble].enabled = false`、录制目录有非空已完成会话，并执行 `neurobridge-ops logs --lines 500` 查看原因。 |
 | 重启后 B 端没有继续收数据 | B 端需要重新建立 WebSocket，调用 `getStatus`，再重新 `subscribe`。 |
@@ -210,6 +214,7 @@ sudo rm /etc/sudoers.d/neurobridge-operator
 sudo rm /usr/local/sbin/neurobridge-ops-status
 sudo rm /usr/local/sbin/neurobridge-ops-logs
 sudo rm /usr/local/sbin/neurobridge-ops-update
+sudo rm /usr/local/sbin/neurobridge-ops-command
 sudo rm /usr/local/bin/neurobridge-ops
 sudo systemctl restart ssh.service
 ```

@@ -119,6 +119,7 @@ logs_script=/usr/local/sbin/neurobridge-ops-logs
 ops_cli=/usr/local/bin/neurobridge-ops
 update_source_dir=/srv/neurobridge-release
 update_script=/usr/local/sbin/neurobridge-ops-update
+command_script=/usr/local/sbin/neurobridge-ops-command
 install -d -o root -g root -m 0755 "$config_dir"
 install -d -o root -g root -m 0755 /run/sshd
 # A release administrator stages an approved complete checkout here. The SSH
@@ -131,18 +132,21 @@ status_tmp=$(mktemp)
 logs_tmp=$(mktemp)
 ops_cli_tmp=$(mktemp)
 update_tmp=$(mktemp)
+command_tmp=$(mktemp)
 previous_config=$(mktemp)
 previous_sudoers=$(mktemp)
 previous_status=$(mktemp)
 previous_logs=$(mktemp)
 previous_ops_cli=$(mktemp)
 previous_update=$(mktemp)
+previous_command=$(mktemp)
 had_previous_config=false
 had_previous_sudoers=false
 had_previous_status=false
 had_previous_logs=false
 had_previous_ops_cli=false
 had_previous_update=false
+had_previous_command=false
 operator_existed=false
 operator_created=false
 operator_shadow_before=
@@ -151,8 +155,8 @@ ssh_was_active=false
 transaction_active=false
 
 cleanup() {
-  rm -f "$config_tmp" "$sudoers_tmp" "$status_tmp" "$logs_tmp" "$ops_cli_tmp" "$update_tmp" \
-    "$previous_config" "$previous_sudoers" "$previous_status" "$previous_logs" "$previous_ops_cli" "$previous_update"
+  rm -f "$config_tmp" "$sudoers_tmp" "$status_tmp" "$logs_tmp" "$ops_cli_tmp" "$update_tmp" "$command_tmp" \
+    "$previous_config" "$previous_sudoers" "$previous_status" "$previous_logs" "$previous_ops_cli" "$previous_update" "$previous_command"
 }
 
 backup_path() {
@@ -179,6 +183,7 @@ rollback() {
   restore_path "$logs_script" "$previous_logs" "$had_previous_logs"
   restore_path "$ops_cli" "$previous_ops_cli" "$had_previous_ops_cli"
   restore_path "$update_script" "$previous_update" "$had_previous_update"
+  restore_path "$command_script" "$previous_command" "$had_previous_command"
 
   if [[ "$operator_created" == true ]]; then
     userdel --remove "$operator_user" 2>/dev/null || userdel "$operator_user" 2>/dev/null || true
@@ -218,6 +223,7 @@ backup_path "$status_script" "$previous_status" had_previous_status
 backup_path "$logs_script" "$previous_logs" had_previous_logs
 backup_path "$ops_cli" "$previous_ops_cli" had_previous_ops_cli
 backup_path "$update_script" "$previous_update" had_previous_update
+backup_path "$command_script" "$previous_command" had_previous_command
 if id -u "$operator_user" >/dev/null 2>&1; then
   operator_existed=true
   operator_shadow_before=$(getent shadow "$operator_user") || fail "Cannot back up the existing operator account."
@@ -260,7 +266,7 @@ EOF
 
 cat >"$sudoers_tmp" <<EOF
 # Managed by linux/configure-ssh-operations.sh.
-Cmnd_Alias NEUROBRIDGE_OPERATIONS = /usr/local/sbin/neurobridge-ops-status, /usr/local/sbin/neurobridge-ops-logs, /usr/local/sbin/neurobridge-ops-logs *, /usr/local/sbin/neurobridge-ops-update, /usr/bin/systemctl start neurobridge.service, /usr/bin/systemctl stop neurobridge.service, /usr/bin/systemctl restart neurobridge.service
+Cmnd_Alias NEUROBRIDGE_OPERATIONS = /usr/local/sbin/neurobridge-ops-command, /usr/local/sbin/neurobridge-ops-command *
 $operator_user ALL=(root) NOPASSWD: NEUROBRIDGE_OPERATIONS
 EOF
 
@@ -318,6 +324,7 @@ Commands:
   status                 Show current service state and the latest 200 logs.
   logs [--lines N]       Show recent logs (default 200, maximum 1000).
   logs --follow           Follow new gateway logs in real time; Ctrl-C stops it.
+  audit [--lines N]      Show SSH operations audit events (default 200, maximum 1000).
   update                 Apply the root-owned staged release and reload the gateway.
   start | stop | restart  Control the NeuroBridge gateway service.
   help                   Show this help.
@@ -327,19 +334,23 @@ USAGE
 case "${1:-help}" in
   status)
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }
-    exec sudo -- /usr/local/sbin/neurobridge-ops-status
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command status
     ;;
   logs)
     shift
-    exec sudo -- /usr/local/sbin/neurobridge-ops-logs "$@"
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command logs "$@"
+    ;;
+  audit)
+    shift
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command audit "$@"
     ;;
   update)
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }
-    exec sudo -- /usr/local/sbin/neurobridge-ops-update
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command update
     ;;
   start|stop|restart)
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }
-    exec sudo -- /usr/bin/systemctl "$1" neurobridge.service
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command "$1"
     ;;
   help|-h|--help)
     usage
@@ -347,6 +358,86 @@ case "${1:-help}" in
   *)
     usage >&2
     exit 2
+    ;;
+esac
+EOF
+
+cat >"$command_tmp" <<'EOF'
+#!/usr/bin/env bash
+# Root-owned command gate and journal audit logger for SSH operations.
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export LC_ALL=C
+
+fail() {
+  echo "ERROR: $*" >&2
+  exit 2
+}
+
+[[ ${EUID} -eq 0 ]] || fail "This helper must run as root through sudo."
+
+operator=${SUDO_USER:-unknown}
+audit() {
+  local action=$1 request=$2 result=$3
+  /usr/bin/logger -p authpriv.notice -t neurobridge-ops-audit -- \
+    "operator=$operator action=$action request=$request result=$result"
+}
+
+run_and_audit() {
+  local action=$1 request=$2
+  shift 2
+  audit "$action" "$request" started
+  if "$@"; then
+    audit "$action" "$request" success
+    return 0
+  fi
+  local status=$?
+  audit "$action" "$request" "failed:$status"
+  return "$status"
+}
+
+lines=200
+parse_lines() {
+  if [[ $# -eq 0 ]]; then
+    return 0
+  fi
+  [[ $# -eq 2 && $1 == --lines && $2 =~ ^[0-9]+$ && $2 -ge 1 && $2 -le 1000 ]] \
+    || fail "Usage: neurobridge-ops $current_action [--lines N] (N: 1-1000)"
+  lines=$2
+}
+
+case "${1:-}" in
+  status)
+    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops status"
+    run_and_audit status status /usr/local/sbin/neurobridge-ops-status
+    ;;
+  logs)
+    shift
+    if [[ ${1:-} == --follow || ${1:-} == -f ]]; then
+      [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops logs [--follow|-f|--lines N]"
+      audit logs follow started
+      exec /usr/local/sbin/neurobridge-ops-logs --follow
+    fi
+    current_action=logs
+    parse_lines "$@"
+    run_and_audit logs "lines:$lines" /usr/local/sbin/neurobridge-ops-logs --lines "$lines"
+    ;;
+  audit)
+    shift
+    current_action=audit
+    parse_lines "$@"
+    run_and_audit audit "lines:$lines" /usr/bin/journalctl -t neurobridge-ops-audit -n "$lines" --no-pager
+    ;;
+  update)
+    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops update"
+    run_and_audit update staged-release /usr/local/sbin/neurobridge-ops-update
+    ;;
+  start|stop|restart)
+    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops start|stop|restart"
+    run_and_audit "$1" neurobridge.service /usr/bin/systemctl "$1" neurobridge.service
+    ;;
+  *)
+    fail "Usage: neurobridge-ops {status|logs|audit|update|start|stop|restart}"
     ;;
 esac
 EOF
@@ -417,10 +508,11 @@ install -o root -g root -m 0755 "$status_tmp" "$status_script"
 install -o root -g root -m 0755 "$logs_tmp" "$logs_script"
 install -o root -g root -m 0755 "$ops_cli_tmp" "$ops_cli"
 install -o root -g root -m 0755 "$update_tmp" "$update_script"
+install -o root -g root -m 0755 "$command_tmp" "$command_script"
 install -o root -g root -m 0440 "$sudoers_tmp" "$sudoers_path"
 
 transaction_active=false
 
 echo "SSH operations access is ready: ssh -p $port $operator_user@$listen_address"
 echo "Allowed source: $allow_from. Root and public-key login are disabled."
-echo "After login, use 'neurobridge-ops status', 'neurobridge-ops logs --follow', or 'neurobridge-ops update'."
+echo "After login, use 'neurobridge-ops status', 'neurobridge-ops audit', or 'neurobridge-ops update'."

@@ -130,11 +130,14 @@ ssh neuroops@192.168.88.10
 neurobridge-ops status             # 当前服务状态 + 最近 200 条日志
 neurobridge-ops logs --lines 500   # 查询指定数量的历史日志，最大 1000 条
 neurobridge-ops logs --follow      # 实时追踪新日志，Ctrl-C 停止
+neurobridge-ops audit --lines 500  # 查询 SSH 运维操作审计，最大 1000 条
 watch -n 2 neurobridge-ops status  # 每 2 秒刷新一次实时服务状态
 neurobridge-ops restart            # 重启网关
 neurobridge-ops stop
 neurobridge-ops start
 ```
+
+每次 `status`、`logs`、`audit`、`update`、`start`、`stop` 或 `restart` 都会写入系统日志标识 `neurobridge-ops-audit`，记录系统时间、`sudo` 确认的运维账户、受限动作、参数摘要和开始/成功/失败结果；`logs --follow` 是持续命令，只记录开始。日志不包含账号密码、SSH 会话内容、网关配置或业务原始数据。使用 `neurobridge-ops audit` 查询；SSH 认证来源仍以系统 `sshd` 日志为准。
 
 `restart` 或 `stop` 会断开 B 端 WebSocket 连接；恢复后 B 端必须重新连接、调用 `getStatus` 并重新订阅。需要修改 `/etc/neurobridge/gateway.toml`、部署新版本或更改防火墙时，应由现场的独立系统管理员账户在本地控制台或已批准的更高权限运维流程执行，不能扩大 `neuroops` 的权限。
 
@@ -145,7 +148,7 @@ sudo sshd -t
 sudo systemctl --no-pager --full status ssh.service
 ```
 
-如需撤销这个 SSH 运维入口，在本地控制台删除 `/etc/ssh/sshd_config.d/00-neurobridge-operations.conf`、`/etc/sudoers.d/neurobridge-operator`、`/usr/local/sbin/neurobridge-ops-status`、`/usr/local/sbin/neurobridge-ops-logs` 和 `/usr/local/bin/neurobridge-ops`，再执行 `sudo systemctl restart ssh.service`。是否停用 SSH 服务由现场运维策略决定。
+如需撤销这个 SSH 运维入口，在本地控制台删除 `/etc/ssh/sshd_config.d/00-neurobridge-operations.conf`、`/etc/sudoers.d/neurobridge-operator`、`/usr/local/sbin/neurobridge-ops-status`、`/usr/local/sbin/neurobridge-ops-logs`、`/usr/local/sbin/neurobridge-ops-update`、`/usr/local/sbin/neurobridge-ops-command` 和 `/usr/local/bin/neurobridge-ops`，再执行 `sudo systemctl restart ssh.service`。是否停用 SSH 服务由现场运维策略决定。
 
 ## 5. 填写现场配置
 
