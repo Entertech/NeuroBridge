@@ -20,9 +20,9 @@ on:
           - published
           - prerelease
       external_document_mode:
-        description: "publish 生成正式对外交付 ZIP 并在 Artifact 成功后提交发布状态；candidate 仅生成候选包。"
+        description: "candidate 仅生成内部候选包；publish 仅允许所有打包源文档已发布并锁定时生成正式 ZIP。"
         required: false
-        default: publish
+        default: candidate
         type: choice
         options:
           - publish
@@ -48,11 +48,10 @@ jobs:
       - run: bash tools/check-external-protocol.sh
       - name: Detect unpublished external documents
         id: external-document-state
-        run: echo "has_unpublished=$(python tools/mark-external-documents-published.py --check)" >> "$GITHUB_OUTPUT"
         run: |
-          test "$RELEASE_BRANCH" != master || { echo "Run publish from a release branch; protected master must be updated through a PR." >&2; exit 1; }
-          python tools/mark-external-documents-published.py --date "$(date -u +%F)"
-          bash tools/check-external-protocol.sh
+          state="$(python tools/mark-external-documents-published.py --check)"
+          test "$state" = true || test "$state" = false
+          echo "has_unpublished=$state" >> "$GITHUB_OUTPUT"
       - name: Install protocol PDF renderer
         run: |
           sudo apt-get update
@@ -100,8 +99,10 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/master' && steps.external-document-state.outputs.has_unpublished == 'true'
         env:
           RELEASE_BRANCH: codex/publish-external-documents-${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           git switch -c "$RELEASE_BRANCH"
+          test "$(git branch --show-current)" = "$RELEASE_BRANCH"
           python tools/mark-external-documents-published.py --date "$(date -u +%F)"
           bash tools/check-external-protocol.sh
           git config user.name "github-actions[bot]"

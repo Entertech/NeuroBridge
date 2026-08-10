@@ -29,12 +29,18 @@ class ExternalDocumentPackageTests(unittest.TestCase):
         self.assertEqual([document.version for document in documents], ["0.2", "0.1", "1.0"])
         self.assertEqual([document.status for document in documents], ["published", "published", "unpublished"])
 
-        manifest = build_release_manifest(documents, "publish")
+        manifest = build_release_manifest(documents, "candidate")
         self.assertEqual(manifest["versionDecision"], "retain_existing_versions")
         self.assertEqual(manifest["unpublishedSourceDocumentCount"], 1)
-        self.assertEqual([item["artifactStatus"] for item in manifest["documents"]], ["published"] * 3)
+        self.assertEqual([item["artifactStatus"] for item in manifest["documents"]], ["candidate"] * 3)
         self.assertEqual(manifest["documents"][2]["versionAction"], "publish_current_unpublished_version")
-        self.assertEqual(manifest["sourceMetadataState"], "published")
+        self.assertEqual(manifest["sourceMetadataState"], "unchanged")
+
+    def test_formal_package_rejects_unpublished_source_documents(self) -> None:
+        documents = collect_external_documents(load_registry())
+
+        with self.assertRaisesRegex(ValueError, "requires every packaged source document"):
+            build_release_manifest(documents, "publish")
 
     def test_web_client_is_a_complete_static_page_for_the_release_zip(self) -> None:
         files = collect_web_client_files()
@@ -46,7 +52,7 @@ class ExternalDocumentPackageTests(unittest.TestCase):
 
     def test_zip_contains_all_pdfs_and_a_directly_openable_b_side_page(self) -> None:
         documents = collect_external_documents(load_registry())
-        manifest = build_release_manifest(documents, "publish")
+        manifest = build_release_manifest(documents, "candidate")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             rendered_pdfs = []

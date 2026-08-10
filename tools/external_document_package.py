@@ -72,10 +72,16 @@ def collect_external_documents(registry: dict) -> list[ExternalDocument]:
 
 
 def build_release_manifest(documents: list[ExternalDocument], mode: str) -> dict:
-    """Describe the released snapshot without changing tracked document metadata."""
+    """Describe a candidate or a fully published, locked document snapshot."""
     if mode not in {"candidate", "publish"}:
         raise ValueError(f"Unsupported package mode: {mode}")
     unpublished = [document for document in documents if document.status == "unpublished"]
+    if mode == "publish" and unpublished:
+        names = ", ".join(f"{document.title} v{document.version}" for document in unpublished)
+        raise ValueError(
+            "A formal external document package requires every packaged source document "
+            f"to be published and locked first; still unpublished: {names}."
+        )
     return {
         "formatVersion": PACKAGE_FORMAT_VERSION,
         "packageMode": mode,
@@ -93,7 +99,7 @@ def build_release_manifest(documents: list[ExternalDocument], mode: str) -> dict
             for document in documents
         ],
         "sourceMetadataState": "published" if mode == "publish" else "unchanged",
-        "note": "Candidate packages do not modify source metadata. The publish workflow first promotes eligible documents on its release branch, then creates this package and commits the promotion only after Artifact upload succeeds.",
+        "note": "Candidate packages do not modify source metadata. Formal packages are allowed only after the release PR has published and locked every packaged source document.",
     }
 
 
@@ -158,6 +164,8 @@ def package_documents(rendered_pdfs: list[Path], web_client_files: list[Path], m
 def build_package(output_directory: Path, pdf_directory: Path, mode: str) -> Path:
     documents = collect_external_documents(load_registry())
     manifest = build_release_manifest(documents, mode)
+    if mode == "publish":
+        subprocess.run(["python3", "tools/check-version-registry.py"], cwd=ROOT, check=True)
     return package_documents(
         render_documents(documents, pdf_directory),
         collect_web_client_files(),
