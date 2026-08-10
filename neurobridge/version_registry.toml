@@ -553,6 +553,17 @@ target_external_release = "0.3"
 reason = "用户要求增加 TXT 格式的 SSH 配置文件，由 --quick 直接读取、缺参再询问，并明确允许密码以明文写入文件；该变更只涉及网关内部运维入口，不改变 B 端请求、字段或已发布对外协议。"
 
 [[change_records]]
+id = "2026-08-10-ssh-controlled-master-update"
+date = "2026-08-10"
+scope = "gateway_deployment"
+summary = "SSH 运维的 neurobridge-ops update 改为唯一受控更新入口：以受信任运维账户检查固定 Git 工作树无本地修改，切换至 master、仅快进拉取批准上游版本，再校验工作树安全性并重载服务；不再支持运维人员通过 SSH 手工运行 Git、替换源码目录或传入临时路径。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求以 neurobridge-ops 替代 SSH 场景中的直接 Git 操作，并要求固定切换 master 后拉取；该变更只约束网关内部部署流程，不改变已锁定的 B 端北向协议。"
+
+[[change_records]]
 id = "2026-08-10-ssh-boot-autostart-documentation"
 date = "2026-08-10"
 scope = "gateway_deployment"

@@ -165,14 +165,12 @@ printf '%s\n' '<至少6位数字密码>' | sudo ./linux/configure-ssh-operations
 ```bash
 ssh neuroops@192.168.88.10
 neurobridge-ops project            # 显示固定项目目录
-cd "$(neurobridge-ops project)"
-git status --short --branch
 neurobridge-ops status             # 当前服务状态 + 最近 200 条日志
 neurobridge-ops logs --lines 500   # 查询指定数量的历史日志，最大 1000 条
 neurobridge-ops logs --follow      # 实时追踪新日志，Ctrl-C 停止
 neurobridge-ops audit --lines 500  # 查询 SSH 运维操作审计，最大 1000 条
 watch -n 2 neurobridge-ops status  # 每 2 秒刷新一次实时服务状态
-neurobridge-ops update             # 应用已同步的完整版本并重新加载
+neurobridge-ops update             # 切换至 master、快进拉取并重新加载
 neurobridge-ops restart            # 重启网关
 neurobridge-ops stop
 neurobridge-ops start
@@ -180,27 +178,13 @@ neurobridge-ops start
 
 每次 `status`、`logs`、`audit`、`update`、`start`、`stop` 或 `restart` 都会写入系统日志标识 `neurobridge-ops-audit`，记录系统时间、`sudo` 确认的运维账户、受限动作、参数摘要和开始/成功/失败结果；`logs --follow` 是持续命令，只记录开始。日志不包含账号密码、SSH 会话内容、网关配置或业务原始数据。使用 `neurobridge-ops audit` 查询；SSH 认证来源仍以系统 `sshd` 日志为准。
 
-如果网关在更新时能够访问批准的代码源，可在 SSH 登录后的项目目录直接更新并部署：
+SSH 运维时，源码更新由 `neurobridge-ops update` 统一执行：它只使用固定项目目录，确认没有本地修改后固定切换至 `master`、执行仅快进拉取并部署。运维人员不应直接运行 Git、替换源码目录或传入临时路径。取得变更授权且网关能访问批准代码源后，SSH 登录执行：
 
 ```bash
-cd "$(neurobridge-ops project)"
-git pull --ff-only
 neurobridge-ops update
 ```
 
-现场隔离、网关无法访问代码源时，先从 B 端把完整新版本同步到同一个项目目录，再 SSH 登录执行 `update`。默认路径如下：
-
-```bash
-rsync -a --delete \
-  --exclude '.git/' --exclude '.venv/' --exclude '__pycache__/' --exclude 'build/' \
-  '<新版本源码目录>/' \
-  neuroops@192.168.88.10:/home/neuroops/NeuroBridge/
-ssh neuroops@192.168.88.10
-cd "$(neurobridge-ops project)"
-neurobridge-ops update
-```
-
-`neurobridge-ops update` 固定使用 `neurobridge-ops project` 显示的目录，不接受临时源码路径。更新前仍会检查完整性、文件归属、组/其他用户写权限和符号链接。因为该账号维护的脚本随后会以 root 安装，所以该账号在权限意义上属于网关管理员账号；密码和允许来源 IP 必须按管理员凭据管理。
+若工作树有本地修改、无法切换 `master`、无法快进拉取，或现场隔离而无法访问批准代码源，`update` 会失败。不要通过手工 Git、`rsync` 或未知文件绕过检查；应联系网关交付方按批准流程处理。因为该账号维护的脚本随后会以 root 安装，所以该账号在权限意义上属于网关管理员账号；密码和允许来源 IP 必须按管理员凭据管理。
 
 已经启用旧版 SSH 运维的网关升级到本方案后，需要从当前完整源码目录在网关本地重新运行一次 `sudo ./linux/setup-ssh-operations.sh`，脚本会初始化 `~/NeuroBridge`；之后直接维护这个项目目录。
 
