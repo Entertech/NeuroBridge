@@ -97,7 +97,7 @@ fi
 [[ -n "$operator_home" && "$operator_home" == /* && "$operator_home" != / ]] || fail "Cannot determine a safe home directory for $operator_user."
 project_dir=$operator_home/NeuroBridge
 
-python3 - "$listen_address" "$allow_from" <<'PY'
+allow_from=$(python3 - "$listen_address" "$allow_from" <<'PY'
 from __future__ import annotations
 
 import ipaddress
@@ -109,7 +109,9 @@ if listen.version != 4 or not listen.is_private:
     raise SystemExit("--listen-address must be an RFC1918 IPv4 address.")
 if allowed.version != 4 or not allowed.is_private:
     raise SystemExit("--allow-from must be an RFC1918 IPv4 address or CIDR.")
+print(allowed.with_prefixlen)
 PY
+)
 
 ip -o -4 addr show | awk '{split($4, address, "/"); print address[1]}' | grep -Fx -- "$listen_address" >/dev/null \
   || fail "--listen-address is not configured on this gateway: $listen_address"
@@ -159,6 +161,9 @@ operator_created=false
 operator_shadow_before=
 ssh_was_enabled=false
 ssh_was_active=false
+ssh_socket_available=false
+ssh_socket_was_enabled=false
+ssh_socket_was_active=false
 transaction_active=false
 
 cleanup() {
@@ -201,15 +206,31 @@ rollback() {
   fi
 
   restore_path "$config_path" "$previous_config" "$had_previous_config"
+
+  # Stop both activation paths before restoring their original enablement and
+  # active states. This avoids briefly exposing the distribution-default
+  # wildcard socket or making it compete with the address-bound daemon.
+  systemctl stop ssh.service >/dev/null 2>&1 || true
+  if [[ "$ssh_socket_available" == true ]]; then
+    systemctl stop ssh.socket >/dev/null 2>&1 || true
+  fi
   if [[ "$ssh_was_enabled" == true ]]; then
     systemctl enable ssh.service >/dev/null 2>&1 || true
   else
     systemctl disable ssh.service >/dev/null 2>&1 || true
   fi
+  if [[ "$ssh_socket_available" == true ]]; then
+    if [[ "$ssh_socket_was_enabled" == true ]]; then
+      systemctl enable ssh.socket >/dev/null 2>&1 || true
+    else
+      systemctl disable ssh.socket >/dev/null 2>&1 || true
+    fi
+    if [[ "$ssh_socket_was_active" == true ]]; then
+      systemctl start ssh.socket >/dev/null 2>&1 || true
+    fi
+  fi
   if [[ "$ssh_was_active" == true ]]; then
-    systemctl restart ssh.service >/dev/null 2>&1 || true
-  else
-    systemctl stop ssh.service >/dev/null 2>&1 || true
+    systemctl start ssh.service >/dev/null 2>&1 || true
   fi
 }
 
@@ -240,6 +261,15 @@ if systemctl is-enabled --quiet ssh.service; then
 fi
 if systemctl is-active --quiet ssh.service; then
   ssh_was_active=true
+fi
+if systemctl cat ssh.socket >/dev/null 2>&1; then
+  ssh_socket_available=true
+  if systemctl is-enabled --quiet ssh.socket; then
+    ssh_socket_was_enabled=true
+  fi
+  if systemctl is-active --quiet ssh.socket; then
+    ssh_socket_was_active=true
+  fi
 fi
 transaction_active=true
 
@@ -522,6 +552,12 @@ effective_addresses=$(sshd -T -f /etc/ssh/sshd_config | awk '$1 == "listenaddres
   fail "Existing SSH configuration leaves unexpected listening addresses: ${effective_addresses:-none}. Resolve the conflict before enabling operations SSH."
 }
 
+# Ubuntu 24.04 may enable ssh.socket when openssh-server is installed. Its
+# wildcard listener would either keep port 22 occupied or bypass ListenAddress,
+# so switch explicitly to the address-bound service before starting sshd.
+if [[ "$ssh_socket_available" == true ]] && ! systemctl disable --now ssh.socket; then
+  fail "Could not disable Ubuntu SSH socket activation; previous SSH configuration was restored."
+fi
 if ! systemctl enable --now ssh.service || ! systemctl restart ssh.service; then
   fail "Could not start the hardened SSH service; previous SSH configuration was restored."
 fi

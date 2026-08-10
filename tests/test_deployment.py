@@ -44,7 +44,12 @@ class DeploymentTests(unittest.TestCase):
         script = (ROOT / "linux" / "configure-ssh-operations.sh").read_text(encoding="utf-8")
         wizard = (ROOT / "linux" / "setup-ssh-operations.sh").read_text(encoding="utf-8")
         self.assertIn("openssh-server", preparation)
+        self.assertIn("systemctl disable --now ssh.socket", preparation)
         self.assertIn("systemctl disable --now ssh.service", preparation)
+        self.assertLess(
+            preparation.index("systemctl disable --now ssh.socket"),
+            preparation.index("systemctl disable --now ssh.service"),
+        )
         self.assertIn("--operator-password-stdin", script)
         self.assertIn("PermitRootLogin no", script)
         self.assertIn("PasswordAuthentication yes", script)
@@ -54,6 +59,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('[[ "$operator_password" =~ ^[0-9]{6}$ ]]', script)
         self.assertIn("ListenAddress $listen_address", script)
         self.assertIn("Match User $operator_user Address *,!$allow_from", script)
+        self.assertIn("print(allowed.with_prefixlen)", script)
         self.assertIn("AllowUsers $operator_user", script)
         self.assertIn("00-neurobridge-operations.conf", script)
         self.assertIn("unexpected listening ports", script)
@@ -79,7 +85,15 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('/usr/bin/systemctl "$1" neurobridge.service', script)
         self.assertIn("operator_shadow_before", script)
         self.assertIn("rollback()", script)
+        self.assertIn("ssh_socket_was_enabled", script)
+        self.assertIn("ssh_socket_was_active", script)
+        self.assertIn("systemctl cat ssh.socket", script)
+        self.assertIn("systemctl disable --now ssh.socket", script)
         self.assertIn("transaction_active=true", script)
+        self.assertLess(
+            script.index("systemctl disable --now ssh.socket"),
+            script.index('if ! systemctl enable --now ssh.service'),
+        )
         self.assertLess(
             script.index('if ! systemctl enable --now ssh.service'),
             script.index('printf \'%s:%s\\n\' "$operator_user" "$operator_password" | chpasswd'),

@@ -39,9 +39,10 @@ apt-get install -y --no-install-recommends \
   python3-venv \
   rsync
 
-# Do not expose the distribution-default SSH daemon. The explicit operations
-# setup script installs a key-only, address-bound configuration before enabling
-# this service.
+# Do not expose the distribution-default SSH daemon or Ubuntu's socket-activated
+# listener. The explicit operations setup installs a password-authenticated,
+# address-bound configuration before enabling ssh.service.
+systemctl disable --now ssh.socket 2>/dev/null || true
 systemctl disable --now ssh.service 2>/dev/null || true
 
 install_dir=/opt/neurobridge
