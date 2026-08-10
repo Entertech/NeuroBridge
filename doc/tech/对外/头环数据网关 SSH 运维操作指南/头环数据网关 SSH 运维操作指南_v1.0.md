@@ -44,16 +44,40 @@
 - 运维主机的来源地址已经确认；常规单主机场景应使用单个地址；
 - 当前源码目录包含 `linux/setup-ssh-operations.sh` 和 `linux/configure-ssh-operations.sh`。
 
-在网关本地控制台进入源码根目录后，执行快速配置：
+在网关本地控制台进入源码根目录后，按现场范围选择下列配置方式。需要明确指定所有参数或允许来源网段时，先使用完整交互配置；单网卡、单运维主机的常规现场可使用快速配置。
+
+### 3.1 完整交互配置
+
+以下情况使用完整模式：需要允许经批准的来源网段、需要明确指定所有参数、或不使用快速配置文件。它不会读取 `config/ssh-operations.txt` 中的密码，密码始终以隐藏方式输入并二次确认。
+
+```bash
+cd <NeuroBridge源码目录>
+sudo ./linux/setup-ssh-operations.sh
+```
+
+完整模式会依次询问运维账户、密码、网关监听 IP、允许来源 IP/CIDR 和端口。来源网段必须使用规范网络地址；例如允许 `192.168.88.x` 网段时填写 `192.168.88.0/24`，单台主机填写 `192.168.88.20/32`。所有参数在应用前均会显示摘要并要求输入 `YES` 确认。
+
+如由网关交付方在受控自动化流程中配置，可使用严格配置入口并仅通过标准输入传入密码。不要将真实密码直接写入命令、脚本或命令历史：
+
+```bash
+printf '%s\n' '<至少6位数字密码>' | sudo ./linux/configure-ssh-operations.sh \
+  --operator-user <运维账户> \
+  --operator-password-stdin \
+  --listen-address <网关私有IPv4> \
+  --allow-from <运维主机IPv4或CIDR> \
+  --port <SSH端口>
+```
+
+修改账户、密码、监听 IP、允许来源或端口后，必须重新运行相应配置流程；直接编辑系统 SSH 文件不属于本指南支持的操作。
+
+### 3.2 快速配置
+
+快速模式适用于单网卡、单运维主机的常规现场。首次运行时，脚本会从 `config/ssh-operations.example.txt` 创建仅本机使用的 `config/ssh-operations.txt`；实际文件已被 Git 忽略。空字段会在执行时提示输入，因此建议默认留空并在本地控制台输入密码。
 
 ```bash
 cd <NeuroBridge源码目录>
 sudo ./linux/setup-ssh-operations.sh --quick
 ```
-
-### 3.1 快速配置
-
-快速模式适用于单网卡、单运维主机的常规现场。首次运行时，脚本会从 `config/ssh-operations.example.txt` 创建仅本机使用的 `config/ssh-operations.txt`；实际文件已被 Git 忽略。空字段会在执行时提示输入，因此建议默认留空并在本地控制台输入密码。
 
 快速配置文件采用简单的 `key=value` 格式，不执行其中的 Shell 命令：
 
@@ -93,29 +117,7 @@ sudo ./linux/setup-ssh-operations.sh --quick <运维主机IPv4地址>
 | B 端运维主机 IP | 单台运维主机的现场 IPv4 地址；快速模式会收紧为单机来源 |
 | SSH 端口 | 双方确认的端口；未确认时不要自行改用其他端口 |
 
-### 3.2 完整交互配置
-
-以下情况使用完整模式：需要允许经批准的来源网段、需要明确指定所有参数、或不使用快速配置文件。它不会读取 `config/ssh-operations.txt` 中的密码，密码始终以隐藏方式输入并二次确认。
-
-```bash
-cd <NeuroBridge源码目录>
-sudo ./linux/setup-ssh-operations.sh
-```
-
-完整模式会依次询问运维账户、密码、网关监听 IP、允许来源 IP/CIDR 和端口。来源网段必须使用规范网络地址；例如允许 `192.168.88.x` 网段时填写 `192.168.88.0/24`，单台主机填写 `192.168.88.20/32`。所有参数在应用前均会显示摘要并要求输入 `YES` 确认。
-
-如由网关交付方在受控自动化流程中配置，可使用严格配置入口并仅通过标准输入传入密码。不要将真实密码直接写入命令、脚本或命令历史：
-
-```bash
-printf '%s\n' '<至少6位数字密码>' | sudo ./linux/configure-ssh-operations.sh \
-  --operator-user <运维账户> \
-  --operator-password-stdin \
-  --listen-address <网关私有IPv4> \
-  --allow-from <运维主机IPv4或CIDR> \
-  --port <SSH端口>
-```
-
-修改账户、密码、监听 IP、允许来源或端口后，必须重新运行相应配置流程；直接编辑系统 SSH 文件不属于本指南支持的操作。
+### 3.3 配置后验证
 
 配置成功后，在网关本地控制台执行：
 
