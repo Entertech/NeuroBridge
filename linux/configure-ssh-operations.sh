@@ -17,7 +17,7 @@ Usage:
     --listen-address <gateway-private-ip> \
     --allow-from <operator-ip-or-cidr> [--port <1-65535>]
 
-The password must be exactly six ASCII digits supplied as one line on standard
+The password must contain at least six ASCII digits supplied as one line on standard
 input; it is never an argument, configuration value, or log entry. This command restricts SSH to the
 named local operator account, disables root and public-key login, and binds
 sshd only to the specified gateway address. The account receives NeuroBridge
@@ -85,7 +85,7 @@ command -v systemctl >/dev/null 2>&1 || fail "systemd is required."
 command -v rsync >/dev/null 2>&1 || fail "rsync is required to initialize the operator project directory."
 command -v ss >/dev/null 2>&1 || fail "ss is required to verify that the SSH port is released."
 IFS= read -r operator_password || fail "--operator-password-stdin requires one password line on standard input."
-[[ "$operator_password" =~ ^[0-9]{6}$ ]] || fail "Operator password must contain exactly 6 digits."
+[[ "$operator_password" =~ ^[0-9]{6,}$ ]] || fail "Operator password must contain at least 6 digits."
 setup_source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/install-ubuntu.sh; do
   [[ -f "$setup_source_dir/$required" ]] || fail "SSH setup must run from a complete NeuroBridge checkout: missing $required"
@@ -611,7 +611,7 @@ if [[ "$operator_existed" == false ]]; then
   useradd --create-home --shell /bin/bash "$operator_user"
   operator_created=true
 fi
-# The dedicated operations account contract requires exactly six digits.
+# The dedicated operations account contract requires at least six digits.
 # Select a shadow-utils hashing method explicitly so this account update does
 # not pass through the host-wide PAM minimum-length rule. This does not change
 # PAM configuration, and the clear-text password remains confined to stdin.

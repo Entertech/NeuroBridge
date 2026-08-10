@@ -54,7 +54,7 @@ echo "NeuroBridge SSH 运维一键配置"
 echo "将启用受限运维账户的密码登录；密码不会写入文件或日志。"
 read -r -p "运维账户 [neuroops]: " operator_user
 operator_user=${operator_user:-neuroops}
-read -r -s -p "运维账户密码（6 位数字）: " operator_password
+read -r -s -p "运维账户密码（至少 6 位数字）: " operator_password
 echo
 read -r -s -p "再次输入运维账户密码: " operator_password_confirm
 echo
@@ -62,8 +62,8 @@ echo
   echo "ERROR: 两次输入的密码不一致。" >&2
   exit 1
 }
-[[ "$operator_password" =~ ^[0-9]{6}$ ]] || {
-  echo "ERROR: 运维账户密码必须是正好 6 位数字。" >&2
+[[ "$operator_password" =~ ^[0-9]{6,}$ ]] || {
+  echo "ERROR: 运维账户密码必须是至少 6 位数字。" >&2
   exit 1
 }
 read -r -p "网关私有监听 IP${default_address:+ [$default_address]}: " listen_address
@@ -80,8 +80,11 @@ port=${port:-22}
 
 echo
 echo "即将仅允许 $operator_user 从 $allow_from 通过 $listen_address:$port 使用账号密码登录。"
-read -r -p "输入 YES 确认: " confirm
-[[ $confirm == YES ]] || { echo "已取消。"; exit 0; }
+read -r -p "输入 YES 确认（不区分大小写）: " confirm
+case "$confirm" in
+  [Yy][Ee][Ss]) ;;
+  *) echo "已取消。"; exit 0 ;;
+esac
 
 printf '%s\n' "$operator_password" | "$configure" \
   --operator-user "$operator_user" \
