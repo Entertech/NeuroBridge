@@ -29,8 +29,7 @@ on:
           - candidate
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   unit-and-websocket:
@@ -52,6 +51,12 @@ jobs:
           state="$(python tools/mark-external-documents-published.py --check)"
           test "$state" = true || test "$state" = false
           echo "has_unpublished=$state" >> "$GITHUB_OUTPUT"
+      - name: Require publication state before merge
+        if: (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/master')) && steps.external-document-state.outputs.has_unpublished == 'true'
+        run: |
+          echo "External documents must be promoted and locked on this PR branch before it can merge." >&2
+          echo "Run: python3 tools/mark-external-documents-published.py --date YYYY-MM-DD" >&2
+          exit 1
       - name: Install protocol PDF renderer
         run: |
           sudo apt-get update
@@ -59,9 +64,8 @@ jobs:
           fc-cache -f
           fc-match "Noto Sans CJK SC" | grep -Eqi "Noto.*CJK"
       - name: Build external document PDF package and page previews
-        if: github.event_name != 'push' || github.ref != 'refs/heads/master' || steps.external-document-state.outputs.has_unpublished != 'true'
         env:
-          EXTERNAL_DOCUMENT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.external_document_mode || (github.event_name == 'push' && github.ref == 'refs/heads/master' && steps.external-document-state.outputs.has_unpublished == 'false' && 'publish') || 'candidate' }}
+          EXTERNAL_DOCUMENT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.external_document_mode || (github.event_name == 'push' && github.ref == 'refs/heads/master' && 'publish') || 'candidate' }}
           PROTOCOL_VERSION: ${{ inputs.protocol_version }}
           PROTOCOL_STAGE: ${{ inputs.protocol_stage || 'published' }}
         run: |
@@ -78,8 +82,8 @@ jobs:
             name=$(basename "$pdf_path" .pdf)
             pdftoppm -png -r 144 "$pdf_path" "artifacts/document-preview/$name"
           done
-          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 3
-          test "$(find artifacts/document-preview -type f -name '*.png' | wc -l | tr -d ' ')" -ge 3
+          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 4
+          test "$(find artifacts/document-preview -type f -name '*.png' | wc -l | tr -d ' ')" -ge 4
           if [[ -n "$PROTOCOL_VERSION" ]]; then
             mkdir -p artifacts/requested-protocol
             python tools/build-external-protocol-artifact.py \
@@ -88,27 +92,9 @@ jobs:
               --version "$PROTOCOL_VERSION"
           fi
       - name: Upload external document ZIP artifact
-        if: github.event_name != 'push' || github.ref != 'refs/heads/master' || steps.external-document-state.outputs.has_unpublished != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: external-document-package
           path: artifacts/
           if-no-files-found: error
           retention-days: 90
-      - name: Create publication-state follow-up PR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && steps.external-document-state.outputs.has_unpublished == 'true'
-        env:
-          RELEASE_BRANCH: codex/publish-external-documents-${{ github.sha }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git switch -c "$RELEASE_BRANCH"
-          test "$(git branch --show-current)" = "$RELEASE_BRANCH"
-          python tools/mark-external-documents-published.py --date "$(date -u +%F)"
-          bash tools/check-external-protocol.sh
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add neurobridge/version_registry.toml doc/tech/对外/头环数据网关\ SSH\ 运维操作指南/头环数据网关\ SSH\ 运维操作指南_v1.0.md doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md
-          git diff --cached --check
-          git commit -m "[codex] docs: mark external documents published"
-          git push origin "HEAD:$RELEASE_BRANCH"
-          gh pr create --base master --head "$RELEASE_BRANCH" --title "[codex] docs: publish external documents" --body "Automated follow-up after merging unpublished external documents. The final ZIP Artifact is generated after this PR merges."

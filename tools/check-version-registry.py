@@ -27,6 +27,21 @@ def digest(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
 
 
+def validate_published_operations_document(registry: dict, locks: dict, document: dict, scope: str, label: str) -> None:
+    markdown = ROOT / document["markdown_path"]
+    required_fields = ("published_date", "markdown_sha256", "publication_record", "pdf_artifact_name")
+    if any(field not in document for field in required_fields):
+        fail(f"published {label} document requires publication metadata")
+    if not markdown.is_file() or digest(markdown) != document["markdown_sha256"]:
+        fail(f"published {label} Markdown hash is invalid")
+    records = [record for record in registry["change_records"] if record["id"] == document["publication_record"]]
+    if len(records) != 1 or records[0]["external_document_action"] != "explicit_user_authorized" or records[0]["change_state"] != "locked":
+        fail(f"published {label} document requires an explicitly authorized locked record")
+    lock = locks.get(records[0].get("release_lock"))
+    if lock is None or lock["scope"] != scope or lock["to_version"] != document["version"]:
+        fail(f"published {label} publication lock is invalid")
+
+
 def main() -> None:
     registry = load_registry()
     policy = registry["change_policy"]
@@ -37,6 +52,7 @@ def main() -> None:
     integration = registry["documents"]["integration_plan"]
     capture_package = registry["documents"].get("external_capture_package")
     ssh_operations = registry["documents"].get("external_ssh_operations")
+    wired_network_operations = registry["documents"].get("external_wired_network_operations")
     wire_version = registry["northbound_wire_protocol"]["version"]
     application_version = registry["application"]["version"]
 
@@ -130,18 +146,18 @@ def main() -> None:
             fail("external capture package publication lock is invalid")
 
     if ssh_operations and ssh_operations["status"] == "published":
-        ssh_markdown = ROOT / ssh_operations["markdown_path"]
-        required_ssh_fields = ("published_date", "markdown_sha256", "publication_record")
-        if any(field not in ssh_operations for field in required_ssh_fields):
-            fail("published SSH operations document requires publication metadata")
-        if not ssh_markdown.is_file() or digest(ssh_markdown) != ssh_operations["markdown_sha256"]:
-            fail("published SSH operations Markdown hash is invalid")
-        ssh_records = [record for record in registry["change_records"] if record["id"] == ssh_operations["publication_record"]]
-        if len(ssh_records) != 1 or ssh_records[0]["external_document_action"] != "explicit_user_authorized" or ssh_records[0]["change_state"] != "locked":
-            fail("published SSH operations document requires an explicitly authorized locked record")
-        ssh_lock = locks.get(ssh_records[0].get("release_lock"))
-        if ssh_lock is None or ssh_lock["scope"] != "external_ssh_operations_document" or ssh_lock["to_version"] != ssh_operations["version"]:
-            fail("published SSH operations publication lock is invalid")
+        validate_published_operations_document(
+            registry, locks, ssh_operations, "external_ssh_operations_document", "SSH operations"
+        )
+
+    if wired_network_operations and wired_network_operations["status"] == "published":
+        validate_published_operations_document(
+            registry,
+            locks,
+            wired_network_operations,
+            "external_wired_network_operations_document",
+            "wired network operations",
+        )
 
     tracked_pdfs = subprocess.run(
         ["git", "ls-files", "--", "doc/tech/*.pdf"], cwd=ROOT, check=True, capture_output=True, text=True

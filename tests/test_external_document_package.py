@@ -25,22 +25,46 @@ class ExternalDocumentPackageTests(unittest.TestCase):
     def test_all_current_external_documents_keep_their_registered_versions(self) -> None:
         documents = collect_external_documents(load_registry())
 
-        self.assertEqual([document.key for document in documents], ["northbound", "capture_package", "ssh_operations"])
-        self.assertEqual([document.version for document in documents], ["0.2", "0.1", "1.0"])
-        self.assertEqual([document.status for document in documents], ["published", "published", "unpublished"])
+        self.assertEqual(
+            [document.key for document in documents],
+            ["northbound", "capture_package", "ssh_operations", "wired_network_operations"],
+        )
+        self.assertEqual([document.version for document in documents], ["0.2", "0.1", "1.0", "1.0"])
+        self.assertEqual(
+            [document.pdf_artifact_name for document in documents],
+            [
+                "头环数据网关北向网络协议_v0.2.pdf",
+                "头环数据采集包格式说明_v0.1.pdf",
+                "头环数据网关 SSH 运维操作指南_v1.0.pdf",
+                "头环数据网关有线网络配置指南_v1.0.pdf",
+            ],
+        )
 
         manifest = build_release_manifest(documents, "candidate")
         self.assertEqual(manifest["versionDecision"], "retain_existing_versions")
-        self.assertEqual(manifest["unpublishedSourceDocumentCount"], 1)
-        self.assertEqual([item["artifactStatus"] for item in manifest["documents"]], ["candidate"] * 3)
-        self.assertEqual(manifest["documents"][2]["versionAction"], "publish_current_unpublished_version")
+        self.assertEqual(
+            manifest["unpublishedSourceDocumentCount"],
+            sum(document.status == "unpublished" for document in documents),
+        )
+        self.assertEqual([item["artifactStatus"] for item in manifest["documents"]], ["candidate"] * 4)
+        self.assertEqual(
+            [item["versionAction"] for item in manifest["documents"]],
+            [
+                "retain_published_version" if document.status == "published" else "publish_current_unpublished_version"
+                for document in documents
+            ],
+        )
         self.assertEqual(manifest["sourceMetadataState"], "unchanged")
 
     def test_formal_package_rejects_unpublished_source_documents(self) -> None:
         documents = collect_external_documents(load_registry())
+        unpublished_documents = [
+            documents[0].__class__(**{**documents[0].__dict__, "status": "unpublished"}),
+            *documents[1:],
+        ]
 
         with self.assertRaisesRegex(ValueError, "requires every packaged source document"):
-            build_release_manifest(documents, "publish")
+            build_release_manifest(unpublished_documents, "publish")
 
     def test_web_client_is_a_complete_static_page_for_the_release_zip(self) -> None:
         files = collect_web_client_files()
