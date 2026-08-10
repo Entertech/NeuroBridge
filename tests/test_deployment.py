@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 
 
@@ -109,17 +112,95 @@ class DeploymentTests(unittest.TestCase):
             script.index('install -o root -g root -m 0440 "$sudoers_tmp" "$sudoers_path"'),
         )
         self.assertIn("NeuroBridge SSH 运维一键配置", wizard)
+        self.assertIn("--quick [operator-ip]", wizard)
+        self.assertIn("quick_mode=false", wizard)
+        self.assertIn("operator_user=neuroops", wizard)
+        self.assertIn("listen_address=$default_address", wizard)
+        self.assertIn("allow_from=$(python3 - \"$operator_host\"", wizard)
+        self.assertIn('print(f"{address}/32")', wizard)
+        self.assertIn("Quick mode accepts one operator IPv4 address", wizard)
         self.assertIn("ip -o -4 addr show scope global", wizard)
         self.assertIn("not address.is_loopback", wizard)
         self.assertIn('default_address=${private_addresses[0]}', wizard)
         self.assertIn('网关私有监听 IP${default_address:+ [$default_address]}', wizard)
         self.assertIn('listen_address=${listen_address:-$default_address}', wizard)
+        self.assertIn('if [[ "$quick_mode" == false ]]', wizard)
         self.assertIn("再次输入运维账户密码", wizard)
         self.assertIn("运维账户密码（至少 6 位数字）", wizard)
         self.assertIn('[[ "$operator_password" =~ ^[0-9]{6,}$ ]]', wizard)
         self.assertIn("--operator-password-stdin", wizard)
         self.assertIn("输入 YES 确认（不区分大小写）", wizard)
         self.assertIn('[Yy][Ee][Ss])', wizard)
+        self.assertIn('exec "$configure" "$@"', wizard)
+
+    def test_ssh_setup_supports_quick_and_full_modes(self) -> None:
+        source = (ROOT / "linux" / "setup-ssh-operations.sh").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            linux_dir = temporary_root / "linux"
+            bin_dir = temporary_root / "bin"
+            linux_dir.mkdir()
+            bin_dir.mkdir()
+
+            wizard = linux_dir / "setup-ssh-operations.sh"
+            wizard.write_text(source, encoding="utf-8")
+            wizard.chmod(0o755)
+
+            configurator = linux_dir / "configure-ssh-operations.sh"
+            configurator.write_text(
+                "#!/usr/bin/env bash\n"
+                "IFS= read -r password\n"
+                "printf 'password=%s\\n' \"$password\"\n"
+                "printf 'args=%s\\n' \"$*\"\n",
+                encoding="utf-8",
+            )
+            configurator.chmod(0o755)
+
+            ip_command = bin_dir / "ip"
+            ip_command.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' '2: eth0 inet 192.168.88.10/24 brd 192.168.88.255 scope global eth0'\n",
+                encoding="utf-8",
+            )
+            ip_command.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+            result = subprocess.run(
+                ["bash", str(wizard), "--quick", "192.168.88.20"],
+                input="123456\n123456\nyes\n",
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("password=123456", result.stdout)
+            self.assertIn(
+                "args=--operator-user neuroops --operator-password-stdin "
+                "--listen-address 192.168.88.10 --allow-from 192.168.88.20/32 --port 22",
+                result.stdout,
+            )
+
+            full_result = subprocess.run(
+                ["bash", str(wizard)],
+                input="\n123456\n123456\n\n192.168.88.20\n\nyes\n",
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+
+            self.assertEqual(full_result.returncode, 0, full_result.stderr)
+            self.assertIn("password=123456", full_result.stdout)
+            self.assertIn(
+                "args=--operator-user neuroops --operator-password-stdin "
+                "--listen-address 192.168.88.10 --allow-from 192.168.88.20 --port 22",
+                full_result.stdout,
+            )
 
     def test_installer_builds_and_installs_the_locked_algorithm_bridge(self) -> None:
         install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")

@@ -136,11 +136,56 @@ sudo systemctl restart neurobridge.service
 sudo systemctl --no-pager --full status neurobridge.service
 ```
 
+### 3.1 临时局域网验证与最终网线直连
+
+临时在同一受控局域网验证 SSH 时，监听地址填写网关当前网卡 IP；允许来源优先填写当前运维电脑的实际 IP 加 `/32`。`/32` 只表示“允许这一台来源主机”，与当前使用交换机、路由器还是单根网线无关。该方式仅用于进场前短时验证，不改变正式部署必须使用专用有线直连的边界。例如：
+
+```text
+网关当前 IP：192.168.88.10
+运维电脑 IP：192.168.88.20
+SSH 监听地址：192.168.88.10
+允许来源：192.168.88.20/32
+```
+
+如果运维电脑通过 DHCP 获取地址，地址变化后会被来源限制拒绝。临时验证期间应固定地址、配置 DHCP 保留，或在每次地址变化后从网关本地控制台重新运行一键配置。不建议为了省事允许整个普通局域网；如现场明确需要允许一个网段，必须填写规范网络地址，例如：
+
+```text
+192.168.88.0/24    # 192.168.88.x 网段
+192.168.88.0/23    # 192.168.88.x～192.168.89.x 网段
+```
+
+最终改为网关与 B 端单根网线直连时，两端应改用现场确认的静态 IP。由于网关监听 IP 和 B 端来源 IP 都发生变化，必须在网关本地控制台重新运行 SSH 一键配置，不能继续沿用临时局域网配置。切换顺序为：配置两端静态 IP → `ping` 验证 → 重新执行快速或完整配置 → 按第 4.3 节验收。
+
 ## 4. 首次一键启用 SSH 运维
 
 首次 SSH 尚未启动时，必须给网关连接一次本地显示器和键盘，完成引导配置。不要为初次设置密码开放临时的明文远程终端。
 
-### 4.1 在网关本地控制台运行一键配置
+### 4.1 推荐：快速一键配置
+
+常规单网卡、单 B 端、默认账号和端口场景，在网关本地控制台执行：
+
+```bash
+sudo ./linux/setup-ssh-operations.sh --quick 192.168.88.20
+```
+
+命令中的 IP 是唯一允许登录的 B 端或临时运维电脑 IP。也可以省略 IP，由脚本单独询问：
+
+```bash
+sudo ./linux/setup-ssh-operations.sh --quick
+```
+
+快速模式自动使用：
+
+- 运维账户 `neuroops`；
+- SSH 端口 `22`；
+- 当前设备检测到的网关私有 IPv4 作为监听地址；
+- B 端 IP `/32` 作为唯一允许来源。
+
+现场只需确认脚本显示的自动参数，隐藏输入并二次确认至少 6 位数字密码，最后输入任意大小写组合的 `YES`。密码仍不会进入命令参数、文件或日志。若未检测到网关私有 IP，快速模式会停止并提示使用完整模式；若检测到的 IP 不是目标网卡，也应取消并改用完整模式，不能让脚本猜测网卡。
+
+### 4.2 完整交互配置（保留）
+
+需要自定义账号、监听 IP、来源网段或 SSH 端口时，继续使用原有无参数命令：
 
 ```bash
 sudo ./linux/setup-ssh-operations.sh
@@ -158,7 +203,7 @@ SSH 端口：22
 确认：YES
 ```
 
-脚本以隐藏方式读取并二次确认密码，要求至少 6 位纯数字；密码不会写入参数、配置、日志或命令历史。配置器仅为该专用运维账户使用系统 `chpasswd` 支持的 SHA512 加盐哈希写入方式，从而不经过 PAM 的最短 8 位检查；不会修改整机 PAM 密码策略，其他账户不受影响。最终输入 `YES` 确认时不区分大小写。数字密码只允许用于本文限定的专用网线直连和固定来源 IP 场景，禁止将 SSH 接入公网、无线网或普通局域网。脚本会验证 IP 已配置在本机网卡、来源与监听地址均为私有 IPv4 地址，并在写入 sshd 前规范化来源：单台 B 端填写 `192.168.88.20/32`，整个网段必须使用其网络地址；例如 `192.168.31.58/23` 会规范化为 `192.168.30.0/23`。它只监听指定 IP，关闭 root 登录、公钥登录、X11/代理/端口转发和隧道；来源不在允许范围内的连接不能获得 shell 或执行命令。
+脚本以隐藏方式读取并二次确认密码，要求至少 6 位纯数字；密码不会写入参数、配置、日志或命令历史。配置器仅为该专用运维账户使用系统 `chpasswd` 支持的 SHA512 加盐哈希写入方式，从而不经过 PAM 的最短 8 位检查；不会修改整机 PAM 密码策略，其他账户不受影响。最终输入 `YES` 确认时不区分大小写。数字密码正式部署只允许用于本文限定的专用网线直连和固定来源 IP 场景；临时局域网验证必须限制为受控网络和单机 `/32` 来源，并在验证后切换到直连配置。禁止将 SSH 接入公网、无线网或不受控局域网。脚本会验证 IP 已配置在本机网卡、来源与监听地址均为私有 IPv4 地址，并在写入 sshd 前规范化来源：单台 B 端填写 `192.168.88.20/32`，整个网段必须使用其网络地址；例如 `192.168.88.20/23` 会规范化为 `192.168.88.0/23`。它只监听指定 IP，关闭 root 登录、公钥登录、X11/代理/端口转发和隧道；来源不在允许范围内的连接不能获得 shell 或执行命令。
 
 Ubuntu 24.04 可能同时提供 `ssh.socket` 和 `ssh.service`。配置器会在 SSH 配置通过语法和监听检查后，停用可能占用 22 端口或绕过指定监听 IP 的 `ssh.socket`，停止 `ssh.service` 控制组内可能遗留的旧 sshd 监听进程，确认端口已经释放，再启用地址受限的 `ssh.service`。清理控制组会断开已有 SSH 会话；若远程执行时发现残留监听，脚本会拒绝强制清理并要求改用网关本地控制台。配置失败时会恢复执行前的 SSH 配置以及 service/socket 启用和运行状态，不需要手工清理半成品。
 
@@ -181,6 +226,39 @@ printf '%s\n' '<至少6位数字密码>' | sudo ./linux/configure-ssh-operations
 sudo sshd -t
 sudo systemctl --no-pager --full status ssh.service
 ```
+
+### 4.3 配置完成后的 SSH 验收
+
+先在网关本地控制台确认配置、账户和监听状态：
+
+```bash
+sudo sshd -t
+sudo systemctl is-active ssh.service
+sudo ss -ltnp 'sport = :22'
+getent passwd neuroops
+sudo passwd -S neuroops
+```
+
+预期 `ssh.service` 输出 `active`，22 端口只监听配置的网关 IP，`getent` 能找到 `neuroops`，`passwd -S` 的状态为 `P`。不要把密码写进上述命令。
+
+然后在 B 端或临时运维电脑执行：
+
+```bash
+ssh -o PreferredAuthentications=password \
+  -o PubkeyAuthentication=no \
+  neuroops@192.168.88.10
+```
+
+必须显式写出 `neuroops@`；如果只运行 `ssh 192.168.88.10`，客户端会使用 B 端当前系统用户名，正确的运维密码也无法登录。登录后执行：
+
+```bash
+whoami
+neurobridge-ops project
+neurobridge-ops status
+neurobridge-ops audit --lines 20
+```
+
+`whoami` 应输出 `neuroops`，其余命令应能读取项目目录、网关状态和运维审计记录。截至 2026-08-10，已根据现场反馈完成一次同一受控局域网内的账号密码 SSH 登录验证；该结论只覆盖 SSH 登录链路，不代表最终麒麟 B 端网线直连、WebSocket 录播或头环与算法链路已完成现场验收。
 
 ## 5. 从 B 端主机进行运维
 
@@ -271,6 +349,51 @@ neurobridge-ops update
    观察服务状态、请求处理、录播启动和异常原因。运行日志不会记录完整敏感原始数据。
 
 ## 7. 常见问题
+
+### 7.1 推荐排查顺序
+
+遇到 SSH 登录或一键配置失败时，按以下顺序排查，不要反复猜测或回显密码：
+
+1. 在 B 端执行 `ip -br addr`，确认实际来源 IP；再 `ping` 网关监听 IP。
+2. 在网关本地执行 `ip -br addr`，确认一键配置使用的监听 IP 仍在网卡上。
+3. 执行 `sudo systemctl status ssh.service --no-pager -l`，确认服务是否启动。
+4. 执行 `sudo journalctl -u ssh.service -b -n 80 --no-pager`，查找第一条具体的 sshd 错误。
+5. 执行 `sudo ss -ltnp 'sport = :22'`，确认端口占用进程和监听地址。
+6. 执行 `getent passwd neuroops` 和 `sudo passwd -S neuroops`，确认账户存在且密码状态为 `P`。
+7. 从 B 端使用 `ssh -vvv neuroops@<网关IP>` 获取客户端协商信息；对外提供日志时删除不相关主机信息，且绝不能提供密码。
+
+### 7.2 本次联调问题复盘
+
+| 现象或关键日志 | 根因 | 当前处理方式 |
+| --- | --- | --- |
+| `Failed password for invalid user <B端系统用户名>` | 登录命令没有写 `neuroops@`，SSH 默认使用 B 端当前用户名 | 使用 `ssh neuroops@<网关IP>`；密码是否正确不能弥补用户名错误 |
+| `Invalid user neuroops` | 一键配置在创建账户前失败并回滚，或仍在运行旧版本脚本 | 先解决更早的配置/服务错误，再用最新源码从网关本地重新运行；用 `getent passwd neuroops` 验证 |
+| `Invalid Match address argument` | 旧脚本把主机 IP 与非 `/32` 掩码原样写入 sshd，例如把某台主机地址直接配成 `/23` | 新脚本会自动规范化；单台 B 端优先使用实际 IP `/32`，整个网段使用规范网络地址 |
+| 输出 `Removed ... ssh.socket` | 正在关闭 Ubuntu 24.04 默认 socket 激活，属于预期切换步骤 | 继续查看后续输出；这行本身不是失败原因 |
+| `Found left-over process ... sshd`、`Address already in use`、`Cannot bind any address` | `ssh.socket` 已关闭，但此前启动的 sshd 监听进程仍留在 `ssh.service` 控制组并占用 22 端口 | 最新脚本会从本地控制台清理该控制组、确认端口释放后再启动一次地址受限服务 |
+| `无效密码：少于 8 个字符` | 旧脚本通过 PAM 更新密码，与“至少 6 位数字”的运维规则冲突 | 最新脚本仅为专用运维账户使用 `chpasswd` SHA512 加盐哈希写入，不修改全局 PAM 策略 |
+| 输入 `yes` 后被取消 | 旧交互脚本只接受全大写 `YES` | 最新脚本对 `YES` 的任意大小写组合均接受，其他输入仍取消 |
+| 密码正确但仍 `Permission denied` | 可能是用户名错误、来源 IP 不匹配、账户未创建/被锁，并不一定是密码本身 | 同时核对登录命令、`--allow-from`、`getent passwd`、`passwd -S` 和 sshd 日志 |
+
+旧版本遇到 sshd 残留监听时，只能在网关本地控制台按下列顺序临时恢复；这些命令会断开现有 SSH 会话：
+
+```bash
+sudo systemctl disable --now ssh.socket
+sudo systemctl stop ssh.service
+sudo systemctl kill --kill-who=all --signal=TERM ssh.service
+sudo ss -ltnp 'sport = :22'
+```
+
+如果端口仍由 `ssh.service` 控制组内的旧 sshd 占用，再执行：
+
+```bash
+sudo systemctl kill --kill-who=all --signal=KILL ssh.service
+sudo ss -ltnp 'sport = :22'
+```
+
+端口释放后应先更新到最新源码，再重新运行一键配置；不要用 `killall sshd`、`pkill sshd` 或不核对目标 PID 的命令。
+
+### 7.3 其他常见问题
 
 | 现象 | 排查与处理 |
 | --- | --- |
