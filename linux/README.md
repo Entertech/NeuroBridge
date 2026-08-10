@@ -104,6 +104,30 @@ ip -br addr show enp1s0
 
 SSH 只用于网关运维，**不**用于 B 端读取数据、控制采集或调用算法。`prepare-ubuntu24.04-environment.sh` 会安装 `openssh-server`，但会停用 Ubuntu 可能自动开启的 `ssh.socket` 和 `ssh.service`；只有执行下面的显式配置命令后，SSH 才会按指定地址启动并开机自启。
 
+### 4.1.1 从源码完成首次 SSH 配置
+
+先完成第 2 节的源码获取、第 3 节的专用网卡静态地址配置，以及首次联网阶段的环境准备。首次启用 SSH 必须在网关**本地控制台**、当前完整源码目录中进行；不要在尚未受限的远程连接中首次设置运维密码。
+
+```bash
+cd <NeuroBridge源码目录>
+test -x linux/setup-ssh-operations.sh
+test -x linux/configure-ssh-operations.sh
+sudo ./linux/setup-ssh-operations.sh --quick
+```
+
+快速模式会按顺序确认运维账户、密码、网关私有监听 IP、唯一允许的运维主机 IP 和 SSH 端口。脚本只将 SSH 绑定到填写的网关地址，并把快速模式的单一来源地址规范为 `/32`。密码采用隐藏输入并要求二次确认；不要在源码、命令历史、终端截图或现场记录中保存密码。
+
+配置完成后立即在本地控制台验证：
+
+```bash
+sudo sshd -t
+sudo systemctl is-enabled ssh.service
+sudo systemctl is-active ssh.service
+sudo ss -ltnp 'sport = :<SSH端口>'
+```
+
+预期服务为 `enabled` 与 `active`，且只在已确认的网关 IP/端口监听。若配置器报告残留 `sshd` 监听，保持在本地控制台执行；不要重新启用 `ssh.socket`、启用通配监听或手工结束未知进程。日常外部运维操作见未发布的 [头环数据网关 SSH 运维操作指南 v1.0](../doc/tech/对外/头环数据网关%20SSH%20运维操作指南/头环数据网关%20SSH%20运维操作指南_v1.0.md)。
+
 网关与 B 端主机通过单根专用网线直连、头环离线时的完整引导、录播联调、审核版本的一键更新重载与排障步骤，见 [网关 SSH 运维与 B 端录播联调指南](../doc/tech/%E7%BD%91%E5%85%B3%20SSH%20%E8%BF%90%E7%BB%B4%E4%B8%8E%20B%20%E7%AB%AF%E5%BD%95%E6%92%AD%E8%81%94%E8%B0%83%E6%8C%87%E5%8D%97.md)。指南同时记录临时局域网到最终直连的配置切换、SSH 验收清单，以及用户名、CIDR、PAM 密码策略、`ssh.socket` 和残留 sshd 端口冲突的现场排查过程。
 
 常规单网卡、单 B 端场景，在网关的**本地控制台**使用快速模式。它读取 Git 忽略的 `config/ssh-operations.txt`；首次运行时会从模板自动创建权限为 `600` 的实际文件，某个字段为空或缺失时才提示输入：
@@ -134,7 +158,7 @@ printf '%s\n' '<至少6位数字密码>' | sudo ./linux/configure-ssh-operations
 
 配置器要求监听地址已经配置在本机网卡上，且监听地址与允许来源均为 RFC1918 私有 IPv4 地址。单个来源可写成 `192.168.88.20` 或 `192.168.88.20/32`；网段输入会在写入 sshd 前自动规范化，例如 `192.168.88.20/23` 会转换为其所属网段 `192.168.88.0/23`。它创建或更新单一 `neuroops` 本地账户并设置其密码，安装 `/etc/ssh/sshd_config.d/00-neurobridge-operations.conf`：只监听指定地址，仅允许该账户使用账号密码；禁止 root 登录、公钥登录、端口转发、代理转发、隧道和 X11 转发。启用前会关闭 Ubuntu 的 `ssh.socket` 通配监听，并停止 `ssh.service` 控制组内可能遗留的旧监听进程，确认端口释放后再启动新服务；失败时恢复原有 service/socket 状态。清理残留进程会中断已有 SSH 会话，因此发现端口残留时只允许在网关本地控制台执行，不会在远程会话中强制清理。脚本会拒绝已有 SSH 配置留下的额外端口或监听地址。来源不在 `--allow-from` 范围内的连接即使通过认证也不能获得 shell 或执行命令。仍须保持网关只接入受控专用网络，并在现场防火墙中仅放行确认的运维来源与 SSH 端口。
 
-一键配置成功后，`ssh.service` 会被 systemd 设为开机自启，且独立于 `neurobridge.service`：启动、停止或重启网关业务服务不会关闭 SSH。`config/ssh-operations.txt` 不会在开机时自动重读；修改账号、密码、监听 IP、允许来源或端口后，必须重新执行 `sudo ./linux/setup-ssh-operations.sh --quick`。网关重启时还必须保证监听 IP 已配置在网卡上。详细启动状态表和重启验收命令见上述联调指南第 4.4 节。
+一键配置成功后，`ssh.service` 会被 systemd 设为开机自启，且独立于 `neurobridge.service`：启动、停止或重启网关业务服务不会关闭 SSH。配置器会同时安装仅供 SSH 使用的 systemd 覆盖：开机时先等待网络就绪，并在 `sshd` 绑定前最多等待 90 秒，直到指定监听 IP 实际出现在网卡上。它仍只监听该固定私有地址，不会改为通配监听。`config/ssh-operations.txt` 不会在开机时自动重读；修改账号、密码、监听 IP、允许来源或端口后，必须重新执行 `sudo ./linux/setup-ssh-operations.sh --quick`。详细启动状态表和重启验收命令见上述联调指南第 4.4 节。
 
 配置完成后，现场只使用这一个受信任的 SSH 运维账号。一键配置会把当前源码同步到该账号固定的 `~/NeuroBridge` 项目目录；登录后先进入该目录，后续代码和运维操作都以它为准：
 
