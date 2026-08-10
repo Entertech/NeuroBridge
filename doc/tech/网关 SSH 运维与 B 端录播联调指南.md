@@ -26,7 +26,7 @@ SSH 运维入口由下列文件提供：
 - `linux/configure-ssh-operations.sh`：可自动化调用的严格配置器；
 - 运行时命令：`neurobridge-ops`。
 
-一键 SSH 配置还会创建 `/srv/neurobridge-release`。该目录只允许 root 写入，用于暂存经过审核、完整的下一版本源码；它不是录播数据目录，也不是 B 端上传目录。
+一键 SSH 配置还会创建 `/srv/neurobridge-release`，并把该目录交给配置的 SSH 运维账号，用于接收完整的下一版本源码。现场只使用这一个受信任账号完成版本同步、更新、状态和日志操作；该目录不是录播数据目录，也不是 B 端业务数据上传目录。
 
 若网关仅部署 `master`，确认该分支已经包含上述文件；否则应先合入对应的 SSH 运维变更，再部署到现场。部署后使用以下命令确认文件存在：
 
@@ -192,13 +192,13 @@ neurobridge-ops logs --lines 500   # 查询历史日志，最多 1000 条
 neurobridge-ops logs --follow      # 实时追踪运行日志；Ctrl-C 停止
 neurobridge-ops audit --lines 500  # 查询 SSH 运维操作审计，最多 1000 条
 watch -n 2 neurobridge-ops status  # 每 2 秒刷新服务状态
-neurobridge-ops update             # 应用已暂存的审核版本并重新加载
+neurobridge-ops update             # 应用已同步的完整版本并重新加载
 neurobridge-ops restart            # 重启网关服务
 neurobridge-ops stop
 neurobridge-ops start
 ```
 
-运维账户只有上述状态、日志和 `neurobridge.service` 启停权限，不能编辑 `/etc/neurobridge/gateway.toml`、安装软件或获得任意 root shell。配置变更、软件升级和防火墙调整应由现场独立系统管理员在本地控制台或已批准的高权限流程中执行。
+现场不再区分发布管理员和普通运维，配置的 SSH 账号就是唯一的受信任运维账号。它可以同步完整版本到固定暂存目录，并触发安装、状态、日志和服务启停。因为该账号提供的脚本随后会以 root 安装，所以必须把它作为网关管理员凭据管理，不能共享密码或放宽允许来源 IP。
 
 每次 `status`、`logs`、`audit`、`update`、`start`、`stop` 或 `restart` 都会写入系统日志标识 `neurobridge-ops-audit`。日志包含系统时间、`sudo` 确认的运维账户、受限动作、参数摘要和开始/成功/失败结果；`logs --follow` 是持续命令，只记录开始。不记录账号密码、SSH 会话内容、网关配置或业务原始数据。用 `neurobridge-ops audit` 查询这份审计日志；SSH 登录来源仍以系统 `sshd` 日志为准。
 
@@ -206,24 +206,34 @@ neurobridge-ops start
 
 ## 5.1 一键更新代码并重新加载
 
-`neurobridge-ops update` 不执行 `git pull`、不访问公网，也不接受 SSH 用户传入的源码路径。它只应用管理员预置在 `/srv/neurobridge-release` 的完整审核版本，然后调用该版本的 `linux/reload-ubuntu.sh` 重新加载网关。
+`neurobridge-ops update` 不执行 `git pull`、不访问公网，也不接受任意源码路径。它只应用同一个 SSH 运维账号同步到 `/srv/neurobridge-release` 的完整版本，然后调用该版本的 `linux/reload-ubuntu.sh` 重新加载网关。
 
-对于已经启用旧版 SSH 运维的网关，发布管理员先通过完整部署流程安装包含本功能的新版本，再在网关本地控制台重新运行一次 `sudo ./linux/setup-ssh-operations.sh`。该操作会更新 root-owned helper 和受限 sudo 规则；完成后 SSH 运维人员才可使用 `neurobridge-ops update`。
+在 B 端麒麟主机或其他受控运维主机上，进入完整的新版本源码目录，执行：
 
-发布管理员在网关本地控制台或批准的高权限交付流程中预置版本，目录必须满足以下要求：
+```bash
+rsync -a --delete \
+  --exclude '.git/' --exclude '.venv/' --exclude '__pycache__/' --exclude 'build/' \
+  ./ neuroops@192.168.88.10:/srv/neurobridge-release/
+ssh neuroops@192.168.88.10
+neurobridge-ops update
+```
+
+如 B 端没有 `rsync`，应在接入隔离网络前按实际麒麟版本和批准的软件源安装。同步的版本必须满足：
 
 - 包含 `pyproject.toml`、`requirements.lock`、`linux/reload-ubuntu.sh` 和 `linux/install-ubuntu.sh`；
-- 所有文件和目录归 root 所有，且不得对组或其他用户开放写权限；
+- 所有文件和目录归当前 SSH 运维账号所有，且不得对组或其他用户开放写权限；
 - 不包含符号链接；
-- 依赖版本和安装流程未变化。若 `reload-ubuntu.sh` 检测到依赖或安装流程变化，会拒绝热更新，要求管理员执行完整安装。
+- 依赖版本和安装流程未变化。若 `reload-ubuntu.sh` 检测到依赖或安装流程变化，会拒绝热更新，要求在网关本地执行完整安装。
 
-预置完成后，SSH 运维人员只需运行：
+已经启用旧版 SSH 运维的网关升级到本方案后，需要在网关本地重新运行一次 `sudo ./linux/setup-ssh-operations.sh`，让 `/srv/neurobridge-release` 转交给同一个 SSH 运维账号；之后不再需要另一个账号预置版本。
+
+版本同步完成后运行：
 
 ```bash
 neurobridge-ops update
 ```
 
-该命令会同步已审核源码、更新 Python 包、重新加载 systemd 单元并重启网关。B 端 WebSocket 会断开，恢复后必须重新连接、调用 `getStatus` 并重新订阅。更新失败时，执行 `neurobridge-ops logs --lines 500`，并由发布管理员检查暂存版本和完整安装要求。
+该命令会安装已同步源码、更新 Python 包、重新加载 systemd 单元并重启网关。B 端 WebSocket 会断开，恢复后必须重新连接、调用 `getStatus` 并重新订阅。更新失败时，同一个运维账号执行 `neurobridge-ops logs --lines 500`，检查暂存版本和完整安装要求。
 
 ## 6. B 端录播联调步骤
 
@@ -258,7 +268,7 @@ neurobridge-ops update
 | 一键脚本拒绝已有监听地址或端口 | 这是防止意外暴露 SSH 的保护。回到本地控制台检查已有 `/etc/ssh/sshd_config` 与片段，不要直接覆盖。 |
 | B 端连接成功但没有录播数据 | 确认 `[ble].enabled = false`、录制目录有非空已完成会话，并执行 `neurobridge-ops logs --lines 500` 查看原因。 |
 | 重启后 B 端没有继续收数据 | B 端需要重新建立 WebSocket，调用 `getStatus`，再重新 `subscribe`。 |
-| `neurobridge-ops update` 提示暂存版本不完整或权限不安全 | 由发布管理员在 `/srv/neurobridge-release` 重新放置完整、root 所有且不可被组或其他用户写入的审核版本；SSH 运维账户不能绕过此限制。 |
+| `neurobridge-ops update` 提示暂存版本不完整或权限不安全 | 使用同一个 SSH 运维账号重新执行 `rsync -a --delete`，确认源码完整、文件归当前账号所有、不可被组或其他用户写入且不包含符号链接。 |
 
 ## 8. 撤销 SSH 运维入口
 

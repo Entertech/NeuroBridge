@@ -21,10 +21,10 @@ The password must be supplied as one line on standard input; it is never an
 argument, configuration value, or log entry. This command restricts SSH to the
 named local operator account, disables root and public-key login, and binds
 sshd only to the specified gateway address. The account receives only NeuroBridge status, log,
-approved staged-code update, start, stop, and restart privileges through sudo.
-The update command only runs a root-owned release staged at
-/srv/neurobridge-release; it never fetches code from a network or accepts a
-source path from the SSH user.
+staged-code update, start, stop, and restart privileges through sudo. The same
+trusted operator account can upload a complete release to
+/srv/neurobridge-release and apply it; the update command never fetches code
+from a network or accepts another source path.
 EOF
 }
 
@@ -122,8 +122,8 @@ update_script=/usr/local/sbin/neurobridge-ops-update
 command_script=/usr/local/sbin/neurobridge-ops-command
 install -d -o root -g root -m 0755 "$config_dir"
 install -d -o root -g root -m 0755 /run/sshd
-# A release administrator stages an approved complete checkout here. The SSH
-# operator cannot write this directory and can only trigger its reload.
+# The directory is initially root-owned. After the trusted operator account is
+# ready, setup transfers this directory to that account for release uploads.
 install -d -o root -g root -m 0750 "$update_source_dir"
 
 config_tmp=$(mktemp)
@@ -325,7 +325,7 @@ Commands:
   logs [--lines N]       Show recent logs (default 200, maximum 1000).
   logs --follow           Follow new gateway logs in real time; Ctrl-C stops it.
   audit [--lines N]      Show SSH operations audit events (default 200, maximum 1000).
-  update                 Apply the root-owned staged release and reload the gateway.
+  update                 Apply the operator-staged release and reload the gateway.
   start | stop | restart  Control the NeuroBridge gateway service.
   help                   Show this help.
 USAGE
@@ -444,7 +444,7 @@ EOF
 
 cat >"$update_tmp" <<'EOF'
 #!/usr/bin/env bash
-# Apply a pre-staged, administrator-owned release without network access.
+# Apply a complete release staged by the trusted SSH operator without network access.
 set -euo pipefail
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -454,6 +454,8 @@ fail() {
 }
 
 [[ ${EUID} -eq 0 ]] || fail "This helper must run as root through sudo."
+release_owner=${SUDO_USER:-}
+[[ -n "$release_owner" && "$release_owner" != root ]] || fail "Cannot identify the trusted SSH operator."
 source_dir=/srv/neurobridge-release
 [[ -d "$source_dir" ]] || fail "Missing staged release directory: $source_dir"
 for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/install-ubuntu.sh; do
@@ -461,13 +463,12 @@ for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/in
 done
 [[ -x "$source_dir/linux/reload-ubuntu.sh" ]] || fail "Staged reload script is not executable."
 
-# The SSH operator must not be able to turn this controlled reload privilege
-# into arbitrary root execution. Reject symlinks, non-root ownership, and any
-# group- or world-writable path in the staged release.
+# Keep the upload predictable: only the authenticated operator may own staged
+# content, and symlinks or group/world-writable paths are rejected.
 unsafe_link=$(find "$source_dir" -xdev -type l -print -quit)
 [[ -z "$unsafe_link" ]] || fail "Staged release contains a symlink: $unsafe_link"
-unsafe_path=$(find "$source_dir" -xdev \( -type f -o -type d \) \( ! -user root -o -perm -0022 \) -print -quit)
-[[ -z "$unsafe_path" ]] || fail "Staged release must be root-owned and not group/world writable: $unsafe_path"
+unsafe_path=$(find "$source_dir" -xdev \( -type f -o -type d \) \( ! -user "$release_owner" -o -perm -0022 \) -print -quit)
+[[ -z "$unsafe_path" ]] || fail "Staged release must be owned by $release_owner and not group/world writable: $unsafe_path"
 
 echo "Applying staged NeuroBridge release from $source_dir ..."
 exec /bin/bash "$source_dir/linux/reload-ubuntu.sh"
@@ -510,6 +511,11 @@ install -o root -g root -m 0755 "$ops_cli_tmp" "$ops_cli"
 install -o root -g root -m 0755 "$update_tmp" "$update_script"
 install -o root -g root -m 0755 "$command_tmp" "$command_script"
 install -o root -g root -m 0440 "$sudoers_tmp" "$sudoers_path"
+# This is a single-role deployment: the trusted SSH operator both uploads and
+# applies the release. Because uploaded code is later installed as root, treat
+# this account as a gateway administrator credential.
+chown "$operator_user:$operator_user" "$update_source_dir"
+chmod 0750 "$update_source_dir"
 
 transaction_active=false
 
