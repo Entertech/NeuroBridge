@@ -18,6 +18,11 @@ from neurobridge.config import load
 DEFAULT_SUBNET_CIDR = "192.168.88.0/24"
 MANAGED_MARKER = "# Managed by NeuroBridge; do not edit."
 INTERFACE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}\Z")
+RFC1918_SUBNETS = (
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+)
 
 
 def physical_ethernet_interfaces(sys_class_net: Path = Path("/sys/class/net")) -> list[str]:
@@ -69,8 +74,15 @@ def validate_address(host: str, subnet_cidr: str) -> tuple[ipaddress.IPv4Address
         raise ValueError("the dedicated B-side link requires IPv4")
     if subnet.prefixlen > 30:
         raise ValueError("network.subnet_cidr must leave usable addresses for both the gateway and B-side host")
-    if not address.is_private or address not in subnet or address in {subnet.network_address, subnet.broadcast_address}:
-        raise ValueError("network.subnet_cidr must contain server.host as a usable private IPv4 address")
+    is_rfc1918_subnet = any(
+        subnet.subnet_of(private_subnet) for private_subnet in RFC1918_SUBNETS
+    )
+    if (
+        not is_rfc1918_subnet
+        or address not in subnet
+        or address in {subnet.network_address, subnet.broadcast_address}
+    ):
+        raise ValueError("network.subnet_cidr must contain server.host as a usable RFC1918 IPv4 address")
     return address, subnet
 
 
@@ -181,8 +193,8 @@ CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 def active_network_state(
     interface: str,
     run: CommandRunner = subprocess.run,
-) -> tuple[set[ipaddress.IPv4Interface], bool]:
-    """Return global IPv4 addresses and whether the link has a default route.
+) -> tuple[set[ipaddress.IPv4Interface], set[ipaddress.IPv6Interface], bool, bool]:
+    """Return global IP addresses and default-route state for both IP versions.
 
     A carrier is deliberately not inspected: a direct B-side cable also has a
     carrier. Existing layer-3 state is the reliable indication that the host
@@ -201,9 +213,24 @@ def active_network_state(
             check=False,
             text=True,
         )
+        ipv6_addresses_result = run(
+            ["ip", "-o", "-6", "addr", "show", "dev", interface, "scope", "global"],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        ipv6_routes_result = run(
+            ["ip", "-6", "route", "show", "default", "dev", interface],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
     except OSError as exc:
         raise ValueError("cannot inspect the current network state; refusing to reconfigure the interface") from exc
-    if addresses_result.returncode != 0 or routes_result.returncode != 0:
+    if any(
+        result.returncode != 0
+        for result in (addresses_result, routes_result, ipv6_addresses_result, ipv6_routes_result)
+    ):
         raise ValueError("cannot inspect the current network state; refusing to reconfigure the interface")
     addresses: set[ipaddress.IPv4Interface] = set()
     for match in re.finditer(r"\binet\s+([^\s]+)", addresses_result.stdout):
@@ -211,8 +238,15 @@ def active_network_state(
             addresses.add(ipaddress.IPv4Interface(match.group(1)))
         except ipaddress.AddressValueError:
             continue
-    has_default_route = bool(routes_result.stdout.strip())
-    return addresses, has_default_route
+    ipv6_addresses: set[ipaddress.IPv6Interface] = set()
+    for match in re.finditer(r"\binet6\s+([^\s]+)", ipv6_addresses_result.stdout):
+        try:
+            ipv6_addresses.add(ipaddress.IPv6Interface(match.group(1)))
+        except ipaddress.AddressValueError:
+            continue
+    has_ipv4_default_route = bool(routes_result.stdout.strip())
+    has_ipv6_default_route = bool(ipv6_routes_result.stdout.strip())
+    return addresses, ipv6_addresses, has_ipv4_default_route, has_ipv6_default_route
 
 
 def ensure_interface_is_available(
@@ -224,17 +258,23 @@ def ensure_interface_is_available(
 ) -> None:
     """Refuse to disturb a live management or deployment network by default."""
     expected = ipaddress.IPv4Interface(f"{address}/{subnet.prefixlen}")
-    addresses, has_default_route = active_network_state(interface, run)
+    addresses, ipv6_addresses, has_ipv4_default_route, has_ipv6_default_route = active_network_state(
+        interface, run
+    )
     other_addresses = addresses - {expected}
-    if not has_default_route and not other_addresses:
+    if not has_ipv4_default_route and not has_ipv6_default_route and not other_addresses and not ipv6_addresses:
         return
     if force:
         return
     details: list[str] = []
     if other_addresses:
         details.append("existing IPv4 address " + ", ".join(str(item) for item in sorted(other_addresses, key=str)))
-    if has_default_route:
-        details.append("an existing default route")
+    if ipv6_addresses:
+        details.append("existing IPv6 address " + ", ".join(str(item) for item in sorted(ipv6_addresses, key=str)))
+    if has_ipv4_default_route:
+        details.append("an existing IPv4 default route")
+    if has_ipv6_default_route:
+        details.append("an existing IPv6 default route")
     raise ValueError(
         f"refusing to reconfigure active interface {interface} ({'; '.join(details)}). "
         "Disconnect it from the current network or rerun manually with --replace-active after confirming this is the dedicated B-side link"
@@ -243,13 +283,15 @@ def ensure_interface_is_available(
 
 def ensure_interface_can_be_retired(interface: str, force: bool, run: CommandRunner = subprocess.run) -> None:
     """Require an explicit active-interface override before removing its managed address."""
-    addresses, has_default_route = active_network_state(interface, run)
-    if not addresses and not has_default_route:
+    addresses, ipv6_addresses, has_ipv4_default_route, has_ipv6_default_route = active_network_state(
+        interface, run
+    )
+    if not addresses and not ipv6_addresses and not has_ipv4_default_route and not has_ipv6_default_route:
         return
     if force:
         return
     raise ValueError(
-        f"managed interface {interface} still has IPv4 state; refusing to remove it. "
+        f"managed interface {interface} still has network state; refusing to remove it. "
         "Disconnect it from the current network or use --replace-active together with --replace-managed-interface"
     )
 
@@ -287,7 +329,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--replace-active",
         action="store_true",
-        help="allow replacement of an interface that already has IPv4 state; requires --apply",
+        help="allow replacement of an interface that already has IP network state; requires --apply",
     )
     parser.add_argument(
         "--replace-managed-interface",

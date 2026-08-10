@@ -30,7 +30,7 @@ git pull --ff-only
 
 需要远程运维时，Ubuntu 环境准备会安装但不启用 OpenSSH；部署后执行 `sudo ./linux/setup-ssh-operations.sh` 即可交互式完成运维账号密码、私有监听地址和来源网段配置。一键配置会把当前源码同步为运维账号自己的固定项目目录 `~/NeuroBridge`。SSH 场景中的源码更新只能使用 `neurobridge-ops update`：该命令固定切换至 `master`、快进拉取批准的上游版本并部署重启，运维人员不应直接运行 Git。还可使用 `status`、`logs --follow`、`audit` 和 `restart`。`audit` 不记录密码或业务原始数据。由于该账号维护的代码随后会以 root 安装，必须把它作为网关管理员凭据管理。完整命令和回滚步骤见 [Ubuntu 网关部署与运行教程](linux/README.md#41-启用-ssh-运维入口可选) 与 [SSH 运维和录播联调指南](doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md)。
 
-部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。首次安装会自动给唯一且未在使用的物理以太网口设置默认的封闭直连地址 `192.168.88.10/24`；无网口、多网口、已有 IPv4/默认路由或 Netplan 冲突时会安全停止，需指定 `[network].interface` 或断开原网络后重试。该默认值不替代双方现场确认：静态 IP、网段、端口、Flowtime 扫描匹配条件、录播目录和回放倍率均可在 `/etc/neurobridge/gateway.toml` 覆盖；`replay_recording_id` 可留空，网关离线时会自动选择目录中最新的非空历史会话。示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
+部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。首次安装会自动给唯一且未在使用的物理以太网口设置默认的封闭直连地址 `192.168.88.10/24`；无网口、多网口、已有 IPv4/IPv6 地址或默认路由、或 Netplan 冲突时会安全停止，需指定 `[network].interface` 或断开原网络后重试。专用链路地址仅接受 RFC1918 IPv4 网段。该默认值不替代双方现场确认：静态 IP、网段、端口、Flowtime 扫描匹配条件、录播目录和回放倍率均可在 `/etc/neurobridge/gateway.toml` 覆盖；`replay_recording_id` 可留空，网关离线时会自动选择目录中最新的非空历史会话。示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
 
 ```bash
 python3 -m venv .venv

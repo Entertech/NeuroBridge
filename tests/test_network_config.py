@@ -55,6 +55,12 @@ class DedicatedNetworkConfigurationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "both the gateway and B-side host"):
             validate_address("192.168.88.10", "192.168.88.10/31")
 
+    def test_rejects_non_rfc1918_dedicated_link_addresses(self) -> None:
+        addresses = (("127.0.0.1", "127.0.0.0/8"), ("169.254.1.1", "169.254.0.0/16"))
+        for host, subnet in addresses:
+            with self.subTest(host=host, subnet=subnet), self.assertRaisesRegex(ValueError, "RFC1918"):
+                validate_address(host, subnet)
+
     def test_does_not_override_an_explicit_interface_in_another_netplan_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             netplan = Path(directory)
@@ -94,7 +100,7 @@ class DedicatedNetworkConfigurationTests(unittest.TestCase):
             output = "2: enp1s0    inet 192.168.88.10/24 scope global enp1s0\n" if arguments[1] == "-o" else ""
             return subprocess.CompletedProcess(arguments, 0, output)
 
-        with self.assertRaisesRegex(ValueError, "still has IPv4 state"):
+        with self.assertRaisesRegex(ValueError, "still has network state"):
             ensure_interface_can_be_retired("enp1s0", False, runner)
         ensure_interface_can_be_retired("enp1s0", True, runner)
 
@@ -138,3 +144,29 @@ class DedicatedNetworkConfigurationTests(unittest.TestCase):
                 False,
                 runner,
             )
+
+    def test_refuses_to_replace_an_interface_with_an_existing_ipv6_address(self) -> None:
+        def runner(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            output = ""
+            if arguments[2] == "-6":
+                output = "2: enp1s0    inet6 2001:db8::25/64 scope global enp1s0\\n"
+            return subprocess.CompletedProcess(arguments, 0, output)
+
+        with self.assertRaisesRegex(ValueError, "existing IPv6 address"):
+            ensure_interface_is_available(
+                "enp1s0",
+                ipaddress.IPv4Address("192.168.88.10"),
+                ipaddress.IPv4Network("192.168.88.0/24"),
+                False,
+                runner,
+            )
+
+    def test_refuses_to_retire_an_interface_with_an_ipv6_default_route(self) -> None:
+        def runner(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            output = ""
+            if arguments[1:3] == ["-6", "route"]:
+                output = "default via 2001:db8::1 dev enp1s0\\n"
+            return subprocess.CompletedProcess(arguments, 0, output)
+
+        with self.assertRaisesRegex(ValueError, "still has network state"):
+            ensure_interface_can_be_retired("enp1s0", False, runner)
