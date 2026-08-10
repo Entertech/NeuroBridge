@@ -92,8 +92,8 @@ def build_release_manifest(documents: list[ExternalDocument], mode: str) -> dict
             }
             for document in documents
         ],
-        "sourceMetadataWritten": False,
-        "note": "The workflow publishes a PDF ZIP Artifact only; it does not commit or rewrite Markdown/registry status.",
+        "sourceMetadataState": "published" if mode == "publish" else "unchanged",
+        "note": "Candidate packages do not modify source metadata. The publish workflow first promotes eligible documents on its release branch, then creates this package and commits the promotion only after Artifact upload succeeds.",
     }
 
 

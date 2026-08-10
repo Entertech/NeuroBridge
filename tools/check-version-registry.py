@@ -36,6 +36,7 @@ def main() -> None:
     prerelease = select_prerelease_protocol(registry)
     integration = registry["documents"]["integration_plan"]
     capture_package = registry["documents"].get("external_capture_package")
+    ssh_operations = registry["documents"].get("external_ssh_operations")
     wire_version = registry["northbound_wire_protocol"]["version"]
     application_version = registry["application"]["version"]
 
@@ -127,6 +128,20 @@ def main() -> None:
         capture_lock = locks.get(capture_record.get("release_lock"))
         if capture_lock is None or capture_lock["scope"] != "external_capture_package_document" or capture_lock["to_version"] != capture_package["version"]:
             fail("external capture package publication lock is invalid")
+
+    if ssh_operations and ssh_operations["status"] == "published":
+        ssh_markdown = ROOT / ssh_operations["markdown_path"]
+        required_ssh_fields = ("published_date", "markdown_sha256", "publication_record")
+        if any(field not in ssh_operations for field in required_ssh_fields):
+            fail("published SSH operations document requires publication metadata")
+        if not ssh_markdown.is_file() or digest(ssh_markdown) != ssh_operations["markdown_sha256"]:
+            fail("published SSH operations Markdown hash is invalid")
+        ssh_records = [record for record in registry["change_records"] if record["id"] == ssh_operations["publication_record"]]
+        if len(ssh_records) != 1 or ssh_records[0]["external_document_action"] != "explicit_user_authorized" or ssh_records[0]["change_state"] != "locked":
+            fail("published SSH operations document requires an explicitly authorized locked record")
+        ssh_lock = locks.get(ssh_records[0].get("release_lock"))
+        if ssh_lock is None or ssh_lock["scope"] != "external_ssh_operations_document" or ssh_lock["to_version"] != ssh_operations["version"]:
+            fail("published SSH operations publication lock is invalid")
 
     tracked_pdfs = subprocess.run(
         ["git", "ls-files", "--", "doc/tech/*.pdf"], cwd=ROOT, check=True, capture_output=True, text=True

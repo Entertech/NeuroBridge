@@ -20,7 +20,7 @@ on:
           - published
           - prerelease
       external_document_mode:
-        description: "publish 生成正式对外交付 ZIP；candidate 仅生成候选包。两者均不回写仓库。"
+        description: "publish 生成正式对外交付 ZIP 并在 Artifact 成功后提交发布状态；candidate 仅生成候选包。"
         required: false
         default: publish
         type: choice
@@ -29,7 +29,8 @@ on:
           - candidate
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   unit-and-websocket:
@@ -45,6 +46,13 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall -q neurobridge
       - run: bash tools/check-external-protocol.sh
+      - name: Detect unpublished external documents
+        id: external-document-state
+        run: echo "has_unpublished=$(python tools/mark-external-documents-published.py --check)" >> "$GITHUB_OUTPUT"
+        run: |
+          test "$RELEASE_BRANCH" != master || { echo "Run publish from a release branch; protected master must be updated through a PR." >&2; exit 1; }
+          python tools/mark-external-documents-published.py --date "$(date -u +%F)"
+          bash tools/check-external-protocol.sh
       - name: Install protocol PDF renderer
         run: |
           sudo apt-get update
@@ -52,8 +60,9 @@ jobs:
           fc-cache -f
           fc-match "Noto Sans CJK SC" | grep -Eqi "Noto.*CJK"
       - name: Build external document PDF package and page previews
+        if: github.event_name != 'push' || github.ref != 'refs/heads/master' || steps.external-document-state.outputs.has_unpublished != 'true'
         env:
-          EXTERNAL_DOCUMENT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.external_document_mode || 'candidate' }}
+          EXTERNAL_DOCUMENT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.external_document_mode || (github.event_name == 'push' && github.ref == 'refs/heads/master' && steps.external-document-state.outputs.has_unpublished == 'false' && 'publish') || 'candidate' }}
           PROTOCOL_VERSION: ${{ inputs.protocol_version }}
           PROTOCOL_STAGE: ${{ inputs.protocol_stage || 'published' }}
         run: |
@@ -80,9 +89,25 @@ jobs:
               --version "$PROTOCOL_VERSION"
           fi
       - name: Upload external document ZIP artifact
+        if: github.event_name != 'push' || github.ref != 'refs/heads/master' || steps.external-document-state.outputs.has_unpublished != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: external-document-package
           path: artifacts/
           if-no-files-found: error
           retention-days: 90
+      - name: Create publication-state follow-up PR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && steps.external-document-state.outputs.has_unpublished == 'true'
+        env:
+          RELEASE_BRANCH: codex/publish-external-documents-${{ github.sha }}
+        run: |
+          git switch -c "$RELEASE_BRANCH"
+          python tools/mark-external-documents-published.py --date "$(date -u +%F)"
+          bash tools/check-external-protocol.sh
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add neurobridge/version_registry.toml doc/tech/对外/头环数据网关\ SSH\ 运维操作指南/头环数据网关\ SSH\ 运维操作指南_v1.0.md doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md
+          git diff --cached --check
+          git commit -m "[codex] docs: mark external documents published"
+          git push origin "HEAD:$RELEASE_BRANCH"
+          gh pr create --base master --head "$RELEASE_BRANCH" --title "[codex] docs: publish external documents" --body "Automated follow-up after merging unpublished external documents. The final ZIP Artifact is generated after this PR merges."

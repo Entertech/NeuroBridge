@@ -34,7 +34,7 @@ class ExternalDocumentPackageTests(unittest.TestCase):
         self.assertEqual(manifest["unpublishedSourceDocumentCount"], 1)
         self.assertEqual([item["artifactStatus"] for item in manifest["documents"]], ["published"] * 3)
         self.assertEqual(manifest["documents"][2]["versionAction"], "publish_current_unpublished_version")
-        self.assertFalse(manifest["sourceMetadataWritten"])
+        self.assertEqual(manifest["sourceMetadataState"], "published")
 
     def test_web_client_is_a_complete_static_page_for_the_release_zip(self) -> None:
         files = collect_web_client_files()
