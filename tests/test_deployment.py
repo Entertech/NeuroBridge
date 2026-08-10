@@ -89,6 +89,11 @@ class DeploymentTests(unittest.TestCase):
             script.index('install -o root -g root -m 0440 "$sudoers_tmp" "$sudoers_path"'),
         )
         self.assertIn("NeuroBridge SSH 运维一键配置", wizard)
+        self.assertIn("ip -o -4 addr show scope global", wizard)
+        self.assertIn("not address.is_loopback", wizard)
+        self.assertIn('default_address=${private_addresses[0]}', wizard)
+        self.assertIn('网关私有监听 IP${default_address:+ [$default_address]}', wizard)
+        self.assertIn('listen_address=${listen_address:-$default_address}', wizard)
         self.assertIn("再次输入运维账户密码", wizard)
         self.assertIn("运维账户密码（6 位数字）", wizard)
         self.assertIn('[[ "$operator_password" =~ ^[0-9]{6}$ ]]', wizard)

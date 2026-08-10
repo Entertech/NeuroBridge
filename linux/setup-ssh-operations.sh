@@ -29,11 +29,20 @@ fi
 private_addresses=()
 while IFS= read -r address; do
   private_addresses+=("$address")
-done < <(ip -o -4 addr show | awk '{split($4, address, "/"); print address[1]}' | \
-  python3 -c 'import ipaddress, sys; [print(value.strip()) for value in sys.stdin if ipaddress.ip_address(value.strip()).is_private]')
+done < <(ip -o -4 addr show scope global | awk '{split($4, address, "/"); print address[1]}' | \
+  python3 -c 'import ipaddress, sys; [print(value.strip()) for value in sys.stdin if (address := ipaddress.ip_address(value.strip())).is_private and not address.is_loopback and not address.is_link_local and not address.is_unspecified]')
 
 default_address=
-if [[ ${#private_addresses[@]} -eq 1 ]]; then
+if [[ -n ${SSH_CONNECTION:-} ]]; then
+  read -r _ _ ssh_local_address _ <<<"$SSH_CONNECTION"
+  for address in "${private_addresses[@]}"; do
+    if [[ "$address" == "$ssh_local_address" ]]; then
+      default_address=$address
+      break
+    fi
+  done
+fi
+if [[ -z "$default_address" && ${#private_addresses[@]} -gt 0 ]]; then
   default_address=${private_addresses[0]}
 fi
 default_source=
