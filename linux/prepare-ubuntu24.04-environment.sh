@@ -32,6 +32,7 @@ apt-get install -y --no-install-recommends \
   dnsmasq \
   git \
   libeigen3-dev \
+  netplan.io \
   openssh-server \
   python3 \
   python3-dev \

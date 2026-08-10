@@ -47,6 +47,15 @@ markdown_path = "doc/tech/对外/头环数据网关 SSH 运维操作指南/头�
 created_date = "2026-08-10"
 reason = "按用户明确要求创建供外部运维人员评审的 SSH 操作指南；尚未发布，不生成 PDF、不创建发布记录或锁定区间。"
 
+[documents.external_wired_network_operations]
+version = "1.0"
+status = "unpublished"
+audience = "operator"
+title = "头环数据网关有线网络配置指南"
+markdown_path = "doc/tech/对外/头环数据网关有线网络配置指南/头环数据网关有线网络配置指南_v1.0.md"
+created_date = "2026-08-10"
+reason = "按用户明确要求将网关有线网络切换与 Windows B 端静态 IP 配置整理为面向外部运维人员的指南；尚未收到正式发布指令，不生成 PDF、不创建发布记录或锁定区间。"
+
 [[documents.external_northbound.versions]]
 version = "0.2"
 status = "published"
@@ -573,3 +582,36 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户要求将 SSH 是否随网关启动及配置生效方式补充进对应文档；内容只澄清现有网关内部运维行为，不改变 B 端请求、字段或已发布对外协议。"
+
+[[change_records]]
+id = "2026-08-10-default-offline-wired-network-configuration"
+date = "2026-08-10"
+scope = "gateway_deployment"
+summary = "Ubuntu 安装器新增受控 Netplan 配置器：在无网线、DHCP、DNS 或局域网时，为唯一物理以太网口自动写入默认的封闭直连静态地址；多网口、无网口或已有明确 Netplan 配置时拒绝猜测或覆盖。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求在不接网络的前提下自动配置默认 IP；随后确认当前网关若已联网不得被自动改写，因此配置器检查 IPv4 地址和默认路由，默认拒绝替换活跃接口。该变更仅影响网关内部部署，且不改变已锁定 B 端协议的请求、字段或版本。"
+
+[[change_records]]
+id = "2026-08-10-network-config-install-order-and-interface-migration-safety"
+date = "2026-08-10"
+scope = "gateway_deployment"
+summary = "修复首次安装时网络配置器先于 gateway.toml 创建而失败的问题；已管理 Netplan 文件改为默认拒绝迁移到另一物理网口，迁移须显式确认，旧接口仍有地址或路由时还须显式允许替换活跃接口。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "PR 审阅发现首次安装顺序错误和已管理网口迁移会静默删除旧接口配置的风险；修复仅涉及网关内部部署，不修改已锁定的 B 端协议或外部评审指南。"
+
+[[change_records]]
+id = "2026-08-10-network-config-ipv6-and-rfc1918-safety"
+date = "2026-08-10"
+scope = "gateway_deployment"
+summary = "网络配置器将活跃网口保护扩展到 IPv6 全局地址和默认路由，并仅允许 RFC1918 IPv4 专用链路地址，避免误断 IPv6 管理网络或接受回环、链路本地地址。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "PR 审阅发现 IPv4-only 检查会遗漏 IPv6 管理网络，且 Python 的 is_private 会接受回环和链路本地地址；修复仅涉及网关部署保护与参数校验，不修改已锁定的 B 端协议或外部评审指南。"

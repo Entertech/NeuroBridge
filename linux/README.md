@@ -59,29 +59,42 @@ cd NeuroBridge
 
 脚本成功后可断开互联网；后续使用 `./linux/update-ubuntu.sh` 即可完成安装、更新和 bridge 重建。
 
-## 3. 先配置专用有线网络
+## 3. 专用有线网络的默认自动配置
 
-服务会绑定 `[server].host` 指定的 IP；因此，先让 Ubuntu 的专用网卡拥有该静态地址，再启动服务。使用 `ip -br link` 找到实际网卡名，例如 `enp1s0`。编辑现有的 `/etc/netplan/*.yaml`，并按现场网络改成相应地址；不要覆盖安装器或现场已有的其他网卡配置。
+安装脚本会从 `/etc/neurobridge/gateway.toml` 读取网关地址并自动写入独立的 `/etc/netplan/99-neurobridge-b-side.yaml`，随后执行 `netplan apply`。这一操作不需要网线已连接、DHCP、DNS 或任何局域网；Netplan 配置会在下次开机继续生效。
 
-下面仅为“网关 `enp1s0` 直连 B 端、网段 `192.168.88.0/24`”的最小示例：
+首次安装的默认值仅用于封闭直连链路，不代表双方已确认的现场参数：网关为 `192.168.88.10/24`，且不配置默认路由、DNS、IPv6 或链路本地地址。B 端应配置为同网段不同的固定地址（例如 `192.168.88.20/24`），再连接 `ws://192.168.88.10:8765/neurobridge/v1/ws`。现场确认了不同的地址、网段或端口时，必须先修改 `gateway.toml` 中对应值，并保证 `[download].host` 与 `[server].host` 一致。
 
-```yaml
-network:
-  version: 2
-  ethernets:
-    enp1s0:
-      addresses:
-        - 192.168.88.10/24
+`[network].interface = "auto"` 只在主机上恰有一个物理以太网口时自动选中它，即使网线未插入也可以完成配置。配置器还会检查该口是否已有全局 IPv4 地址或默认路由；发现当前网关正在通过该口联网时，安装会停止且不改动网络。存在多个物理网口、找不到网口，或其他 Netplan 文件已明确配置该网口时也会停止。请在本地控制台指定 B 端专用网口，例如：
+
+```toml
+[network]
+mode = "static"
+interface = "enp1s0"
+subnet_cidr = "192.168.88.0/24"
 ```
 
-应用后核对地址：
+保存后重新运行安装入口即可应用：
 
 ```bash
-sudo netplan apply
+sudo ./linux/update-ubuntu.sh
 ip -br addr show enp1s0
 ```
 
-静态地址模式下，B 端也应配置为同一网段的另一个固定地址（例如 `192.168.88.20/24`），然后连接 `ws://<网关IP>:<端口><路径>`。如现场启用了 UFW 或其他防火墙，只允许该专用网卡访问已确认的 TCP WebSocket 端口；若启用下载服务，也只放行其 HTTP 端口。
+从早期版本升级时，已有 `gateway.toml` 未包含 `network.interface` 和 `network.subnet_cidr` 的，安装器会跳过自动网络配置，继续保留现场原有 Netplan；需要采用此功能时，显式加入上述两个字段后再执行安装入口。
+
+也可以只重新应用网络配置，不重建网关：
+
+```bash
+sudo /opt/neurobridge/venv/bin/neurobridge-network-config \
+  --config /etc/neurobridge/gateway.toml --apply
+```
+
+配置器只改写带有 NeuroBridge 管理标识的上述 Netplan 文件；不会覆盖其他 Netplan 文件或选择管理网口。若现场启用了 UFW 或其他防火墙，只允许该专用网卡访问已确认的 TCP WebSocket 端口；若启用下载服务，也只放行其 HTTP 端口。
+
+若已确认需要把已由配置器管理的 B 端专用网口从一个物理接口迁移到另一个接口，必须由现场运维人员在本地控制台显式执行 `--replace-managed-interface`。旧接口仍有 IPv4 地址或默认路由时，还必须同时确认 `--replace-active`；安装器不会自动迁移接口。
+
+若已确认需要把一个当前正在使用的网口改作 B 端专线，必须先断开其原网络；只有无法断开且由现场运维人员明确确认时，才可在本地控制台使用 `--replace-active` 强制替换，安装器不会自动使用这个参数。
 
 ## 4. 安装网关
 
@@ -213,7 +226,7 @@ sudoedit /etc/neurobridge/gateway.toml
 | --- | --- |
 | `[server] host` | 与第 3 步中网关专用网卡的静态 IP 完全一致。 |
 | `[server] port`、`path` | 填写双方确认的固定 WebSocket 端口和路径。 |
-| `[network] mode` | 通常选 `static`；只有 B 端程序能读取 DHCP 默认网关、且现场明确要自动分配地址时才选 `dhcp`。 |
+| `[network] mode` | 通常选 `static`；安装器会自动配置默认的专用有线地址。只有 B 端程序能读取 DHCP 默认网关、且现场明确要自动分配地址时才选 `dhcp`。 |
 | `[ble] enabled` | 无头环/冒烟验证时保持 `false`；完成该 Ubuntu 主机的真实头环 POC 后才改为 `true`，同时确认扫描匹配字段。 |
 | `[recording] directory` | 保持默认的 `/var/lib/neurobridge/recordings`，除非已按权限和容量要求另行配置。 |
 | `[recording] subject_id` | 填写演示或采集使用的受试者标识；无值可留空。 |
@@ -227,7 +240,7 @@ sudoedit /etc/neurobridge/gateway.toml
 sudo -u neurobridge /opt/neurobridge/venv/bin/python -c 'from neurobridge.config import load; load("/etc/neurobridge/gateway.toml"); print("gateway.toml OK")'
 ```
 
-若采用 DHCP 模式，还要填写 `interface`、`subnet_cidr`、`dhcp_range_start`、`dhcp_range_end` 与 `dhcp_lease_time`。网关本身仍必须在该网卡使用 `[server].host` 作为静态地址；DHCP 只为 B 端分配地址，不提供 DNS，也不会让端口动态化。
+若采用 DHCP 模式，还要将 `interface` 改为明确的网卡名（不能是 `auto`），并填写 `subnet_cidr`、`dhcp_range_start`、`dhcp_range_end` 与 `dhcp_lease_time`。网关本身仍必须在该网卡使用 `[server].host` 作为静态地址；DHCP 只为 B 端分配地址，不提供 DNS，也不会让端口动态化。
 
 算法默认开启：安装器会使用锁定的 SDK 和依赖自动构建 bridge，并安装到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`；网关在未配置 `algorithm.command` 时自动使用该路径。受控的真实数据 POC 可临时将 `[algorithm].enabled = false`，以录制只含原始数据的基线；算法结果的字段语义和有效性仍须以实际数据验证。详情见 [算法 SDK 接入 POC](../doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 

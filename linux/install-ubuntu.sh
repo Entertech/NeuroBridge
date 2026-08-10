@@ -23,7 +23,7 @@ algorithm_build_dir=/var/lib/neurobridge/algorithm-build
 algorithm_bridge_dir=/usr/local/lib/neurobridge
 algorithm_bridge_path=$algorithm_bridge_dir/neurobridge_affective_bridge
 
-for command in python3 rsync cmake c++; do
+for command in python3 rsync cmake c++ netplan; do
   command -v "$command" >/dev/null 2>&1 || { echo "Missing system prerequisite: $command. Install it in the Ubuntu 24.04 base image before deployment." >&2; exit 1; }
 done
 [[ -d /usr/include/eigen3 ]] || { echo "Missing system prerequisite: libeigen3-dev. Install it in the Ubuntu 24.04 base image before deployment." >&2; exit 1; }
@@ -37,18 +37,22 @@ rsync -a --delete --exclude .git --exclude .venv --exclude venv "$root_dir/" "$i
 [[ -x "$install_dir/venv/bin/python" && -x "$install_dir/venv/bin/pip" ]] || { echo "Missing existing NeuroBridge Python environment at $install_dir/venv. Provision it in the Ubuntu 24.04 base image before deployment." >&2; exit 1; }
 "$install_dir/venv/bin/python" -c 'import bleak, websockets' || { echo "Existing NeuroBridge Python environment is missing bleak or websockets. Provision them in the Ubuntu 24.04 base image before deployment." >&2; exit 1; }
 PIP_NO_INDEX=1 "$install_dir/venv/bin/pip" install --no-index --no-deps --no-build-isolation "$install_dir"
-# Build the same locked C++ bridge used by the macOS POC, but do it as the
-# unprivileged service account.  The service never needs a per-host command in
-# gateway.toml: config.py resolves the installed fixed path automatically.
-runuser -u neurobridge -- "$install_dir/linux/build-algorithm-bridge.sh" "$install_dir/third_party" "$algorithm_build_dir/output"
-install -d -o root -g root -m 0755 "$algorithm_bridge_dir"
-install -o root -g root -m 0755 "$algorithm_build_dir/output/neurobridge_affective_bridge" "$algorithm_bridge_path"
 if [[ ! -e "$config_dir/gateway.toml" ]]; then
   install -o root -g neurobridge -m 0640 "$install_dir/config/gateway.toml.example" "$config_dir/gateway.toml"
 else
   chown root:neurobridge "$config_dir/gateway.toml"
   chmod 0640 "$config_dir/gateway.toml"
 fi
+# Configure the dedicated B-side link from gateway.toml.  The configurator
+# refuses an ambiguous multi-NIC host or an interface owned by another Netplan
+# file, so it cannot silently change the management network.
+"$install_dir/venv/bin/neurobridge-network-config" --config "$config_dir/gateway.toml" --apply
+# Build the same locked C++ bridge used by the macOS POC, but do it as the
+# unprivileged service account.  The service never needs a per-host command in
+# gateway.toml: config.py resolves the installed fixed path automatically.
+runuser -u neurobridge -- "$install_dir/linux/build-algorithm-bridge.sh" "$install_dir/third_party" "$algorithm_build_dir/output"
+install -d -o root -g root -m 0755 "$algorithm_bridge_dir"
+install -o root -g root -m 0755 "$algorithm_build_dir/output/neurobridge_affective_bridge" "$algorithm_bridge_path"
 install -m 0644 "$install_dir/linux/systemd/neurobridge.service" /etc/systemd/system/neurobridge.service
 install -m 0644 "$install_dir/linux/systemd/neurobridge-dhcp.service" /etc/systemd/system/neurobridge-dhcp.service
 install -m 0644 "$install_dir/linux/logrotate/neurobridge" /etc/logrotate.d/neurobridge
@@ -59,4 +63,4 @@ systemctl disable --now dnsmasq.socket 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable neurobridge.service
 systemctl enable neurobridge-dhcp.service
-echo "NeuroBridge is enabled for every boot. Confirm $config_dir/gateway.toml, then run: systemctl start neurobridge"
+echo "NeuroBridge is enabled for every boot and the dedicated Ethernet link is configured from $config_dir/gateway.toml. Confirm the deployment values, then run: systemctl start neurobridge"

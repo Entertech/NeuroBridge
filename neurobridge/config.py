@@ -117,11 +117,23 @@ def load(path: str | Path) -> GatewayConfig:
     dhcp_lease_time = str(network.get("dhcp_lease_time", "12h"))
     if network_mode not in {"static", "dhcp"}:
         raise ValueError("network.mode must be static or dhcp")
+    if interface is not None and interface != "auto" and (
+        not isinstance(interface, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}", interface) is None
+    ):
+        raise ValueError("network.interface is invalid")
+    if subnet_cidr is not None:
+        try:
+            subnet = ipaddress.ip_network(str(subnet_cidr), strict=True)
+        except ValueError as exc:
+            raise ValueError("network.subnet_cidr is invalid") from exc
+        if subnet.version != 4 or address.version != 4 or address not in subnet or address in {subnet.network_address, subnet.broadcast_address}:
+            raise ValueError("network.subnet_cidr must contain server.host as a usable IPv4 address")
     if network_mode == "dhcp":
         if not all((interface, subnet_cidr, dhcp_range_start, dhcp_range_end)):
             raise ValueError("network.interface, subnet_cidr, and DHCP range are required in dhcp mode")
-        if not isinstance(interface, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}", interface) is None:
-            raise ValueError("network.interface is invalid")
+        if interface == "auto":
+            raise ValueError("network.interface must explicitly name the DHCP interface")
         try:
             subnet = ipaddress.ip_network(str(subnet_cidr), strict=True)
             range_start, range_end = ipaddress.ip_address(str(dhcp_range_start)), ipaddress.ip_address(str(dhcp_range_end))
