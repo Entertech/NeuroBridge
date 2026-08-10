@@ -98,7 +98,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("stop_ssh_service_processes()", script)
         self.assertIn("systemctl kill --kill-who=all --signal=TERM ssh.service", script)
         self.assertIn("systemctl kill --kill-who=all --signal=KILL ssh.service", script)
-        self.assertIn('ss -H -ltn "sport = :$port"', script)
+        self.assertIn("sshd_listener_remains()", script)
+        self.assertIn("ss -H -ltnp", script)
+        self.assertIn("not only the requested new port", script)
+        self.assertIn(r'''awk '/\("sshd",/''', script)
         self.assertIn("Run this setup from the local gateway console", script)
         self.assertIn("transaction_active=true", script)
         self.assertLess(

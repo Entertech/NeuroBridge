@@ -189,13 +189,18 @@ restore_path() {
   fi
 }
 
-ssh_port_is_listening() {
-  [[ -n $(ss -H -ltn "sport = :$port") ]]
+sshd_listener_remains() {
+  # Check every SSH daemon listener, not only the requested new port.  Ubuntu's
+  # ssh.service uses KillMode=process, so an old daemon can remain on its
+  # previous port (commonly 22) while a new configuration selects another one.
+  # Looking only at $port would then leave the old, less-restricted listener
+  # reachable after this setup reports success.
+  ss -H -ltnp | awk '/\("sshd",/ { found = 1 } END { exit !found }'
 }
 
 stop_ssh_service_processes() {
   systemctl stop ssh.service >/dev/null 2>&1 || true
-  if ! ssh_port_is_listening; then
+  if ! sshd_listener_remains; then
     return 0
   fi
 
@@ -208,7 +213,7 @@ stop_ssh_service_processes() {
 
   systemctl kill --kill-who=all --signal=TERM ssh.service >/dev/null 2>&1 || true
   for _ in {1..20}; do
-    if ! ssh_port_is_listening; then
+    if ! sshd_listener_remains; then
       return 0
     fi
     sleep 0.1
@@ -218,7 +223,7 @@ stop_ssh_service_processes() {
   # was left behind after the main process changed, TERM may not clear it.
   systemctl kill --kill-who=all --signal=KILL ssh.service >/dev/null 2>&1 || true
   for _ in {1..20}; do
-    if ! ssh_port_is_listening; then
+    if ! sshd_listener_remains; then
       return 0
     fi
     sleep 0.1
@@ -598,9 +603,9 @@ if [[ "$ssh_socket_available" == true ]] && ! systemctl disable --now ssh.socket
 fi
 if ! stop_ssh_service_processes; then
   if [[ -n ${SSH_CONNECTION:-} ]]; then
-    fail "SSH port $port is still held by an old sshd process. Run this setup from the local gateway console so stale SSH processes can be stopped safely."
+    fail "An old sshd listener is still active. Run this setup from the local gateway console so stale SSH processes can be stopped safely."
   fi
-  fail "SSH port $port is still occupied after stopping ssh.service. Inspect it with: ss -ltnp 'sport = :$port'"
+  fail "An old sshd listener is still active after stopping ssh.service. Inspect it with: ss -ltnp"
 fi
 systemctl reset-failed ssh.service >/dev/null 2>&1 || true
 if ! systemctl enable ssh.service || ! systemctl start ssh.service; then
