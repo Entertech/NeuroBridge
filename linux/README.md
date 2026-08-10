@@ -104,6 +104,30 @@ ip -br addr show enp1s0
 
 SSH 只用于网关运维，**不**用于 B 端读取数据、控制采集或调用算法。`prepare-ubuntu24.04-environment.sh` 会安装 `openssh-server`，但会停用 Ubuntu 可能自动开启的 `ssh.socket` 和 `ssh.service`；只有执行下面的显式配置命令后，SSH 才会按指定地址启动并开机自启。
 
+### 4.1.1 从源码完成首次 SSH 配置
+
+先完成第 2 节的源码获取、第 3 节的专用网卡静态地址配置，以及首次联网阶段的环境准备。首次启用 SSH 必须在网关**本地控制台**、当前完整源码目录中进行；不要在尚未受限的远程连接中首次设置运维密码。
+
+```bash
+cd <NeuroBridge源码目录>
+test -x linux/setup-ssh-operations.sh
+test -x linux/configure-ssh-operations.sh
+sudo ./linux/setup-ssh-operations.sh --quick
+```
+
+快速模式会按顺序确认运维账户、密码、网关私有监听 IP、唯一允许的运维主机 IP 和 SSH 端口。脚本只将 SSH 绑定到填写的网关地址，并把快速模式的单一来源地址规范为 `/32`。密码采用隐藏输入并要求二次确认；不要在源码、命令历史、终端截图或现场记录中保存密码。
+
+配置完成后立即在本地控制台验证：
+
+```bash
+sudo sshd -t
+sudo systemctl is-enabled ssh.service
+sudo systemctl is-active ssh.service
+sudo ss -ltnp 'sport = :<SSH端口>'
+```
+
+预期服务为 `enabled` 与 `active`，且只在已确认的网关 IP/端口监听。若配置器报告残留 `sshd` 监听，保持在本地控制台执行；不要重新启用 `ssh.socket`、启用通配监听或手工结束未知进程。日常外部运维操作见未发布的 [头环数据网关 SSH 运维操作指南 v1.0](../doc/tech/对外/头环数据网关%20SSH%20运维操作指南/头环数据网关%20SSH%20运维操作指南_v1.0.md)。
+
 网关与 B 端主机通过单根专用网线直连、头环离线时的完整引导、录播联调、审核版本的一键更新重载与排障步骤，见 [网关 SSH 运维与 B 端录播联调指南](../doc/tech/%E7%BD%91%E5%85%B3%20SSH%20%E8%BF%90%E7%BB%B4%E4%B8%8E%20B%20%E7%AB%AF%E5%BD%95%E6%92%AD%E8%81%94%E8%B0%83%E6%8C%87%E5%8D%97.md)。指南同时记录临时局域网到最终直连的配置切换、SSH 验收清单，以及用户名、CIDR、PAM 密码策略、`ssh.socket` 和残留 sshd 端口冲突的现场排查过程。
 
 常规单网卡、单 B 端场景，在网关的**本地控制台**使用快速模式。它读取 Git 忽略的 `config/ssh-operations.txt`；首次运行时会从模板自动创建权限为 `600` 的实际文件，某个字段为空或缺失时才提示输入：
