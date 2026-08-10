@@ -386,6 +386,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('interface = "auto"', example)
         self.assertIn('subnet_cidr = "192.168.88.0/24"', example)
         self.assertIn('neurobridge-network-config" --config "$config_dir/gateway.toml" --apply', install_script)
+        self.assertLess(
+            install_script.index('if [[ ! -e "$config_dir/gateway.toml" ]]'),
+            install_script.index('neurobridge-network-config" --config "$config_dir/gateway.toml" --apply'),
+        )
 
     def test_web_assets_are_not_in_a_platform_directory(self) -> None:
         self.assertTrue((ROOT / "web" / "capture" / "index.html").is_file())

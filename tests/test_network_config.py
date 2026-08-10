@@ -8,6 +8,7 @@ import unittest
 
 from neurobridge.network_config import (
     MANAGED_MARKER,
+    ensure_interface_can_be_retired,
     ensure_interface_is_available,
     declared_interfaces,
     ensure_output_is_safe,
@@ -70,7 +71,32 @@ class DedicatedNetworkConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "99-neurobridge-b-side.yaml"
             output.write_text(f"{MANAGED_MARKER}\nnetwork:\n", encoding="utf-8")
-            ensure_output_is_safe(output, "enp1s0")
+            with self.assertRaisesRegex(ValueError, "cannot determine"):
+                ensure_output_is_safe(output, "enp1s0")
+
+    def test_refuses_to_move_a_managed_netplan_file_to_another_interface_without_explicit_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "99-neurobridge-b-side.yaml"
+            output.write_text(
+                render_netplan(
+                    "enp1s0",
+                    ipaddress.IPv4Address("192.168.88.10"),
+                    ipaddress.IPv4Network("192.168.88.0/24"),
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "refusing to move"):
+                ensure_output_is_safe(output, "enp2s0")
+            self.assertEqual(ensure_output_is_safe(output, "enp2s0", True), "enp1s0")
+
+    def test_refuses_to_retire_a_managed_interface_that_still_has_an_address(self) -> None:
+        def runner(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            output = "2: enp1s0    inet 192.168.88.10/24 scope global enp1s0\n" if arguments[1] == "-o" else ""
+            return subprocess.CompletedProcess(arguments, 0, output)
+
+        with self.assertRaisesRegex(ValueError, "still has IPv4 state"):
+            ensure_interface_can_be_retired("enp1s0", False, runner)
+        ensure_interface_can_be_retired("enp1s0", True, runner)
 
     def test_refuses_to_replace_an_interface_with_an_existing_ipv4_address(self) -> None:
         def runner(arguments: list[str], **_: object) -> subprocess.CompletedProcess[str]:

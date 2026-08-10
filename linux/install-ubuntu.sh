@@ -37,6 +37,12 @@ rsync -a --delete --exclude .git --exclude .venv --exclude venv "$root_dir/" "$i
 [[ -x "$install_dir/venv/bin/python" && -x "$install_dir/venv/bin/pip" ]] || { echo "Missing existing NeuroBridge Python environment at $install_dir/venv. Provision it in the Ubuntu 24.04 base image before deployment." >&2; exit 1; }
 "$install_dir/venv/bin/python" -c 'import bleak, websockets' || { echo "Existing NeuroBridge Python environment is missing bleak or websockets. Provision them in the Ubuntu 24.04 base image before deployment." >&2; exit 1; }
 PIP_NO_INDEX=1 "$install_dir/venv/bin/pip" install --no-index --no-deps --no-build-isolation "$install_dir"
+if [[ ! -e "$config_dir/gateway.toml" ]]; then
+  install -o root -g neurobridge -m 0640 "$install_dir/config/gateway.toml.example" "$config_dir/gateway.toml"
+else
+  chown root:neurobridge "$config_dir/gateway.toml"
+  chmod 0640 "$config_dir/gateway.toml"
+fi
 # Configure the dedicated B-side link from gateway.toml.  The configurator
 # refuses an ambiguous multi-NIC host or an interface owned by another Netplan
 # file, so it cannot silently change the management network.
@@ -47,12 +53,6 @@ PIP_NO_INDEX=1 "$install_dir/venv/bin/pip" install --no-index --no-deps --no-bui
 runuser -u neurobridge -- "$install_dir/linux/build-algorithm-bridge.sh" "$install_dir/third_party" "$algorithm_build_dir/output"
 install -d -o root -g root -m 0755 "$algorithm_bridge_dir"
 install -o root -g root -m 0755 "$algorithm_build_dir/output/neurobridge_affective_bridge" "$algorithm_bridge_path"
-if [[ ! -e "$config_dir/gateway.toml" ]]; then
-  install -o root -g neurobridge -m 0640 "$install_dir/config/gateway.toml.example" "$config_dir/gateway.toml"
-else
-  chown root:neurobridge "$config_dir/gateway.toml"
-  chmod 0640 "$config_dir/gateway.toml"
-fi
 install -m 0644 "$install_dir/linux/systemd/neurobridge.service" /etc/systemd/system/neurobridge.service
 install -m 0644 "$install_dir/linux/systemd/neurobridge-dhcp.service" /etc/systemd/system/neurobridge-dhcp.service
 install -m 0644 "$install_dir/linux/logrotate/neurobridge" /etc/logrotate.d/neurobridge

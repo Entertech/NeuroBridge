@@ -124,7 +124,35 @@ def declared_interfaces(netplan_directory: Path, ignored_file: Path) -> set[str]
     return result
 
 
-def ensure_output_is_safe(output: Path, interface: str) -> None:
+def managed_interface(output: Path) -> str:
+    """Return the sole Ethernet interface declared in a managed Netplan file."""
+    try:
+        lines = output.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ValueError(f"cannot read managed Netplan file: {output}") from exc
+    ethernets_indent: int | None = None
+    interfaces: list[str] = []
+    for line in lines:
+        stripped = line.lstrip(" ")
+        indent = len(line) - len(stripped)
+        if re.fullmatch(r"ethernets:\s*(?:#.*)?", stripped):
+            ethernets_indent = indent
+            continue
+        if ethernets_indent is None:
+            continue
+        if stripped and not stripped.startswith("#") and indent <= ethernets_indent:
+            ethernets_indent = None
+            continue
+        if indent == ethernets_indent + 2:
+            match = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9_.-]{0,14}):\s*(?:#.*)?", stripped)
+            if match:
+                interfaces.append(match.group(1))
+    if len(interfaces) != 1:
+        raise ValueError(f"cannot determine the managed Ethernet interface in {output}")
+    return interfaces[0]
+
+
+def ensure_output_is_safe(output: Path, interface: str, replace_managed_interface: bool = False) -> str | None:
     if output.exists():
         try:
             first_line = output.read_text(encoding="utf-8").splitlines()[0]
@@ -132,11 +160,19 @@ def ensure_output_is_safe(output: Path, interface: str) -> None:
             raise ValueError(f"cannot verify existing Netplan file ownership: {output}") from exc
         if first_line != MANAGED_MARKER:
             raise ValueError(f"refusing to overwrite unmanaged Netplan file: {output}")
+        existing_interface = managed_interface(output)
+        if existing_interface != interface and not replace_managed_interface:
+            raise ValueError(
+                f"managed Netplan file currently configures {existing_interface}; refusing to move it to {interface}. "
+                "Use --replace-managed-interface only after confirming the old interface is no longer in use"
+            )
+        return existing_interface
     elif interface in declared_interfaces(output.parent, output):
         raise ValueError(
             f"{interface} is already configured by another Netplan file; "
             "choose the dedicated interface explicitly or remove the conflicting deployment configuration"
         )
+    return None
 
 
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
@@ -144,7 +180,6 @@ CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 def active_network_state(
     interface: str,
-    expected_address: ipaddress.IPv4Interface,
     run: CommandRunner = subprocess.run,
 ) -> tuple[set[ipaddress.IPv4Interface], bool]:
     """Return global IPv4 addresses and whether the link has a default route.
@@ -189,7 +224,7 @@ def ensure_interface_is_available(
 ) -> None:
     """Refuse to disturb a live management or deployment network by default."""
     expected = ipaddress.IPv4Interface(f"{address}/{subnet.prefixlen}")
-    addresses, has_default_route = active_network_state(interface, expected, run)
+    addresses, has_default_route = active_network_state(interface, run)
     other_addresses = addresses - {expected}
     if not has_default_route and not other_addresses:
         return
@@ -203,6 +238,19 @@ def ensure_interface_is_available(
     raise ValueError(
         f"refusing to reconfigure active interface {interface} ({'; '.join(details)}). "
         "Disconnect it from the current network or rerun manually with --replace-active after confirming this is the dedicated B-side link"
+    )
+
+
+def ensure_interface_can_be_retired(interface: str, force: bool, run: CommandRunner = subprocess.run) -> None:
+    """Require an explicit active-interface override before removing its managed address."""
+    addresses, has_default_route = active_network_state(interface, run)
+    if not addresses and not has_default_route:
+        return
+    if force:
+        return
+    raise ValueError(
+        f"managed interface {interface} still has IPv4 state; refusing to remove it. "
+        "Disconnect it from the current network or use --replace-active together with --replace-managed-interface"
     )
 
 
@@ -241,11 +289,18 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="allow replacement of an interface that already has IPv4 state; requires --apply",
     )
+    parser.add_argument(
+        "--replace-managed-interface",
+        action="store_true",
+        help="allow the managed Netplan file to move from one Ethernet interface to another; requires --apply",
+    )
     arguments = parser.parse_args(argv)
     if arguments.apply and os.geteuid() != 0:
         raise SystemExit("Run with sudo when using --apply.")
     if arguments.replace_active and not arguments.apply:
         raise SystemExit("--replace-active requires --apply.")
+    if arguments.replace_managed_interface and not arguments.apply:
+        raise SystemExit("--replace-managed-interface requires --apply.")
 
     config = load(arguments.config)
     # Preserve upgraded deployments that predate automatic link management:
@@ -260,9 +315,11 @@ def main(argv: list[str] | None = None) -> None:
     interface = resolve_interface(config.network.interface)
     subnet_cidr = config.network.subnet_cidr or DEFAULT_SUBNET_CIDR
     address, subnet = validate_address(config.server.host, subnet_cidr)
-    ensure_interface_is_available(interface, address, subnet, arguments.replace_active)
     output = Path(arguments.output)
-    ensure_output_is_safe(output, interface)
+    previous_interface = ensure_output_is_safe(output, interface, arguments.replace_managed_interface)
+    if previous_interface is not None and previous_interface != interface:
+        ensure_interface_can_be_retired(previous_interface, arguments.replace_active)
+    ensure_interface_is_available(interface, address, subnet, arguments.replace_active)
     content = render_netplan(interface, address, subnet)
     if not arguments.apply:
         print(content, end="")

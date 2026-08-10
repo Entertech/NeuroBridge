@@ -92,6 +92,8 @@ sudo /opt/neurobridge/venv/bin/neurobridge-network-config \
 
 配置器只改写带有 NeuroBridge 管理标识的上述 Netplan 文件；不会覆盖其他 Netplan 文件或选择管理网口。若现场启用了 UFW 或其他防火墙，只允许该专用网卡访问已确认的 TCP WebSocket 端口；若启用下载服务，也只放行其 HTTP 端口。
 
+若已确认需要把已由配置器管理的 B 端专用网口从一个物理接口迁移到另一个接口，必须由现场运维人员在本地控制台显式执行 `--replace-managed-interface`。旧接口仍有 IPv4 地址或默认路由时，还必须同时确认 `--replace-active`；安装器不会自动迁移接口。
+
 若已确认需要把一个当前正在使用的网口改作 B 端专线，必须先断开其原网络；只有无法断开且由现场运维人员明确确认时，才可在本地控制台使用 `--replace-active` 强制替换，安装器不会自动使用这个参数。
 
 ## 4. 安装网关
