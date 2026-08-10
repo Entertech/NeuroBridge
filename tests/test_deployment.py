@@ -89,13 +89,18 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("ssh_socket_was_active", script)
         self.assertIn("systemctl cat ssh.socket", script)
         self.assertIn("systemctl disable --now ssh.socket", script)
+        self.assertIn("stop_ssh_service_processes()", script)
+        self.assertIn("systemctl kill --kill-who=all --signal=TERM ssh.service", script)
+        self.assertIn("systemctl kill --kill-who=all --signal=KILL ssh.service", script)
+        self.assertIn('ss -H -ltn "sport = :$port"', script)
+        self.assertIn("Run this setup from the local gateway console", script)
         self.assertIn("transaction_active=true", script)
         self.assertLess(
             script.index("systemctl disable --now ssh.socket"),
-            script.index('if ! systemctl enable --now ssh.service'),
+            script.index('if ! systemctl enable ssh.service'),
         )
         self.assertLess(
-            script.index('if ! systemctl enable --now ssh.service'),
+            script.index('if ! systemctl enable ssh.service'),
             script.index('printf \'%s:%s\\n\' "$operator_user" "$operator_password" | chpasswd'),
         )
         self.assertLess(

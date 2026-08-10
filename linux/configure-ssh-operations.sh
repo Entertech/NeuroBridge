@@ -83,6 +83,7 @@ command -v sshd >/dev/null 2>&1 || fail "openssh-server is missing. Run linux/pr
 command -v chpasswd >/dev/null 2>&1 || fail "chpasswd is missing; install the Ubuntu account-management prerequisites."
 command -v systemctl >/dev/null 2>&1 || fail "systemd is required."
 command -v rsync >/dev/null 2>&1 || fail "rsync is required to initialize the operator project directory."
+command -v ss >/dev/null 2>&1 || fail "ss is required to verify that the SSH port is released."
 IFS= read -r operator_password || fail "--operator-password-stdin requires one password line on standard input."
 [[ "$operator_password" =~ ^[0-9]{6}$ ]] || fail "Operator password must contain exactly 6 digits."
 setup_source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -188,6 +189,43 @@ restore_path() {
   fi
 }
 
+ssh_port_is_listening() {
+  [[ -n $(ss -H -ltn "sport = :$port") ]]
+}
+
+stop_ssh_service_processes() {
+  systemctl stop ssh.service >/dev/null 2>&1 || true
+  if ! ssh_port_is_listening; then
+    return 0
+  fi
+
+  # Killing the whole ssh.service cgroup also terminates active SSH sessions.
+  # Do that only from the local console, never from the SSH session running
+  # this configurator.
+  if [[ -n ${SSH_CONNECTION:-} ]]; then
+    return 2
+  fi
+
+  systemctl kill --kill-who=all --signal=TERM ssh.service >/dev/null 2>&1 || true
+  for _ in {1..20}; do
+    if ! ssh_port_is_listening; then
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  # Ubuntu's vendor unit uses KillMode=process. If a socket-activated listener
+  # was left behind after the main process changed, TERM may not clear it.
+  systemctl kill --kill-who=all --signal=KILL ssh.service >/dev/null 2>&1 || true
+  for _ in {1..20}; do
+    if ! ssh_port_is_listening; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
 rollback() {
   set +e
   restore_path "$sudoers_path" "$previous_sudoers" "$had_previous_sudoers"
@@ -210,7 +248,7 @@ rollback() {
   # Stop both activation paths before restoring their original enablement and
   # active states. This avoids briefly exposing the distribution-default
   # wildcard socket or making it compete with the address-bound daemon.
-  systemctl stop ssh.service >/dev/null 2>&1 || true
+  stop_ssh_service_processes || true
   if [[ "$ssh_socket_available" == true ]]; then
     systemctl stop ssh.socket >/dev/null 2>&1 || true
   fi
@@ -558,7 +596,14 @@ effective_addresses=$(sshd -T -f /etc/ssh/sshd_config | awk '$1 == "listenaddres
 if [[ "$ssh_socket_available" == true ]] && ! systemctl disable --now ssh.socket; then
   fail "Could not disable Ubuntu SSH socket activation; previous SSH configuration was restored."
 fi
-if ! systemctl enable --now ssh.service || ! systemctl restart ssh.service; then
+if ! stop_ssh_service_processes; then
+  if [[ -n ${SSH_CONNECTION:-} ]]; then
+    fail "SSH port $port is still held by an old sshd process. Run this setup from the local gateway console so stale SSH processes can be stopped safely."
+  fi
+  fail "SSH port $port is still occupied after stopping ssh.service. Inspect it with: ss -ltnp 'sport = :$port'"
+fi
+systemctl reset-failed ssh.service >/dev/null 2>&1 || true
+if ! systemctl enable ssh.service || ! systemctl start ssh.service; then
   fail "Could not start the hardened SSH service; previous SSH configuration was restored."
 fi
 
