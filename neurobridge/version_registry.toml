@@ -80,6 +80,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-08-10-ssh-listen-address-startup-order"
+date = "2026-08-10"
+scope = "gateway_operations"
+summary = "SSH 运维配置器为地址受限的 ssh.service 安装 network-online 依赖和监听地址就绪等待，消除系统启动时静态 IP 晚于 sshd 导致服务失败的竞态；仍仅监听已确认的固定私有地址。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "现场重启日志显示 sshd 在 192.168.31.33 尚未配置时启动并报 Cannot assign requested address；修复仅涉及网关内部 SSH 运维，不改变 B 端协议或已发布对外文档。"
+
+[[change_records]]
 id = "2026-08-05-public-northbound-v0.2"
 date = "2026-08-05"
 scope = "external_northbound_document"

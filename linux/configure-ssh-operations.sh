@@ -133,8 +133,13 @@ logs_script=/usr/local/sbin/neurobridge-ops-logs
 ops_cli=/usr/local/bin/neurobridge-ops
 update_script=/usr/local/sbin/neurobridge-ops-update
 command_script=/usr/local/sbin/neurobridge-ops-command
+network_wait_script=/usr/local/lib/neurobridge/wait-for-ssh-listen-address
+systemd_dropin_dir=/etc/systemd/system/ssh.service.d
+systemd_dropin_path=$systemd_dropin_dir/10-neurobridge-listen-address.conf
 install -d -o root -g root -m 0755 "$config_dir"
 install -d -o root -g root -m 0755 /run/sshd
+install -d -o root -g root -m 0755 "$(dirname "$network_wait_script")"
+install -d -o root -g root -m 0755 "$systemd_dropin_dir"
 
 config_tmp=$(mktemp)
 sudoers_tmp=$(mktemp)
@@ -143,6 +148,8 @@ logs_tmp=$(mktemp)
 ops_cli_tmp=$(mktemp)
 update_tmp=$(mktemp)
 command_tmp=$(mktemp)
+network_wait_tmp=$(mktemp)
+systemd_dropin_tmp=$(mktemp)
 previous_config=$(mktemp)
 previous_sudoers=$(mktemp)
 previous_status=$(mktemp)
@@ -150,6 +157,8 @@ previous_logs=$(mktemp)
 previous_ops_cli=$(mktemp)
 previous_update=$(mktemp)
 previous_command=$(mktemp)
+previous_network_wait=$(mktemp)
+previous_systemd_dropin=$(mktemp)
 had_previous_config=false
 had_previous_sudoers=false
 had_previous_status=false
@@ -157,6 +166,8 @@ had_previous_logs=false
 had_previous_ops_cli=false
 had_previous_update=false
 had_previous_command=false
+had_previous_network_wait=false
+had_previous_systemd_dropin=false
 operator_existed=false
 operator_created=false
 operator_shadow_before=
@@ -169,7 +180,8 @@ transaction_active=false
 
 cleanup() {
   rm -f "$config_tmp" "$sudoers_tmp" "$status_tmp" "$logs_tmp" "$ops_cli_tmp" "$update_tmp" "$command_tmp" \
-    "$previous_config" "$previous_sudoers" "$previous_status" "$previous_logs" "$previous_ops_cli" "$previous_update" "$previous_command"
+    "$network_wait_tmp" "$systemd_dropin_tmp" "$previous_config" "$previous_sudoers" "$previous_status" "$previous_logs" \
+    "$previous_ops_cli" "$previous_update" "$previous_command" "$previous_network_wait" "$previous_systemd_dropin"
 }
 
 backup_path() {
@@ -233,6 +245,9 @@ stop_ssh_service_processes() {
 
 rollback() {
   set +e
+  restore_path "$systemd_dropin_path" "$previous_systemd_dropin" "$had_previous_systemd_dropin"
+  restore_path "$network_wait_script" "$previous_network_wait" "$had_previous_network_wait"
+  systemctl daemon-reload >/dev/null 2>&1 || true
   restore_path "$sudoers_path" "$previous_sudoers" "$had_previous_sudoers"
   restore_path "$status_script" "$previous_status" "$had_previous_status"
   restore_path "$logs_script" "$previous_logs" "$had_previous_logs"
@@ -295,6 +310,8 @@ backup_path "$logs_script" "$previous_logs" had_previous_logs
 backup_path "$ops_cli" "$previous_ops_cli" had_previous_ops_cli
 backup_path "$update_script" "$previous_update" had_previous_update
 backup_path "$command_script" "$previous_command" had_previous_command
+backup_path "$network_wait_script" "$previous_network_wait" had_previous_network_wait
+backup_path "$systemd_dropin_path" "$previous_systemd_dropin" had_previous_systemd_dropin
 if id -u "$operator_user" >/dev/null 2>&1; then
   operator_existed=true
   operator_shadow_before=$(getent shadow "$operator_user") || fail "Cannot back up the existing operator account."
@@ -342,6 +359,40 @@ Match User $operator_user Address *,!$allow_from
     PermitTTY no
     AllowTcpForwarding no
 Match all
+EOF
+
+cat >"$network_wait_tmp" <<'EOF'
+#!/usr/bin/env bash
+# Wait until the SSH configuration's address is present before sshd binds it.
+set -euo pipefail
+
+listen_address=${1:?missing listen address}
+timeout_seconds=${2:?missing timeout seconds}
+[[ "$timeout_seconds" =~ ^[0-9]+$ && "$timeout_seconds" -ge 1 && "$timeout_seconds" -le 300 ]] || {
+  echo "Invalid SSH listen-address wait timeout: $timeout_seconds" >&2
+  exit 2
+}
+
+for ((attempt = 0; attempt < timeout_seconds; attempt++)); do
+  if /usr/sbin/ip -o -4 addr show | /usr/bin/awk '{split($4, address, "/"); print address[1]}' | /usr/bin/grep -Fx -- "$listen_address" >/dev/null; then
+    exit 0
+  fi
+  /usr/bin/sleep 1
+done
+
+echo "Timed out waiting ${timeout_seconds}s for SSH listen address: $listen_address" >&2
+exit 1
+EOF
+
+cat >"$systemd_dropin_tmp" <<EOF
+# Managed by linux/configure-ssh-operations.sh. Do not edit in place.
+# Address-bound SSH must not start before the configured gateway IP exists.
+[Unit]
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStartPre=$network_wait_script $listen_address 90
 EOF
 
 cat >"$sudoers_tmp" <<EOF
@@ -578,6 +629,9 @@ EOF
 
 visudo -cf "$sudoers_tmp" >/dev/null || fail "Generated sudo policy did not validate."
 install -o root -g root -m 0644 "$config_tmp" "$config_path"
+install -o root -g root -m 0755 "$network_wait_tmp" "$network_wait_script"
+install -o root -g root -m 0644 "$systemd_dropin_tmp" "$systemd_dropin_path"
+systemctl daemon-reload
 
 if ! sshd -t -f /etc/ssh/sshd_config; then
   fail "Generated sshd configuration did not validate; previous SSH configuration was restored."
