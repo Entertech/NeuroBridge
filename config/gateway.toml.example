@@ -24,8 +24,8 @@ subnet_cidr = "192.168.88.0/24"
 [ble]
 # Enabled only after a real headband POC on the target Ubuntu x86_64 host.
 enabled = false
-# On every unconnected cycle, scan matching advertisements and connect the highest RSSI.
-device_name = "Flowtime Headband"
+# On every unconnected cycle, scan for this profile UUID and connect the highest RSSI.
+# Device names are not used because they can change on the headband.
 model_nbr_uuid = "0000ff10-1212-abcd-1523-785feabcd123"
 scan_timeout_seconds = 5
 reconnect_delay_seconds = 3

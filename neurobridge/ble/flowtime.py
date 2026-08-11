@@ -27,12 +27,15 @@ class FlowtimeAdapter:
         self._stopping = False
 
     def select_strongest(self, devices: list[Any]) -> Any | None:
-        """Select the strongest advertisement matching the configured Flowtime profile."""
+        """Select the strongest advertisement matching the configured UUID.
+
+        Device names are intentionally not used: they are mutable presentation
+        data and are not a stable part of the confirmed device profile.
+        """
         def matches(device: Any) -> bool:
-            name_matches = self.config.device_name is None or getattr(device, "name", None) == self.config.device_name
             metadata = getattr(device, "metadata", {}) or {}
             advertised_uuids = {str(item).lower() for item in metadata.get("uuids", [])}
-            return name_matches and self.config.model_nbr_uuid in advertised_uuids
+            return self.config.model_nbr_uuid in advertised_uuids
 
         candidates = [device for device in devices if matches(device)]
         return max(candidates, key=lambda device: getattr(device, "rssi", None) if isinstance(getattr(device, "rssi", None), int | float) else float("-inf"), default=None)
@@ -44,11 +47,11 @@ class FlowtimeAdapter:
         while not self._stopping:
             try:
                 await self.status("connectionState", "connecting")
-                LOG.info("Scanning for Flowtime headband")
+                LOG.info("Scanning for Flowtime headband by configured profile UUID")
                 devices = await BleakScanner.discover(timeout=self.config.scan_timeout_seconds)
                 candidate = self.select_strongest(devices)
                 if candidate is None:
-                    raise RuntimeError("No Flowtime headband matching the configured profile was found")
+                    raise RuntimeError("No Flowtime headband advertising the configured profile UUID was found")
                 LOG.info("Connecting to Flowtime candidate (RSSI=%s)", getattr(candidate, "rssi", None))
                 self._client = BleakClient(candidate, disconnected_callback=lambda _: asyncio.create_task(self.status("connectionState", "disconnected")))
                 await self._client.connect()

@@ -47,7 +47,7 @@ uv pip install --python /tmp/neurobridge-mac-venv/bin/python bleak==0.19.0 webso
 
 macOS POC 必须使用 Python 3.11；系统默认 Python 3.14 与锁定的 Bleak 0.19 / PyObjC 8.5 不兼容。上述命令将虚拟环境建在项目外，避免产生工作树文件。
 
-若页面扫描不到头环，先执行只读扫描并据此确认模板里的 `device_name` 和 `model_nbr_uuid`：
+若页面扫描不到头环，先执行只读扫描并据此确认模板里的 `model_nbr_uuid`；设备名称不会参与匹配：
 
 ```bash
 /tmp/neurobridge-mac-venv/bin/python mac/scan_devices.py
@@ -64,7 +64,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 /tmp/neurobridge-mac-venv/bin/python mac/poc_server.py --config /tmp/neurobridge-gateway.capture.toml
 ```
 
-浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载会立即发起本机扫描；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51` 与电量通知，随后向 `FF21` 写入 `0x05` 启动采集。模板默认不启动算法 bridge，直到真实录制数据已验证其输入分组。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
+浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载会立即发起本机扫描；网关会扫描广播了已配置 Model Number UUID 的头环（不匹配设备名称），订阅 `FF31`、`FF32`、`FF51` 与电量通知，随后向 `FF21` 写入 `0x05` 启动采集。模板默认不启动算法 bridge，直到真实录制数据已验证其输入分组。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
 
 成功连接后的记录会保存到 `/tmp/neurobridge-headband-poc/sessions/rec-.../`，其中原始 EEG、原始心率和各算法指标分别位于 `raw/`、`algorithm/` 子目录。目录名中的 `rec-...` 是后续录播所需的 recording ID。请只记录 ID，不要复制 JSONL 中的 Base64 原始字节。
 

@@ -19,7 +19,6 @@ class ServerConfig:
 @dataclass(frozen=True)
 class BleConfig:
     enabled: bool
-    device_name: str | None
     model_nbr_uuid: str
     scan_timeout_seconds: int
     reconnect_delay_seconds: int
@@ -145,7 +144,7 @@ def load(path: str | Path) -> GatewayConfig:
             raise ValueError("network.dhcp_lease_time must use a positive m, h, or d duration")
     return GatewayConfig(
         server=ServerConfig(host, port, endpoint),
-        ble=BleConfig(bool(ble.get("enabled", False)), ble.get("device_name") or None, str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(), int(ble.get("scan_timeout_seconds", 5)), int(ble.get("reconnect_delay_seconds", 3))),
+        ble=BleConfig(bool(ble.get("enabled", False)), str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(), int(ble.get("scan_timeout_seconds", 5)), int(ble.get("reconnect_delay_seconds", 3))),
         recording=RecordingConfig(Path(recording.get("directory", "./recordings")), recording.get("subject_id") or None, recording.get("replay_recording_id") or None, replay_speed),
         # Ubuntu installation places the locked native bridge at this fixed path.
         # ``enabled`` is therefore the only setting an operator needs to change

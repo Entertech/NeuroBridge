@@ -48,7 +48,7 @@ class DownloadServiceTests(unittest.IsolatedAsyncioTestCase):
         self.gateway = Gateway(
             GatewayConfig(
                 ServerConfig("127.0.0.1", unused_port(), "/neurobridge/v1/ws"),
-                BleConfig(False, None, "0000ff10-1212-abcd-1523-785feabcd123", 5, 3),
+                BleConfig(False, "0000ff10-1212-abcd-1523-785feabcd123", 5, 3),
                 RecordingConfig(root / "recordings", "SUBJECT-001", None, 1),
                 AlgorithmConfig(False, ()),
                 DownloadConfig(True, "127.0.0.1", self.port, "/downloads"),
