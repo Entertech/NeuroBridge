@@ -7,18 +7,6 @@ on:
     branches: [master]
   workflow_dispatch:
     inputs:
-      protocol_version:
-        description: "可选：额外生成指定北向协议 PDF，例如 0.2 或 v0.2"
-        required: false
-        type: string
-      protocol_stage:
-        description: "额外北向协议 PDF 的阶段；published 为正式对外版本，prerelease 为内部评审稿"
-        required: false
-        default: published
-        type: choice
-        options:
-          - published
-          - prerelease
       external_document_mode:
         description: "candidate 仅生成内部候选包；publish 仅允许所有打包源文档已发布并锁定时生成正式 ZIP。"
         required: false
@@ -63,38 +51,29 @@ jobs:
           sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
           fc-cache -f
           fc-match "Noto Sans CJK SC" | grep -Eqi "Noto.*CJK"
-      - name: Build external document PDF package and page previews
+      - name: Build and validate external document PDF package
         env:
           EXTERNAL_DOCUMENT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.external_document_mode || (github.event_name == 'push' && github.ref == 'refs/heads/master' && 'publish') || 'candidate' }}
-          PROTOCOL_VERSION: ${{ inputs.protocol_version }}
-          PROTOCOL_STAGE: ${{ inputs.protocol_stage || 'published' }}
         run: |
-          mkdir -p artifacts/document-preview "$RUNNER_TEMP/external-document-pdfs"
+          mkdir -p "$RUNNER_TEMP/document-preview" "$RUNNER_TEMP/external-document-pdfs" "$RUNNER_TEMP/external-document-package"
           python tools/build-external-document-package.py \
-            --output-dir artifacts \
+            --output-dir "$RUNNER_TEMP/external-document-package" \
             --pdf-dir "$RUNNER_TEMP/external-document-pdfs" \
             --mode "$EXTERNAL_DOCUMENT_MODE"
-          test -s artifacts/neurobridge-external-documents.zip
-          test -s artifacts/release-manifest.json
+          test -s "$RUNNER_TEMP/external-document-package/neurobridge-external-documents.zip"
+          test -s "$RUNNER_TEMP/external-document-package/release-manifest.json"
           find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' -print0 | while IFS= read -r -d '' pdf_path; do
             pdfinfo "$pdf_path"
             pdffonts "$pdf_path" | grep -Eqi "Noto.*CJK|NotoSansCJK"
             name=$(basename "$pdf_path" .pdf)
-            pdftoppm -png -r 144 "$pdf_path" "artifacts/document-preview/$name"
+            pdftoppm -png -r 144 "$pdf_path" "$RUNNER_TEMP/document-preview/$name"
           done
           test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 4
-          test "$(find artifacts/document-preview -type f -name '*.png' | wc -l | tr -d ' ')" -ge 4
-          if [[ -n "$PROTOCOL_VERSION" ]]; then
-            mkdir -p artifacts/requested-protocol
-            python tools/build-external-protocol-artifact.py \
-              --output-dir artifacts/requested-protocol \
-              --stage "$PROTOCOL_STAGE" \
-              --version "$PROTOCOL_VERSION"
-          fi
+          test "$(find "$RUNNER_TEMP/document-preview" -type f -name '*.png' | wc -l | tr -d ' ')" -ge 4
       - name: Upload external document ZIP artifact
         uses: actions/upload-artifact@v4
         with:
           name: external-document-package
-          path: artifacts/
+          path: ${{ runner.temp }}/external-document-package/neurobridge-external-documents.zip
           if-no-files-found: error
           retention-days: 90
