@@ -19,7 +19,7 @@ from neurobridge.dhcp import render_dnsmasq_config
 def gateway_config(mode: str = "dhcp") -> GatewayConfig:
     return GatewayConfig(
         ServerConfig("192.168.88.10", 8765, "/neurobridge/v1/ws"),
-        BleConfig(False, None, "0000ff10-1212-abcd-1523-785feabcd123", 5, 3),
+        BleConfig(False, "0000ff10-1212-abcd-1523-785feabcd123", 5, 3),
         RecordingConfig(Path("/var/lib/neurobridge/recordings"), None, None, 1),
         AlgorithmConfig(False, ()),
         network=NetworkConfig(mode, "enp1s0", "192.168.88.0/24", "192.168.88.20", "192.168.88.200", "12h"),

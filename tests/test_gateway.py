@@ -18,7 +18,7 @@ from neurobridge.business.recording import RecordingStore
 
 
 def config(root: Path, replay_id: str | None = None, replay_speed: float = 1000) -> GatewayConfig:
-    return GatewayConfig(ServerConfig("127.0.0.1", 8765, "/neurobridge/v1/ws"), BleConfig(False, "Flowtime Headband", "0000ff10-1212-abcd-1523-785feabcd123", 5, 3), RecordingConfig(root, "SUBJECT-001", replay_id, replay_speed), AlgorithmConfig(False, ()))
+    return GatewayConfig(ServerConfig("127.0.0.1", 8765, "/neurobridge/v1/ws"), BleConfig(False, "0000ff10-1212-abcd-1523-785feabcd123", 5, 3), RecordingConfig(root, "SUBJECT-001", replay_id, replay_speed), AlgorithmConfig(False, ()))
 
 
 class PacketTests(unittest.TestCase):
@@ -46,7 +46,7 @@ class PacketTests(unittest.TestCase):
 
 
 class FlowtimeSelectionTests(unittest.TestCase):
-    def test_selects_matching_candidate_with_highest_rssi(self) -> None:
+    def test_selects_profile_candidate_with_highest_rssi_regardless_of_name(self) -> None:
         class Device:
             def __init__(self, name: str, uuids: list[str], rssi: int) -> None:
                 self.name, self.metadata, self.rssi = name, {"uuids": uuids}, rssi
@@ -55,9 +55,9 @@ class FlowtimeSelectionTests(unittest.TestCase):
         async def ignored_ready() -> None: pass
         adapter = FlowtimeAdapter(config(Path("/tmp")).ble, ignored_packet, ignored_status, ignored_ready)
         selected = adapter.select_strongest([
-            Device("Other", ["0000ff10-1212-abcd-1523-785feabcd123"], -20),
-            Device("Flowtime Headband", ["0000ff10-1212-abcd-1523-785feabcd123"], -80),
-            Device("Flowtime Headband", ["0000ff10-1212-abcd-1523-785feabcd123"], -42),
+            Device("Other", ["0000180f-0000-1000-8000-00805f9b34fb"], -20),
+            Device("Renamed by operator", ["0000ff10-1212-abcd-1523-785feabcd123"], -80),
+            Device(None, ["0000ff10-1212-abcd-1523-785feabcd123"], -42),
         ])
         self.assertEqual(selected.rssi, -42)
 

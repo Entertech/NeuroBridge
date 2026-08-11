@@ -11,7 +11,7 @@ path = "/neurobridge/v1/ws"
 [ble]
 # 此 POC 会扫描、连接匹配头环、订阅通知，并向 FF21 写入 0x05 开始采集。
 enabled = true
-device_name = "Flowtime Headband"
+# The scan matches this profile UUID; the headband name is deliberately ignored.
 model_nbr_uuid = "0000ff10-1212-abcd-1523-785feabcd123"
 scan_timeout_seconds = 5
 reconnect_delay_seconds = 3

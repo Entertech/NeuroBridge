@@ -26,7 +26,7 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.port = unused_port()
         config = GatewayConfig(
             ServerConfig("127.0.0.1", self.port, "/neurobridge/v1/ws"),
-            BleConfig(False, "Flowtime Headband", "0000ff10-1212-abcd-1523-785feabcd123", 5, 3),
+            BleConfig(False, "0000ff10-1212-abcd-1523-785feabcd123", 5, 3),
             RecordingConfig(Path(self.directory.name), "SUBJECT-001", None, 1),
             AlgorithmConfig(False, ()),
         )

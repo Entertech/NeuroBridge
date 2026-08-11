@@ -227,7 +227,7 @@ sudoedit /etc/neurobridge/gateway.toml
 | `[server] host` | 与第 3 步中网关专用网卡的静态 IP 完全一致。 |
 | `[server] port`、`path` | 填写双方确认的固定 WebSocket 端口和路径。 |
 | `[network] mode` | 通常选 `static`；安装器会自动配置默认的专用有线地址。只有 B 端程序能读取 DHCP 默认网关、且现场明确要自动分配地址时才选 `dhcp`。 |
-| `[ble] enabled` | 无头环/冒烟验证时保持 `false`；完成该 Ubuntu 主机的真实头环 POC 后才改为 `true`，同时确认扫描匹配字段。 |
+| `[ble] enabled` | 无头环/冒烟验证时保持 `false`；完成该 Ubuntu 主机的真实头环 POC 后才改为 `true`，同时确认设备广播了配置的 profile UUID。 |
 | `[recording] directory` | 保持默认的 `/var/lib/neurobridge/recordings`，除非已按权限和容量要求另行配置。 |
 | `[recording] subject_id` | 填写演示或采集使用的受试者标识；无值可留空。 |
 | `[recording] replay_recording_id` | 可选：填写一个存在且非空的录制会话 ID 以固定回放目标；留空、填写已删除 ID 或空会话时，离线录播自动选择该目录中最新的非空历史会话。 |
@@ -324,7 +324,7 @@ git pull --ff-only
 | 日志出现无法绑定地址 | 用 `ip -br addr` 检查专用网卡；`[server].host` 必须是该主机实际拥有的私有或回环 IP，不能填写 DNS 名称、通配地址或 B 端地址。 |
 | B 端无法建立 WebSocket | 确认网线、两端 IP/掩码、专用网卡防火墙、端口和 `path`；握手必须提供 `neurobridge.v1` 子协议。连接恢复后先 `getStatus`，再重新订阅。 |
 | `neurobridge-dhcp.service` 显示未运行 | 在 `static` 模式下这是预期行为：其 `ExecCondition` 会跳过 DHCP 服务。只有配置为 `dhcp` 并填写完整 DHCP 参数后才应运行。 |
-| 未收到实时数据 | 确认 `[ble].enabled = true`、蓝牙适配器可见、设备名称/UUID 与已确认 profile 一致。通过网关日志查看扫描或连接失败原因；不要仅凭服务进程存活判断头环已连接。 |
+| 未收到实时数据 | 确认 `[ble].enabled = true`、蓝牙适配器可见、设备广播的 profile UUID 与已确认 profile 一致。通过网关日志查看扫描或连接失败原因；不要仅凭服务进程存活判断头环已连接。 |
 | 离线时没有录播数据 | 检查 `[recording].directory` 是否指向存放历史会话的目录，并确认其中至少有一个非空会话；网关会自动选择最新会话。若填写了 `replay_recording_id`，该会话无效时会回退到自动选择。 |
 | 下载接口不可用 | 确认 `[download].enabled = true`、监听 IP/端口与防火墙配置一致；只有已结束的录制会话能导出。 |
 
