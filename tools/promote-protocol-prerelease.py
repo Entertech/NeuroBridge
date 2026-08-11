@@ -28,7 +28,16 @@ def main() -> None:
     text = source_path.read_text(encoding="utf-8")
     text = text.replace(f"# {catalog['title']} 预发布 v{version}", f"# {catalog['title']} v{version}", 1)
     text = text.replace(f"版本：v{version}（预发布）<br>", f"版本：v{version}<br>", 1)
-    text = text.replace("状态：**预发布；仅供内部评审，尚未对 B 端发布**", "状态：**接口基线；联调前由双方确认有线直连地址、端口与启用流**", 1)
+    text = text.replace(
+        "状态：**预发布；仅供内部评审，尚未对 B 端发布**",
+        "状态：**接口基线；联调前由双方确认有线直连地址、端口与启用流**",
+        1,
+    )
+    text = text.replace(
+        "状态：**未发布（预发布）；仅供内部评审，尚未对 B 端发布**",
+        "状态：**接口基线；联调前由双方确认有线直连地址、端口与启用流**",
+        1,
+    )
     text = text.replace(f"## 预发布变更（v{version}）", f"## v{version} 变更", 1)
     text = text.replace("<!-- protocol-prerelease-change:start -->\n", "", 1)
     text = text.replace("<!-- protocol-prerelease-change:end -->\n", "", 1)

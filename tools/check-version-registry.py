@@ -223,8 +223,8 @@ def main() -> None:
     change_log = (ROOT / policy["change_log_path"]).read_text(encoding="utf-8")
     if f'v{publication_lock["from_version"]} → v{publication_lock["to_version"]}' not in change_log:
         fail("version change log must include the locked release interval")
-    if "## 未锁定变更" not in change_log:
-        fail("version change log must include the unlocked change section")
+    if "## 待发布变更" not in change_log:
+        fail("version change log must include the pending change section")
 
 
 if __name__ == "__main__":

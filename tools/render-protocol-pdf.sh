@@ -11,8 +11,10 @@ output_file=$2
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source_path=$(cd "$(dirname "$source_file")" && pwd)/$(basename "$source_file")
 output_path=$(cd "$(dirname "$output_file")" && pwd)/$(basename "$output_file")
-html_path=$(mktemp "${TMPDIR:-/tmp}/neurobridge-protocol.XXXXXX.html")
-chrome_profile=$(mktemp -d "${TMPDIR:-/tmp}/neurobridge-chrome-profile.XXXXXX")
+html_temp_path=$(mktemp -t neurobridge-protocol)
+html_path="${html_temp_path}.html"
+mv "$html_temp_path" "$html_path"
+chrome_profile=$(mktemp -d -t neurobridge-chrome-profile)
 document_title=$(sed -n 's/^# //p' "$source_path" | head -n 1)
 
 if [[ -n "${CHROME_BIN:-}" ]]; then

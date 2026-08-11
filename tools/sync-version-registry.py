@@ -16,15 +16,14 @@ PYPROJECT_PATH = ROOT / "pyproject.toml"
 
 def render_change_log(registry: dict) -> str:
     external = registry["documents"]["external_northbound"]
-    prerelease = registry["documents"]["internal_prerelease"]
     locks = registry["release_locks"]
     records = registry["change_records"]
     lines = [
         "# 版本变更记录",
         "",
-        "本文件由 `neurobridge/version_registry.toml` 生成；版本台账是唯一来源。已锁定区间不可回写，未锁定变更不会修改已发布对外文档。",
+        "本文件由 `neurobridge/version_registry.toml` 生成；版本台账是唯一来源。本文仅展示 B 端可见的已发布版本和待发布变更。",
         "",
-        "## 已锁定的发布区间",
+        "## 已发布版本",
         "",
     ]
     for lock in locks:
@@ -36,33 +35,34 @@ def render_change_log(registry: dict) -> str:
                 "",
                 f'- 状态：`{lock["status"]}`；锁定时间：{lock["locked_at"]}。',
                 f'- 锁定依据：已发布的 B 端 {external["title"]} v{lock["to_version"]} PDF。',
-                "- 约束：此区间的 Markdown/PDF 及其语义不再回写；后续变更只能创建新的未锁定记录。",
+            ]
+        )
+        summary = lock.get("change_summary", [])
+        if summary:
+            lines.extend(
+                [
+                    "- 变更摘要：",
+                    *[f"  - {item}" for item in summary],
+                ]
+            )
+        lines.extend(
+            [
+                "- 约束：该版本 Markdown、PDF 及其语义已锁定，后续变更不会回写到此版本。",
                 "",
             ]
         )
-    lines.extend(
-        [
-            "## 当前内部预发布版本",
-            "",
-            f'- 版本：v{prerelease["version"]}；状态：`{prerelease["status"]}`。',
-            f'- 基线：v{prerelease["based_on_released_version"]}；仅保留此一份内部预发布 Markdown。',
-            "- 升格规则：收到明确发布指令后，将该文档转换为独立的对外版本 Markdown，更新台账和锁定记录；CI 成功生成该版本 PDF Artifact 后方可合入发布。",
-            "",
-        ]
-    )
-    lines.extend(["## 未锁定变更", ""])
+    lines.extend(["## 待发布变更", ""])
     unlocked = [record for record in records if record["change_state"] == "unlocked"]
     if not unlocked:
-        lines.extend(["当前没有未锁定变更。", ""])
+        lines.extend(["当前没有面向 B 端的待发布变更。", ""])
     for record in unlocked:
         lines.extend(
             [
                 f'### {record["date"]}：{record["id"]}',
                 "",
                 f'- 变更：{record["summary"]}',
-                f'- 锚点：已锁定的 v{record["base_locked_release"]}；目标对外版本：`{record["target_external_release"]}`。',
-                f'- 对外文档：`{record["external_document_action"]}`；{record["reason"]}',
-                "- 发布条件：收到明确“更新对外文档”授权后，创建下一版本的 Markdown/PDF、发布锁定记录和文件摘要；不得修改已锁定区间。",
+                f'- 目标版本：v{record["target_external_release"]}（以已发布的 v{record["base_locked_release"]} 为基线）。',
+                f'- 影响说明：{record["reason"]}',
                 "",
             ]
         )

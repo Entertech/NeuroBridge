@@ -15,14 +15,14 @@ class ExternalProtocolRegistryTests(unittest.TestCase):
     def test_current_and_explicit_versions_resolve_to_the_stored_document(self) -> None:
         registry = load_registry()
         current = select_external_protocol(registry)
-        numeric = select_external_protocol(registry, "0.2")
-        prefixed = select_external_protocol(registry, "v0.2")
+        numeric = select_external_protocol(registry, "0.3")
+        prefixed = select_external_protocol(registry, "v0.3")
 
         self.assertEqual(current, numeric)
         self.assertEqual(numeric, prefixed)
         self.assertEqual(
             numeric["markdown_path"],
-            "doc/tech/对外/头环数据网关北向网络协议/头环数据网关北向网络协议_v0.2.md",
+            "doc/tech/对外/头环数据网关北向网络协议/头环数据网关北向网络协议_v0.3.md",
         )
 
     def test_unknown_version_is_rejected(self) -> None:
@@ -30,6 +30,6 @@ class ExternalProtocolRegistryTests(unittest.TestCase):
             select_external_protocol(load_registry(), "9.9")
 
     def test_active_prerelease_is_resolved_separately_from_published_versions(self) -> None:
-        prerelease = select_prerelease_protocol(load_registry(), "v0.3")
+        prerelease = select_prerelease_protocol(load_registry(), "v0.4")
         self.assertEqual(prerelease["markdown_path"], "doc/tech/头环数据网关北向网络协议_预发布.md")
         self.assertEqual(prerelease["status"], "prerelease")
