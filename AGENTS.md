@@ -17,8 +17,8 @@
 - B 端按需拉取数据：小数据使用 `getLatest`；连续波形/节律必须经 `subscribe` 启动、每 600 ms 一组或一批发送，并可由 `unsubscribe` 停止。
 - 录播由网关部署配置管理，B 端不选择录播或切换数据源；头环未连接时，网关在收到 `subscribe` 或 `getLatest` 后自动使用录播，并以输出中的 `mode="replay"` 告知 B 端。
 - 采集时必须分别持久化原始设备数据和算法结果；每条记录保留录制会话标识及对应采集窗口时间戳。录播直接读取两类已保存数据，按原始时间间隔发送，不重新计算算法。单文件或按周期分段的存储粒度须在实施前确认。
-- 网关所有输出的根对象固定为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 为 `1.0`，`code=200` 成功，非 `200` 时 `message` 必须写明错误原因。连续事件的 `data` 携带 `gatewayBootId`、`mode`、`subjectId`、`timestampMs`、`valid` 与 `payload`；实时与录播的 `mode` 分别为 `live` 与 `replay`。v0.1 为单头环、单网关实例，不传 `deviceId` 或 `gatewayId`。
-- v0.1 北向协议固定为网关服务端、B 端客户端的 WS/WebSocket + UTF-8 JSON；网关与 B 端通过专用有线网络直连，不使用 TLS、证书或 Token，数据明文传输，禁止接入公网、其他网络或不受控局域网。两端静态 IP、子网掩码与端口以部署配置为准。完整契约见 [北向网络协议 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%8C%97%E5%90%91%E7%BD%91%E7%BB%9C%E5%8D%8F%E8%AE%AE_v0.1.md)。
+- 网关所有输出的根对象固定为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 为 `1.0`，`code=200` 成功，非 `200` 时 `message` 必须写明错误原因。连续事件的 `data` 携带 `gatewayBootId`、`mode`、`subjectId`、`timestampMs`、`valid` 与 `payload`；实时与录播的 `mode` 分别为 `live` 与 `replay`。当前协议为单头环、单网关实例，不传 `deviceId` 或 `gatewayId`。
+- 当前北向协议固定为网关服务端、B 端客户端的 WS/WebSocket + UTF-8 JSON；网关与 B 端通过专用有线网络直连，不使用 TLS、证书或 Token，数据明文传输，禁止接入公网、其他网络或不受控局域网。两端静态 IP、子网掩码与端口以部署配置为准。当前对外版本和独立 Markdown 路径必须从[版本台账](neurobridge/version_registry.toml)读取，不得引用或改写已锁定的旧版本。
 - 不使用应用层保活：网关与 B 端均不得发送 WebSocket Ping/Pong 或 JSON 心跳。实际断线后网关继续监听新连接；B 端重新建连后先调用 `getStatus`，再重新订阅，旧 `subscriptionId` 不可复用。
 - 原始波形和节律使用批量 JSON 或二进制帧；不得按单采样点发送单条 JSON。
 - 任何北向协议变更都必须同时更新字段说明、时序/示例、模拟服务端测试与录播兼容性。
@@ -45,6 +45,7 @@
 - **对外版本独立保存与 PDF 生成：**每个发布过的 B 端协议版本必须保留独立 Markdown 文件，并在台账 `documents.external_northbound.versions` 中单独登记；新版本只能新增条目和文件，禁止覆盖或改名历史版本。Codex 生成指定版本 PDF 时必须使用 `pdf` skill，执行 `python3 tools/build-external-protocol-artifact.py --version <版本号> --output-dir <目录>`，再按 skill 渲染检查全部页面。GitHub Actions 可通过 `workflow_dispatch` 的 `protocol_version` 输入生成指定版本的 PDF Artifact；两种方式共用同一构建脚本。
 - **预发布与正式发布：**协议修订版本使用统一序列：台账 `protocol_lifecycle.released_version` 是当前正式对外版本，`prerelease_version` 是下一版本；内部只保留 `documents.internal_prerelease` 指向的一份最新预发布 Markdown，替换它时不得保留旧内部版本文件。预发布只能使用 `--stage prerelease` 生成内部评审 PDF Artifact，不能作为正式对外交付。收到明确发布指令后，在发布 PR 中用 `tools/promote-protocol-prerelease.py` 将预发布 Markdown 转换为新的独立对外版本 Markdown，新增对应台账条目、发布记录和锁定区间；CI 成功生成该正式版本 PDF Artifact 且 PR 合入后，预发布版本才成为正式版本。CI 不得绕过 `main` 分支保护直接改写或发布文档。
 - **默认只记录，不改对外文档：**除非用户在当前请求中明确要求“更新对外文档”或等效授权，否则不得修改台账指定的 B 端 Markdown，也不得更新其版本、发布日期或摘要；只在台账 `change_records` 与 `doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md` 记录变更内容、影响和未发布原因。PDF 发布会锁定台账中对应的版本区间；被锁定区间的 Markdown、PDF Artifact、摘要和语义不得回写，之后的实现或协议变更必须以该锁定版本为锚点创建 `unlocked` 记录，不能伪装成已发布版本的一部分。对外版本更新必须同时落盘：下一版本的台账版本/日期/摘要、`explicit_user_authorized` 发布记录、锁定区间和对应 Markdown；CI 生成 PDF、渲染预览并上传 Artifact，PDF 不提交仓库。随后运行 `tools/check-external-protocol.sh`。历史版本和内部实现基线默认不改。若版本关系、签字状态、受众或授权无法从仓库确定，停止对协议文件的写入并请求用户确认。
+- **变更记录归档与受众：**版本变更记录是面向 B 端的摘要，只展示已发布版本的 B 端可见变更和当前待发布的 B 端变更；不得展示内部预发布版本、实现细节或已经随本次发布关闭的历史记录。正式发布时，属于该发布区间的 `record_only` 历史记录必须保留在 `change_records` 审计台账中，改为 `locked` 并关联同一 `release_lock`；不得删除审计记录，也不得把它们重锚定为下一预发布版本的 `unlocked` 变更。生成后运行 `tools/sync-version-registry.py`，并用 `tools/check-external-protocol.sh` 校验。
 - **对外北向文档内容边界：**面向 B 端的协议标题使用“头环数据网关”，只描述 B 端可观察到的网络地址规则、WebSocket 契约、请求/响应、事件、字段、错误与验收；不得暴露或链接蓝牙/BLE、UUID、FFxx 特征值、设备扫描与连接策略、SDK、算法实现、原始帧格式、录制文件组织等网关内部细节。此类内容只能留在实现基线或内部技术文档中。提交前必须以关键字检索并人工复核对外 Markdown 和 PDF 的标题、目录、表格、示例与正文。
 - 在实现前先补全或确认北向契约；新字段应说明单位、范围、刷新频率、延迟和有效性含义。
 - 结论区分“源码/文档支持”“POC 已验证”和“现场验收通过”，不得把前者写成已交付能力。
