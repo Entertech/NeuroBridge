@@ -55,8 +55,11 @@ echo "Updating Python package ..."
 
 install -m 0644 "$install_dir/linux/systemd/neurobridge.service" "$unit_dir/neurobridge.service"
 install -m 0644 "$install_dir/linux/systemd/neurobridge-dhcp.service" "$unit_dir/neurobridge-dhcp.service"
+install -m 0644 "$install_dir/linux/systemd/neurobridge-config-ui.service" "$unit_dir/neurobridge-config-ui.service"
 
 systemctl daemon-reload
+systemctl enable --now neurobridge-config-ui.service
+systemctl restart neurobridge-config-ui.service
 if ! systemctl restart neurobridge.service; then
   fail "Gateway restart failed. Inspect the reason with: sudo journalctl -u neurobridge.service -n 100 --no-pager"
 fi

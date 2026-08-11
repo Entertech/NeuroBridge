@@ -26,6 +26,16 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("python3 rsync cmake c++ netplan", install_script)
         self.assertIn('[[ $# -eq 0 ]]', install_script)
         self.assertIn("systemctl enable neurobridge.service", install_script)
+        self.assertIn("neurobridge-config-ui.service", install_script)
+        self.assertIn("systemctl enable --now neurobridge-config-ui.service", install_script)
+        reload_script = (ROOT / "linux" / "reload-ubuntu.sh").read_text(encoding="utf-8")
+        self.assertIn("systemctl restart neurobridge-config-ui.service", reload_script)
+
+    def test_gateway_configuration_console_is_loopback_only(self) -> None:
+        service = (ROOT / "linux" / "systemd" / "neurobridge-config-ui.service").read_text(encoding="utf-8")
+        self.assertIn("--host 127.0.0.1 --port 8090", service)
+        self.assertIn("User=root", service)
+        self.assertIn("ReadWritePaths=/etc/neurobridge /etc/netplan", service)
 
     def test_one_command_update_uses_only_the_existing_checkout(self) -> None:
         script = (ROOT / "linux" / "update-ubuntu.sh").read_text(encoding="utf-8")

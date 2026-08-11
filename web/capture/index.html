@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NeuroBridge · 头环采集 POC</title>
+    <title>NeuroBridge · 头环采集与网关配置</title>
     <link rel="stylesheet" href="/capture/styles.css" />
   </head>
   <body>
     <main>
-      <p class="eyebrow">NEUROBRIDGE / MACOS POC</p>
+      <p class="eyebrow">NEUROBRIDGE / CAPTURE CONSOLE</p>
       <h1>头环采集控制台</h1>
-      <p class="intro">页面打开后将立即在本机扫描已配置头环。连接成功后，网关会订阅设备通知、启动采集，并把完整窗口交给本地算法输入 bridge。</p>
+      <p class="intro">页面打开后将立即请求启动已配置的采集服务。macOS POC 会扫描头环；Ubuntu 网关主机则管理已常驻的网关服务，并可在本页完成部署配置。</p>
 
       <section class="card status-card" aria-live="polite">
         <div class="status-heading">
@@ -33,6 +33,64 @@
         <button id="stopButton" class="secondary" type="button">停止采集</button>
         <a id="saveButton" class="secondary" href="#" aria-disabled="true">一键保存 ZIP</a>
         <a class="b-client-link" href="/b-client/" target="_blank" rel="noopener">打开 B 端订阅页</a>
+      </section>
+
+      <section id="configPanel" class="card config-card" aria-labelledby="configTitle">
+        <div class="config-heading">
+          <div>
+            <p class="label">仅网关本机</p>
+            <h2 id="configTitle">网关部署配置</h2>
+          </div>
+          <span id="configState" class="config-state">正在读取…</span>
+        </div>
+        <p class="config-intro">配置服务只监听 <code>127.0.0.1</code>，不暴露给 B 端。保存前会校验全部字段；变更网关地址、网段、网卡或 DHCP 设置时，必须明确勾选应用专用有线网络配置。</p>
+        <form id="configForm">
+          <fieldset id="configFields">
+            <legend>WebSocket 与专用有线网络</legend>
+            <div class="form-grid">
+              <label>网关静态 IPv4<input id="serverHost" required inputmode="decimal" /></label>
+              <label>WebSocket 端口<input id="serverPort" required type="number" min="1" max="65535" /></label>
+              <label class="wide">WebSocket 路径<input id="serverPath" required /></label>
+              <label>地址分配<select id="networkMode"><option value="static">静态地址</option><option value="dhcp">DHCP</option></select></label>
+              <label>专用网卡<input id="networkInterface" required placeholder="auto 或 enp1s0" /></label>
+              <label class="wide">IPv4 网段（CIDR）<input id="networkSubnet" required placeholder="192.168.88.0/24" /></label>
+              <label class="dhcp-field">DHCP 起始地址<input id="dhcpRangeStart" inputmode="decimal" /></label>
+              <label class="dhcp-field">DHCP 结束地址<input id="dhcpRangeEnd" inputmode="decimal" /></label>
+              <label class="dhcp-field">DHCP 租期<input id="dhcpLeaseTime" placeholder="12h" /></label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>采集、录制与算法</legend>
+            <div class="form-grid">
+              <label class="toggle"><input id="bleEnabled" type="checkbox" />启用头环蓝牙采集</label>
+              <label class="toggle"><input id="algorithmEnabled" type="checkbox" />启用算法 bridge</label>
+              <label>设备名称<input id="bleDeviceName" /></label>
+              <label>Model Nbr UUID<input id="bleModelUuid" required /></label>
+              <label>扫描超时（秒）<input id="bleScanTimeout" required type="number" min="1" /></label>
+              <label>重连间隔（秒）<input id="bleReconnectDelay" required type="number" min="1" /></label>
+              <label class="wide">录制目录<input id="recordingDirectory" required /></label>
+              <label>受试者标识<input id="recordingSubjectId" /></label>
+              <label>指定录播会话<input id="replayRecordingId" /></label>
+              <label>录播倍率<input id="replaySpeed" required type="number" min="0.01" step="0.01" /></label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>导出与日志</legend>
+            <div class="form-grid">
+              <label class="toggle"><input id="downloadEnabled" type="checkbox" />启用专用网络下载服务</label>
+              <label>下载服务 IPv4<input id="downloadHost" required inputmode="decimal" /></label>
+              <label>下载端口<input id="downloadPort" required type="number" min="1" max="65535" /></label>
+              <label>下载路径<input id="downloadPath" required /></label>
+              <label class="wide">日志目录<input id="loggingDirectory" required /></label>
+              <label>日志文件名<input id="loggingFilename" required /></label>
+              <label>日志级别<select id="loggingLevel"><option>DEBUG</option><option>INFO</option><option>WARNING</option><option>ERROR</option><option>CRITICAL</option></select></label>
+            </div>
+          </fieldset>
+          <label class="apply-network"><input id="applyNetwork" type="checkbox" /> 我已确认此网卡仅用于专用 B 端有线链路；保存时应用有线网络配置。</label>
+          <div class="config-actions"><button id="saveConfigButton" type="submit">保存配置并重启网关</button><p id="configMessage" class="message" role="status"></p></div>
+        </form>
       </section>
 
       <section class="card note">

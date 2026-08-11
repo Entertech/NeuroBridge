@@ -55,6 +55,7 @@ install -d -o root -g root -m 0755 "$algorithm_bridge_dir"
 install -o root -g root -m 0755 "$algorithm_build_dir/output/neurobridge_affective_bridge" "$algorithm_bridge_path"
 install -m 0644 "$install_dir/linux/systemd/neurobridge.service" /etc/systemd/system/neurobridge.service
 install -m 0644 "$install_dir/linux/systemd/neurobridge-dhcp.service" /etc/systemd/system/neurobridge-dhcp.service
+install -m 0644 "$install_dir/linux/systemd/neurobridge-config-ui.service" /etc/systemd/system/neurobridge-config-ui.service
 install -m 0644 "$install_dir/linux/logrotate/neurobridge" /etc/logrotate.d/neurobridge
 # Do not allow the distribution-wide dnsmasq unit to serve an unintended
 # network. The dedicated unit uses a generated, interface-bound configuration.
@@ -63,4 +64,5 @@ systemctl disable --now dnsmasq.socket 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable neurobridge.service
 systemctl enable neurobridge-dhcp.service
-echo "NeuroBridge is enabled for every boot and the dedicated Ethernet link is configured from $config_dir/gateway.toml. Confirm the deployment values, then run: systemctl start neurobridge"
+systemctl enable --now neurobridge-config-ui.service
+echo "NeuroBridge is enabled for every boot and the dedicated Ethernet link is configured from $config_dir/gateway.toml. On the gateway's local desktop, open http://127.0.0.1:8090/ to review or update it. Confirm the deployment values, then run: systemctl start neurobridge"

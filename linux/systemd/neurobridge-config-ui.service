@@ -1,0 +1,24 @@
+[Unit]
+Description=NeuroBridge local gateway configuration console
+After=network.target
+
+[Service]
+Type=simple
+# The UI needs to atomically update the root-owned deployment configuration,
+# apply the existing guarded Netplan configurator, and restart the two gateway
+# units.  It is consequently root-owned but listens only on loopback.
+User=root
+Group=root
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/neurobridge/venv/bin/neurobridge-config-ui --config /etc/neurobridge/gateway.toml --web-root /opt/neurobridge/web/capture --b-client-root /opt/neurobridge/web/b-client-test --host 127.0.0.1 --port 8090
+Restart=on-failure
+RestartSec=3
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/neurobridge /etc/netplan
+
+[Install]
+WantedBy=multi-user.target
