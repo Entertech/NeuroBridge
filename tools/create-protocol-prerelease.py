@@ -33,6 +33,12 @@ def main() -> None:
     released_version = source["version"]
     prerelease_version = prerelease["version"]
     title = catalog["title"]
+    source_text = re.sub(
+        r"\n## v[^\n]+ 变更\n.*?(?=\n## 1\. 使用范围)",
+        "\n",
+        source_text,
+        flags=re.DOTALL,
+    )
     output_text = source_text.replace(
         f"# {title} v{released_version}", f"# {title} 预发布 v{prerelease_version}", 1
     )
@@ -50,11 +56,7 @@ def main() -> None:
 <!-- protocol-prerelease-change:start -->
 ## 预发布变更（v{prerelease_version}）
 
-本节优先于本文其他与录播 `getLatest` 有冲突的描述。
-
-- 录播结果依次为 `1,2,3,4,5,6,7,8`，当前 WebSocket 连接已发送 `4` 后，`getLatest` 必须返回 `4`，不得预读 `5` 至 `8`。
-- 当前连接尚未回放出算法结果时，`getLatest` 返回 `code=200`、`valid=false` 和空 `payload`，且不会暗中启动持续录播。
-- 未连接头环时，只有 `subscribe` 启动该连接的录播进度；之后的 `getLatest` 读取该进度。
+当前没有已登记的 v{prerelease_version} B 端兼容性变更；此版本仅供内部评审，不能作为正式交付或验收依据。
 <!-- protocol-prerelease-change:end -->
 
 """

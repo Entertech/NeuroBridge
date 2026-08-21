@@ -29,11 +29,11 @@ class ExternalDocumentPackageTests(unittest.TestCase):
             [document.key for document in documents],
             ["northbound", "capture_package", "ssh_operations", "wired_network_operations"],
         )
-        self.assertEqual([document.version for document in documents], ["0.2", "0.1", "1.0", "1.0"])
+        self.assertEqual([document.version for document in documents], ["0.3", "0.1", "1.0", "1.0"])
         self.assertEqual(
             [document.pdf_artifact_name for document in documents],
             [
-                "头环数据网关北向网络协议_v0.2.pdf",
+                "头环数据网关北向网络协议_v0.3.pdf",
                 "头环数据采集包格式说明_v0.1.pdf",
                 "头环数据网关 SSH 运维操作指南_v1.0.pdf",
                 "头环数据网关有线网络配置指南_v1.0.pdf",
