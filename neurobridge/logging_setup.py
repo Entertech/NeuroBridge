@@ -15,7 +15,7 @@ def configure_logging(config: LoggingConfig) -> None:
 
     config.directory.mkdir(parents=True, exist_ok=True)
     logfile = config.directory / config.filename
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    formatter = logging.Formatter("%(asctime)s pid=%(process)d %(levelname)s %(name)s: %(message)s")
     file_handler = WatchedFileHandler(logfile, encoding="utf-8")
     file_handler.setFormatter(formatter)
     stream_handler = logging.StreamHandler()

@@ -80,6 +80,14 @@ class Gateway:
         self._active_replay_recording_id: str | None = None
         self._replay_algorithm: dict | None = None
         self._replay_algorithm_timestamp: int | None = None
+        self._capture_stats: dict[str, int | None] = {
+            "eegPackets": 0,
+            "hrPackets": 0,
+            "windows": 0,
+            "invalidWindows": 0,
+            "lastDataAtMs": None,
+            "lastSummaryAtMs": 0,
+        }
 
     @property
     def live(self) -> bool:
@@ -100,7 +108,13 @@ class Gateway:
         # The local algorithm is session scoped and must be initialized only after
         # a Flowtime connection has subscribed all notifications and started capture.
         self.status["algorithmState"] = "unavailable"
-        LOG.info("Gateway started: bootId=%s recordingDirectory=%s networkMode=%s", self.boot_id, self.config.recording.directory, self.config.network.mode)
+        LOG.info(
+            "Gateway started: bootId=%s recordingDirectory=%s networkMode=%s algorithmEnabled=%s",
+            self.boot_id,
+            self.config.recording.directory,
+            self.config.network.mode,
+            self.config.algorithm.enabled,
+        )
 
     async def stop(self) -> None:
         await self._cancel_window_flush()
@@ -124,6 +138,7 @@ class Gateway:
         if name == "connectionState" and value == "connected" and previous != "connected":
             self.connection_error = None
             await self._stop_replay()
+            self._reset_capture_stats()
             recording_id = self.store.start(now_ms())
             LOG.info("Headband connected; recording started: recordingId=%s", recording_id)
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
@@ -133,6 +148,7 @@ class Gateway:
                 await self.publish_window(last)
             await self.algorithm.stop()
             self.status["algorithmState"] = "unavailable"
+            self._log_capture_summary("disconnected")
             self.store.stop()
             LOG.info("Headband disconnected; recording stopped")
         if previous != value:
@@ -152,6 +168,18 @@ class Gateway:
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
         received_at_ms = now_ms()
         raw_stream = {"ff31": "eeg", "ff51": "hr"}.get(characteristic)
+        if raw_stream is None:
+            LOG.warning("Ignoring unsupported device channel: channel=%s bytes=%s", characteristic, len(value))
+            return
+        self._capture_stats[f"{raw_stream}Packets"] = int(self._capture_stats[f"{raw_stream}Packets"] or 0) + 1
+        expected_bytes = {"eeg": 20, "hr": 1}[raw_stream]
+        if len(value) != expected_bytes:
+            LOG.warning(
+                "Device packet length invalid: channel=%s bytes=%s expectedBytes=%s",
+                characteristic,
+                len(value),
+                expected_bytes,
+            )
         if raw_stream:
             window_start_ms = received_at_ms - received_at_ms % self.assembler.interval_ms
             self.store.save_raw_packet(
@@ -164,6 +192,29 @@ class Gateway:
         for window in self.assembler.add(characteristic, value, received_at_ms):
             await self.publish_window(window)
         self._schedule_window_flush()
+
+    def _reset_capture_stats(self) -> None:
+        self._capture_stats.update(
+            eegPackets=0,
+            hrPackets=0,
+            windows=0,
+            invalidWindows=0,
+            lastDataAtMs=None,
+            lastSummaryAtMs=0,
+        )
+
+    def _log_capture_summary(self, reason: str) -> None:
+        stats = self._capture_stats
+        LOG.info(
+            "Capture summary: reason=%s recordingId=%s windows=%s invalidWindows=%s eegPackets=%s hrPackets=%s lastDataAtMs=%s",
+            reason,
+            self.store.recording_id or self.store.last_recording_id,
+            stats["windows"],
+            stats["invalidWindows"],
+            stats["eegPackets"],
+            stats["hrPackets"],
+            stats["lastDataAtMs"],
+        )
 
     def _schedule_window_flush(self) -> None:
         deadline = self.assembler.window_end_ms
@@ -199,6 +250,8 @@ class Gateway:
                 await task
 
     async def publish_window(self, window: DataWindow) -> None:
+        self._capture_stats["windows"] = int(self._capture_stats["windows"] or 0) + 1
+        self._capture_stats["lastDataAtMs"] = window.end_ms
         raw = window.raw_payload()
         reasons = list(window.reasons)
         algorithm_payload, algorithm_reasons = await self.algorithm.evaluate(window)
@@ -208,6 +261,24 @@ class Gateway:
         if self.algorithm.available:
             reasons.extend(algorithm_reasons)
         valid = not reasons
+        if not valid:
+            self._capture_stats["invalidWindows"] = int(self._capture_stats["invalidWindows"] or 0) + 1
+        LOG.debug(
+            "Capture window processed: recordingId=%s startMs=%s endMs=%s eegPackets=%s hrPackets=%s valid=%s algorithmState=%s subscribers=%s",
+            self.store.recording_id,
+            window.start_ms,
+            window.end_ms,
+            len(window.eeg),
+            len(window.hr),
+            valid,
+            self.status.get("algorithmState"),
+            sum(len(session.subscriptions) for session in self.sessions),
+        )
+        now = now_ms()
+        last_summary = int(self._capture_stats["lastSummaryAtMs"] or 0)
+        if now - last_summary >= 10_000:
+            self._capture_stats["lastSummaryAtMs"] = now
+            self._log_capture_summary("periodic")
         if algorithm_payload:
             self.store.save_algorithm_events(
                 algorithm=algorithm_payload,
@@ -305,9 +376,14 @@ class Gateway:
         # here as well makes the gateway API safe for other adapters and tests.
         self.sessions.add(session)
         request_id: str | None = None
+        action: str | None = None
+        log_request_id = None
         try:
             request = self.parse_request(raw)
             request_id, action, params = request["requestId"], request["action"], request["params"]
+            # Request IDs are client supplied; keep correlation useful without
+            # allowing control characters or unbounded values into log files.
+            log_request_id = request_id.replace("\n", " ").replace("\r", " ")[:96]
             start_replay_after_response = False
             if action == "getStatus":
                 self.validate_params(params, set())
@@ -326,12 +402,14 @@ class Gateway:
             else:
                 raise ProtocolError(400, "INVALID_REQUEST", "Unknown action.", details={"action": action})
             await send(envelope(200, {"requestId": request_id, "action": action, "result": result}))
+            LOG.info("Northbound request handled: action=%s requestId=%s code=200", action, log_request_id)
             if start_replay_after_response:
                 self._start_replay_if_needed()
         except ProtocolError as error:
+            LOG.warning("Northbound request rejected: action=%s requestId=%s code=%s reason=%s", action, log_request_id, error.code, error.reason)
             await send(self.error(request_id, error))
         except Exception:
-            LOG.exception("Request handling failed")
+            LOG.exception("Northbound request failed: action=%s requestId=%s", action, log_request_id)
             await send(self.error(request_id, ProtocolError(500, "INTERNAL_ERROR", "Gateway request failed.", True)))
 
     def get_latest(self, session: ClientSession, params: dict, *, start_replay: bool = True) -> dict:
@@ -399,6 +477,7 @@ class Gateway:
         self.sessions.add(session)
         session.subscriptions[subscription.id] = subscription
         subscription.replay_delivery_task = asyncio.create_task(self._deliver_replay(session, subscription))
+        LOG.info("Subscription created: subscriptionId=%s streams=%s includeInvalid=%s mode=%s", subscription.id, ",".join(streams), include_invalid, self.mode())
         if start_replay and not self.live:
             self._start_replay_if_needed()
         return {"subscriptionId": subscription.id, "streams": streams, "mode": self.mode(), "intervalMs": 600}
@@ -411,6 +490,7 @@ class Gateway:
         if not subscription:
             raise ProtocolError(404, "SUBSCRIPTION_NOT_FOUND", "Subscription does not exist.")
         await self._remove_subscription(session, subscription)
+        LOG.info("Subscription removed: subscriptionId=%s", subscription_id)
         return {"subscriptionId": subscription_id}
 
     def _start_replay_if_needed(self) -> None:

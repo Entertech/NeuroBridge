@@ -39,6 +39,7 @@ class FlowtimeAdapter:
 
     async def run(self) -> None:
         if not self.config.enabled:
+            LOG.info("Flowtime BLE adapter disabled by configuration")
             return
         from bleak import BleakClient, BleakScanner
         while not self._stopping:
@@ -53,6 +54,7 @@ class FlowtimeAdapter:
                 self._client = BleakClient(candidate, disconnected_callback=lambda _: asyncio.create_task(self.status("connectionState", "disconnected")))
                 await self._client.connect()
                 await self._subscribe()
+                LOG.info("Flowtime notifications ready; initializing capture")
                 # Do not start device capture until the algorithm has a clean session.
                 # This makes every post-FF21 packet eligible for automatic append.
                 await self.device_ready()
@@ -68,6 +70,7 @@ class FlowtimeAdapter:
                     await self.error(str(exc))
                 await self._disconnect_after_failure()
                 await self.status("connectionState", "disconnected")
+                LOG.info("Flowtime reconnect scheduled: delaySeconds=%s", self.config.reconnect_delay_seconds)
             await asyncio.sleep(self.config.reconnect_delay_seconds)
 
     async def _disconnect_after_failure(self) -> None:
@@ -116,6 +119,7 @@ class FlowtimeAdapter:
 
     async def stop(self) -> None:
         self._stopping = True
+        LOG.info("Stopping Flowtime BLE adapter")
         if self._client and self._client.is_connected:
             try:
                 await self._client.write_gatt_char(FF21, b"\x06", response=True)

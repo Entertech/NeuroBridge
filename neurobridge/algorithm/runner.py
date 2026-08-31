@@ -34,6 +34,7 @@ class AlgorithmRunner:
 
     async def start(self) -> None:
         if not self.config.enabled:
+            LOG.info("Algorithm bridge disabled by configuration")
             return
         if not self.config.command:
             self.error = "algorithm.enabled requires algorithm.command"
@@ -41,12 +42,14 @@ class AlgorithmRunner:
             return
         try:
             self.process = await asyncio.create_subprocess_exec(*self.config.command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+            LOG.info("Algorithm bridge started: command=%s pid=%s", self.config.command[0], self.process.pid)
         except OSError as exc:
             self.error = str(exc)
             LOG.exception("Cannot start algorithm bridge: %s", self.error)
 
     async def initialize(self) -> None:
         """Create a clean SDK process for each new device connection/session."""
+        LOG.info("Initializing algorithm bridge for new capture session")
         await self.stop()
         self.process = None
         self.error = None
@@ -54,8 +57,10 @@ class AlgorithmRunner:
 
     async def stop(self) -> None:
         if self.process and self.process.returncode is None:
+            LOG.info("Stopping algorithm bridge: pid=%s", self.process.pid)
             self.process.terminate()
             await self.process.wait()
+            LOG.info("Algorithm bridge stopped: returncode=%s", self.process.returncode)
         self.process = None
 
     async def evaluate(self, window: DataWindow) -> tuple[dict | None, list[str]]:

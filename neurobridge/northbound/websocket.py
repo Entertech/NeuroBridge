@@ -26,6 +26,7 @@ async def create_server(gateway: Gateway):
 
     async def handler(websocket, path: str) -> None:
         if path != gateway.config.server.path:
+            LOG.warning("WebSocket connection rejected: peer=%s endpoint=%s expected=%s", websocket.remote_address, path, gateway.config.server.path)
             await websocket.close(code=1008, reason="Unsupported endpoint")
             return
         session = ClientSession()
@@ -37,12 +38,13 @@ async def create_server(gateway: Gateway):
         try:
             async for message in websocket:
                 if not isinstance(message, str):
+                    LOG.warning("WebSocket binary frame rejected: peer=%s bytes=%s", peer, len(message))
                     await websocket.close(code=1003, reason="Text JSON required")
                     break
                 await gateway.handle(session, message, send)
         finally:
             await gateway.close_session(session)
-            LOG.info("B-side WebSocket client disconnected: peer=%s", peer)
+            LOG.info("B-side WebSocket client disconnected: peer=%s closeCode=%s closeReason=%s", peer, websocket.close_code, websocket.close_reason)
 
     return await websockets.serve(handler, gateway.config.server.host, gateway.config.server.port, subprotocols=[SUBPROTOCOL], process_request=require_subprotocol, ping_interval=None, ping_timeout=None, max_size=256 * 1024, compression=None)
 
