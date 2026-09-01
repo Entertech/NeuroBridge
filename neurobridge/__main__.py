@@ -83,7 +83,7 @@ async def run(config_path: str) -> None:
         LOG.info(
             "Serial runtime configuration: device=%s candidateTypes=%s baudRate=%s handshakeTimeoutMs=%s "
             "commandResponseTimeoutMs=%s dataTimeoutSeconds=%s reconnectDelaySeconds=%s "
-            "statsIntervalSeconds=%s maxBufferBytes=%s",
+            "statsIntervalSeconds=%s maxBufferBytes=%s dtr=%s rts=%s",
             config.serial.device,
             ",".join(config.serial.candidate_types),
             config.serial.baud_rate,
@@ -93,6 +93,8 @@ async def run(config_path: str) -> None:
             config.serial.reconnect_delay_seconds,
             config.serial.stats_interval_seconds,
             config.serial.max_buffer_bytes,
+            config.serial.dtr,
+            config.serial.rts,
         )
     gateway = Gateway(config)
     adapter = create_device_adapter(config, gateway)

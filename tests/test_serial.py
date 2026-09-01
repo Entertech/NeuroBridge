@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from neurobridge.config import SerialConfig
+from neurobridge.device.packet import DevicePacket
 from neurobridge.serial.adapter import (
     FRAME_HEADER,
     FRAME_TAIL,
@@ -11,6 +15,8 @@ from neurobridge.serial.adapter import (
     START_COMMAND,
     SequenceLossTracker,
     SerialAdapter,
+    _open_serial,
+    _serial_candidate_order_key,
 )
 
 
@@ -85,6 +91,52 @@ class SequenceLossTrackerTests(unittest.TestCase):
 
 
 class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_candidate_order_prefers_by_id_then_usb_parent_and_interface(self) -> None:
+        first = _serial_candidate_order_key(
+            "/dev/serial/by-id/z",
+            {"usbParent": "/sys/usb/2", "interface": "01", "physicalPath": "/sys/usb/2/2-1:1.1"},
+        )
+        second = _serial_candidate_order_key(
+            "/dev/ttyACM0",
+            {"usbParent": "/sys/usb/1", "interface": "00", "physicalPath": "/sys/usb/1/1-1:1.0"},
+        )
+        self.assertLess(first, second)
+        interface_zero = _serial_candidate_order_key(
+            "/dev/ttyACM1",
+            {"usbParent": "/sys/usb/1", "interface": "00", "physicalPath": "/sys/usb/1/1-1:1.0"},
+        )
+        interface_one = _serial_candidate_order_key(
+            "/dev/ttyACM2",
+            {"usbParent": "/sys/usb/1", "interface": "01", "physicalPath": "/sys/usb/1/1-1:1.1"},
+        )
+        self.assertLess(interface_zero, interface_one)
+
+    async def test_modem_control_lines_are_set_before_serial_open(self) -> None:
+        class Client:
+            def __init__(self, **_kwargs) -> None:
+                self.dtr = True
+                self.rts = True
+                self.port = None
+                self.open_snapshot: tuple[bool, bool, str | None] | None = None
+
+            def open(self) -> None:
+                self.open_snapshot = (self.dtr, self.rts, self.port)
+
+            def close(self) -> None:
+                pass
+
+        client = Client()
+        fake_serial = SimpleNamespace(
+            EIGHTBITS=8,
+            PARITY_NONE="N",
+            STOPBITS_ONE=1,
+            Serial=lambda **_kwargs: client,
+        )
+        with patch.dict(sys.modules, {"serial": fake_serial}):
+            opened = _open_serial("/dev/ttyACM-test", SerialConfig(dtr=False, rts=False))
+        self.assertIs(opened, client)
+        self.assertEqual(client.open_snapshot, (False, False, "/dev/ttyACM-test"))
+
     async def test_fixed_handshake_is_acked_and_stops_candidate_probe(self) -> None:
         client = FakeSerial([b"ignored" + HANDSHAKE])
         adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
@@ -117,18 +169,22 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_frames_map_to_existing_raw_channels_and_log_industry_loss(self) -> None:
         packets: list[tuple[str, bytes]] = []
 
-        async def packet(channel: str, value: bytes) -> None:
-            packets.append((channel, value))
+        async def packet(event: DevicePacket) -> None:
+            packets.append((event.channel, event.value))
 
         adapter = SerialAdapter(SerialConfig(), packet, noop, noop)
         buffer = bytearray(b"noise" + frame(10, 2, 61) + frame(12, 3, 62))
         with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
             parsed = await adapter._consume_frames(buffer)
         self.assertEqual(parsed, 2)
-        self.assertEqual([channel for channel, _value in packets], ["ff31", "ff51", "ff31", "ff51"])
-        self.assertEqual(len(packets[0][1]), 20)
-        self.assertEqual(packets[0][1][:2], b"\x00\x0a")
-        self.assertEqual(packets[1][1], bytes([61]))
+        self.assertEqual(
+            [channel for channel, _value in packets],
+            ["serial.frame", "ff31", "ff51", "serial.frame", "ff31", "ff51"],
+        )
+        self.assertEqual(len(packets[0][1]), 28)
+        self.assertEqual(len(packets[1][1]), 20)
+        self.assertEqual(packets[1][1][:2], b"\x00\x0a")
+        self.assertEqual(packets[2][1], bytes([61]))
         snapshot = adapter._loss.snapshot()
         self.assertEqual(snapshot.expected_packets, 3)
         self.assertEqual(snapshot.received_unique_packets, 2)
@@ -167,9 +223,9 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         states: list[tuple[str, object]] = []
         adapter: SerialAdapter
 
-        async def packet(channel: str, value: bytes) -> None:
-            packets.append((channel, value))
-            if channel == "ff31":
+        async def packet(event: DevicePacket) -> None:
+            packets.append((event.channel, event.value))
+            if event.channel == "ff31":
                 await adapter.stop()
 
         async def status(name: str, value: object) -> None:
@@ -185,7 +241,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         await adapter.run()
         self.assertEqual(client.writes, [HANDSHAKE, b"\xE1", b"\xE0"])
-        self.assertEqual([channel for channel, _value in packets], ["ff31", "ff51"])
+        self.assertEqual([channel for channel, _value in packets], ["serial.frame", "ff31", "ff51"])
         self.assertIn(("connectionState", "connected"), states)
         self.assertEqual(states[-1], ("connectionState", "disconnected"))
         self.assertTrue(client.closed)

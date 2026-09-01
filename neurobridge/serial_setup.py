@@ -61,7 +61,9 @@ def apply_serial_config(
             f"data_timeout_seconds = {data_timeout_seconds:g}\n"
             f"reconnect_delay_seconds = {reconnect_delay_seconds:g}\n"
             f"stats_interval_seconds = {stats_interval_seconds:g}\n"
-            "max_buffer_bytes = 65536"
+            "max_buffer_bytes = 65536\n"
+            "dtr = false\n"
+            "rts = false"
         ),
     }
     updated = _replace_managed_sections(path.read_text(encoding="utf-8"), blocks)

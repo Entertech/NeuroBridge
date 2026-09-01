@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 from neurobridge.ble.flowtime import FlowtimeAdapter
 from neurobridge.business.gateway import Gateway
 from neurobridge.config import GatewayConfig, load
+from neurobridge.device.packet import DevicePacket
 from neurobridge.northbound.websocket import create_server
 
 
@@ -77,14 +78,14 @@ class CaptureController:
     async def update_connection_error(self, error: str) -> None:
         self.connection_error = error
 
-    async def receive_packet(self, characteristic: str, value: bytes) -> None:
+    async def receive_packet(self, packet: DevicePacket) -> None:
         """Forward a packet while adding a rate-limited, non-complete UI log.
 
         The POC UI may show that data is arriving, but it must not retain full
         physiological raw bytes in a browser-visible log.
         """
-        self._summarize_packet(characteristic, value)
-        await self.gateway.receive_packet(characteristic, value)
+        self._summarize_packet(packet.channel, packet.value)
+        await self.gateway.receive_device_packet(packet)
 
     def _summarize_packet(self, characteristic: str, value: bytes) -> None:
         bucket = int(time.time() * 1000) // 600

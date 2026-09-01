@@ -34,6 +34,8 @@ class SerialSetupTests(unittest.TestCase):
             self.assertEqual(config.data_source.type, "serial")
             self.assertEqual(config.serial.device, "auto")
             self.assertEqual(config.serial.command_response_timeout_ms, 1200)
+            self.assertFalse(config.serial.dtr)
+            self.assertFalse(config.serial.rts)
             text = path.read_text(encoding="utf-8")
             self.assertEqual(text.count("[data_source]"), 1)
             self.assertEqual(text.count("[serial]"), 1)

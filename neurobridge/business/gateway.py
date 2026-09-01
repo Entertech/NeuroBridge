@@ -12,6 +12,7 @@ from typing import Any, Awaitable, Callable
 
 from ..algorithm.runner import AlgorithmRunner
 from ..config import GatewayConfig
+from ..device.packet import DevicePacket
 from ..ble.packets import DataWindow, WindowAssembler
 from ..versioning import NORTHBOUND_PROTOCOL_VERSION
 from .recording import RecordingStore
@@ -118,8 +119,9 @@ class Gateway:
         # a Flowtime connection has subscribed all notifications and started capture.
         self.status["algorithmState"] = "unavailable"
         LOG.info(
-            "Gateway started: bootId=%s recordingDirectory=%s networkMode=%s algorithmEnabled=%s",
+            "Gateway started: bootId=%s transport=%s recordingDirectory=%s networkMode=%s algorithmEnabled=%s",
             self.boot_id,
+            self.config.data_source.type,
             self.config.recording.directory,
             self.config.network.mode,
             self.config.algorithm.enabled,
@@ -189,10 +191,31 @@ class Gateway:
         LOG.warning("Headband connection attempt failed: transport=%s reason=%s", self.config.data_source.type, safe_error)
 
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
-        received_at_ms = now_ms()
+        """Compatibility entry point for tests and older in-process callers."""
+
+        await self.receive_device_packet(DevicePacket(self.config.data_source.type, characteristic, bytes(value), now_ms()))
+
+    async def receive_device_packet(self, packet: DevicePacket) -> None:
+        """Consume the transport-neutral event emitted by a selected adapter."""
+
+        characteristic = packet.channel
+        value = packet.value
+        received_at_ms = packet.received_at_ms
+        self.store.save_device_packet(
+            transport=packet.transport,
+            channel=characteristic,
+            received_at_ms=received_at_ms,
+            value=value,
+        )
         raw_stream = {"ff31": "eeg", "ff51": "hr"}.get(characteristic)
         if raw_stream is None:
-            LOG.warning("Ignoring unsupported device channel: channel=%s bytes=%s", characteristic, len(value))
+            if characteristic not in {"ff32", "serial.frame"}:
+                LOG.warning(
+                    "Ignoring unsupported device channel: transport=%s channel=%s bytes=%s",
+                    packet.transport,
+                    characteristic,
+                    len(value),
+                )
             return
         self._capture_stats[f"{raw_stream}Packets"] = int(self._capture_stats[f"{raw_stream}Packets"] or 0) + 1
         self._capture_stats[f"{raw_stream}Bytes"] = int(self._capture_stats[f"{raw_stream}Bytes"] or 0) + len(value)

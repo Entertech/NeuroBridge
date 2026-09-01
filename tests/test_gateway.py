@@ -10,6 +10,7 @@ import unittest
 import zipfile
 
 from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, RecordingConfig, ServerConfig
+from neurobridge.device.packet import DevicePacket
 from neurobridge.algorithm.runner import AlgorithmRunner
 from neurobridge.ble.flowtime import FF51, REQUIRED_NOTIFICATION_CHARACTERISTICS, FlowtimeAdapter, wear_state_from_packet
 from neurobridge.business.gateway import ClientSession, Gateway, REPLAY_NOT_AVAILABLE_REASON
@@ -50,7 +51,7 @@ class FlowtimeSelectionTests(unittest.TestCase):
         class Device:
             def __init__(self, name: str, uuids: list[str], rssi: int) -> None:
                 self.name, self.metadata, self.rssi = name, {"uuids": uuids}, rssi
-        async def ignored_packet(_: str, __: bytes) -> None: pass
+        async def ignored_packet(_: DevicePacket) -> None: pass
         async def ignored_status(_: str, __: object) -> None: pass
         async def ignored_ready() -> None: pass
         adapter = FlowtimeAdapter(config(Path("/tmp")).ble, ignored_packet, ignored_status, ignored_ready)
@@ -68,10 +69,10 @@ class FlowtimeSelectionTests(unittest.TestCase):
 
 class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
     async def test_ff51_notification_is_subscribed_and_forwarded_as_raw_hr(self) -> None:
-        received: list[tuple[str, bytes]] = []
+        received: list[DevicePacket] = []
 
-        async def packet(characteristic: str, value: bytes) -> None:
-            received.append((characteristic, value))
+        async def packet(event: DevicePacket) -> None:
+            received.append(event)
 
         async def ignored_status(_: str, __: object) -> None:
             pass
@@ -99,7 +100,7 @@ class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(client.handlers), set(REQUIRED_NOTIFICATION_CHARACTERISTICS))
         client.handlers[FF51](0, bytearray(b"r" * HR_PACKET_BYTES))  # type: ignore[operator]
         await asyncio.sleep(0)
-        self.assertEqual(received, [("ff51", b"r" * HR_PACKET_BYTES)])
+        self.assertEqual([(item.transport, item.channel, item.value) for item in received], [("bluetooth", "ff51", b"r" * HR_PACKET_BYTES)])
 
 
 class AlgorithmRunnerTests(unittest.IsolatedAsyncioTestCase):
@@ -223,6 +224,23 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             for stream, value in (("eeg", b"e" * EEG_PACKET_BYTES), ("hr", b"r" * HR_PACKET_BYTES)):
                 row = json.loads((raw_dir / f"{stream}.jsonl").read_text(encoding="utf-8"))
                 self.assertEqual(base64.b64decode(row["bytesBase64"]), value)
+
+    async def test_serial_full_frame_and_transport_metadata_are_internal_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway = Gateway(config(root))
+            await gateway.update_status("connectionState", "connected")
+            recording_id = str(gateway.store.recording_id)
+            raw_frame = b"f" * 28
+            await gateway.receive_device_packet(DevicePacket("serial", "serial.frame", raw_frame, 1234))
+            await gateway.receive_device_packet(DevicePacket("serial", "ff31", b"e" * EEG_PACKET_BYTES, 1234))
+            await gateway.update_status("connectionState", "disconnected")
+
+            rows = [json.loads(line) for line in (root / "internal-device" / recording_id / "packets.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(rows[0]["transport"], "serial")
+            self.assertEqual(rows[0]["channel"], "serial.frame")
+            self.assertEqual(base64.b64decode(rows[0]["bytesBase64"]), raw_frame)
+            self.assertFalse((root / "sessions" / recording_id / "internal-device").exists())
 
     async def test_window_observer_receives_algorithm_output(self) -> None:
         class Algorithm:

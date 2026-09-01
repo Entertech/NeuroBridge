@@ -5,6 +5,8 @@ import tempfile
 import unittest
 
 from neurobridge.config import DEFAULT_ALGORITHM_COMMAND, load
+from neurobridge.business.gateway import Gateway
+from neurobridge.device.strategy import create_device_adapter
 from neurobridge.northbound.strategy import access_strategy
 
 
@@ -64,14 +66,37 @@ class DeviceStrategyConfigurationTests(unittest.TestCase):
             self.assertEqual(config.serial.baud_rate, 115200)
             self.assertEqual(config.serial.handshake_timeout_ms, 1000)
             self.assertEqual(config.serial.command_response_timeout_ms, 1000)
+            self.assertFalse(config.serial.dtr)
+            self.assertFalse(config.serial.rts)
+
+    def test_unselected_serial_parameters_are_not_parsed_or_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            path.write_text(
+                '[data_source]\ntype = "bluetooth"\n'
+                '[serial]\ndevice = "not-an-absolute-path"\nbaud_rate = 9600\n',
+                encoding="utf-8",
+            )
+            config = load(path)
+            self.assertEqual(config.data_source.type, "bluetooth")
+            self.assertEqual(config.serial.baud_rate, 115200)
+
+    def test_native_usb_is_a_reserved_strategy_value(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            path.write_text('[data_source]\ntype = "usb"\n', encoding="utf-8")
+            config = load(path)
+            self.assertEqual(config.data_source.type, "usb")
+            with self.assertRaisesRegex(NotImplementedError, "use data_source.type=serial"):
+                create_device_adapter(config, Gateway(config))
 
     def test_serial_configuration_rejects_unsafe_or_unknown_values(self) -> None:
         cases = (
-            ('[data_source]\ntype = "usb"\n', "data_source.type"),
-            ('[serial]\ndevice = "ttyUSB0"\n', "serial.device"),
-            ('[serial]\nbaud_rate = 9600\n', "serial.baud_rate"),
-            ('[serial]\ncandidate_types = ["ttyS"]\n', "candidate_types"),
-            ('[serial]\ncommand_response_timeout_ms = 10\n', "command_response_timeout_ms"),
+            ('[data_source]\ntype = "other"\n', "data_source.type"),
+            ('[data_source]\ntype = "serial"\n[serial]\ndevice = "ttyUSB0"\n', "serial.device"),
+            ('[data_source]\ntype = "serial"\n[serial]\nbaud_rate = 9600\n', "serial.baud_rate"),
+            ('[data_source]\ntype = "serial"\n[serial]\ncandidate_types = ["ttyS"]\n', "candidate_types"),
+            ('[data_source]\ntype = "serial"\n[serial]\ncommand_response_timeout_ms = 10\n', "command_response_timeout_ms"),
         )
         for contents, message in cases:
             with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:

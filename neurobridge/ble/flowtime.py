@@ -6,6 +6,7 @@ import time
 from typing import Any, Awaitable, Callable
 
 from ..config import BleConfig
+from ..device.packet import DevicePacket
 
 LOG = logging.getLogger(__name__)
 BASE = "-1212-abcd-1523-785feabcd123"
@@ -22,7 +23,7 @@ def wear_state_from_packet(_value: bytes) -> str:
 
 class FlowtimeAdapter:
     """Bleak adapter for the FF31/FF32/FF51/FF21 profile in the device specification."""
-    def __init__(self, config: BleConfig, packet: Callable[[str, bytes], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]], error: Callable[[str], Awaitable[None]] | None = None) -> None:
+    def __init__(self, config: BleConfig, packet: Callable[[DevicePacket], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]], error: Callable[[str], Awaitable[None]] | None = None) -> None:
         self.config, self.packet, self.status, self.device_ready = config, packet, status, device_ready
         self.error = error
         self._client = None
@@ -139,14 +140,16 @@ class FlowtimeAdapter:
     async def _subscribe(self) -> None:
         assert self._client
         async def notify(characteristic: str, _sender: int, value: bytearray) -> None:
+            raw = bytes(value)
             if characteristic == FF32:
-                await self.status("wearState", wear_state_from_packet(bytes(value)))
+                await self.packet(DevicePacket.received("bluetooth", "ff32", raw))
+                await self.status("wearState", wear_state_from_packet(raw))
             elif characteristic == BATTERY:
                 # The profile's voltage-to-percent mapping still requires POC
                 # validation. Do not expose the raw byte as a percentage.
                 await self.status("batteryPercent", None)
             else:
-                await self.packet({FF31: "ff31", FF51: "ff51"}[characteristic], bytes(value))
+                await self.packet(DevicePacket.received("bluetooth", {FF31: "ff31", FF51: "ff51"}[characteristic], raw))
         for characteristic in REQUIRED_NOTIFICATION_CHARACTERISTICS:
             # Bleak notification callbacks are synchronous on all supported backends.
             # Schedule the async state update rather than relying on backend-specific

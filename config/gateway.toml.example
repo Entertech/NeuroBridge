@@ -33,8 +33,12 @@ mode = "static"
 # dhcp_range_end = "192.168.88.200"
 # dhcp_lease_time = "12h"
 
-# Current Kylin deployment uses the USB-derived serial strategy. Switch to
-# bluetooth only for an explicitly approved BLE regression deployment.
+# USB is the physical cable, but Linux transport selection depends on how the
+# device enumerates: /dev/ttyACM* or /dev/ttyUSB* means serial; HID, Bulk, or
+# Interrupt endpoints mean native usb. The confirmed Kylin deployment is
+# serial. Native usb remains blocked until its VID/PID/interface/endpoints and
+# transfer contract are confirmed. Use bluetooth only for an approved BLE
+# regression deployment. Changing this value requires a service restart.
 [data_source]
 type = "serial"
 
@@ -52,6 +56,10 @@ reconnect_delay_seconds = 3
 # Periodic logs include cumulative expected/received/lost packets and loss rate.
 stats_interval_seconds = 10
 max_buffer_bytes = 65536
+# Keep modem-control outputs inactive before the port opens. Any change must be
+# jointly confirmed with the device team because DTR/RTS can reset hardware.
+dtr = false
+rts = false
 
 [ble]
 # Ignored while data_source.type = "serial". Enable only for BLE regression.

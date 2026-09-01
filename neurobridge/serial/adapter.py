@@ -12,6 +12,7 @@ import time
 from typing import Any, Awaitable, Callable, Iterable
 
 from ..config import SerialConfig
+from ..device.packet import DevicePacket, wall_clock_ms
 
 LOG = logging.getLogger(__name__)
 HANDSHAKE = bytes.fromhex("AA 55 01 01 01 01 6F")
@@ -169,7 +170,30 @@ def discover_serial_candidates(config: SerialConfig) -> list[str]:
         if Path(resolved).name.startswith(tuple(config.candidate_types)) and resolved not in resolved_seen:
             candidates.append(str(path))
             resolved_seen.add(resolved)
-    return candidates
+    # Prefer persistent by-id aliases. Within each group, use the USB parent,
+    # physical sysfs path, and interface number so multi-interface devices keep
+    # the same probe order even if ttyACM/ttyUSB kernel indices change.
+    return sorted(
+        candidates,
+        key=lambda candidate: _serial_candidate_order_key(candidate, serial_candidate_metadata(candidate)),
+    )
+
+
+def _serial_candidate_order_key(candidate: str, metadata: dict[str, str | None]) -> tuple[int, str, int, str, str]:
+    """Build the deterministic by-id/USB-parent/interface probe order."""
+
+    interface = metadata["interface"]
+    try:
+        interface_number = int(interface or "", 16)
+    except ValueError:
+        interface_number = 1 << 30
+    return (
+        0 if Path(candidate).parent == Path("/dev/serial/by-id") else 1,
+        metadata["usbParent"] or "",
+        interface_number,
+        metadata["physicalPath"] or "",
+        candidate,
+    )
 
 
 def serial_candidate_metadata(path: str) -> dict[str, str | None]:
@@ -186,6 +210,7 @@ def serial_candidate_metadata(path: str) -> dict[str, str | None]:
         "usbSerial": None,
         "interface": None,
         "driver": None,
+        "usbParent": None,
         "physicalPath": None,
     }
     sysfs_device = Path("/sys/class/tty") / Path(resolved_path).name / "device"
@@ -214,6 +239,8 @@ def serial_candidate_metadata(path: str) -> dict[str, str | None]:
                 continue
             if value:
                 metadata[key] = _safe_log_text(value, 128)
+        if metadata["usbParent"] is None and ((node / "idVendor").is_file() or (node / "idProduct").is_file()):
+            metadata["usbParent"] = _safe_log_text(node, 512)
         if node == Path("/sys"):
             break
     return metadata
@@ -224,8 +251,8 @@ def _open_serial(path: str, config: SerialConfig) -> Any:
         import serial
     except ImportError as exc:
         raise RuntimeError("pyserial is required for data_source.type=serial") from exc
-    return serial.Serial(
-        port=path,
+    client = serial.Serial(
+        port=None,
         baudrate=config.baud_rate,
         bytesize=serial.EIGHTBITS,
         parity=serial.PARITY_NONE,
@@ -237,6 +264,18 @@ def _open_serial(path: str, config: SerialConfig) -> Any:
         dsrdtr=False,
         exclusive=True,
     )
+    # Set inactive modem-control levels before open. Passing a live port to the
+    # constructor can briefly assert the library defaults and reset some USB
+    # serial devices before these values are applied.
+    client.dtr = config.dtr
+    client.rts = config.rts
+    client.port = path
+    try:
+        client.open()
+    except Exception:
+        client.close()
+        raise
+    return client
 
 
 class SerialAdapter:
@@ -245,7 +284,7 @@ class SerialAdapter:
     def __init__(
         self,
         config: SerialConfig,
-        packet: Callable[[str, bytes], Awaitable[None]],
+        packet: Callable[[DevicePacket], Awaitable[None]],
         status: Callable[[str, object], Awaitable[None]],
         device_ready: Callable[[], Awaitable[None]],
         error: Callable[[str], Awaitable[None]] | None = None,
@@ -307,7 +346,7 @@ class SerialAdapter:
                     identity = serial_candidate_metadata(path)
                     LOG.info(
                         "Serial candidate discovered: attempt=%s candidateIndex=%s candidateCount=%s path=%s "
-                        "resolvedPath=%s vid=%s pid=%s usbSerial=%s interface=%s driver=%s physicalPath=%s",
+                        "resolvedPath=%s vid=%s pid=%s usbSerial=%s usbParent=%s interface=%s driver=%s physicalPath=%s",
                         attempt,
                         index,
                         len(candidates),
@@ -316,6 +355,7 @@ class SerialAdapter:
                         identity["vid"],
                         identity["pid"],
                         identity["usbSerial"],
+                        _safe_log_text(identity["usbParent"]),
                         identity["interface"],
                         identity["driver"],
                         _safe_log_text(identity["physicalPath"]),
@@ -338,6 +378,20 @@ class SerialAdapter:
                         )
                         if await self._await_handshake(client, path, attempt, index, len(candidates)):
                             self._client, self._target = client, path
+                            identity = serial_candidate_metadata(path)
+                            LOG.info(
+                                "Serial target selected: path=%s resolvedPath=%s vid=%s pid=%s usbSerial=%s "
+                                "usbParent=%s interface=%s driver=%s physicalPath=%s",
+                                _safe_log_text(path),
+                                _safe_log_text(identity["resolvedPath"]),
+                                identity["vid"],
+                                identity["pid"],
+                                identity["usbSerial"],
+                                _safe_log_text(identity["usbParent"]),
+                                identity["interface"],
+                                identity["driver"],
+                                _safe_log_text(identity["physicalPath"]),
+                            )
                             break
                     except Exception as exc:
                         LOG.warning(
@@ -608,8 +662,12 @@ class SerialAdapter:
                     observation.snapshot.lost_packets,
                     observation.snapshot.loss_rate_percent,
                 )
-            await self.packet("ff31", frame[EEG_START:EEG_END])
-            await self.packet("ff51", frame[HR_OFFSET:HR_OFFSET + 1])
+            received_at_ms = wall_clock_ms()
+            # Preserve the confirmed 28-byte transport frame independently of
+            # the compatibility projections consumed by the existing algorithm.
+            await self.packet(DevicePacket("serial", "serial.frame", frame, received_at_ms))
+            await self.packet(DevicePacket("serial", "ff31", frame[EEG_START:EEG_END], received_at_ms))
+            await self.packet(DevicePacket("serial", "ff51", frame[HR_OFFSET:HR_OFFSET + 1], received_at_ms))
 
     def _log_stats(self, reason: str) -> None:
         snapshot = self._loss.snapshot()
