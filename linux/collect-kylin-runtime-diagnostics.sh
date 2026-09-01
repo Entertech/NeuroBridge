@@ -147,6 +147,14 @@ EOF
 # Host, operating system, clock, hardware, storage, and resource state.
 capture os-release cat /etc/os-release
 [[ -r /etc/issue ]] && capture issue cat /etc/issue || warn "/etc/issue is unavailable"
+[[ -r /etc/kylin-release ]] && capture kylin-release cat /etc/kylin-release || warn "/etc/kylin-release is unavailable"
+if [[ -r /etc/.kyinfo ]]; then
+  capture_shell kylin-build-info 'grep -Ei "^[[:space:]]*(name|milestone|arch|version|release|build|buildid|time|dist_id)[[:space:]]*=" /etc/.kyinfo || true'
+else
+  warn "/etc/.kyinfo is unavailable"
+fi
+[[ -r /etc/lsb-release ]] && capture lsb-release cat /etc/lsb-release || warn "/etc/lsb-release is unavailable"
+capture_if_available kylin-version-command nkvers
 capture_if_available uname uname -a
 capture_if_available architecture uname -m
 capture_if_available hostname hostname
