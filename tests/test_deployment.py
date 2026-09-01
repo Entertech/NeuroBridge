@@ -13,6 +13,70 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_kylin_gateway_assistant_guides_setup_and_repairs_git_permissions_safely(self) -> None:
+        script_path = ROOT / "linux" / "setup-kylin-gateway.sh"
+        script = script_path.read_text(encoding="utf-8")
+        self.assertTrue(os.access(script_path, os.X_OK))
+
+        syntax = subprocess.run(
+            ["bash", "-n", str(script_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        help_result = subprocess.run(
+            ["bash", str(script_path), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("First-time setup", help_result.stdout)
+        self.assertIn("Repair project permissions and update source", help_result.stdout)
+        self.assertIn("one decision accept yes/no", help_result.stdout)
+
+        menu_result = subprocess.run(
+            ["bash", str(script_path)],
+            input="0\n",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(menu_result.returncode, 0, menu_result.stderr)
+        self.assertIn("1. 新设备首次配置", menu_result.stdout)
+        self.assertIn("2. 修复项目权限并更新代码", menu_result.stdout)
+        self.assertIn("3. 检查当前 USB/串口（无需拔插）", menu_result.stdout)
+        self.assertIn("请输入选项 [0-6]", menu_result.stdout)
+
+        self.assertIn('[[ ${EUID:-$(id -u)} -ne 0 ]]', script)
+        self.assertIn("Run without sudo", script)
+        self.assertIn('[[ -n $root_dir && $root_dir != / ]]', script)
+        self.assertIn('[[ -f $root_dir/pyproject.toml ]]', script)
+        self.assertIn('[[ -d $root_dir/.git && ! -L $root_dir/.git ]]', script)
+        self.assertIn('[[ -f $root_dir/linux/setup-kylin-gateway.sh ]]', script)
+        self.assertLess(
+            script.index("validate_project_root\n"),
+            script.index('sudo chown -R --no-dereference'),
+        )
+        self.assertIn('sudo chown -R --no-dereference "$current_uid:$current_gid" "$root_dir"', script)
+        self.assertIn('find "$root_dir" -xdev ! -uid "$current_uid"', script)
+        self.assertIn('[[ ! -e $root_dir/.git/index || -w $root_dir/.git/index ]]', script)
+        self.assertIn("助手不会自动删除它", script)
+
+        self.assertIn('git -C "$root_dir" pull --ff-only', script)
+        self.assertNotIn('sudo git -C "$root_dir" pull', script)
+        self.assertNotIn('run_step "以普通用户更新代码" sudo', script)
+        self.assertIn("为避免继续运行更新前的脚本，本助手现在退出", script)
+        self.assertIn('(( result == 20 )) && exit 0', script)
+        self.assertIn('sudo "$root_dir/linux/diagnose-kylin-usb-serial.sh"', script)
+        self.assertIn("检查当前 USB/串口（无需拔插）", script)
+        self.assertIn("--plug-cycle --timeout 60", script)
+        self.assertIn("[yes/no]", script)
+        self.assertIn("下一步命令：", script)
+        self.assertIn('runtime_dir="$root_dir/.runtime"', script)
+        self.assertIn("setup-kylin-gateway-$(date -u", script)
+
     def test_kylin_usb_serial_diagnosis_prompts_times_out_and_preserves_logs(self) -> None:
         script_path = ROOT / "linux" / "diagnose-kylin-usb-serial.sh"
         script = script_path.read_text(encoding="utf-8")

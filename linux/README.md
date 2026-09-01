@@ -1,6 +1,14 @@
-# Ubuntu 网关部署与运行教程
+# Linux 网关部署与运行教程
 
-本目录保存 Ubuntu x86_64 网关的部署专属内容：
+银河麒麟 V10 新设备的首选入口只有一条命令：
+
+```bash
+./linux/setup-kylin-gateway.sh
+```
+
+输入 `1` 完成首次配置，输入 `5` 日常启动；重启后 `git pull` 报索引权限不足时输入 `2`。助手使用数字菜单，单项确认只使用 `yes/no`，每一步保存日志并提示下一条命令。保持耳机 USB 已连接即可，正常检测不要求拔插。完整现场流程和日志判读见[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
+
+本目录同时保存 Ubuntu x86_64 部署及银河麒麟项目运行脚本：
 
 - `update-ubuntu.sh`：目标机一键部署入口；只使用当前源码目录，不执行 Git 或网络操作。
 - `prepare-ubuntu24.04-environment.sh`：一次性联网环境准备，安装系统包与锁定的 Python 运行依赖；完成后可断网。
@@ -9,6 +17,7 @@
 - `../config/ssh-operations.example.txt`：快速模式模板；实际 `ssh-operations.txt` 被 Git 忽略，可按现场要求保存明文密码。
 - `collect-ubuntu-build-diagnostics.sh`：收集编译日志、工具版本和 CMake 诊断，不包含现场配置或原始数据。
 - `collect-kylin-runtime-diagnostics.sh`：供 N100/N150 银河麒麟 V10 现场离线采集系统、服务、journal、USB/TTY、网络、依赖和应用日志；它是诊断工具，不是麒麟安装器。
+- `setup-kylin-gateway.sh`：银河麒麟 V10 项目一键上手、权限恢复、更新、配置、启动与诊断菜单；以普通用户运行，只在必要步骤调用 `sudo`，Git 更新永远不使用 `sudo`。
 - `setup-kylin-python.sh`：银河麒麟 V10 项目 Python 环境一键初始化；系统仅有 Python 3.8 时自动准备经 SHA-256 锁定的项目内 Python 3.11，再选择离线 `wheelhouse` 或当前网络，所有运行时、缓存、临时文件和日志保存在项目内。
 - `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口一键识别；默认直接检查已连接设备，无需拔插，并保存 USB/TTY/驱动快照；仅在显式 `--plug-cycle` 时监控拔插过程和超时；旧版 `lsusb` 不支持 `-nn` 时自动回退。
 - `setup-kylin-serial.sh`：银河麒麟 x86_64 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务；项目启动脚本会处理账号已入组但当前会话权限尚未刷新的情况。
@@ -18,7 +27,7 @@
 
 本文用于 Ubuntu 24.04 LTS x86_64 兼容/回归环境；正式银河麒麟部署见内部麒麟手册。当前默认 `local_browser` 策略让网页、WebSocket 和下载仅监听 `127.0.0.1`，不需要独立 B 端主机或数据专用网线。旧 `wired_b_side` 策略仍保留，但只能使用双方确认的隔离有线网络。
 
-银河麒麟项目目录直接运行的最短流程为：耳机保持 USB 连接，依次执行 `./linux/setup-kylin-python.sh`、`sudo ./linux/diagnose-kylin-usb-serial.sh`、`sudo ./linux/setup-kylin-serial.sh` 和 `./linux/start-kylin-gateway.sh`，无需拔插。只有排查物理枚举过程时才使用诊断脚本的 `--plug-cycle --timeout 60`。真实设备 POC、日志判读和诊断导出必须按[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)执行。
+银河麒麟分步脚本仍保留给故障恢复：`setup-kylin-python.sh`、`diagnose-kylin-usb-serial.sh`、`setup-kylin-serial.sh` 和 `start-kylin-gateway.sh`。只有排查物理枚举过程时才使用诊断脚本的 `--plug-cycle --timeout 60`。
 
 > 默认本机地址固定使用 `127.0.0.1`。文中的 `192.168.88.10`、`192.168.88.20` 和网卡名仅用于兼容有线策略，切换前必须确认现场参数。
 
