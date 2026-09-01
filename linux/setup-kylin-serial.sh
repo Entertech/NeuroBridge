@@ -86,6 +86,8 @@ if (( ${#tty_candidates[@]} )); then
     fi
   done
 else
+  echo "WARNING: no ttyACM/ttyUSB device exists; serial permissions cannot be verified yet." >&2
+  echo "Run before setup: sudo $root_dir/linux/diagnose-kylin-usb-serial.sh --timeout 60" >&2
   for tty_group in dialout uucp; do
     if getent group "$tty_group" >/dev/null 2>&1; then
       usermod -aG "$tty_group" neurobridge

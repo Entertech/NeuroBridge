@@ -11,6 +11,52 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_kylin_usb_serial_diagnosis_prompts_times_out_and_preserves_logs(self) -> None:
+        script_path = ROOT / "linux" / "diagnose-kylin-usb-serial.sh"
+        script = script_path.read_text(encoding="utf-8")
+        self.assertTrue(os.access(script_path, os.X_OK))
+        syntax = subprocess.run(
+            ["bash", "-n", str(script_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        help_result = subprocess.run(
+            ["bash", str(script_path), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("--timeout SECONDS", help_result.stdout)
+        self.assertIn("--output-dir DIR", help_result.stdout)
+        self.assertIn("exit 2: USB appeared", help_result.stdout)
+        invalid_timeout = subprocess.run(
+            ["bash", str(script_path), "--timeout", "4"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(invalid_timeout.returncode, 0)
+        self.assertIn("between 5 and 600 seconds", invalid_timeout.stderr)
+        self.assertIn("journalctl -k -f", script)
+        self.assertIn("journalctl -u neurobridge.service -f", script)
+        self.assertIn("udevadm monitor --kernel --udev --property", script)
+        self.assertIn("dmesg --follow --time-format iso", script)
+        self.assertIn("$prefix-usb-interfaces.log", script)
+        self.assertIn("usbguard-status", script)
+        self.assertIn("capture \"$prefix-lsusb\" lsusb -nn", script)
+        self.assertIn("capture \"$prefix-lsusb-tree\" lsusb -t", script)
+        self.assertIn("result_status=usb_detected_tty_timeout", script)
+        self.assertIn("result_status=usb_detection_timeout", script)
+        self.assertIn("payloadCollected=false", script)
+        self.assertIn('tar -C "$output_dir" -czf "$archive_path"', script)
+        self.assertIn('sha256sum "${archive_path##*/}"', script)
+        self.assertIn('artifact_uid=${SUDO_UID:-0}', script)
+        self.assertIn('chown -R "$artifact_uid:$artifact_gid" "$session_dir"', script)
+        self.assertNotIn("cat /etc/neurobridge/gateway.toml", script)
+
     def test_kylin_runtime_diagnostics_are_self_contained_and_exclude_configuration_contents(self) -> None:
         script_path = ROOT / "linux" / "collect-kylin-runtime-diagnostics.sh"
         script = script_path.read_text(encoding="utf-8")

@@ -9,6 +9,7 @@
 - `../config/ssh-operations.example.txt`：快速模式模板；实际 `ssh-operations.txt` 被 Git 忽略，可按现场要求保存明文密码。
 - `collect-ubuntu-build-diagnostics.sh`：收集编译日志、工具版本和 CMake 诊断，不包含现场配置或原始数据。
 - `collect-kylin-runtime-diagnostics.sh`：供 N100/N150 银河麒麟 V10 现场离线采集系统、服务、journal、USB/TTY、网络、依赖和应用日志；它是诊断工具，不是麒麟安装器。
+- `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口插入一键识别；提示拔插设备，限时等待 USB 和 TTY，保存内核、udev、网关及前后快照日志，并在超时时区分“未枚举 USB”与“已枚举但未生成 TTY”。
 - `setup-kylin-serial.sh`：银河麒麟 x86_64 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
@@ -16,7 +17,7 @@
 
 本文用于 Ubuntu 24.04 LTS x86_64 兼容/回归环境；正式银河麒麟部署见内部麒麟手册。当前默认 `local_browser` 策略让网页、WebSocket 和下载仅监听 `127.0.0.1`，不需要独立 B 端主机或数据专用网线。旧 `wired_b_side` 策略仍保留，但只能使用双方确认的隔离有线网络。
 
-银河麒麟设备已完成运行环境和配置安装后，串口策略的最简入口是 `sudo ./linux/setup-kylin-serial.sh`。真实设备 POC、日志判读和诊断导出必须按[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)执行；该脚本不是操作系统或完整应用安装器。
+银河麒麟设备已完成运行环境和配置安装后，先执行 `sudo ./linux/diagnose-kylin-usb-serial.sh --timeout 60` 完成真实 USB/TTY 识别并保存过程日志，再执行 `sudo ./linux/setup-kylin-serial.sh` 启用串口策略。真实设备 POC、日志判读和诊断导出必须按[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)执行；两个脚本都不是操作系统或完整应用安装器。
 
 > 默认本机地址固定使用 `127.0.0.1`。文中的 `192.168.88.10`、`192.168.88.20` 和网卡名仅用于兼容有线策略，切换前必须确认现场参数。
 
