@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -16,6 +17,7 @@ from neurobridge.serial.adapter import (
     SequenceLossTracker,
     SerialAdapter,
     _open_serial,
+    _serial_discovery_inventory,
     _serial_candidate_order_key,
 )
 
@@ -50,6 +52,14 @@ class GarbageSerial(FakeSerial):
 
     def read(self, _size: int) -> bytes:
         return b"garbage"
+
+
+class SlowEmptySerial(FakeSerial):
+    def read(self, size: int) -> bytes:
+        if self.reads:
+            return super().read(size)
+        time.sleep(0.01)
+        return b""
 
 
 def frame(sequence: int, fill: int = 1, heart_rate: int = 60) -> bytes:
@@ -91,6 +101,50 @@ class SequenceLossTrackerTests(unittest.TestCase):
 
 
 class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_discovery_inventory_explains_missing_nodes_and_fixed_path(self) -> None:
+        entries = {
+            "/dev/serial/by-id/*": ["/dev/serial/by-id/a"],
+            "/dev/ttyACM*": ["/dev/ttyACM0", "/dev/ttyACM1"],
+            "/dev/ttyUSB*": [],
+        }
+        with patch("neurobridge.serial.adapter.glob", side_effect=lambda pattern: entries[pattern]):
+            inventory = _serial_discovery_inventory(SerialConfig(device="/dev/not-present"))
+        self.assertEqual(inventory["byIdEntries"], 1)
+        self.assertEqual(inventory["ttyACMEntries"], 2)
+        self.assertEqual(inventory["ttyUSBEntries"], 0)
+        self.assertFalse(inventory["configuredPathExists"])
+
+    async def test_zero_candidates_log_each_device_node_class_without_payload(self) -> None:
+        adapter: SerialAdapter
+
+        async def stop_after_error(_reason: str) -> None:
+            await adapter.stop()
+
+        adapter = SerialAdapter(
+            SerialConfig(device="auto"),
+            noop,
+            noop,
+            noop,
+            error=stop_after_error,
+            candidate_provider=lambda _config: [],
+        )
+        entries = {
+            "/dev/serial/by-id/*": [],
+            "/dev/ttyACM*": [],
+            "/dev/ttyUSB*": [],
+        }
+        with (
+            patch("neurobridge.serial.adapter.glob", side_effect=lambda pattern: entries[pattern]),
+            self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs,
+        ):
+            await adapter.run()
+        rendered = "\n".join(logs.output)
+        self.assertIn("Serial discovery found no usable candidates", rendered)
+        self.assertIn("byIdEntries=0", rendered)
+        self.assertIn("ttyACMEntries=0", rendered)
+        self.assertIn("ttyUSBEntries=0", rendered)
+        self.assertIn("configuredPathExists=not_applicable", rendered)
+
     async def test_candidate_order_prefers_by_id_then_usb_parent_and_interface(self) -> None:
         first = _serial_candidate_order_key(
             "/dev/serial/by-id/z",
@@ -144,6 +198,30 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(accepted)
         self.assertEqual(client.writes, [HANDSHAKE])
 
+    async def test_wrong_handshake_is_explicitly_logged_without_payload(self) -> None:
+        wrong_handshake = bytes.fromhex("AA 55 01 01 01 01 70")
+        client = SlowEmptySerial([wrong_handshake])
+        adapter = SerialAdapter(SerialConfig(handshake_timeout_ms=200), noop, noop, noop)
+        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
+            accepted = await adapter._await_handshake(client, "/dev/ttyACM0", 1, 1, 1)
+        self.assertFalse(accepted)
+        rendered = "\n".join(logs.output)
+        self.assertIn("produced bytes but no valid handshake", rendered)
+        self.assertIn("invalidHandshakeObserved=true", rendered)
+        self.assertIn("longestHandshakePrefixBytes=6", rendered)
+        self.assertIn("payloadLogged=false", rendered)
+        self.assertNotIn(wrong_handshake.hex(), rendered)
+
+    async def test_no_handshake_bytes_is_distinguished_from_wrong_handshake(self) -> None:
+        client = SlowEmptySerial([])
+        adapter = SerialAdapter(SerialConfig(handshake_timeout_ms=200), noop, noop, noop)
+        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
+            accepted = await adapter._await_handshake(client, "/dev/ttyACM0", 1, 1, 1)
+        self.assertFalse(accepted)
+        rendered = "\n".join(logs.output)
+        self.assertIn("produced no handshake bytes", rendered)
+        self.assertNotIn("invalidHandshakeObserved=true", rendered)
+
     async def test_any_nonempty_control_response_is_success_without_logging_payload(self) -> None:
         client = FakeSerial([b"arbitrary-response"])
         adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
@@ -191,6 +269,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.lost_packets, 1)
         self.assertAlmostEqual(snapshot.loss_rate_percent, 100 / 3)
         self.assertIn("expectedSequence=11", "\n".join(logs.output))
+        self.assertIn("payloadLogged=false", "\n".join(logs.output))
         self.assertEqual(buffer, b"")
         with self.assertLogs("neurobridge.serial.adapter", level="INFO") as summaries:
             adapter._log_stats("periodic")
@@ -199,6 +278,20 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("intervalReceivedUniquePackets=2", summary)
         self.assertIn("intervalLostPackets=1", summary)
         self.assertIn("intervalLossRatePercent=33.333333", summary)
+
+    async def test_invalid_length_and_tail_are_logged_without_frame_payload(self) -> None:
+        adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
+        invalid_length = FRAME_HEADER + b"\x1d" + bytes([0xA5]) * 24
+        invalid_tail = frame(1)[:-1] + b"\xBC"
+        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
+            await adapter._consume_frames(bytearray(invalid_length))
+            await adapter._consume_frames(bytearray(invalid_tail))
+        rendered = "\n".join(logs.output)
+        self.assertIn("Serial invalid frame rejected: reason=length", rendered)
+        self.assertIn("Serial invalid frame rejected: reason=tail", rendered)
+        self.assertIn("payloadLogged=false", rendered)
+        self.assertNotIn(invalid_length.hex(), rendered)
+        self.assertNotIn(invalid_tail.hex(), rendered)
 
     async def test_continuous_invalid_bytes_still_trigger_valid_frame_timeout(self) -> None:
         adapter = SerialAdapter(SerialConfig(data_timeout_seconds=0.01), noop, noop, noop)

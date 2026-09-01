@@ -28,12 +28,38 @@ SEQUENCE_MODULUS = 1 << 16
 SEQUENCE_HALF_RANGE = 1 << 15
 RECENT_SEQUENCE_WINDOW = 4096
 LOG_TEXT_LIMIT = 512
+DISCARDED_BYTES_LOG_INTERVAL = 4096
 
 
 def _safe_log_text(value: object, limit: int = LOG_TEXT_LIMIT) -> str:
     """Bound exception text and remove control characters before logging."""
 
     return "".join(character if character.isprintable() else " " for character in str(value))[:limit]
+
+
+def _serial_discovery_inventory(config: SerialConfig) -> dict[str, int | bool | str]:
+    """Return node counts that explain why discovery found no candidate."""
+
+    by_id = glob("/dev/serial/by-id/*")
+    tty_acm = glob("/dev/ttyACM*")
+    tty_usb = glob("/dev/ttyUSB*")
+    return {
+        "byIdEntries": len(by_id),
+        "ttyACMEntries": len(tty_acm),
+        "ttyUSBEntries": len(tty_usb),
+        "configuredPathExists": (
+            "not_applicable" if config.device == "auto" else Path(config.device).exists()
+        ),
+    }
+
+
+def _longest_handshake_prefix(data: bytes | bytearray) -> int:
+    """Measure wrong/partial handshakes without logging unknown serial bytes."""
+
+    return max(
+        (length for length in range(1, len(HANDSHAKE)) if HANDSHAKE[:length] in data),
+        default=0,
+    )
 
 
 @dataclass(frozen=True)
@@ -335,12 +361,18 @@ class SerialAdapter:
             try:
                 await self.status("connectionState", "connecting")
                 candidates = list(self.candidate_provider(self.config))
+                inventory = _serial_discovery_inventory(self.config)
                 LOG.info(
-                    "Serial discovery started: attempt=%s candidates=%s deviceMode=%s handshakeTimeoutMs=%s",
+                    "Serial discovery started: attempt=%s candidates=%s deviceMode=%s handshakeTimeoutMs=%s "
+                    "byIdEntries=%s ttyACMEntries=%s ttyUSBEntries=%s configuredPathExists=%s",
                     attempt,
                     len(candidates),
                     self.config.device,
                     self.config.handshake_timeout_ms,
+                    inventory["byIdEntries"],
+                    inventory["ttyACMEntries"],
+                    inventory["ttyUSBEntries"],
+                    inventory["configuredPathExists"],
                 )
                 for index, path in enumerate(candidates, start=1):
                     identity = serial_candidate_metadata(path)
@@ -361,6 +393,19 @@ class SerialAdapter:
                         _safe_log_text(identity["physicalPath"]),
                     )
                 if not candidates:
+                    LOG.warning(
+                        "Serial discovery found no usable candidates: attempt=%s deviceMode=%s candidateTypes=%s "
+                        "byIdEntries=%s ttyACMEntries=%s ttyUSBEntries=%s configuredPathExists=%s "
+                        "nextRetrySeconds=%s",
+                        attempt,
+                        self.config.device,
+                        ",".join(self.config.candidate_types),
+                        inventory["byIdEntries"],
+                        inventory["ttyACMEntries"],
+                        inventory["ttyUSBEntries"],
+                        inventory["configuredPathExists"],
+                        self.config.reconnect_delay_seconds,
+                    )
                     raise ConnectionError("No USB-derived serial candidates were found")
                 phase = "handshake"
                 for index, path in enumerate(candidates, start=1):
@@ -468,47 +513,95 @@ class SerialAdapter:
         buffer = bytearray()
         read_bytes = 0
         reads = 0
+        non_empty_reads = 0
+        discarded_bytes = 0
+        buffer_truncations = 0
+        longest_prefix_bytes = 0
         started = time.monotonic()
         while not self._stopping and time.monotonic() < deadline:
             chunk = await asyncio.to_thread(client.read, 256)
             reads += 1
             if not chunk:
                 continue
+            non_empty_reads += 1
             read_bytes += len(chunk)
             buffer.extend(chunk)
+            longest_prefix_bytes = max(longest_prefix_bytes, _longest_handshake_prefix(buffer))
             if len(buffer) > self.config.max_buffer_bytes:
-                del buffer[: len(buffer) - self.config.max_buffer_bytes]
+                overflow = len(buffer) - self.config.max_buffer_bytes
+                del buffer[:overflow]
+                discarded_bytes += overflow
+                buffer_truncations += 1
             offset = buffer.find(HANDSHAKE)
             if offset < 0:
                 if len(buffer) > len(HANDSHAKE) - 1:
-                    del buffer[: -(len(HANDSHAKE) - 1)]
+                    discarded = len(buffer) - (len(HANDSHAKE) - 1)
+                    del buffer[:discarded]
+                    discarded_bytes += discarded
                 continue
+            total_discarded_before_handshake = discarded_bytes + offset
+            if total_discarded_before_handshake:
+                LOG.warning(
+                    "Serial unexpected bytes discarded before valid handshake: attempt=%s candidateIndex=%s "
+                    "candidateCount=%s path=%s discardedBytes=%s longestHandshakePrefixBytes=%s "
+                    "payloadLogged=false",
+                    attempt,
+                    index,
+                    candidate_count,
+                    _safe_log_text(path),
+                    total_discarded_before_handshake,
+                    longest_prefix_bytes,
+                )
             await asyncio.to_thread(client.write, HANDSHAKE)
             await self._flush(client)
             LOG.info(
                 "Serial handshake accepted and ACK sent: attempt=%s candidateIndex=%s candidateCount=%s path=%s "
-                "reads=%s readBytes=%s discardedBeforeHandshake=%s durationMs=%s traversalStopped=true",
+                "reads=%s nonEmptyReads=%s readBytes=%s discardedBeforeHandshake=%s bufferTruncations=%s "
+                "durationMs=%s traversalStopped=true",
                 attempt,
                 index,
                 candidate_count,
                 _safe_log_text(path),
                 reads,
+                non_empty_reads,
                 read_bytes,
-                offset,
+                total_discarded_before_handshake,
+                buffer_truncations,
                 int((time.monotonic() - started) * 1000),
             )
             return True
-        LOG.info(
-            "Serial candidate handshake timed out: attempt=%s candidateIndex=%s candidateCount=%s path=%s "
-            "reads=%s readBytes=%s durationMs=%s",
-            attempt,
-            index,
-            candidate_count,
-            _safe_log_text(path),
-            reads,
-            read_bytes,
-            int((time.monotonic() - started) * 1000),
-        )
+        duration_ms = int((time.monotonic() - started) * 1000)
+        if read_bytes:
+            LOG.warning(
+                "Serial candidate produced bytes but no valid handshake: attempt=%s candidateIndex=%s "
+                "candidateCount=%s path=%s reads=%s nonEmptyReads=%s readBytes=%s discardedBytes=%s "
+                "bufferedBytes=%s bufferTruncations=%s longestHandshakePrefixBytes=%s "
+                "invalidHandshakeObserved=true payloadLogged=false durationMs=%s",
+                attempt,
+                index,
+                candidate_count,
+                _safe_log_text(path),
+                reads,
+                non_empty_reads,
+                read_bytes,
+                discarded_bytes,
+                len(buffer),
+                buffer_truncations,
+                longest_prefix_bytes,
+                duration_ms,
+            )
+        else:
+            LOG.warning(
+                "Serial candidate produced no handshake bytes: attempt=%s candidateIndex=%s candidateCount=%s "
+                "path=%s reads=%s timeoutMs=%s durationMs=%s",
+                attempt,
+                index,
+                candidate_count,
+                _safe_log_text(path),
+                reads,
+                self.config.handshake_timeout_ms,
+                duration_ms,
+            )
         return False
 
     async def _send_control(self, command: bytes, name: str) -> bytes:
@@ -583,6 +676,18 @@ class SerialAdapter:
                 self._log_stats("periodic")
                 self._stats["lastSummaryAtMonotonic"] = now
             if now - last_frame_at >= self.config.data_timeout_seconds:
+                LOG.warning(
+                    "Serial valid-frame timeout: target=%s timeoutSeconds=%.3f readBytes=%s frames=%s "
+                    "invalidFrames=%s discardedBytes=%s bufferOverflows=%s bufferedBytes=%s",
+                    _safe_log_text(self._target),
+                    self.config.data_timeout_seconds,
+                    self._stats["readBytes"],
+                    self._stats["frames"],
+                    self._stats["invalidFrames"],
+                    self._stats["discardedBytes"],
+                    self._stats["bufferOverflows"],
+                    len(buffer),
+                )
                 raise TimeoutError(f"No valid serial data frame for {self.config.data_timeout_seconds:.3f} seconds")
             client = self._client
             if client is None:
@@ -613,16 +718,18 @@ class SerialAdapter:
                 discarded = len(buffer) - keep
                 if discarded:
                     del buffer[:discarded]
-                    self._stats["discardedBytes"] = int(self._stats["discardedBytes"]) + discarded
+                    self._record_discarded_bytes(discarded, "frame_header_not_found", len(buffer))
                 return parsed
             if offset:
                 del buffer[:offset]
-                self._stats["discardedBytes"] = int(self._stats["discardedBytes"]) + offset
+                self._record_discarded_bytes(offset, "bytes_before_frame_header", len(buffer))
             if len(buffer) < 4:
                 return parsed
             if buffer[3] != FRAME_BYTES:
+                observed_length = buffer[3]
                 del buffer[0]
                 self._stats["invalidFrames"] = int(self._stats["invalidFrames"]) + 1
+                self._log_invalid_frame("length", len(buffer), observed_length)
                 continue
             if len(buffer) < FRAME_BYTES:
                 return parsed
@@ -630,6 +737,7 @@ class SerialAdapter:
             if frame[-len(FRAME_TAIL):] != FRAME_TAIL:
                 del buffer[0]
                 self._stats["invalidFrames"] = int(self._stats["invalidFrames"]) + 1
+                self._log_invalid_frame("tail", len(buffer), FRAME_BYTES)
                 continue
             del buffer[:FRAME_BYTES]
             sequence = int.from_bytes(frame[4:6], "big", signed=False)
@@ -668,6 +776,33 @@ class SerialAdapter:
             await self.packet(DevicePacket("serial", "serial.frame", frame, received_at_ms))
             await self.packet(DevicePacket("serial", "ff31", frame[EEG_START:EEG_END], received_at_ms))
             await self.packet(DevicePacket("serial", "ff51", frame[HR_OFFSET:HR_OFFSET + 1], received_at_ms))
+
+    def _record_discarded_bytes(self, discarded: int, reason: str, buffered_bytes: int) -> None:
+        previous = int(self._stats["discardedBytes"])
+        total = previous + discarded
+        self._stats["discardedBytes"] = total
+        if previous == 0 or total // DISCARDED_BYTES_LOG_INTERVAL > previous // DISCARDED_BYTES_LOG_INTERVAL:
+            LOG.warning(
+                "Serial bytes discarded while resynchronizing: reason=%s discardedNow=%s discardedBytes=%s "
+                "bufferedBytes=%s payloadLogged=false",
+                reason,
+                discarded,
+                total,
+                buffered_bytes,
+            )
+
+    def _log_invalid_frame(self, reason: str, buffered_bytes: int, observed_length: int) -> None:
+        count = int(self._stats["invalidFrames"])
+        if count <= 3 or count & (count - 1) == 0:
+            LOG.warning(
+                "Serial invalid frame rejected: reason=%s invalidFrames=%s observedLength=%s "
+                "expectedLength=%s bufferedBytes=%s payloadLogged=false",
+                reason,
+                count,
+                observed_length,
+                FRAME_BYTES,
+                buffered_bytes,
+            )
 
     def _log_stats(self, reason: str) -> None:
         snapshot = self._loss.snapshot()
