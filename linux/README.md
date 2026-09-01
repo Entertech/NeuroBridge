@@ -13,9 +13,9 @@
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。
 
-本文用于在一台**Ubuntu 24.04 LTS x86_64** 主机上部署 NeuroBridge。首期部署目标是 N100/N150 等 x86_64 小主机；不要在 ARM、Windows、macOS 或非 systemd 环境上使用这些脚本。目标机可匿名从 GitHub 公开 HTTPS 地址获取本仓库源码，无需登录；源码到位后，所有部署、bridge 构建和运行步骤均不访问互联网。网关和 B 端主机必须只接入双方确认的专用有线网络，不能暴露到公网、无线网络或不受控局域网。
+本文用于 Ubuntu 24.04 LTS x86_64 兼容/回归环境；正式银河麒麟部署见内部麒麟手册。当前默认 `local_browser` 策略让网页、WebSocket 和下载仅监听 `127.0.0.1`，不需要独立 B 端主机或数据专用网线。旧 `wired_b_side` 策略仍保留，但只能使用双方确认的隔离有线网络。
 
-> 文中的 `192.168.88.10`、`192.168.88.20`、端口和网卡名只是示例。安装前必须由双方确认实际静态 IP、子网掩码、WebSocket 端口、下载端口和网卡名；不要把示例值直接用于现场。
+> 默认本机地址固定使用 `127.0.0.1`。文中的 `192.168.88.10`、`192.168.88.20` 和网卡名仅用于兼容有线策略，切换前必须确认现场参数。
 
 ## 1. 安装前准备
 
@@ -24,7 +24,7 @@
 - Ubuntu **24.04 LTS** x86_64，使用 systemd 启动；安装账户具有 `sudo` 权限。
 - 已审查的 NeuroBridge 源码版本（建议固定到已确认的 tag 或 commit），以及可连接头环的已验证蓝牙 5.x 适配器（仅实时采集需要）。可直接匿名获取：`git clone https://github.com/Entertech/NeuroBridge.git`。
 - 可联网时先运行一次 `./linux/prepare-ubuntu24.04-environment.sh`，它会安装 `python3`、`rsync`、CMake、C++17 编译器、Eigen3、BlueZ、dnsmasq，并创建 `/opt/neurobridge/venv`、安装锁定的 Python 运行依赖。完成后即可断开互联网；安装器只验证这些前提，绝不调用 APT、PyPI 或其他下载服务。
-- 网关与 B 端的专用有线链路。先确定网关地址、B 端地址、掩码、端口和网卡名。
+- 本机浏览器场景无需数据专用网线；只有选择 `wired_b_side` 时才准备网关/B 端地址、掩码、端口和网卡名。
 - 若要使用录播，准备好录制数据目录及要回放的 `recordingId`；若要使用算法，先完成该 Ubuntu 主机上的真实数据 POC。算法默认启用，但 POC 前可暂时设为 `false`。
 - 若要使用 SSH 运维，确认运维账户名、至少 6 位数字的密码、运维主机固定 IP/CIDR，以及网关用于运维的私有静态 IP。快速模式允许把明文密码保存在 Git 忽略且权限为 `600` 的现场 TXT 中，但不得写入现场文档、命令历史、日志或版本库。数字密码正式部署仅适用于专用网线直连和固定来源 IP 的封闭现场；短时局域网验证必须限制为受控网络和单机 `/32` 来源，禁止把 SSH 接入公网、无线网或不受控局域网。
 
@@ -60,7 +60,11 @@ cd NeuroBridge
 
 脚本成功后可断开互联网；后续使用 `./linux/update-ubuntu.sh` 即可完成安装、更新和 bridge 重建。
 
-## 3. 专用有线网络的默认自动配置
+## 3. 访问策略与兼容有线网络
+
+首次安装默认使用 `local_browser`：安装器读取配置后跳过 Netplan 专线变更，网页通过 `http://127.0.0.1:8080/` 加载，WebSocket 使用 `ws://127.0.0.1:8765/neurobridge/v1/ws`。网页服务校验 Host，WebSocket 校验固定 Origin。
+
+以下专用网络内容只适用于显式切换到 `wired_b_side` 的旧方案。
 
 安装脚本会从 `/etc/neurobridge/gateway.toml` 读取网关地址并自动写入独立的 `/etc/netplan/99-neurobridge-b-side.yaml`，随后执行 `netplan apply`。这一操作不需要网线已连接、DHCP、DNS 或任何局域网；Netplan 配置会在下次开机继续生效。
 
@@ -225,14 +229,16 @@ sudoedit /etc/neurobridge/gateway.toml
 
 | 配置项 | 首次部署要求 |
 | --- | --- |
-| `[server] host` | 与第 3 步中网关专用网卡的静态 IP 完全一致。 |
+| `[access] mode` | 默认 `local_browser`；只有恢复独立 B 端时改为 `wired_b_side`。 |
+| `[local_ui]` | 本机模式启用并固定 `127.0.0.1:8080`；旧有线模式必须关闭。 |
+| `[server] host` | 本机模式固定 `127.0.0.1`；旧有线模式填写专用网卡静态 IP。 |
 | `[server] port`、`path` | 填写双方确认的固定 WebSocket 端口和路径。 |
-| `[network] mode` | 通常选 `static`；安装器会自动配置默认的专用有线地址。只有 B 端程序能读取 DHCP 默认网关、且现场明确要自动分配地址时才选 `dhcp`。 |
+| `[network] mode` | 本机模式保持 `static` 且不填写接口/子网；旧有线模式才配置静态或 DHCP。 |
 | `[ble] enabled` | 无头环/冒烟验证时保持 `false`；完成该 Ubuntu 主机的真实头环 POC 后才改为 `true`，同时确认扫描匹配字段。 |
 | `[recording] directory` | 保持默认的 `/var/lib/neurobridge/recordings`，除非已按权限和容量要求另行配置。 |
 | `[recording] subject_id` | 填写演示或采集使用的受试者标识；无值可留空。 |
 | `[recording] replay_recording_id` | 可选：填写一个存在且非空的录制会话 ID 以固定回放目标；留空、填写已删除 ID 或空会话时，离线录播自动选择该目录中最新的非空历史会话。 |
-| `[download]` | 仅在专用有线网络确有导出需求时启用；`host` 必须是网关静态 IP，端口由双方确认。 |
+| `[download]` | 本机模式绑定 `127.0.0.1`；旧有线模式绑定批准的私网地址。 |
 | `[algorithm] enabled` | 默认 `true`。安装器已提供 bridge，无需填写路径；需要仅采集原始数据或维护时才改为 `false`。 |
 
 配置语法和权限可先由服务账户验证：
@@ -262,13 +268,13 @@ sudo journalctl -u neurobridge.service -n 100 --no-pager
 sudo ss -lntp
 ```
 
-从 B 端主机使用已确认的 WebSocket 地址连接，并在握手中提供子协议 `neurobridge.v1`。连接后先调用 `getStatus`，再调用 `getLatest` 或 `subscribe`；断线重连后必须重新订阅，不能复用旧 `subscriptionId`。可用仓库的 [B 端联调网页](../web/b-client-test/README.md) 做人工验证。
+默认在同机浏览器访问 `http://127.0.0.1:8080/`，页面自动连接回环 WebSocket 并提供 `neurobridge.v1` 子协议。连接后先调用 `getStatus`，再调用 `getLatest` 或 `subscribe`；断线重连后重新订阅。旧有线策略才从独立 B 端连接批准的私网地址。
 
 首次无头环冒烟验证可保持 `[ble].enabled = false`，此时 `getStatus` 应显示未连接；只要 `[recording].directory` 下存在非空历史会话，离线 `getLatest` 或 `subscribe` 就会自动选择最新会话并产生 `mode="replay"` 数据。若填写有效的 `replay_recording_id`，则该会话优先。实时采集验收还应覆盖头环连接、数据到达、断线重连和服务重启后的恢复。
 
-如果 `[download].enabled = true`，可从专用有线网络的 B 端访问 `http://<网关IP>:<下载端口><下载路径>` 查看已结束会话的下载索引。该接口没有 TLS 或应用层认证，绝不能暴露到公共或不受控网络。
+如果 `[download].enabled = true`，本机浏览器访问 `http://127.0.0.1:<下载端口><下载路径>`；旧有线策略才从专网 B 端访问私网地址。该接口没有 TLS 或应用层认证。
 
-## 7. 静态地址与 DHCP 模式
+## 7. 兼容有线策略的静态地址与 DHCP 模式
 
 `[network].mode` 将地址分配与采集/录播业务隔离，可在两种模式间切换：
 
@@ -339,4 +345,4 @@ sudo ./linux/collect-ubuntu-build-diagnostics.sh
 
 N100/N150 改装银河麒麟 V10 后出现运行、驱动、USB 串口或网络问题时，使用 `sudo ./linux/collect-kylin-runtime-diagnostics.sh --output-dir /tmp --journal-lines 10000` 生成完整现场诊断包。该脚本不复用 Ubuntu 安装流程；详细收集范围、脱敏边界、U 盘/SCP 导出和问题记录模板见[麒麟 V10 网关运行与串口联调内部文档](../doc/tech/麒麟V10网关运行与串口联调内部文档.md#82-无-codex-环境的一键诊断包)。
 
-部署或修改设备接入、算法、网络依赖后，至少重新验证实时采集、录播、头环断线重连、B 端不可达与恢复五个场景。所有日志、配置和录播数据均应仅保留在受控环境中。
+部署或修改设备接入、算法、网络依赖后，至少重新验证实时采集、录播、头环断线重连、浏览器/客户端断开与恢复五个场景。默认 `local_browser` 验证同机浏览器；`wired_b_side` 才验证独立 B 端和专网恢复。所有日志、配置和录播数据均应仅保留在受控环境中。

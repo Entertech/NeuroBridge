@@ -1,4 +1,4 @@
-"""Local-only HTTP service for completed recording and operational-log downloads."""
+"""Strategy-bound HTTP service for recording and operational-log downloads."""
 
 from __future__ import annotations
 

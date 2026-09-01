@@ -41,7 +41,7 @@ class AlgorithmConfig:
 
 @dataclass(frozen=True)
 class DownloadConfig:
-    """HTTP endpoint used only on the dedicated deployment network."""
+    """HTTP downloads exposed by the selected access strategy."""
 
     enabled: bool = False
     host: str = "127.0.0.1"
@@ -58,7 +58,7 @@ class LoggingConfig:
 
 @dataclass(frozen=True)
 class NetworkConfig:
-    """B-side endpoint allocation mode; DHCP remains an isolated opt-in service."""
+    """Legacy wired endpoint allocation; local browser leaves fields empty."""
 
     mode: str = "static"
     interface: str | None = None
@@ -66,6 +66,21 @@ class NetworkConfig:
     dhcp_range_start: str | None = None
     dhcp_range_end: str | None = None
     dhcp_lease_time: str = "12h"
+
+
+@dataclass(frozen=True)
+class AccessConfig:
+    """Select how a browser/client reaches the unchanged WebSocket contract."""
+
+    mode: str = "local_browser"
+
+
+@dataclass(frozen=True)
+class LocalUiConfig:
+    enabled: bool = True
+    host: str = "127.0.0.1"
+    port: int = 8080
+    directory: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -77,12 +92,27 @@ class GatewayConfig:
     download: DownloadConfig = field(default_factory=DownloadConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
+    access: AccessConfig = field(default_factory=AccessConfig)
+    local_ui: LocalUiConfig = field(default_factory=LocalUiConfig)
 
 
 def load(path: str | Path) -> GatewayConfig:
     with Path(path).open("rb") as file:
         raw = tomllib.load(file)
-    server, ble, recording, algorithm, download, logging, network = (raw.get(name, {}) for name in ("server", "ble", "recording", "algorithm", "download", "logging", "network"))
+    server, ble, recording, algorithm, download, logging, network, access, local_ui = (
+        raw.get(name, {})
+        for name in (
+            "server",
+            "ble",
+            "recording",
+            "algorithm",
+            "download",
+            "logging",
+            "network",
+            "access",
+            "local_ui",
+        )
+    )
     replay_speed = float(recording.get("replay_speed", 1))
     if replay_speed <= 0:
         raise ValueError("recording.replay_speed must be greater than zero")
@@ -109,6 +139,22 @@ def load(path: str | Path) -> GatewayConfig:
         raise ValueError("logging.filename must be a plain .log filename")
     if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise ValueError("logging.level is invalid")
+    # Existing deployments predate access.mode. Preserve their private-address
+    # wired topology, while new/loopback configurations default to local UI.
+    access_mode = str(access.get("mode") or ("local_browser" if address.is_loopback else "wired_b_side"))
+    local_ui_host = str(local_ui.get("host", "127.0.0.1"))
+    local_ui_port = int(local_ui.get("port", 8080))
+    local_ui_enabled = bool(local_ui.get("enabled", access_mode == "local_browser"))
+    try:
+        local_ui_address = ipaddress.ip_address(local_ui_host)
+    except ValueError as exc:
+        raise ValueError("local_ui.host must be an IP address") from exc
+    if not (local_ui_address.is_private or local_ui_address.is_loopback) or not 1 <= local_ui_port <= 65535:
+        raise ValueError("local_ui host or port is invalid")
+    local_ui_directory_value = local_ui.get("directory")
+    local_ui_directory = Path(local_ui_directory_value) if local_ui_directory_value else None
+    if local_ui_directory is not None and not local_ui_directory.is_absolute():
+        raise ValueError("local_ui.directory must be absolute when configured")
     network_mode = str(network.get("mode", "static"))
     interface = network.get("interface") or None
     subnet_cidr = network.get("subnet_cidr") or None
@@ -143,7 +189,7 @@ def load(path: str | Path) -> GatewayConfig:
             raise ValueError("network DHCP range must be IPv4, inside subnet, and exclude server.host")
         if not dhcp_lease_time[:-1].isdigit() or dhcp_lease_time[-1:] not in {"m", "h", "d"} or int(dhcp_lease_time[:-1]) <= 0:
             raise ValueError("network.dhcp_lease_time must use a positive m, h, or d duration")
-    return GatewayConfig(
+    config = GatewayConfig(
         server=ServerConfig(host, port, endpoint),
         ble=BleConfig(bool(ble.get("enabled", False)), ble.get("device_name") or None, str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(), int(ble.get("scan_timeout_seconds", 5)), int(ble.get("reconnect_delay_seconds", 3))),
         recording=RecordingConfig(Path(recording.get("directory", "./recordings")), recording.get("subject_id") or None, recording.get("replay_recording_id") or None, replay_speed),
@@ -158,4 +204,15 @@ def load(path: str | Path) -> GatewayConfig:
         download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path),
         logging=LoggingConfig(log_directory, log_filename, log_level),
         network=NetworkConfig(network_mode, interface, subnet_cidr, dhcp_range_start, dhcp_range_end, dhcp_lease_time),
+        access=AccessConfig(access_mode),
+        local_ui=LocalUiConfig(
+            local_ui_enabled,
+            local_ui_host,
+            local_ui_port,
+            local_ui_directory,
+        ),
     )
+    from .northbound.strategy import access_strategy
+
+    access_strategy(config.access.mode).validate(config)
+    return config

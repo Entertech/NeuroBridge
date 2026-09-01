@@ -4,14 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark" />
-    <title>NeuroBridge B 端联调台</title>
+    <title>NeuroBridge 本机可视化联调台</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="shell">
       <header class="masthead">
         <div>
-          <p class="eyebrow">NEUROBRIDGE / B-SIDE TEST CONSOLE</p>
+          <p class="eyebrow">NEUROBRIDGE / LOCAL VISUALIZATION CONSOLE</p>
           <h1>网关联调台</h1>
           <p class="intro">按 v1.0 北向协议连接网关，发送请求并查看实时数据事件。</p>
         </div>
@@ -32,12 +32,12 @@
         <div class="connect-row">
           <label class="field endpoint-field" for="endpoint">
             <span>WebSocket 地址</span>
-            <input id="endpoint" type="url" value="ws://127.0.0.1:8080/neurobridge/v1/ws" spellcheck="false" />
+            <input id="endpoint" type="url" value="ws://127.0.0.1:8765/neurobridge/v1/ws" spellcheck="false" />
           </label>
           <button id="connectButton" class="button button-primary" type="button">连接</button>
           <button id="disconnectButton" class="button button-quiet" type="button" disabled>断开</button>
         </div>
-        <p class="hint">请替换为现场网关的 <code>ws://IP:端口/neurobridge/v1/ws</code>。仅限专用有线网络使用。</p>
+        <p class="hint">默认通过 <code>127.0.0.1</code> 连接同一台网关主机；切换旧有线策略时才使用批准的专网地址。</p>
       </section>
 
       <div class="workspace">
@@ -145,6 +145,7 @@
       </section>
     </main>
     <script src="./version.js"></script>
+    <script src="./runtime-config.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

@@ -15,6 +15,8 @@ from .ble.flowtime import FlowtimeAdapter
 from .business.gateway import Gateway
 from .download import serve_downloads
 from .logging_setup import configure_logging
+from .northbound.local_ui import serve_local_ui
+from .northbound.strategy import access_strategy
 from .northbound.websocket import serve
 from .versioning import APPLICATION_VERSION
 
@@ -36,6 +38,7 @@ def _file_sha256(path: str) -> str:
 async def run(config_path: str) -> None:
     started_at = time.monotonic()
     config = load(config_path)
+    strategy = access_strategy(config.access.mode)
     configure_logging(config.logging)
     LOG.info(
         "Process starting: appVersion=%s pid=%s python=%s platform=%s arch=%s kernel=%s config=%s configSha256=%s",
@@ -49,10 +52,12 @@ async def run(config_path: str) -> None:
         _file_sha256(config_path),
     )
     LOG.info(
-        "Runtime configuration: transport=ble bleEnabled=%s scanTimeoutSeconds=%s reconnectDelaySeconds=%s "
+        "Runtime configuration: transport=ble accessMode=%s accessSummary=%s bleEnabled=%s scanTimeoutSeconds=%s reconnectDelaySeconds=%s "
         "server=%s:%s%s networkMode=%s networkInterface=%s subnet=%s downloadEnabled=%s "
         "downloadEndpoint=%s:%s%s recordingDirectory=%s replaySpeed=%s algorithmEnabled=%s "
         "algorithmCommand=%s loggingLevel=%s logFile=%s",
+        config.access.mode,
+        strategy.summary(config),
         config.ble.enabled,
         config.ble.scan_timeout_seconds,
         config.ble.reconnect_delay_seconds,
@@ -75,9 +80,8 @@ async def run(config_path: str) -> None:
     )
     gateway = Gateway(config)
     # Keep the production runtime on the same adapter-error path as the macOS
-    # POC.  The Linux deployment has no local control page, so the gateway
-    # records a concise, durable operational error instead of silently losing
-    # the reason after the adapter has scheduled its reconnect attempt.
+    # POC. The browser UI consumes gateway state; durable logs still preserve
+    # the root cause when the adapter schedules a reconnect attempt.
     adapter = FlowtimeAdapter(
         gateway.config.ble,
         gateway.receive_packet,
@@ -90,6 +94,8 @@ async def run(config_path: str) -> None:
         async with asyncio.TaskGroup() as group:
             group.create_task(serve(gateway))
             group.create_task(adapter.run())
+            if strategy.serves_local_ui(config):
+                group.create_task(serve_local_ui(config))
             if gateway.config.download.enabled:
                 group.create_task(serve_downloads(gateway))
     except Exception:

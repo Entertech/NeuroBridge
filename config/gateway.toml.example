@@ -1,22 +1,34 @@
 # Copy to /etc/neurobridge/gateway.toml; do not put recordings in git.
 [server]
-host = "192.168.88.10" # Default gateway static IP; replace only with a deployment-approved value.
-port = 8765            # To be confirmed with B-end host.
+host = "127.0.0.1"
+port = 8765
 path = "/neurobridge/v1/ws"
 
+[access]
+# local_browser: the default single-machine strategy. The bundled browser UI,
+# WebSocket service, and downloads bind only to 127.0.0.1; no B-side cable,
+# static Ethernet address, or DHCP service is required.
+# wired_b_side: legacy strategy for a separate B-side host on an isolated
+# Ethernet link. Set server/download to the approved private address, disable
+# local_ui, and configure the [network] fields documented below.
+mode = "local_browser"
+
+[local_ui]
+enabled = true
+host = "127.0.0.1"
+port = 8080
+# The deployed checkout contains the browser assets at this path. Source-tree
+# runs may omit it and use the auto-detected web/b-client-test directory.
+directory = "/opt/neurobridge/web/b-client-test"
+
 [network]
-# static: the installer automatically configures this dedicated Ethernet link.
-# dhcp: the gateway retains server.host as its static link address and uses the
-# optional DHCP unit to assign the B-side address and advertise server.host as
-# the default gateway. The B-side then connects to the configured fixed port.
+# local_browser keeps this static with no interface or subnet fields; traffic
+# stays on the operating-system loopback device.
 mode = "static"
-# `auto` is safe only when this host has one physical Ethernet NIC. With more
-# than one NIC, set the dedicated B-side interface explicitly (for example,
-# `enp1s0`) and rerun the installer. The link remains private and route-free.
-interface = "auto"
-subnet_cidr = "192.168.88.0/24"
-# The following fields are required only when mode = "dhcp". DHCP requires an
-# explicit interface name; it never accepts `auto`.
+# Legacy wired_b_side static example:
+# interface = "enp1s0"
+# subnet_cidr = "192.168.88.0/24"
+# Legacy wired_b_side DHCP additionally requires:
 # dhcp_range_start = "192.168.88.20"
 # dhcp_range_end = "192.168.88.200"
 # dhcp_lease_time = "12h"
@@ -40,11 +52,10 @@ replay_recording_id = ""
 replay_speed = 1.0
 
 [download]
-# This HTTP service is only for the dedicated wired deployment network. It has
-# no TLS or application authentication, so never expose it to a public or
-# unmanaged LAN. Confirm this static IP and port with the receiving host.
+# In local_browser mode this service is loopback-only. The legacy wired mode
+# must use only the approved isolated private address.
 enabled = true
-host = "192.168.88.10"
+host = "127.0.0.1"
 port = 8766
 path = "/downloads"
 

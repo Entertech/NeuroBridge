@@ -6,6 +6,7 @@ import json
 import logging
 
 from ..business.gateway import ClientSession, Gateway
+from .strategy import access_strategy
 
 LOG = logging.getLogger(__name__)
 SUBPROTOCOL = "neurobridge.v1"
@@ -24,6 +25,9 @@ async def require_subprotocol(_path: str, request_headers):
 
 async def create_server(gateway: Gateway):
     import websockets
+
+    strategy = access_strategy(gateway.config.access.mode)
+    strategy.validate(gateway.config)
 
     async def handler(websocket, path: str) -> None:
         if path != gateway.config.server.path:
@@ -58,7 +62,18 @@ async def create_server(gateway: Gateway):
                 len(gateway.sessions),
             )
 
-    return await websockets.serve(handler, gateway.config.server.host, gateway.config.server.port, subprotocols=[SUBPROTOCOL], process_request=require_subprotocol, ping_interval=None, ping_timeout=None, max_size=256 * 1024, compression=None)
+    return await websockets.serve(
+        handler,
+        gateway.config.server.host,
+        gateway.config.server.port,
+        subprotocols=[SUBPROTOCOL],
+        process_request=require_subprotocol,
+        origins=strategy.websocket_origins(gateway.config),
+        ping_interval=None,
+        ping_timeout=None,
+        max_size=256 * 1024,
+        compression=None,
+    )
 
 
 async def serve(gateway: Gateway) -> None:

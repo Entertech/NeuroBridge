@@ -52,7 +52,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('uname -m) != "x86_64"', install_script)
         self.assertIn('ID:-} != "ubuntu"', install_script)
         self.assertIn('VERSION_ID:-} != "24.04"', install_script)
-        self.assertIn("python3 rsync cmake c++ netplan", install_script)
+        self.assertIn("python3 rsync cmake c++", install_script)
+        self.assertIn("required by wired_b_side", install_script)
         self.assertIn('[[ $# -eq 0 ]]', install_script)
         self.assertIn("systemctl enable neurobridge.service", install_script)
 
@@ -409,11 +410,13 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("ExecCondition=", service)
         self.assertIn("--check-enabled", service)
 
-    def test_installer_applies_the_dedicated_link_configuration_before_startup(self) -> None:
+    def test_example_defaults_to_local_browser_and_keeps_wired_switch_documented(self) -> None:
         install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
         example = (ROOT / "config" / "gateway.toml.example").read_text(encoding="utf-8")
-        self.assertIn('interface = "auto"', example)
-        self.assertIn('subnet_cidr = "192.168.88.0/24"', example)
+        self.assertIn('mode = "local_browser"', example)
+        self.assertIn('host = "127.0.0.1"', example)
+        self.assertIn('wired_b_side', example)
+        self.assertNotIn('\ninterface = "auto"', example)
         self.assertIn('neurobridge-network-config" --config "$config_dir/gateway.toml" --apply', install_script)
         self.assertLess(
             install_script.index('if [[ ! -e "$config_dir/gateway.toml" ]]'),
@@ -423,6 +426,7 @@ class DeploymentTests(unittest.TestCase):
     def test_web_assets_are_not_in_a_platform_directory(self) -> None:
         self.assertTrue((ROOT / "web" / "capture" / "index.html").is_file())
         self.assertTrue((ROOT / "web" / "b-client-test" / "index.html").is_file())
+        self.assertTrue((ROOT / "web" / "b-client-test" / "runtime-config.js").is_file())
         self.assertFalse((ROOT / "mac" / "capture").exists())
 
     def test_diagnostic_collector_excludes_sensitive_gateway_inputs(self) -> None:
