@@ -222,6 +222,37 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("produced no handshake bytes", rendered)
         self.assertNotIn("invalidHandshakeObserved=true", rendered)
 
+    async def test_open_failure_preserves_permission_root_cause(self) -> None:
+        reasons: list[str] = []
+        adapter: SerialAdapter
+
+        async def stop_after_error(reason: str) -> None:
+            reasons.append(reason)
+            await adapter.stop()
+
+        def deny_open(_path: str, _config: SerialConfig) -> FakeSerial:
+            raise PermissionError(13, "Permission denied", "/dev/ttyUSB0")
+
+        adapter = SerialAdapter(
+            SerialConfig(),
+            noop,
+            noop,
+            noop,
+            error=stop_after_error,
+            candidate_provider=lambda _config: ["/dev/ttyUSB0"],
+            serial_factory=deny_open,
+        )
+        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
+            await adapter.run()
+
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("Unable to open any usable serial candidate", reasons[0])
+        self.assertIn("lastErrorType=PermissionError", reasons[0])
+        self.assertIn("Permission denied", reasons[0])
+        rendered = "\n".join(logs.output)
+        self.assertIn("phase=handshake", rendered)
+        self.assertNotIn("No serial candidate produced the fixed handshake", rendered)
+
     async def test_any_nonempty_control_response_is_success_without_logging_payload(self) -> None:
         client = FakeSerial([b"arbitrary-response"])
         adapter = SerialAdapter(SerialConfig(), noop, noop, noop)

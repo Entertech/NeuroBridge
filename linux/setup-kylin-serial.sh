@@ -9,6 +9,15 @@ fail() {
   exit 1
 }
 
+contains_value() {
+  local expected=$1 value
+  shift
+  for value in "$@"; do
+    [[ $value == "$expected" ]] && return 0
+  done
+  return 1
+}
+
 usage() {
   cat <<EOF
 Usage: sudo $0 [options]
@@ -190,7 +199,8 @@ PYTHONPATH=$root_dir "$python_path" -m neurobridge.serial_setup \
 chown "$config_owner:$config_group" "$config_path" "$backup_path"
 chmod "$config_mode" "$config_path" "$backup_path"
 
-groups_added=()
+groups_required=()
+groups_newly_added=()
 shopt -s nullglob
 tty_candidates=(/dev/ttyACM* /dev/ttyUSB*)
 shopt -u nullglob
@@ -199,8 +209,12 @@ if (( ${#tty_candidates[@]} )); then
     tty_group=$(stat -Lc '%G' "$tty_path" 2>/dev/null || true)
     if [[ -n $tty_group && $tty_group != root ]] && getent group "$tty_group" >/dev/null 2>&1; then
       if [[ $permission_user != root ]]; then
-        usermod -aG "$tty_group" "$permission_user"
-        groups_added+=("$tty_group")
+        contains_value "$tty_group" "${groups_required[@]}" || groups_required+=("$tty_group")
+        if ! id -nG "$permission_user" | tr ' ' '\n' | grep -Fxq -- "$tty_group"; then
+          usermod -aG "$tty_group" "$permission_user"
+          contains_value "$tty_group" "${groups_newly_added[@]}" \
+            || groups_newly_added+=("$tty_group")
+        fi
       fi
     fi
   done
@@ -209,8 +223,12 @@ else
   echo "Run before setup: sudo $root_dir/linux/diagnose-kylin-usb-serial.sh --timeout 60" >&2
   for tty_group in dialout uucp; do
     if [[ $permission_user != root ]] && getent group "$tty_group" >/dev/null 2>&1; then
-      usermod -aG "$tty_group" "$permission_user"
-      groups_added+=("$tty_group")
+      contains_value "$tty_group" "${groups_required[@]}" || groups_required+=("$tty_group")
+      if ! id -nG "$permission_user" | tr ' ' '\n' | grep -Fxq -- "$tty_group"; then
+        usermod -aG "$tty_group" "$permission_user"
+        contains_value "$tty_group" "${groups_newly_added[@]}" \
+          || groups_newly_added+=("$tty_group")
+      fi
     fi
   done
 fi
@@ -239,7 +257,17 @@ echo "backup=$backup_path"
 echo "device=$device"
 echo "python=$python_path"
 echo "runtimeReady=$runtime_ready"
-echo "groups=${groups_added[*]:-none}"
+echo "requiredGroups=${groups_required[*]:-none}"
+echo "newGroups=${groups_newly_added[*]:-none}"
+if (( ${#groups_newly_added[@]} )); then
+  echo "accountGroupMembershipChanged=true"
+  echo "sessionGroupState=refresh-required"
+  echo "NOTICE: the current login session may not yet have the new serial group."
+  echo "NOTICE: start-kylin-gateway.sh will try one safe group-activation restart; if that fails, log out and back in or reboot."
+else
+  echo "accountGroupMembershipChanged=false"
+  echo "sessionGroupState=verify-at-start"
+fi
 echo "service=$service_state"
 [[ -n $setup_log ]] && echo "setupLog=$setup_log"
 if [[ $runtime_ready == true && $system_install != true ]]; then

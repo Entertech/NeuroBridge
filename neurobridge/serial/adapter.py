@@ -408,12 +408,16 @@ class SerialAdapter:
                     )
                     raise ConnectionError("No USB-derived serial candidates were found")
                 phase = "handshake"
+                opened_candidate_count = 0
+                invalid_handshake_candidate_count = 0
+                probe_failures: list[tuple[str, Exception]] = []
                 for index, path in enumerate(candidates, start=1):
                     if self._stopping:
                         return
                     client = None
                     try:
                         client = await asyncio.to_thread(self.serial_factory, path, self.config)
+                        opened_candidate_count += 1
                         LOG.info(
                             "Serial candidate opened: attempt=%s candidateIndex=%s candidateCount=%s path=%s",
                             attempt,
@@ -438,7 +442,9 @@ class SerialAdapter:
                                 _safe_log_text(identity["physicalPath"]),
                             )
                             break
+                        invalid_handshake_candidate_count += 1
                     except Exception as exc:
+                        probe_failures.append((path, exc))
                         LOG.warning(
                             "Serial candidate probe failed: attempt=%s candidateIndex=%s candidateCount=%s "
                             "path=%s errorType=%s reason=%s",
@@ -453,6 +459,19 @@ class SerialAdapter:
                         if client is not None and client is not self._client:
                             await self._close_client(client)
                 if self._client is None:
+                    if invalid_handshake_candidate_count:
+                        raise TimeoutError(
+                            "Serial candidates opened but no valid fixed handshake was received"
+                        )
+                    if probe_failures:
+                        failed_path, probe_error = probe_failures[-1]
+                        action = "open" if opened_candidate_count == 0 else "probe"
+                        raise ConnectionError(
+                            f"Unable to {action} any usable serial candidate; "
+                            f"lastPath={_safe_log_text(failed_path)} "
+                            f"lastErrorType={type(probe_error).__name__} "
+                            f"lastReason={_safe_log_text(probe_error)}"
+                        ) from probe_error
                     raise TimeoutError("No serial candidate produced the fixed handshake")
 
                 self._reset_stats()

@@ -205,7 +205,13 @@ capture_snapshot() {
   local prefix=$1
   capture "$prefix-date" date --iso-8601=seconds
   if command -v lsusb >/dev/null 2>&1; then
-    capture "$prefix-lsusb" lsusb -nn
+    if lsusb -nn >/dev/null 2>&1; then
+      capture "$prefix-lsusb" lsusb -nn
+    else
+      capture "$prefix-lsusb" lsusb
+      printf '\nnote: lsusb -nn is unsupported; captured portable lsusb output instead\n' \
+        >>"$session_dir/$prefix-lsusb.log"
+    fi
     capture "$prefix-lsusb-tree" lsusb -t
   else
     printf 'lsusb is unavailable\n' >"$session_dir/$prefix-lsusb.log"

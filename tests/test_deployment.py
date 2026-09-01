@@ -49,7 +49,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("dmesg --follow --time-format iso", script)
         self.assertIn("$prefix-usb-interfaces.log", script)
         self.assertIn("usbguard-status", script)
+        self.assertIn("if lsusb -nn >/dev/null 2>&1", script)
         self.assertIn("capture \"$prefix-lsusb\" lsusb -nn", script)
+        self.assertIn("capture \"$prefix-lsusb\" lsusb", script)
+        self.assertIn("lsusb -nn is unsupported", script)
         self.assertIn("capture \"$prefix-lsusb-tree\" lsusb -t", script)
         self.assertIn("result_status=usb_detected_tty_timeout", script)
         self.assertIn("result_status=usb_detection_timeout", script)
@@ -505,6 +508,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('config_template="$root_dir/config/gateway.project.toml.example"', script)
         self.assertIn("--system-install", script)
         self.assertIn("start-kylin-gateway.sh", script)
+        self.assertIn("requiredGroups=", script)
+        self.assertIn("newGroups=", script)
+        self.assertIn("accountGroupMembershipChanged=", script)
+        self.assertIn("sessionGroupState=", script)
         self.assertIn("Project mode --config must stay under", script)
         help_result = subprocess.run(
             ["bash", str(script_path), "--help"],
@@ -549,6 +556,12 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("logging.directory", start_source)
         self.assertIn("recording.directory", start_source)
         self.assertIn("must remain under", start_source)
+        self.assertIn("Serial permission preflight", start_source)
+        self.assertIn("NEUROBRIDGE_GROUP_REEXEC", start_source)
+        self.assertIn('exec sg "$activation_group" -c "$reexec_command"', start_source)
+        self.assertIn("accessibleCandidates=", start_source)
+        self.assertIn("discovery will continue with accessible candidates", start_source)
+        self.assertIn("Log out and back in", start_source)
 
         python_setup = ROOT / "linux" / "setup-kylin-python.sh"
         self.assertTrue(os.access(python_setup, os.X_OK))

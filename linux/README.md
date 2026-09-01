@@ -10,8 +10,8 @@
 - `collect-ubuntu-build-diagnostics.sh`：收集编译日志、工具版本和 CMake 诊断，不包含现场配置或原始数据。
 - `collect-kylin-runtime-diagnostics.sh`：供 N100/N150 银河麒麟 V10 现场离线采集系统、服务、journal、USB/TTY、网络、依赖和应用日志；它是诊断工具，不是麒麟安装器。
 - `setup-kylin-python.sh`：银河麒麟 V10 项目 Python 环境一键初始化；系统仅有 Python 3.8 时自动准备经 SHA-256 锁定的项目内 Python 3.11，再选择离线 `wheelhouse` 或当前网络，所有运行时、缓存、临时文件和日志保存在项目内。
-- `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口插入一键识别；提示拔插设备，限时等待 USB 和 TTY，保存内核、udev、网关及前后快照日志，并在超时时区分“未枚举 USB”与“已枚举但未生成 TTY”。
-- `setup-kylin-serial.sh`：银河麒麟 x86_64 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务。
+- `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口插入一键识别；提示拔插设备，限时等待 USB 和 TTY，保存内核、udev、网关及前后快照日志，并在超时时区分“未枚举 USB”与“已枚举但未生成 TTY”；旧版 `lsusb` 不支持 `-nn` 时自动回退。
+- `setup-kylin-serial.sh`：银河麒麟 x86_64 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务；项目启动脚本会处理账号已入组但当前会话权限尚未刷新的情况。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。
