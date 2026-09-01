@@ -347,6 +347,6 @@ sudo ./linux/collect-ubuntu-build-diagnostics.sh
 
 使用 `sudo` 运行时，生成的压缩包会归发起该命令的登录用户所有，权限为仅该用户可读写（`0600`），可直接上传或复制；不会归 root 锁定。
 
-N100/N150 改装银河麒麟 V10 后出现运行、驱动或 USB 串口问题时，使用 `sudo ./linux/collect-kylin-runtime-diagnostics.sh --output-dir /tmp --journal-lines 10000` 生成完整现场诊断包。详细命令见[麒麟 V10 网关运行与串口联调内部文档](../doc/tech/麒麟V10网关运行与串口联调内部文档.md#8-导出诊断包)。
+N100/N150 改装银河麒麟 V10 后出现运行、驱动或 USB 串口问题时，使用 `sudo ./linux/collect-kylin-runtime-diagnostics.sh --journal-lines 10000` 生成完整现场诊断包。默认保存到项目 `.runtime/diagnostics/`，详细命令见[麒麟 V10 USB 串口耳机配置与启动手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md#8-一键导出完整诊断包)。
 
 部署或修改设备接入、算法、网络依赖后，至少重新验证实时采集、录播、头环断线重连、浏览器/客户端断开与恢复五个场景。默认 `local_browser` 验证同机浏览器；`wired_b_side` 才验证独立 B 端和专网恢复。所有日志、配置和录播数据均应仅保留在受控环境中。

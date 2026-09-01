@@ -4,13 +4,17 @@
 # gateway's own serial discovery. No serial payload or recording is collected.
 set -u -o pipefail
 
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+default_output_dir="$root_dir/.runtime/diagnostics"
+
 usage() {
   cat <<'EOF'
 Usage: sudo ./linux/diagnose-kylin-usb-serial.sh [options]
 
 Options:
   --timeout SECONDS   Wait 5-600 seconds for a new TTY (default: 60)
-  --output-dir DIR    Existing absolute log output directory (default: /tmp)
+  --output-dir DIR    Absolute directory below project .runtime/diagnostics
+                      (default: project .runtime/diagnostics)
   --no-prompt         Do not wait for Enter before starting the plug-in window
   -h, --help          Show this help
 
@@ -37,7 +41,7 @@ fail() {
 }
 
 timeout_text=60
-output_dir=/tmp
+output_dir=$default_output_dir
 prompt=true
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -69,17 +73,30 @@ done
 timeout_seconds=$((10#$timeout_text))
 (( timeout_seconds >= 5 && timeout_seconds <= 600 )) || fail "--timeout must be between 5 and 600 seconds"
 [[ $output_dir == /* ]] || fail "--output-dir must be an absolute path"
-[[ -d $output_dir && -w $output_dir ]] || fail "Output directory must exist and be writable: $output_dir"
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run with sudo so kernel, udev, and service logs can be collected."
 [[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable"
 . /etc/os-release
 [[ ${ID,,} == kylin ]] || fail "This helper is only for Galaxy Kylin; detected ID=${ID:-unknown}."
 
-for required_command in date find sort comm tar sha256sum; do
+for required_command in date find sort comm tar sha256sum realpath; do
   command -v "$required_command" >/dev/null 2>&1 || fail "Required command is unavailable: $required_command"
 done
 
 umask 077
+output_dir=$(realpath -m -- "$output_dir")
+case $output_dir in
+  "$default_output_dir"|"$default_output_dir"/*) ;;
+  *) fail "Output must stay under the ignored project directory: $default_output_dir" ;;
+esac
+artifact_uid=${SUDO_UID:-0}
+artifact_gid=${SUDO_GID:-0}
+[[ $artifact_uid =~ ^[0-9]+$ ]] || artifact_uid=0
+[[ $artifact_gid =~ ^[0-9]+$ ]] || artifact_gid=0
+install -d -o "$artifact_uid" -g "$artifact_gid" -m 0750 \
+  "$root_dir/.runtime" "$default_output_dir" "$output_dir" \
+  || fail "Could not create project diagnostic directory: $output_dir"
+[[ -d $output_dir && -w $output_dir ]] || fail "Output directory must exist and be writable: $output_dir"
+
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 session_name="neurobridge-usb-serial-diagnosis-${stamp}-$$"
 session_dir="$output_dir/$session_name"
@@ -93,10 +110,6 @@ finalized=false
 result_status=running
 result_code=1
 started_at=$(date --iso-8601=seconds)
-artifact_uid=${SUDO_UID:-0}
-artifact_gid=${SUDO_GID:-0}
-[[ $artifact_uid =~ ^[0-9]+$ ]] || artifact_uid=0
-[[ $artifact_gid =~ ^[0-9]+$ ]] || artifact_gid=0
 
 log() {
   local message=$*

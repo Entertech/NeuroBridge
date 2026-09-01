@@ -5,12 +5,16 @@
 # credentials/keys, recordings, raw EEG/HR packets, and algorithm payloads.
 set -u -o pipefail
 
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+default_output_dir="$root_dir/.runtime/diagnostics"
+
 usage() {
   cat <<'EOF'
 Usage: sudo ./linux/collect-kylin-runtime-diagnostics.sh [options]
 
 Options:
-  --output-dir DIR       Existing absolute output directory (default: /tmp)
+  --output-dir DIR       Absolute directory below project .runtime/diagnostics
+                         (default: project .runtime/diagnostics)
   --journal-lines N      Maximum lines per service/kernel journal (default: 5000)
   -h, --help             Show this help
 
@@ -25,7 +29,7 @@ fail() {
   exit 1
 }
 
-output_dir=/tmp
+output_dir=$default_output_dir
 journal_lines=5000
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -51,26 +55,40 @@ done
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run this command with sudo so journal, driver, and service diagnostics are complete."
 [[ $output_dir == /* ]] || fail "--output-dir must be an absolute path"
-[[ -d $output_dir ]] || fail "Output directory does not exist: $output_dir"
-[[ -w $output_dir ]] || fail "Output directory is not writable: $output_dir"
 [[ $journal_lines =~ ^[0-9]+$ ]] || fail "--journal-lines must be an integer"
 (( journal_lines >= 100 && journal_lines <= 50000 )) || fail "--journal-lines must be between 100 and 50000"
 
 umask 077
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+command -v realpath >/dev/null 2>&1 || fail "Required command is unavailable: realpath"
+output_dir=$(realpath -m -- "$output_dir")
+case $output_dir in
+  "$default_output_dir"|"$default_output_dir"/*) ;;
+  *) fail "Output must stay under the ignored project directory: $default_output_dir" ;;
+esac
+archive_uid=${SUDO_UID:-0}
+archive_gid=${SUDO_GID:-0}
+[[ $archive_uid =~ ^[0-9]+$ ]] || archive_uid=0
+[[ $archive_gid =~ ^[0-9]+$ ]] || archive_gid=0
+install -d -o "$archive_uid" -g "$archive_gid" -m 0750 \
+  "$root_dir/.runtime" "$default_output_dir" "$output_dir" \
+  || fail "Could not create project diagnostic directory: $output_dir"
+[[ -d $output_dir ]] || fail "Output directory does not exist: $output_dir"
+[[ -w $output_dir ]] || fail "Output directory is not writable: $output_dir"
+
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 archive_name="neurobridge-kylin-runtime-diagnostics-${stamp}-$$.tar.gz"
 archive_path="$output_dir/$archive_name"
 checksum_path="$archive_path.sha256"
 [[ ! -e $archive_path && ! -e $checksum_path ]] || fail "Refusing to overwrite an existing diagnostic bundle"
 
-work_dir=$(mktemp -d /tmp/neurobridge-kylin-diagnostics.XXXXXX) || fail "Could not create a temporary directory"
+work_dir=$(mktemp -d "$output_dir/.neurobridge-kylin-diagnostics.XXXXXX") \
+  || fail "Could not create a temporary diagnostic directory under: $output_dir"
 warnings_file="$work_dir/collection-warnings.txt"
 touch "$warnings_file"
 
 cleanup() {
   case $work_dir in
-    /tmp/neurobridge-kylin-diagnostics.*)
+    "$output_dir"/.neurobridge-kylin-diagnostics.*)
       rm -rf -- "$work_dir"
       ;;
     *)
@@ -196,10 +214,18 @@ elif command -v rpm >/dev/null 2>&1; then
 else
   warn "No dpkg-query or rpm command found; package inventory omitted"
 fi
-if [[ -x /opt/neurobridge/venv/bin/python ]]; then
-  capture python-packages /opt/neurobridge/venv/bin/python -m pip freeze --all
+python_runtime=
+for candidate in "$root_dir/.venv/bin/python" "$root_dir/venv/bin/python" /opt/neurobridge/venv/bin/python; do
+  if [[ -x $candidate ]]; then
+    python_runtime=$candidate
+    break
+  fi
+done
+if [[ -n $python_runtime ]]; then
+  capture python-runtime-version "$python_runtime" --version
+  capture python-packages "$python_runtime" -m pip freeze --all
 else
-  warn "/opt/neurobridge/venv/bin/python is unavailable"
+  warn "No project .venv/venv or installed /opt NeuroBridge Python runtime is available"
 fi
 if command -v git >/dev/null 2>&1 && [[ -d $root_dir/.git ]]; then
   capture source-revision git -C "$root_dir" rev-parse HEAD
@@ -208,8 +234,13 @@ else
   warn "Collector checkout has no readable Git metadata"
 fi
 
-capture_shell deployed-file-metadata '
+write_deployed_file_metadata() {
+  local path
   for path in \
+    "$root_dir/.runtime/config/gateway.toml" \
+    "$root_dir/.runtime/logs" \
+    "$root_dir/.runtime/recordings" \
+    "$root_dir/.runtime/diagnostics" \
     /etc/neurobridge/gateway.toml \
     /opt/neurobridge/venv/bin/neurobridge \
     /usr/local/lib/neurobridge/neurobridge_affective_bridge \
@@ -225,7 +256,8 @@ capture_shell deployed-file-metadata '
       printf "missing=%s\n" "$path"
     fi
   done
-'
+}
+capture deployed-file-metadata write_deployed_file_metadata
 if [[ -x /usr/local/lib/neurobridge/neurobridge_affective_bridge ]]; then
   capture algorithm-bridge-dependencies ldd /usr/local/lib/neurobridge/neurobridge_affective_bridge
 fi
@@ -268,7 +300,15 @@ capture_if_available selinux-status sestatus
 capture_if_available apparmor-status aa-status
 
 mkdir -p "$work_dir/application-logs"
-if [[ -d /var/log/neurobridge ]]; then
+log_directories=("$root_dir/.runtime/logs" /var/log/neurobridge)
+copied_logs=0
+for log_directory in "${log_directories[@]}"; do
+  if [[ ! -d $log_directory ]]; then
+    warn "Application log directory does not exist: $log_directory"
+    continue
+  fi
+  log_source_label=$(basename "$(dirname "$log_directory")")-$(basename "$log_directory")
+  mkdir -p "$work_dir/application-logs/$log_source_label"
   copied_logs=0
   while IFS= read -r -d '' source; do
     base=$(basename "$source")
@@ -278,16 +318,14 @@ if [[ -d /var/log/neurobridge ]]; then
         warn "Skipped compressed application log larger than 50 MiB: $source"
         continue
       fi
-      tail -c 52428800 "$source" >"$work_dir/application-logs/$base.tail-50MiB" 2>/dev/null || warn "Could not copy log tail: $source"
+      tail -c 52428800 "$source" >"$work_dir/application-logs/$log_source_label/$base.tail-50MiB" 2>/dev/null || warn "Could not copy log tail: $source"
     else
-      cp --preserve=timestamps "$source" "$work_dir/application-logs/$base" 2>/dev/null || warn "Could not copy application log: $source"
+      cp --preserve=timestamps "$source" "$work_dir/application-logs/$log_source_label/$base" 2>/dev/null || warn "Could not copy application log: $source"
     fi
     copied_logs=$((copied_logs + 1))
-  done < <(find /var/log/neurobridge -maxdepth 1 -type f -name '*.log*' -print0)
-  (( copied_logs > 0 )) || warn "No application *.log* files found under /var/log/neurobridge"
-else
-  warn "/var/log/neurobridge does not exist"
-fi
+  done < <(find "$log_directory" -maxdepth 1 -type f -name '*.log*' -print0)
+  (( copied_logs > 0 )) || warn "No application *.log* files found under $log_directory"
+done
 
 # USB, serial, Bluetooth, driver, and device-permission state. These commands
 # inspect metadata only and do not open/configure a TTY or send device bytes.
@@ -402,8 +440,6 @@ if ! (
   fail "Could not create archive checksum"
 fi
 
-archive_uid=${SUDO_UID:-0}
-archive_gid=${SUDO_GID:-0}
 if ! chmod 0600 "$archive_path" "$checksum_path"; then
   rm -f -- "$archive_path" "$checksum_path"
   fail "Could not restrict diagnostic bundle permissions to 0600"

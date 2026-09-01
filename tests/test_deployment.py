@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 import unittest
 
+from neurobridge.config import load
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,6 +33,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
         self.assertIn("--timeout SECONDS", help_result.stdout)
         self.assertIn("--output-dir DIR", help_result.stdout)
+        self.assertIn("project .runtime/diagnostics", help_result.stdout)
         self.assertIn("exit 2: USB appeared", help_result.stdout)
         invalid_timeout = subprocess.run(
             ["bash", str(script_path), "--timeout", "4"],
@@ -55,6 +58,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('sha256sum "${archive_path##*/}"', script)
         self.assertIn('artifact_uid=${SUDO_UID:-0}', script)
         self.assertIn('chown -R "$artifact_uid:$artifact_gid" "$session_dir"', script)
+        self.assertIn('default_output_dir="$root_dir/.runtime/diagnostics"', script)
+        self.assertIn("Output must stay under the ignored project directory", script)
         self.assertNotIn("cat /etc/neurobridge/gateway.toml", script)
 
     def test_kylin_runtime_diagnostics_are_self_contained_and_exclude_configuration_contents(self) -> None:
@@ -76,6 +81,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
         self.assertIn("--output-dir DIR", help_result.stdout)
         self.assertIn("--journal-lines N", help_result.stdout)
+        self.assertIn("project .runtime/diagnostics", help_result.stdout)
         self.assertIn("journalctl -u neurobridge.service", script)
         self.assertIn("/etc/kylin-release", script)
         self.assertIn("/etc/.kyinfo", script)
@@ -86,6 +92,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("sha256sum \"$archive_name\"", script)
         self.assertIn('chmod 0600 "$archive_path" "$checksum_path"', script)
         self.assertIn("redaction-report.txt", script)
+        self.assertIn('default_output_dir="$root_dir/.runtime/diagnostics"', script)
+        self.assertIn('work_dir=$(mktemp -d "$output_dir/.neurobridge-kylin-diagnostics.XXXXXX")', script)
+        self.assertIn('"$root_dir/.runtime/logs"', script)
+        self.assertIn("Output must stay under the ignored project directory", script)
         self.assertNotIn("cat /etc/neurobridge/gateway.toml", script)
         self.assertNotIn("printenv", script)
         self.assertNotIn("/root/.ssh", script)
@@ -487,6 +497,58 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("usermod -aG", script)
         self.assertIn("systemctl restart neurobridge.service", script)
         self.assertIn("journalctl -u neurobridge.service -f", script)
+        self.assertIn('"$root_dir/venv/bin/python"', script)
+        self.assertIn("for command_name in python3.11 python3", script)
+        self.assertIn("--python /absolute/python", script)
+        self.assertIn("runtimeReady=$runtime_ready", script)
+        self.assertIn('runtime_dir="$root_dir/.runtime"', script)
+        self.assertIn('config_template="$root_dir/config/gateway.project.toml.example"', script)
+        self.assertIn("--system-install", script)
+        self.assertIn("start-kylin-gateway.sh", script)
+        self.assertIn("Project mode --config must stay under", script)
+        help_result = subprocess.run(
+            ["bash", str(script_path), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("--python /absolute/python", help_result.stdout)
+
+    def test_kylin_project_runtime_stays_in_ignored_checkout_directories(self) -> None:
+        config = load(ROOT / "config" / "gateway.project.toml.example")
+        self.assertEqual(config.data_source.type, "serial")
+        self.assertEqual(config.logging.directory, Path(".runtime/logs"))
+        self.assertEqual(config.recording.directory, Path(".runtime/recordings"))
+        self.assertFalse(config.algorithm.enabled)
+
+        ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+        for ignored_directory in (".venv/", "venv/", ".runtime/", "wheelhouse/"):
+            self.assertIn(ignored_directory, ignore)
+
+        start_script = ROOT / "linux" / "start-kylin-gateway.sh"
+        self.assertTrue(os.access(start_script, os.X_OK))
+        syntax = subprocess.run(
+            ["bash", "-n", str(start_script)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        help_result = subprocess.run(
+            ["bash", str(start_script), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("Persistent output:", help_result.stdout)
+        start_source = start_script.read_text(encoding="utf-8")
+        self.assertIn('runtime_dir="$root_dir/.runtime"', start_source)
+        self.assertIn("Run without sudo", start_source)
+        self.assertIn("logging.directory", start_source)
+        self.assertIn("recording.directory", start_source)
+        self.assertIn("must remain under", start_source)
 
     def test_web_assets_are_not_in_a_platform_directory(self) -> None:
         self.assertTrue((ROOT / "web" / "capture" / "index.html").is_file())

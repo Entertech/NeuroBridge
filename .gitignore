@@ -1,4 +1,7 @@
 .venv/
+venv/
+.runtime/
+wheelhouse/
 __pycache__/
 *.py[cod]
 .pytest_cache/
