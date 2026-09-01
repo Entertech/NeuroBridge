@@ -179,14 +179,14 @@ class Gateway:
             await self.broadcast_status()
 
     async def update_connection_error(self, error: str) -> None:
-        """Record the latest BLE setup failure for Linux operational diagnosis.
+        """Record the latest device-transport failure for operational diagnosis.
 
-        ``FlowtimeAdapter`` retries internally, so surfacing the exception here
-        must not terminate the gateway or alter the published northbound schema.
+        Adapters retry internally, so surfacing the exception here must not
+        terminate the gateway or alter the published northbound schema.
         """
         safe_error = safe_log_text(error)
         self.connection_error = safe_error
-        LOG.warning("Headband connection attempt failed: %s", safe_error)
+        LOG.warning("Headband connection attempt failed: transport=%s reason=%s", self.config.data_source.type, safe_error)
 
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
         received_at_ms = now_ms()

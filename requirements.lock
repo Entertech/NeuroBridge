@@ -1,3 +1,4 @@
 # Runtime packages.  Keep Bleak aligned with Enter-Biomodule-BLE-PC-SDK 1.1.6.
 bleak==0.19.0
+pyserial==3.5
 websockets==12.0

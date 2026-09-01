@@ -57,6 +57,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('ID:-} != "ubuntu"', install_script)
         self.assertIn('VERSION_ID:-} != "24.04"', install_script)
         self.assertIn("python3 rsync cmake c++", install_script)
+        self.assertIn("import bleak, serial, websockets", install_script)
         self.assertIn("required by wired_b_side", install_script)
         self.assertIn('[[ $# -eq 0 ]]', install_script)
         self.assertIn("systemctl enable neurobridge.service", install_script)
@@ -420,12 +421,26 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('mode = "local_browser"', example)
         self.assertIn('host = "127.0.0.1"', example)
         self.assertIn('wired_b_side', example)
+        self.assertIn('[data_source]\ntype = "serial"', example)
+        self.assertIn('command_response_timeout_ms = 1000', example)
+        self.assertIn('stats_interval_seconds = 10', example)
         self.assertNotIn('\ninterface = "auto"', example)
         self.assertIn('neurobridge-network-config" --config "$config_dir/gateway.toml" --apply', install_script)
         self.assertLess(
             install_script.index('if [[ ! -e "$config_dir/gateway.toml" ]]'),
             install_script.index('neurobridge-network-config" --config "$config_dir/gateway.toml" --apply'),
         )
+
+    def test_kylin_serial_setup_is_one_command_and_preserves_a_backup(self) -> None:
+        script_path = ROOT / "linux" / "setup-kylin-serial.sh"
+        script = script_path.read_text(encoding="utf-8")
+        syntax = subprocess.run(["bash", "-n", str(script_path)], capture_output=True, text=True, check=False)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        self.assertIn("-m neurobridge.serial_setup", script)
+        self.assertIn("before-serial", script)
+        self.assertIn("usermod -aG", script)
+        self.assertIn("systemctl restart neurobridge.service", script)
+        self.assertIn("journalctl -u neurobridge.service -f", script)
 
     def test_web_assets_are_not_in_a_platform_directory(self) -> None:
         self.assertTrue((ROOT / "web" / "capture" / "index.html").is_file())

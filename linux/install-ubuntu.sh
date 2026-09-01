@@ -35,7 +35,7 @@ install -d -m 0755 "$install_dir"
 install -d -o root -g neurobridge -m 0750 "$config_dir"
 rsync -a --delete --exclude .git --exclude .venv --exclude venv "$root_dir/" "$install_dir/"
 [[ -x "$install_dir/venv/bin/python" && -x "$install_dir/venv/bin/pip" ]] || { echo "Missing existing NeuroBridge Python environment at $install_dir/venv. Provision it in the Ubuntu 24.04 base image before deployment." >&2; exit 1; }
-"$install_dir/venv/bin/python" -c 'import bleak, websockets' || { echo "Existing NeuroBridge Python environment is missing bleak or websockets. Provision them in the Ubuntu 24.04 base image before deployment." >&2; exit 1; }
+"$install_dir/venv/bin/python" -c 'import bleak, serial, websockets' || { echo "Existing NeuroBridge Python environment is missing bleak, pyserial, or websockets. Provision requirements.lock in the Ubuntu 24.04 base image before deployment." >&2; exit 1; }
 PIP_NO_INDEX=1 "$install_dir/venv/bin/pip" install --no-index --no-deps --no-build-isolation "$install_dir"
 if [[ ! -e "$config_dir/gateway.toml" ]]; then
   install -o root -g neurobridge -m 0640 "$install_dir/config/gateway.toml.example" "$config_dir/gateway.toml"

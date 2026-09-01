@@ -26,6 +26,26 @@ class BleConfig:
 
 
 @dataclass(frozen=True)
+class DataSourceConfig:
+    """Select exactly one device-side transport strategy."""
+
+    type: str = "bluetooth"
+
+
+@dataclass(frozen=True)
+class SerialConfig:
+    device: str = "auto"
+    candidate_types: tuple[str, ...] = ("ttyACM", "ttyUSB")
+    baud_rate: int = 115200
+    handshake_timeout_ms: int = 1000
+    command_response_timeout_ms: int = 1000
+    data_timeout_seconds: float = 5.0
+    reconnect_delay_seconds: float = 3.0
+    stats_interval_seconds: float = 10.0
+    max_buffer_bytes: int = 65536
+
+
+@dataclass(frozen=True)
 class RecordingConfig:
     directory: Path
     subject_id: str | None
@@ -94,12 +114,14 @@ class GatewayConfig:
     network: NetworkConfig = field(default_factory=NetworkConfig)
     access: AccessConfig = field(default_factory=AccessConfig)
     local_ui: LocalUiConfig = field(default_factory=LocalUiConfig)
+    data_source: DataSourceConfig = field(default_factory=DataSourceConfig)
+    serial: SerialConfig = field(default_factory=SerialConfig)
 
 
 def load(path: str | Path) -> GatewayConfig:
     with Path(path).open("rb") as file:
         raw = tomllib.load(file)
-    server, ble, recording, algorithm, download, logging, network, access, local_ui = (
+    server, ble, recording, algorithm, download, logging, network, access, local_ui, data_source, serial = (
         raw.get(name, {})
         for name in (
             "server",
@@ -111,6 +133,8 @@ def load(path: str | Path) -> GatewayConfig:
             "network",
             "access",
             "local_ui",
+            "data_source",
+            "serial",
         )
     )
     replay_speed = float(recording.get("replay_speed", 1))
@@ -189,6 +213,39 @@ def load(path: str | Path) -> GatewayConfig:
             raise ValueError("network DHCP range must be IPv4, inside subnet, and exclude server.host")
         if not dhcp_lease_time[:-1].isdigit() or dhcp_lease_time[-1:] not in {"m", "h", "d"} or int(dhcp_lease_time[:-1]) <= 0:
             raise ValueError("network.dhcp_lease_time must use a positive m, h, or d duration")
+    data_source_type = str(data_source.get("type", "bluetooth"))
+    if data_source_type not in {"bluetooth", "serial"}:
+        raise ValueError("data_source.type must be bluetooth or serial")
+    serial_device = str(serial.get("device", "auto"))
+    if serial_device != "auto" and not Path(serial_device).is_absolute():
+        raise ValueError("serial.device must be auto or an absolute device path")
+    candidate_types_value = serial.get("candidate_types", ["ttyACM", "ttyUSB"])
+    if not isinstance(candidate_types_value, list) or not candidate_types_value:
+        raise ValueError("serial.candidate_types must be a non-empty array")
+    candidate_types = tuple(str(value) for value in candidate_types_value)
+    if any(value not in {"ttyACM", "ttyUSB"} for value in candidate_types):
+        raise ValueError("serial.candidate_types only supports ttyACM and ttyUSB")
+    baud_rate = int(serial.get("baud_rate", 115200))
+    handshake_timeout_ms = int(serial.get("handshake_timeout_ms", 1000))
+    command_response_timeout_ms = int(serial.get("command_response_timeout_ms", 1000))
+    data_timeout_seconds = float(serial.get("data_timeout_seconds", 5))
+    serial_reconnect_delay_seconds = float(serial.get("reconnect_delay_seconds", 3))
+    stats_interval_seconds = float(serial.get("stats_interval_seconds", 10))
+    max_buffer_bytes = int(serial.get("max_buffer_bytes", 65536))
+    if baud_rate != 115200:
+        raise ValueError("serial.baud_rate must be 115200 for the confirmed device protocol")
+    if not 200 <= handshake_timeout_ms <= 30000:
+        raise ValueError("serial.handshake_timeout_ms must be between 200 and 30000")
+    if not 100 <= command_response_timeout_ms <= 30000:
+        raise ValueError("serial.command_response_timeout_ms must be between 100 and 30000")
+    if not 0.5 <= data_timeout_seconds <= 300:
+        raise ValueError("serial.data_timeout_seconds must be between 0.5 and 300")
+    if not 0.1 <= serial_reconnect_delay_seconds <= 300:
+        raise ValueError("serial.reconnect_delay_seconds must be between 0.1 and 300")
+    if not 1 <= stats_interval_seconds <= 3600:
+        raise ValueError("serial.stats_interval_seconds must be between 1 and 3600")
+    if not 1024 <= max_buffer_bytes <= 4 * 1024 * 1024:
+        raise ValueError("serial.max_buffer_bytes must be between 1024 and 4194304")
     config = GatewayConfig(
         server=ServerConfig(host, port, endpoint),
         ble=BleConfig(bool(ble.get("enabled", False)), ble.get("device_name") or None, str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(), int(ble.get("scan_timeout_seconds", 5)), int(ble.get("reconnect_delay_seconds", 3))),
@@ -210,6 +267,18 @@ def load(path: str | Path) -> GatewayConfig:
             local_ui_host,
             local_ui_port,
             local_ui_directory,
+        ),
+        data_source=DataSourceConfig(data_source_type),
+        serial=SerialConfig(
+            serial_device,
+            candidate_types,
+            baud_rate,
+            handshake_timeout_ms,
+            command_response_timeout_ms,
+            data_timeout_seconds,
+            serial_reconnect_delay_seconds,
+            stats_interval_seconds,
+            max_buffer_bytes,
         ),
     )
     from .northbound.strategy import access_strategy

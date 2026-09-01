@@ -33,8 +33,28 @@ mode = "static"
 # dhcp_range_end = "192.168.88.200"
 # dhcp_lease_time = "12h"
 
+# Current Kylin deployment uses the USB-derived serial strategy. Switch to
+# bluetooth only for an explicitly approved BLE regression deployment.
+[data_source]
+type = "serial"
+
+[serial]
+# auto probes only USB-derived ttyACM/ttyUSB candidates in stable order and
+# stops immediately after the first complete fixed handshake.
+device = "auto"
+candidate_types = ["ttyACM", "ttyUSB"]
+baud_rate = 115200
+handshake_timeout_ms = 1000
+# 0xE1/0xE0 succeed when any non-empty response arrives within this timeout.
+command_response_timeout_ms = 1000
+data_timeout_seconds = 5
+reconnect_delay_seconds = 3
+# Periodic logs include cumulative expected/received/lost packets and loss rate.
+stats_interval_seconds = 10
+max_buffer_bytes = 65536
+
 [ble]
-# Enabled only after a real headband POC on the target Ubuntu x86_64 host.
+# Ignored while data_source.type = "serial". Enable only for BLE regression.
 enabled = false
 # On every unconnected cycle, scan matching advertisements and connect the highest RSSI.
 device_name = "Flowtime Headband"

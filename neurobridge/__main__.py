@@ -11,8 +11,8 @@ import sys
 import time
 
 from .config import load
-from .ble.flowtime import FlowtimeAdapter
 from .business.gateway import Gateway
+from .device.strategy import create_device_adapter
 from .download import serve_downloads
 from .logging_setup import configure_logging
 from .northbound.local_ui import serve_local_ui
@@ -52,10 +52,11 @@ async def run(config_path: str) -> None:
         _file_sha256(config_path),
     )
     LOG.info(
-        "Runtime configuration: transport=ble accessMode=%s accessSummary=%s bleEnabled=%s scanTimeoutSeconds=%s reconnectDelaySeconds=%s "
+        "Runtime configuration: transport=%s accessMode=%s accessSummary=%s bleEnabled=%s scanTimeoutSeconds=%s reconnectDelaySeconds=%s "
         "server=%s:%s%s networkMode=%s networkInterface=%s subnet=%s downloadEnabled=%s "
         "downloadEndpoint=%s:%s%s recordingDirectory=%s replaySpeed=%s algorithmEnabled=%s "
         "algorithmCommand=%s loggingLevel=%s logFile=%s",
+        config.data_source.type,
         config.access.mode,
         strategy.summary(config),
         config.ble.enabled,
@@ -78,17 +79,23 @@ async def run(config_path: str) -> None:
         config.logging.level,
         config.logging.directory / config.logging.filename,
     )
+    if config.data_source.type == "serial":
+        LOG.info(
+            "Serial runtime configuration: device=%s candidateTypes=%s baudRate=%s handshakeTimeoutMs=%s "
+            "commandResponseTimeoutMs=%s dataTimeoutSeconds=%s reconnectDelaySeconds=%s "
+            "statsIntervalSeconds=%s maxBufferBytes=%s",
+            config.serial.device,
+            ",".join(config.serial.candidate_types),
+            config.serial.baud_rate,
+            config.serial.handshake_timeout_ms,
+            config.serial.command_response_timeout_ms,
+            config.serial.data_timeout_seconds,
+            config.serial.reconnect_delay_seconds,
+            config.serial.stats_interval_seconds,
+            config.serial.max_buffer_bytes,
+        )
     gateway = Gateway(config)
-    # Keep the production runtime on the same adapter-error path as the macOS
-    # POC. The browser UI consumes gateway state; durable logs still preserve
-    # the root cause when the adapter schedules a reconnect attempt.
-    adapter = FlowtimeAdapter(
-        gateway.config.ble,
-        gateway.receive_packet,
-        gateway.update_status,
-        gateway.on_device_ready,
-        gateway.update_connection_error,
-    )
+    adapter = create_device_adapter(config, gateway)
     await gateway.start()
     try:
         async with asyncio.TaskGroup() as group:

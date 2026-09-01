@@ -47,6 +47,40 @@ class AlgorithmConfigurationTests(unittest.TestCase):
                 load(path)
 
 
+class DeviceStrategyConfigurationTests(unittest.TestCase):
+    def test_legacy_configuration_keeps_bluetooth_strategy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            path.write_text("", encoding="utf-8")
+            self.assertEqual(load(path).data_source.type, "bluetooth")
+
+    def test_serial_configuration_uses_confirmed_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            path.write_text('[data_source]\ntype = "serial"\n', encoding="utf-8")
+            config = load(path)
+            self.assertEqual(config.serial.device, "auto")
+            self.assertEqual(config.serial.candidate_types, ("ttyACM", "ttyUSB"))
+            self.assertEqual(config.serial.baud_rate, 115200)
+            self.assertEqual(config.serial.handshake_timeout_ms, 1000)
+            self.assertEqual(config.serial.command_response_timeout_ms, 1000)
+
+    def test_serial_configuration_rejects_unsafe_or_unknown_values(self) -> None:
+        cases = (
+            ('[data_source]\ntype = "usb"\n', "data_source.type"),
+            ('[serial]\ndevice = "ttyUSB0"\n', "serial.device"),
+            ('[serial]\nbaud_rate = 9600\n', "serial.baud_rate"),
+            ('[serial]\ncandidate_types = ["ttyS"]\n', "candidate_types"),
+            ('[serial]\ncommand_response_timeout_ms = 10\n', "command_response_timeout_ms"),
+        )
+        for contents, message in cases:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "gateway.toml"
+                path.write_text(contents, encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, message):
+                    load(path)
+
+
 class AccessStrategyConfigurationTests(unittest.TestCase):
     def test_local_browser_is_the_loopback_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

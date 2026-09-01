@@ -1,12 +1,22 @@
 # NeuroBridge
 
-NeuroBridge 是将回车科技头环数据接入第三方 B 端主机的跨平台 PC 网关。网关核心负责设备采集、数据与算法处理、北向协议适配、录播和运行维护；第三方 B 端主机负责展示与保存。首期交付目标是 Ubuntu x86_64，macOS 仅用于真实设备 POC，Windows 尚未完成网关运行验证。
+NeuroBridge 是将回车科技头环数据接入本机浏览器或兼容第三方 B 端主机的跨平台 PC 网关。网关核心负责设备采集、数据与算法处理、北向协议适配、录播和运行维护。当前正式目标为 N100/N150 x86_64 主机上的银河麒麟 V10；Ubuntu x86_64 保留为兼容与回归基线，macOS 用于真实设备 POC，Windows 尚未完成网关运行验证。
 
 当前对接方案详见：[头环蓝牙网关对接方案 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%AF%B9%E6%8E%A5%E6%96%B9%E6%A1%88_v0.1.md)。
 
 ## 可运行网关与部署
 
 仓库现已包含可部署的 Python 网关：`neurobridge/`。它通过策略模式提供两种可切换的访问拓扑：当前默认 `local_browser` 让同一台网关主机上的浏览器通过 `127.0.0.1` 使用 WebSocket；兼容策略 `wired_b_side` 保留独立 B 端主机的专用网线访问。两种策略复用相同的消息契约、600 ms 批量数据、订阅、录播和持久化逻辑。
+
+设备侧也使用独立策略：`data_source.type = "serial"` 选择当前 USB 派生 TTY 方案，`"bluetooth"` 切回 Flowtime BLE，一次只运行一种。串口策略会稳定排序并逐个探测 `/dev/serial/by-id/`、`ttyACM*`、`ttyUSB*`，收到首个固定握手后立即 ACK 并停止遍历；`0xE1`/`0xE0` 收到任意非空响应即成功。16 位大端序号用于输出累计和区间丢包率，日志不记录控制响应原文或完整脑波帧。
+
+已具备运行环境和 `/etc/neurobridge/gateway.toml` 的银河麒麟 x86_64 设备，推荐一键启用串口并重启服务：
+
+```bash
+sudo ./linux/setup-kylin-serial.sh
+```
+
+脚本自动备份并原子更新配置、补充服务账户串口组权限、列出候选设备、验证配置并重启。完整部署、日志字段和导出方法见[银河麒麟 V10 内部手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
 
 Ubuntu 24.04 x86_64 网关可先用公开 HTTPS 地址匿名获取本仓库源码，不需要 GitHub 账号或密码：
 
@@ -35,7 +45,7 @@ git pull --ff-only
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install --no-deps -e .  # unit tests do not need BLE hardware
-.venv/bin/pip install websockets==12.0
+.venv/bin/pip install websockets==12.0 pyserial==3.5
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
@@ -43,7 +53,7 @@ Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未�
 
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
-运行时代码按职责组织：`neurobridge/ble/` 负责 Flowtime 扫描、连接、通知与原始字节窗口；`neurobridge/algorithm/` 隔离算法 SDK bridge；`neurobridge/business/` 负责订阅、状态、录制与录播；`neurobridge/northbound/` 仅负责 WS/WebSocket 传输。
+运行时代码按职责组织：`neurobridge/device/` 选择设备策略，`neurobridge/ble/` 和 `neurobridge/serial/` 分别负责 Flowtime BLE 与 USB TTY 接入；`neurobridge/algorithm/` 隔离算法 SDK bridge；`neurobridge/business/` 负责订阅、状态、录制与录播；`neurobridge/northbound/` 仅负责 WS/WebSocket 传输。
 
 ## 仓库结构
 
@@ -69,16 +79,16 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 ## 首期交付结论
 
-- 目标硬件：N100/N150 x86 小主机，8 GB 内存、256 GB SSD、千兆网口（双网口优先）、经实机验证可稳定连接目标头环的蓝牙 5.x 芯片。
+- 目标硬件：N100/N150 x86 小主机，8 GB 内存、256 GB SSD、可稳定枚举目标耳机 TTY 的 USB 端口；蓝牙控制器仅用于保留的 BLE 回归策略。
 - 目标系统：N100/N150 x86_64 主机上的银河麒麟 V10；Ubuntu LTS 仅保留为兼容和回归基线。
-- 当前默认链路：`头环 → USB/串口（目标方案，适配器待实现）→ 网关后台 → 本机回环 WebSocket → 同机浏览器`。不需要 B 端专用网线、静态地址或 DHCP。
+- 当前默认链路：`头环 → USB/串口（源码已支持，目标机 POC/现场验收待完成）→ 网关后台 → 本机回环 WebSocket → 同机浏览器`。不需要 B 端专用网线、静态地址或 DHCP。
 - 兼容链路：配置切换为 `wired_b_side` 后，继续支持 `网关 → 专用有线以太网 → 独立 B 端主机`，消息契约不变。
 - 运行方式：实时模式和录播模式均为交付范围；头环未连接时，B 端首次 `subscribe` 或 `getLatest` 会启动网关级录播流程，并以 `mode="replay"` 标记数据来源。录播优先使用部署配置明确指定且有效的会话；否则自动遍历录播目录，选择最新的非空历史会话。后续订阅加入该流程的当前进度。最后一个 B 端 WebSocket 连接断开时，网关停止录播并重置进度；仍有连接时，文件播放到末尾会从首条重新循环。头环重连时自动停止录播并回到实时。网关应开机自启，现场无需操作。
 - 运维与交付：网关注册为 systemd 开机自启服务；运行日志持久化并每日轮转。本机策略下网页、WebSocket 和下载服务只监听 `127.0.0.1`。只有切换兼容有线策略时，才配置专网静态地址或独立 DHCP 单元。
 - 演示范围：本次为单人；北向协议仅保留录播关联所需的 `subjectId`。
 - 当前设备通信规范定义：EEG `FF31` 为 20 字节大端数据包（2 字节序号与 6 个 24 位采样），心率 `FF51` 为 1 字节，佩戴/接触状态 `FF32` 为 2 字节；北向仍最多按 600 ms 分组，但实际包数由网关运行时记录，不写死。
 
-若现场禁止任何蓝牙，实时链路不能工作；只能改用有线采集、在允许蓝牙的区域采集后录播，或取得场地方对限制范围的书面确认。
+当前默认实时链路使用 USB 串口，不依赖蓝牙。只有显式切换到 `bluetooth` 回归策略时，才需要 BlueZ 和经验证的蓝牙控制器。
 
 ## 北向协议要点
 
@@ -95,30 +105,30 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 网关所有输出统一为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 固定为 `1.0`，`code=200` 成功，非 `200` 时 `message` 为错误原因。连续数据事件的 `data` 中包含 `gatewayBootId`、`mode`（`live`/`replay`）、`subjectId`、`timestampMs`、`valid` 与 `payload`。v0.1 为单头环、单网关实例，不传 `deviceId` 或 `gatewayId`。原始波形和节律数据使用批量 JSON 或二进制帧，避免单采样点逐条 JSON 发送。
 
-最终消息名称、字段和传输协议（TCP、WebSocket、HTTP(S) 等）以双方确认的接口文档为准。协议、采样率、每 600 ms 的样本数和录播规则仍是联调前待确认项。
+北向消息名称、字段和 WebSocket 传输以版本台账登记的当前对外协议为准；设备采样率、每 600 ms 实际样本数等未确认值继续配置化或由运行日志实测，不在 README 中假定。
 
 ## SDK 适配评估
 
 | SDK | 结论 | 依据与处理方式 |
 | --- | --- | --- |
 | [Enter-Biomodule-BLE-PC-SDK](https://github.com/Entertech/Enter-Biomodule-BLE-PC-SDK) | **适配，作为 BLE 接入层的首选 POC** | Python SDK 基于 Bleak 0.19，声明支持 macOS、Linux 和 Windows；可承担 Flowtime 的扫描、连接、通知、启动采集与断线回调。BLE UUID 与数据契约以 [头环蓝牙通信协议](https://entertech.feishu.cn/docs/doccnlmMLpxwY25gJQyiFQmBeRd?from=from_copylink) 为准，不能以 SDK 的旧解包示例推断。Linux 上仍须实机验证。 |
-| [AffectiveCloud-Algorithm-SDK](https://github.com/Entertech/AffectiveCloud-Algorithm-SDK) | **适配 x86 Linux 网关的算法层，须完成构建 POC 后上线** | C++ SDK 提供双通道 `appendEEG`、单通道 `appendSCEEG`、`appendHR` 及注意力、放松度、脑波等报表；接口注释以 0.6 秒为默认触发周期，和本网关 600 ms 分组一致。它要求 C++17、Eigen3、NumCpp；仓库当前没有可直接交付的 Linux 产物，需在 Ubuntu x86_64 上补齐依赖、编译并用真实 BLE 原始字节流做结果比对。 |
+| [AffectiveCloud-Algorithm-SDK](https://github.com/Entertech/AffectiveCloud-Algorithm-SDK) | **适配 x86 Linux 网关的算法层，目标麒麟仍须真实数据 POC** | C++ SDK 提供双通道 `appendEEG`、单通道 `appendSCEEG`、`appendHR` 及注意力、放松度、脑波等报表；它要求 C++17、Eigen3、NumCpp。仓库部署流程已能构建 bridge，但银河麒麟目标机仍须用真实串口原始字节验证构建、输入分组、性能和结果。 |
 
 算法 SDK 还带有 Python 实现，但其依赖固定在 TensorFlow 1.8、Keras 2.2、NumPy 1.16 等较旧版本。首期网关优先选 C++ 实现；不要在未完成独立环境验证的情况下将该 Python 环境直接用于生产镜像。
 
 ## 实现边界
 
-- 网关处理头环 BLE 协议、数据解析、重连、时间戳、缓存、算法调用和北向适配。
-- 实时采集时，网关分别保存原始 BLE 数据与算法结果，并保留可关联的录制会话和时间戳；录播直接读取这些已保存数据，按原始时间间隔发送。
-- 第三方 B 端主机处理展示与保存；其是否继续上传服务端不属于网关边界。
-- 使用专用有线以太网直连第三方主机；联调前确认两端静态 IP、子网掩码、WS 端口、连接方向、防火墙放行与断线补传规则。
+- 网关按已选策略处理头环串口或 BLE 协议、数据解析、重连、时间戳、缓存、算法调用和北向适配。
+- 实时采集时，网关分别保存设备原始数据与算法结果，并保留可关联的录制会话和时间戳；录播直接读取已保存数据，按原始时间间隔发送。
+- 默认由同机浏览器展示；兼容模式下第三方 B 端主机处理展示与保存，其后续服务端上传不属于网关边界。
+- 默认只使用本机回环 HTTP/WS；只有切换 `wired_b_side` 时才使用双方批准的专用有线网络参数。
 
 ## 上线前 POC 与验收
 
-1. 在目标 N100/N150 + Ubuntu LTS 上测试 PC BLE SDK：扫描、连接、订阅、断线重连、重启恢复和长时间运行。
-2. 在同一环境编译算法 C++ SDK，固定 Eigen3/NumCpp/CMake/编译器版本，并以录制的真实 `FF31`/`FF51` 原始字节验证算法输入长度、字节序、分组方式和 600 ms 触发节奏。
-3. 完成北向模拟服务端和真实 B 端主机联调，覆盖实时、录播、网关/服务端离线、恢复补传和异常数据。
-4. 在展演网络完成一次全链路演练，交付版本号、配置备份、操作手册和问题日志。
+1. 在最终 N100/N150 + 银河麒麟镜像上验证多 TTY 遍历、首握手短路、`0xE1`/`0xE0` 任意响应、分帧、丢包统计、拔插重连和长时间运行。
+2. 在同一环境构建算法 C++ bridge，固定 Eigen3/NumCpp/CMake/编译器版本，并以真实串口原始字节验证输入长度、字节序、分组、性能和结果。
+3. 使用同机浏览器覆盖实时、录播、设备离线/恢复和浏览器断线重连；若项目切换旧方案，再单独完成专网 B 端联调。
+4. 完成启动、systemd、日志轮转、一键诊断导出、升级和回滚演练，交付版本号、配置哈希、操作手册和问题日志。
 
 ## 文档
 
