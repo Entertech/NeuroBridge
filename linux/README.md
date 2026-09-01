@@ -10,7 +10,7 @@
 - `collect-ubuntu-build-diagnostics.sh`：收集编译日志、工具版本和 CMake 诊断，不包含现场配置或原始数据。
 - `collect-kylin-runtime-diagnostics.sh`：供 N100/N150 银河麒麟 V10 现场离线采集系统、服务、journal、USB/TTY、网络、依赖和应用日志；它是诊断工具，不是麒麟安装器。
 - `setup-kylin-python.sh`：银河麒麟 V10 项目 Python 环境一键初始化；系统仅有 Python 3.8 时自动准备经 SHA-256 锁定的项目内 Python 3.11，再选择离线 `wheelhouse` 或当前网络，所有运行时、缓存、临时文件和日志保存在项目内。
-- `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口插入一键识别；提示拔插设备，限时等待 USB 和 TTY，保存内核、udev、网关及前后快照日志，并在超时时区分“未枚举 USB”与“已枚举但未生成 TTY”；旧版 `lsusb` 不支持 `-nn` 时自动回退。
+- `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口一键识别；默认直接检查已连接设备，无需拔插，并保存 USB/TTY/驱动快照；仅在显式 `--plug-cycle` 时监控拔插过程和超时；旧版 `lsusb` 不支持 `-nn` 时自动回退。
 - `setup-kylin-serial.sh`：银河麒麟 x86_64 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务；项目启动脚本会处理账号已入组但当前会话权限尚未刷新的情况。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
@@ -18,7 +18,7 @@
 
 本文用于 Ubuntu 24.04 LTS x86_64 兼容/回归环境；正式银河麒麟部署见内部麒麟手册。当前默认 `local_browser` 策略让网页、WebSocket 和下载仅监听 `127.0.0.1`，不需要独立 B 端主机或数据专用网线。旧 `wired_b_side` 策略仍保留，但只能使用双方确认的隔离有线网络。
 
-银河麒麟项目目录直接运行的最短流程为：先执行 `./linux/setup-kylin-python.sh`，再执行 `sudo ./linux/diagnose-kylin-usb-serial.sh --timeout 60`、`sudo ./linux/setup-kylin-serial.sh` 和 `./linux/start-kylin-gateway.sh`。真实设备 POC、日志判读和诊断导出必须按[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)执行。
+银河麒麟项目目录直接运行的最短流程为：耳机保持 USB 连接，依次执行 `./linux/setup-kylin-python.sh`、`sudo ./linux/diagnose-kylin-usb-serial.sh`、`sudo ./linux/setup-kylin-serial.sh` 和 `./linux/start-kylin-gateway.sh`，无需拔插。只有排查物理枚举过程时才使用诊断脚本的 `--plug-cycle --timeout 60`。真实设备 POC、日志判读和诊断导出必须按[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)执行。
 
 > 默认本机地址固定使用 `127.0.0.1`。文中的 `192.168.88.10`、`192.168.88.20` 和网卡名仅用于兼容有线策略，切换前必须确认现场参数。
 

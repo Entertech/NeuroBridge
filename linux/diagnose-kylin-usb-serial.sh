@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Observe one USB plug-in attempt on Galaxy Kylin and preserve enough evidence
-# to distinguish physical enumeration, driver binding, TTY creation, and the
-# gateway's own serial discovery. No serial payload or recording is collected.
+# Inspect currently connected USB serial devices on Galaxy Kylin. An explicit
+# plug-cycle mode remains available when physical enumeration timing must be
+# observed. No serial payload or recording is collected.
 set -u -o pipefail
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -12,21 +12,29 @@ usage() {
 Usage: sudo ./linux/diagnose-kylin-usb-serial.sh [options]
 
 Options:
-  --timeout SECONDS   Wait 5-600 seconds for a new TTY (default: 60)
+  --plug-cycle        Observe an explicit unplug/plug cycle instead of checking
+                      devices that are already connected
+  --timeout SECONDS   Plug-cycle wait, 5-600 seconds (default: 60)
   --output-dir DIR    Absolute directory below project .runtime/diagnostics
                       (default: project .runtime/diagnostics)
-  --no-prompt         Do not wait for Enter before starting the plug-in window
+  --no-prompt         Plug-cycle compatibility mode without waiting for Enter
   -h, --help          Show this help
 
-Interactive use:
+Default use (no unplug required):
+  1. Keep the headset USB connected.
+  2. Run this command once.
+  3. Existing ttyACM/ttyUSB/by-id candidates are reported immediately; the
+     gateway later confirms the target by its fixed handshake.
+
+Optional plug-cycle use:
   1. Unplug the headset USB.
-  2. Run this command and press Enter when prompted.
+  2. Run this command with --plug-cycle and press Enter when prompted.
   3. Plug the headset into the computer before the timeout expires.
 
 Results:
-  exit 0: a new /dev/ttyACM*, /dev/ttyUSB*, or /dev/serial/by-id/* appeared
-  exit 2: USB appeared, but no new TTY appeared before timeout
-  exit 3: no new USB device appeared before timeout
+  exit 0: at least one current or newly inserted serial candidate was found
+  exit 2: no current TTY, or plug-cycle USB appeared without a new TTY
+  exit 3: plug-cycle mode saw no new USB device before timeout
   exit 130: interrupted; logs collected up to the interruption are retained
 
 The command keeps a timestamped directory, a .tar.gz archive, and a SHA-256
@@ -43,8 +51,13 @@ fail() {
 timeout_text=60
 output_dir=$default_output_dir
 prompt=true
+detection_mode=current
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --plug-cycle)
+      detection_mode=plug_cycle
+      shift
+      ;;
     --timeout)
       [[ $# -ge 2 ]] || fail "--timeout requires a value"
       timeout_text=$2
@@ -56,6 +69,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --no-prompt)
+      detection_mode=plug_cycle
       prompt=false
       shift
       ;;
@@ -110,6 +124,8 @@ finalized=false
 result_status=running
 result_code=1
 started_at=$(date --iso-8601=seconds)
+result_usb_file=
+result_tty_file=
 
 log() {
   local message=$*
@@ -282,14 +298,19 @@ finalize() {
     printf 'exitCode=%s\n' "$result_code"
     printf 'startedAt=%s\n' "$started_at"
     printf 'finishedAt=%s\n' "$(date --iso-8601=seconds)"
-    printf 'timeoutSeconds=%s\n' "$timeout_seconds"
+    printf 'detectionMode=%s\n' "$detection_mode"
+    if [[ $detection_mode == plug_cycle ]]; then
+      printf 'timeoutSeconds=%s\n' "$timeout_seconds"
+    else
+      printf 'timeoutSeconds=not_applicable\n'
+    fi
     printf 'artifactOwnerUid=%s\n' "$artifact_uid"
     printf 'artifactOwnerGid=%s\n' "$artifact_gid"
     printf 'payloadCollected=false\n'
-    printf 'newUsbDevices:\n'
-    sed 's/^/  /' "$session_dir/new-usb-nodes.log" 2>/dev/null || true
-    printf 'newTtyPaths:\n'
-    sed 's/^/  /' "$session_dir/new-tty-paths.log" 2>/dev/null || true
+    printf 'usbDevices:\n'
+    [[ -n $result_usb_file ]] && sed 's/^/  /' "$result_usb_file" 2>/dev/null || true
+    printf 'ttyPaths:\n'
+    [[ -n $result_tty_file ]] && sed 's/^/  /' "$result_tty_file" 2>/dev/null || true
   } >"$summary_file"
   chown -R "$artifact_uid:$artifact_gid" "$session_dir" 2>>"$console_log" || \
     log "WARNING：无法将日志目录交给执行 sudo 的用户，目录仍已保留。"
@@ -326,10 +347,10 @@ trap handle_signal INT TERM
 trap 'stop_monitors' EXIT
 
 cat >"$session_dir/README.txt" <<'EOF'
-NeuroBridge USB serial plug-in diagnosis
+NeuroBridge USB serial diagnosis
 
-Collected: before/after USB and TTY snapshots, kernel events, udev events,
-gateway service journal, loaded common serial drivers, result, and console log.
+Collected: current or before/after USB and TTY snapshots, kernel events, udev
+events, gateway service journal, loaded serial drivers, result, and console log.
 
 Not collected: serial port contents, handshake bytes, EEG/HR data, recordings,
 gateway configuration contents, process environments, passwords, or tokens.
@@ -340,6 +361,28 @@ EOF
 
 log "NeuroBridge USB/串口一键识别开始。"
 log "全过程日志将保存到：$session_dir"
+if [[ $detection_mode == current ]]; then
+  log "检测模式：直接检查当前已连接设备，不需要拔插 USB。"
+  capture_snapshot current
+  result_usb_file="$session_dir/current-usb-sysfs.log"
+  result_tty_file="$session_dir/current-tty-paths.log"
+  if [[ -s $result_tty_file ]]; then
+    result_status=current_tty_detected
+    result_code=0
+    log "成功：检测到当前串口候选；目标设备将在网关启动后通过固定握手确认："
+    sed 's/^/  /' "$result_tty_file" | tee -a "$console_log"
+    log "下一步执行：sudo ./linux/setup-kylin-serial.sh"
+  else
+    result_status=current_tty_not_detected
+    result_code=2
+    log "未检测到当前 ttyACM/ttyUSB/by-id 串口节点；已保存当前 USB、接口、驱动和内核快照。"
+    log "先检查接线、供电和 USB 数据线；如需观察插入瞬间，再执行：sudo ./linux/diagnose-kylin-usb-serial.sh --plug-cycle --timeout ${timeout_seconds}"
+  fi
+  finalize
+  exit "$result_code"
+fi
+
+log "检测模式：USB 拔插过程监控。"
 if [[ $prompt == true ]]; then
   log "操作提示：先拔下耳机 USB；确认已拔下后按 Enter。"
   IFS= read -r _unused_input || true
@@ -352,6 +395,8 @@ cp -- "$session_dir/before-usb-sysfs.log" "$session_dir/baseline-usb-nodes.log"
 cp -- "$session_dir/before-tty-paths.log" "$session_dir/baseline-tty-paths.log"
 : >"$session_dir/new-usb-nodes.log"
 : >"$session_dir/new-tty-paths.log"
+result_usb_file="$session_dir/new-usb-nodes.log"
+result_tty_file="$session_dir/new-tty-paths.log"
 
 if command -v journalctl >/dev/null 2>&1; then
   start_monitor kernel-journal-follow journalctl -k -f --since now --no-pager -o short-iso-precise

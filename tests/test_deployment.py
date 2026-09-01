@@ -32,9 +32,12 @@ class DeploymentTests(unittest.TestCase):
         )
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
         self.assertIn("--timeout SECONDS", help_result.stdout)
+        self.assertIn("--plug-cycle", help_result.stdout)
+        self.assertIn("Default use (no unplug required)", help_result.stdout)
         self.assertIn("--output-dir DIR", help_result.stdout)
         self.assertIn("project .runtime/diagnostics", help_result.stdout)
-        self.assertIn("exit 2: USB appeared", help_result.stdout)
+        self.assertIn("exit 2: no current TTY", help_result.stdout)
+        self.assertIn("plug-cycle USB appeared without a new TTY", help_result.stdout)
         invalid_timeout = subprocess.run(
             ["bash", str(script_path), "--timeout", "4"],
             capture_output=True,
@@ -56,6 +59,11 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("capture \"$prefix-lsusb-tree\" lsusb -t", script)
         self.assertIn("result_status=usb_detected_tty_timeout", script)
         self.assertIn("result_status=usb_detection_timeout", script)
+        self.assertIn("detection_mode=current", script)
+        self.assertIn("result_status=current_tty_detected", script)
+        self.assertIn("result_status=current_tty_not_detected", script)
+        self.assertIn("目标设备将在网关启动后通过固定握手确认", script)
+        self.assertIn("detectionMode=%s", script)
         self.assertIn("payloadCollected=false", script)
         self.assertIn('tar -C "$output_dir" -czf "$archive_path"', script)
         self.assertIn('sha256sum "${archive_path##*/}"', script)

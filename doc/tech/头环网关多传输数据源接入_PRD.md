@@ -522,7 +522,7 @@ lossRatePercent = lostPackets / expectedPackets × 100%
 
 目标麒麟系统必须提供无需 Codex、无需联网的一键诊断包导出命令。诊断包至少覆盖系统/内核、N100/N150 硬件、依赖和二进制校验、systemd 状态与当前/上次启动 journal、应用及轮转日志、USB/TTY/驱动、网络监听、资源与采集警告；同时满足以下约束：
 
-首次 USB 插入还必须提供独立一键识别命令：操作员按提示先拔出耳机以记录基线，再在可配置的 5～600 秒窗口内插入。命令从开始运行起持续保存前后 `lsusb -nn`、`lsusb -t`、sysfs USB 身份、TTY/by-id 路径与 udev 属性、内核 journal、`dmesg --follow`、`udevadm monitor` 及网关 journal。结果必须明确分为“生成新 TTY”、“已检测新 USB 但 TTY 超时”和“USB 枚举超时”；成功、超时和中断均保留日志目录、`tar.gz` 及 SHA-256，不得打开串口或采集任何载荷。
+USB 串口识别必须提供无需拔插的一键命令：耳机保持连接，命令立即遍历当前 `ttyACM*`、`ttyUSB*` 和 by-id 路径，同时保存 `lsusb`、`lsusb -t`、sysfs USB 身份、接口驱动、TTY/udev 属性、内核及网关日志。发现 TTY 只判定为候选，目标身份仍由网关遍历候选并读取固定握手确认；未发现 TTY 时明确返回当前状态失败并保留日志目录、`tar.gz` 及 SHA-256。另保留显式 `--plug-cycle` 故障诊断：仅在需要分析物理枚举时，由操作员先拔出记录基线，再在可配置的 5～600 秒窗口内插入，持续保存前后设备差分、内核 journal、`dmesg --follow`、`udevadm monitor` 及网关 journal，区分“生成新 TTY”、“已检测新 USB 但 TTY 超时”和“USB 枚举超时”。两种模式均不得打开串口或采集任何载荷。
 
 - 不收集配置文件内容、环境变量、密码、Token、私钥、录播目录、完整原始 EEG/HR 或算法载荷；
 - 普通文本执行凭据模式脱敏，并明确提示压缩旧日志仍需人工复核；

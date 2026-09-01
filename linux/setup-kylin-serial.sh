@@ -220,7 +220,7 @@ if (( ${#tty_candidates[@]} )); then
   done
 else
   echo "WARNING: no ttyACM/ttyUSB device exists; serial permissions cannot be verified yet." >&2
-  echo "Run before setup: sudo $root_dir/linux/diagnose-kylin-usb-serial.sh --timeout 60" >&2
+  echo "Inspect the currently connected device: sudo $root_dir/linux/diagnose-kylin-usb-serial.sh" >&2
   for tty_group in dialout uucp; do
     if [[ $permission_user != root ]] && getent group "$tty_group" >/dev/null 2>&1; then
       contains_value "$tty_group" "${groups_required[@]}" || groups_required+=("$tty_group")

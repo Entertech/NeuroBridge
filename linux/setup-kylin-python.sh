@@ -185,4 +185,4 @@ PYTHONPATH=$root_dir "$venv_dir/bin/python" -c \
 echo "Python environment ready"
 echo "mode=$install_mode"
 echo "python=$venv_dir/bin/python"
-echo "next=sudo $root_dir/linux/diagnose-kylin-usb-serial.sh --timeout 60"
+echo "next=sudo $root_dir/linux/diagnose-kylin-usb-serial.sh"
