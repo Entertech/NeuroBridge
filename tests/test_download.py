@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha256
 import json
 from pathlib import Path
 import socket
@@ -98,6 +99,13 @@ class DownloadServiceTests(unittest.IsolatedAsyncioTestCase):
         with zipfile.ZipFile(archive) as bundle:
             self.assertIn("neurobridge.log", bundle.namelist())
             self.assertIn("manifest.json", bundle.namelist())
+            manifest = json.loads(bundle.read("manifest.json"))
+            self.assertEqual(manifest["scope"], "application-file-logs-only")
+            self.assertIn("systemd journal", manifest["excluded"])
+            details = {entry["name"]: entry for entry in manifest["fileDetails"]}
+            log_bytes = bundle.read("neurobridge.log")
+            self.assertEqual(details["neurobridge.log"]["bytes"], len(log_bytes))
+            self.assertEqual(details["neurobridge.log"]["sha256"], sha256(log_bytes).hexdigest())
 
         status, _headers, _body = await http_get(self.port, "/downloads/recordings/%2E%2E.zip")
         self.assertEqual(status, 404)

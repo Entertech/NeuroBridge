@@ -175,11 +175,34 @@ class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_capture_summary_contains_counts_and_timing_without_raw_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = Gateway(config(Path(directory)))
+            gateway._capture_stats.update(
+                eegPackets=12,
+                eegBytes=240,
+                hrPackets=3,
+                hrBytes=3,
+                invalidPacketLengths=1,
+                windows=2,
+                invalidWindows=1,
+                firstPacketAtMs=1000,
+                lastDataAtMs=1800,
+            )
+            with self.assertLogs("neurobridge.business.gateway", level="INFO") as logs:
+                gateway._log_capture_summary("test")
+            message = "\n".join(logs.output)
+            self.assertIn("eegPackets=12", message)
+            self.assertIn("eegBytes=240", message)
+            self.assertIn("invalidPacketLengths=1", message)
+            self.assertIn("durationMs=800", message)
+            self.assertNotIn("bytesBase64", message)
+
     async def test_connection_error_is_retained_until_a_successful_connection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             gateway = Gateway(config(Path(directory)))
-            await gateway.update_connection_error("headband not found")
-            self.assertEqual(gateway.connection_error, "headband not found")
+            await gateway.update_connection_error("headband not found\ninjected line")
+            self.assertEqual(gateway.connection_error, "headband not found injected line")
 
             await gateway.update_status("connectionState", "connected")
             self.assertIsNone(gateway.connection_error)

@@ -2,8 +2,20 @@ from __future__ import annotations
 
 import logging
 from logging.handlers import WatchedFileHandler
+import time
 
 from .config import LoggingConfig
+
+
+def utc_formatter() -> logging.Formatter:
+    formatter = logging.Formatter(
+        "%(asctime)s.%(msecs)03dZ pid=%(process)d %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    # UTC with millisecond precision makes journal, device timestamps, and
+    # logs exported from machines in different time zones directly comparable.
+    formatter.converter = time.gmtime
+    return formatter
 
 
 def configure_logging(config: LoggingConfig) -> None:
@@ -15,7 +27,7 @@ def configure_logging(config: LoggingConfig) -> None:
 
     config.directory.mkdir(parents=True, exist_ok=True)
     logfile = config.directory / config.filename
-    formatter = logging.Formatter("%(asctime)s pid=%(process)d %(levelname)s %(name)s: %(message)s")
+    formatter = utc_formatter()
     file_handler = WatchedFileHandler(logfile, encoding="utf-8")
     file_handler.setFormatter(formatter)
     stream_handler = logging.StreamHandler()

@@ -11,6 +11,35 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_kylin_runtime_diagnostics_are_self_contained_and_exclude_configuration_contents(self) -> None:
+        script_path = ROOT / "linux" / "collect-kylin-runtime-diagnostics.sh"
+        script = script_path.read_text(encoding="utf-8")
+        syntax = subprocess.run(
+            ["bash", "-n", str(script_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        help_result = subprocess.run(
+            ["bash", str(script_path), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("--output-dir DIR", help_result.stdout)
+        self.assertIn("--journal-lines N", help_result.stdout)
+        self.assertIn("journalctl -u neurobridge.service", script)
+        self.assertIn("udevadm info --query=all", script)
+        self.assertIn("lsusb -t", script)
+        self.assertIn("sha256sum \"$archive_name\"", script)
+        self.assertIn('chmod 0600 "$archive_path" "$checksum_path"', script)
+        self.assertIn("redaction-report.txt", script)
+        self.assertNotIn("cat /etc/neurobridge/gateway.toml", script)
+        self.assertNotIn("printenv", script)
+        self.assertNotIn("/root/.ssh", script)
+
     def test_service_account_can_read_the_gateway_configuration(self) -> None:
         install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
         service = (ROOT / "linux" / "systemd" / "neurobridge.service").read_text(encoding="utf-8")

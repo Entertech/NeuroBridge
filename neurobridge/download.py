@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 import logging
 from pathlib import Path
@@ -13,6 +14,7 @@ from urllib.parse import unquote, urlsplit
 import zipfile
 
 from .business.gateway import Gateway
+from .versioning import APPLICATION_VERSION
 
 LOG = logging.getLogger(__name__)
 MAX_REQUEST_HEADER_BYTES = 16 * 1024
@@ -41,15 +43,42 @@ def _log_archive(log_directory: Path, filename: str) -> Path:
     candidates = sorted(path for path in log_directory.glob("*.log*") if path.is_file() and not path.is_symlink())
     try:
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            file_details = []
             for path in candidates:
-                bundle.write(path, arcname=path.name)
+                initial_stat = path.stat()
+                digest = sha256()
+                size = 0
+                info = zipfile.ZipInfo.from_file(path, arcname=path.name)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with path.open("rb") as source, bundle.open(info, "w", force_zip64=True) as destination:
+                    while chunk := source.read(FILE_CHUNK_BYTES):
+                        destination.write(chunk)
+                        digest.update(chunk)
+                        size += len(chunk)
+                file_details.append(
+                    {
+                        "name": path.name,
+                        "bytes": size,
+                        "modifiedAt": datetime.fromtimestamp(initial_stat.st_mtime, timezone.utc).isoformat(),
+                        "sha256": digest.hexdigest(),
+                    }
+                )
             bundle.writestr(
                 "manifest.json",
                 json.dumps(
                     {
                         "generatedAt": datetime.now(timezone.utc).isoformat(),
+                        "applicationVersion": APPLICATION_VERSION,
+                        "scope": "application-file-logs-only",
                         "primaryLog": filename,
                         "files": [path.name for path in candidates],
+                        "fileDetails": file_details,
+                        "excluded": [
+                            "systemd journal",
+                            "kernel and USB/TTY diagnostics",
+                            "gateway configuration contents",
+                            "recordings and raw device data",
+                        ],
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -98,6 +127,7 @@ async def _send_index(writer: asyncio.StreamWriter, gateway: Gateway, method: st
 
 async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, gateway: Gateway) -> None:
     temporary: Path | None = None
+    peer = writer.get_extra_info("peername")
     try:
         try:
             raw = await reader.readuntil(b"\r\n\r\n")
@@ -121,6 +151,8 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             await _send_error(writer, 400, "Query parameters are not supported")
             return
         path = unquote(parsed.path)
+        log_path = "".join(character if character.isprintable() else " " for character in path)[:256]
+        LOG.info("Download request received: peer=%s method=%s path=%s", peer, method, log_path)
         base = gateway.config.download.path
         if path in {base, base + "/"}:
             await _send_index(writer, gateway, method)
@@ -143,18 +175,29 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                 await _send_error(writer, 409, str(error))
                 return
             await _send_file(writer, method, archive, archive.name)
-            LOG.info("Completed recording download: recordingId=%s", recording_id)
+            LOG.info(
+                "Completed recording download: peer=%s recordingId=%s bytes=%s method=%s",
+                peer,
+                recording_id,
+                archive.stat().st_size,
+                method,
+            )
             return
         if path == base + "/logs/neurobridge-logs.zip":
             temporary = await asyncio.to_thread(_log_archive, gateway.config.logging.directory, gateway.config.logging.filename)
             await _send_file(writer, method, temporary, "neurobridge-logs.zip")
-            LOG.info("Completed operational log download")
+            LOG.info(
+                "Completed operational log download: peer=%s bytes=%s method=%s",
+                peer,
+                temporary.stat().st_size,
+                method,
+            )
             return
         await _send_error(writer, 404, "Not found")
     except (BrokenPipeError, ConnectionResetError):
-        LOG.info("Download client disconnected before transfer completed")
+        LOG.info("Download client disconnected before transfer completed: peer=%s", peer)
     except Exception:
-        LOG.exception("Download service request failed")
+        LOG.exception("Download service request failed: peer=%s", peer)
         with suppress(Exception):
             await _send_error(writer, 500, "Internal server error")
     finally:

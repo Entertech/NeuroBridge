@@ -33,6 +33,10 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def safe_log_text(value: object, limit: int = 512) -> str:
+    return "".join(character if character.isprintable() else " " for character in str(value))[:limit]
+
+
 def envelope(code: int, data: dict, message: str = "OK") -> dict:
     return {"protocolVersion": PROTOCOL_VERSION, "code": code, "data": data, "message": message}
 
@@ -83,11 +87,16 @@ class Gateway:
         self._capture_stats: dict[str, int | None] = {
             "eegPackets": 0,
             "hrPackets": 0,
+            "eegBytes": 0,
+            "hrBytes": 0,
+            "invalidPacketLengths": 0,
             "windows": 0,
             "invalidWindows": 0,
+            "firstPacketAtMs": None,
             "lastDataAtMs": None,
             "lastSummaryAtMs": 0,
         }
+        self._capture_final_summary_logged = False
 
     @property
     def live(self) -> bool:
@@ -120,6 +129,11 @@ class Gateway:
         await self._cancel_window_flush()
         await self._stop_replay()
         await self.algorithm.stop()
+        if not self._capture_final_summary_logged and (
+            int(self._capture_stats["eegPackets"] or 0) or int(self._capture_stats["hrPackets"] or 0)
+        ):
+            self._log_capture_summary("gateway_stop")
+            self._capture_final_summary_logged = True
         self.store.stop()
         LOG.info("Gateway stopped: bootId=%s", self.boot_id)
 
@@ -128,7 +142,7 @@ class Gateway:
         await self.algorithm.initialize()
         self.status["algorithmState"] = "ready" if self.algorithm.available else ("error" if self.algorithm.error else "unavailable")
         if self.status["algorithmState"] == "error":
-            LOG.error("Device capture initialized: algorithmState=error reason=%s", self.algorithm.error)
+            LOG.error("Device capture initialized: algorithmState=error reason=%s", safe_log_text(self.algorithm.error))
         else:
             LOG.info("Device capture initialized: algorithmState=%s", self.status["algorithmState"])
 
@@ -149,10 +163,18 @@ class Gateway:
             await self.algorithm.stop()
             self.status["algorithmState"] = "unavailable"
             self._log_capture_summary("disconnected")
+            self._capture_final_summary_logged = True
             self.store.stop()
             LOG.info("Headband disconnected; recording stopped")
         if previous != value:
-            if name != "connectionState":
+            if name == "connectionState":
+                LOG.info(
+                    "Connection state changed: previous=%s current=%s lastError=%s",
+                    previous,
+                    value,
+                    self.connection_error,
+                )
+            else:
                 LOG.info("Gateway status changed: %s=%s", name, value)
             await self.broadcast_status()
 
@@ -162,8 +184,9 @@ class Gateway:
         ``FlowtimeAdapter`` retries internally, so surfacing the exception here
         must not terminate the gateway or alter the published northbound schema.
         """
-        self.connection_error = error
-        LOG.warning("Headband connection attempt failed: %s", error)
+        safe_error = safe_log_text(error)
+        self.connection_error = safe_error
+        LOG.warning("Headband connection attempt failed: %s", safe_error)
 
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
         received_at_ms = now_ms()
@@ -172,13 +195,19 @@ class Gateway:
             LOG.warning("Ignoring unsupported device channel: channel=%s bytes=%s", characteristic, len(value))
             return
         self._capture_stats[f"{raw_stream}Packets"] = int(self._capture_stats[f"{raw_stream}Packets"] or 0) + 1
+        self._capture_stats[f"{raw_stream}Bytes"] = int(self._capture_stats[f"{raw_stream}Bytes"] or 0) + len(value)
+        if self._capture_stats["firstPacketAtMs"] is None:
+            self._capture_stats["firstPacketAtMs"] = received_at_ms
+        self._capture_stats["lastDataAtMs"] = received_at_ms
         expected_bytes = {"eeg": 20, "hr": 1}[raw_stream]
         if len(value) != expected_bytes:
+            self._capture_stats["invalidPacketLengths"] = int(self._capture_stats["invalidPacketLengths"] or 0) + 1
             LOG.warning(
-                "Device packet length invalid: channel=%s bytes=%s expectedBytes=%s",
+                "Device packet length invalid: channel=%s bytes=%s expectedBytes=%s invalidPacketLengths=%s",
                 characteristic,
                 len(value),
                 expected_bytes,
+                self._capture_stats["invalidPacketLengths"],
             )
         if raw_stream:
             window_start_ms = received_at_ms - received_at_ms % self.assembler.interval_ms
@@ -194,26 +223,49 @@ class Gateway:
         self._schedule_window_flush()
 
     def _reset_capture_stats(self) -> None:
+        self._capture_final_summary_logged = False
         self._capture_stats.update(
             eegPackets=0,
             hrPackets=0,
+            eegBytes=0,
+            hrBytes=0,
+            invalidPacketLengths=0,
             windows=0,
             invalidWindows=0,
+            firstPacketAtMs=None,
             lastDataAtMs=None,
             lastSummaryAtMs=0,
         )
 
     def _log_capture_summary(self, reason: str) -> None:
         stats = self._capture_stats
+        first_packet = stats["firstPacketAtMs"]
+        last_packet = stats["lastDataAtMs"]
+        duration_ms = (
+            int(last_packet) - int(first_packet)
+            if first_packet is not None and last_packet is not None
+            else None
+        )
         LOG.info(
-            "Capture summary: reason=%s recordingId=%s windows=%s invalidWindows=%s eegPackets=%s hrPackets=%s lastDataAtMs=%s",
+            "Capture summary: reason=%s recordingId=%s windows=%s invalidWindows=%s "
+            "eegPackets=%s eegBytes=%s hrPackets=%s hrBytes=%s invalidPacketLengths=%s "
+            "firstPacketAtMs=%s lastPacketAtMs=%s durationMs=%s algorithmState=%s "
+            "clients=%s subscriptions=%s",
             reason,
             self.store.recording_id or self.store.last_recording_id,
             stats["windows"],
             stats["invalidWindows"],
             stats["eegPackets"],
+            stats["eegBytes"],
             stats["hrPackets"],
-            stats["lastDataAtMs"],
+            stats["hrBytes"],
+            stats["invalidPacketLengths"],
+            first_packet,
+            last_packet,
+            duration_ms,
+            self.status.get("algorithmState"),
+            len(self.sessions),
+            sum(len(session.subscriptions) for session in self.sessions),
         )
 
     def _schedule_window_flush(self) -> None:
@@ -251,7 +303,6 @@ class Gateway:
 
     async def publish_window(self, window: DataWindow) -> None:
         self._capture_stats["windows"] = int(self._capture_stats["windows"] or 0) + 1
-        self._capture_stats["lastDataAtMs"] = window.end_ms
         raw = window.raw_payload()
         reasons = list(window.reasons)
         algorithm_payload, algorithm_reasons = await self.algorithm.evaluate(window)
@@ -264,14 +315,17 @@ class Gateway:
         if not valid:
             self._capture_stats["invalidWindows"] = int(self._capture_stats["invalidWindows"] or 0) + 1
         LOG.debug(
-            "Capture window processed: recordingId=%s startMs=%s endMs=%s eegPackets=%s hrPackets=%s valid=%s algorithmState=%s subscribers=%s",
+            "Capture window processed: recordingId=%s startMs=%s endMs=%s eegPackets=%s hrPackets=%s "
+            "valid=%s invalidReasons=%s algorithmState=%s clients=%s subscriptions=%s",
             self.store.recording_id,
             window.start_ms,
             window.end_ms,
             len(window.eeg),
             len(window.hr),
             valid,
+            ",".join(reasons) if reasons else "none",
             self.status.get("algorithmState"),
+            len(self.sessions),
             sum(len(session.subscriptions) for session in self.sessions),
         )
         now = now_ms()

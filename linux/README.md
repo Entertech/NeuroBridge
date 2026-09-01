@@ -8,6 +8,7 @@
 - `setup-ssh-operations.sh`：一键 SSH 运维配置入口；快速模式读取现场 TXT，缺少的字段才交互询问。
 - `../config/ssh-operations.example.txt`：快速模式模板；实际 `ssh-operations.txt` 被 Git 忽略，可按现场要求保存明文密码。
 - `collect-ubuntu-build-diagnostics.sh`：收集编译日志、工具版本和 CMake 诊断，不包含现场配置或原始数据。
+- `collect-kylin-runtime-diagnostics.sh`：供 N100/N150 银河麒麟 V10 现场离线采集系统、服务、journal、USB/TTY、网络、依赖和应用日志；它是诊断工具，不是麒麟安装器。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。
@@ -335,5 +336,7 @@ sudo ./linux/collect-ubuntu-build-diagnostics.sh
 ```
 
 使用 `sudo` 运行时，生成的压缩包会归发起该命令的登录用户所有，权限为仅该用户可读写（`0600`），可直接上传或复制；不会归 root 锁定。
+
+N100/N150 改装银河麒麟 V10 后出现运行、驱动、USB 串口或网络问题时，使用 `sudo ./linux/collect-kylin-runtime-diagnostics.sh --output-dir /tmp --journal-lines 10000` 生成完整现场诊断包。该脚本不复用 Ubuntu 安装流程；详细收集范围、脱敏边界、U 盘/SCP 导出和问题记录模板见[麒麟 V10 网关运行与串口联调内部文档](../doc/tech/麒麟V10网关运行与串口联调内部文档.md#82-无-codex-环境的一键诊断包)。
 
 部署或修改设备接入、算法、网络依赖后，至少重新验证实时采集、录播、头环断线重连、B 端不可达与恢复五个场景。所有日志、配置和录播数据均应仅保留在受控环境中。

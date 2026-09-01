@@ -4,10 +4,16 @@ import asyncio
 import base64
 import json
 import logging
+import time
+
 from ..config import AlgorithmConfig
 from ..ble.packets import DataWindow
 
 LOG = logging.getLogger(__name__)
+
+
+def _safe_log_text(value: object, limit: int = 512) -> str:
+    return "".join(character if character.isprintable() else " " for character in str(value))[:limit]
 
 
 class AlgorithmRunner:
@@ -45,7 +51,7 @@ class AlgorithmRunner:
             LOG.info("Algorithm bridge started: command=%s pid=%s", self.config.command[0], self.process.pid)
         except OSError as exc:
             self.error = str(exc)
-            LOG.exception("Cannot start algorithm bridge: %s", self.error)
+            LOG.exception("Cannot start algorithm bridge: %s", _safe_log_text(self.error))
 
     async def initialize(self) -> None:
         """Create a clean SDK process for each new device connection/session."""
@@ -68,6 +74,7 @@ class AlgorithmRunner:
             return None, []
         if not self.available or not self.process or not self.process.stdin or not self.process.stdout:
             return None, ["ALGORITHM_NOT_READY"]
+        started_at = time.monotonic()
         try:
             request = {"timestampMs": window.end_ms, "eegRawBase64": base64.b64encode(b"".join(x.value for x in window.eeg)).decode(), "hrRawBase64": base64.b64encode(b"".join(x.value for x in window.hr)).decode()}
             self.process.stdin.write((json.dumps(request) + "\n").encode())
@@ -80,9 +87,32 @@ class AlgorithmRunner:
             if bridge_error:
                 raise ValueError(f"algorithm bridge: {bridge_error}")
             if not isinstance(result.get("algorithm"), dict):
+                LOG.warning(
+                    "Algorithm bridge output invalid: timestampMs=%s eegPackets=%s hrPackets=%s responseFields=%s",
+                    window.end_ms,
+                    len(window.eeg),
+                    len(window.hr),
+                    ",".join(sorted(str(key) for key in result)) if isinstance(result, dict) else "not-an-object",
+                )
                 return None, ["ALGORITHM_OUTPUT_INVALID"]
+            LOG.debug(
+                "Algorithm window evaluated: timestampMs=%s eegPackets=%s hrPackets=%s durationMs=%s outputFields=%s",
+                window.end_ms,
+                len(window.eeg),
+                len(window.hr),
+                int((time.monotonic() - started_at) * 1000),
+                ",".join(sorted(str(key) for key in result["algorithm"])),
+            )
             return result["algorithm"], []
         except (asyncio.TimeoutError, json.JSONDecodeError, OSError, UnicodeError, ValueError, RuntimeError) as exc:
             self.error = str(exc)
-            LOG.warning("Algorithm bridge evaluation failed: %s", exc)
+            LOG.warning(
+                "Algorithm bridge evaluation failed: timestampMs=%s eegPackets=%s hrPackets=%s durationMs=%s errorType=%s reason=%s",
+                window.end_ms,
+                len(window.eeg),
+                len(window.hr),
+                int((time.monotonic() - started_at) * 1000),
+                type(exc).__name__,
+                _safe_log_text(exc),
+            )
             return None, ["ALGORITHM_ERROR"]

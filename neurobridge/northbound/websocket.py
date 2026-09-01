@@ -4,6 +4,7 @@ from http import HTTPStatus
 import asyncio
 import json
 import logging
+
 from ..business.gateway import ClientSession, Gateway
 
 LOG = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ async def create_server(gateway: Gateway):
         session = ClientSession()
         gateway.sessions.add(session)
         peer = websocket.remote_address
-        LOG.info("B-side WebSocket client connected: peer=%s", peer)
+        LOG.info("B-side WebSocket client connected: peer=%s activeClients=%s", peer, len(gateway.sessions))
         async def send(message: dict) -> None:
             await websocket.send(json.dumps(message, separators=(",", ":"), ensure_ascii=False))
         try:
@@ -41,10 +42,21 @@ async def create_server(gateway: Gateway):
                     LOG.warning("WebSocket binary frame rejected: peer=%s bytes=%s", peer, len(message))
                     await websocket.close(code=1003, reason="Text JSON required")
                     break
+                LOG.debug("WebSocket text frame received: peer=%s bytes=%s", peer, len(message.encode("utf-8")))
                 await gateway.handle(session, message, send)
         finally:
             await gateway.close_session(session)
-            LOG.info("B-side WebSocket client disconnected: peer=%s closeCode=%s closeReason=%s", peer, websocket.close_code, websocket.close_reason)
+            close_reason = websocket.close_reason or ""
+            safe_close_reason = "".join(
+                character if character.isprintable() else " " for character in close_reason
+            )[:256]
+            LOG.info(
+                "B-side WebSocket client disconnected: peer=%s closeCode=%s closeReason=%s activeClients=%s",
+                peer,
+                websocket.close_code,
+                safe_close_reason,
+                len(gateway.sessions),
+            )
 
     return await websockets.serve(handler, gateway.config.server.host, gateway.config.server.port, subprotocols=[SUBPROTOCOL], process_request=require_subprotocol, ping_interval=None, ping_timeout=None, max_size=256 * 1024, compression=None)
 
