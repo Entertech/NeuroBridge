@@ -523,7 +523,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertFalse(config.algorithm.enabled)
 
         ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-        for ignored_directory in (".venv/", "venv/", ".runtime/", "wheelhouse/"):
+        for ignored_directory in (".venv/", "venv/", ".runtime/", "wheelhouse/", "python-runtime/"):
             self.assertIn(ignored_directory, ignore)
 
         start_script = ROOT / "linux" / "start-kylin-gateway.sh"
@@ -566,12 +566,23 @@ class DeploymentTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
-        self.assertIn("creates the ignored project", help_result.stdout)
+        self.assertIn("prepares a project-local Python 3.11", help_result.stdout)
         python_setup_source = python_setup.read_text(encoding="utf-8")
         self.assertIn('PIP_CACHE_DIR="$runtime_dir/cache/pip"', python_setup_source)
         self.assertIn('TMPDIR="$runtime_dir/tmp"', python_setup_source)
         self.assertIn('"$wheelhouse_dir"/*.whl', python_setup_source)
+        self.assertIn("cpython-3.11.16+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz", python_setup_source)
+        self.assertIn("25844eb97cdc72cdc78addaad0969ce3b2133a4de54bfcfa4d57f8a6d095eaab", python_setup_source)
+        self.assertIn("sha256sum -c", python_setup_source)
+        self.assertIn("config/kylin-wheelhouse.sha256", python_setup_source)
+        self.assertIn("download_portable_archive", python_setup_source)
+        self.assertIn('portable_python="$portable_root/python/bin/python3"', python_setup_source)
+        self.assertIn("venv-before-python311", python_setup_source)
         self.assertIn("Python environment ready", python_setup_source)
+        wheel_manifest = (ROOT / "config" / "kylin-wheelhouse.sha256").read_text(encoding="utf-8")
+        self.assertIn("bleak-0.19.0-py3-none-any.whl", wheel_manifest)
+        self.assertIn("dbus_fast-1.95.2-cp311", wheel_manifest)
+        self.assertEqual(len(wheel_manifest.splitlines()), 5)
 
     def test_web_assets_are_not_in_a_platform_directory(self) -> None:
         self.assertTrue((ROOT / "web" / "capture" / "index.html").is_file())
