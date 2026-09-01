@@ -550,6 +550,29 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("recording.directory", start_source)
         self.assertIn("must remain under", start_source)
 
+        python_setup = ROOT / "linux" / "setup-kylin-python.sh"
+        self.assertTrue(os.access(python_setup, os.X_OK))
+        syntax = subprocess.run(
+            ["bash", "-n", str(python_setup)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        help_result = subprocess.run(
+            ["bash", str(python_setup), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("creates the ignored project", help_result.stdout)
+        python_setup_source = python_setup.read_text(encoding="utf-8")
+        self.assertIn('PIP_CACHE_DIR="$runtime_dir/cache/pip"', python_setup_source)
+        self.assertIn('TMPDIR="$runtime_dir/tmp"', python_setup_source)
+        self.assertIn('"$wheelhouse_dir"/*.whl', python_setup_source)
+        self.assertIn("Python environment ready", python_setup_source)
+
     def test_web_assets_are_not_in_a_platform_directory(self) -> None:
         self.assertTrue((ROOT / "web" / "capture" / "index.html").is_file())
         self.assertTrue((ROOT / "web" / "b-client-test" / "index.html").is_file())

@@ -74,7 +74,7 @@ for candidate in "${python_candidates[@]}"; do
   fi
 done
 [[ -n $python_path ]] || fail \
-  "A complete project .venv/venv was not found. Create .venv and install requirements.lock first."
+  "A complete project .venv/venv was not found. Run ./linux/setup-kylin-python.sh first."
 
 runtime_dir="$root_dir/.runtime"
 if ! PYTHONPATH=$root_dir "$python_path" - "$config_path" "$root_dir" "$runtime_dir" <<'PY'

@@ -142,9 +142,8 @@ if [[ -z $python_path ]]; then
   {
     echo "ERROR: no usable Python 3.11+ environment was found."
     echo "Checked the active environment, project .venv/venv, /opt installation, python3.11, and python3."
-    echo "Create the ignored project environment from the project root:"
-    echo "  python3.11 -m venv .venv"
-    echo "  ./.venv/bin/python -m pip install --no-index --find-links /path/to/wheelhouse -r requirements.lock"
+    echo "Prepare the ignored project environment from the project root:"
+    echo "  ./linux/setup-kylin-python.sh"
     echo "Then rerun this command, or pass --python /absolute/path/to/python."
   } >&2
   exit 1
@@ -247,7 +246,7 @@ if [[ $runtime_ready == true && $system_install != true ]]; then
   echo "run=$root_dir/linux/start-kylin-gateway.sh"
 elif [[ $runtime_ready != true ]]; then
   echo "WARNING: configuration succeeded, but pyserial is missing from $python_path" >&2
-  echo "Install requirements.lock into .venv before starting NeuroBridge." >&2
+  echo "Run ./linux/setup-kylin-python.sh before starting NeuroBridge." >&2
 fi
 if [[ $system_install == true ]]; then
   echo "logs=sudo journalctl -u neurobridge.service -f -o short-iso-precise"
