@@ -6,7 +6,7 @@
 bash linux/neurobridge-kylin-bootstrap.sh
 ```
 
-`linux/neurobridge-kylin-bootstrap.sh` 是现场操作员唯一需要运行的文件：它先处理旧代码或 Git 权限问题，再打开数字菜单。无法拉取的旧设备可只接收这个文件并把它放到项目根目录，以 `bash neurobridge-kylin-bootstrap.sh` 运行；复制后的根目录文件名不会与仓库内跟踪路径冲突。输入 `1` 完成首次配置，输入 `5` 日常启动。入口使用数字菜单，单项确认只使用 `yes/no`，每一步保存日志并提示下一条命令。保持耳机 USB 已连接即可，正常检测不要求拔插。完整现场流程和日志判读见[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
+`linux/neurobridge-kylin-bootstrap.sh` 是现场操作员唯一需要运行的文件：它先处理旧代码或 Git 权限问题，再打开数字菜单。无法拉取的旧设备可只接收这个文件并把它放到项目根目录，以 `bash neurobridge-kylin-bootstrap.sh` 运行；复制后的根目录文件名不会与仓库内跟踪路径冲突。通常只需输入 `1`，助手会跳过已完成步骤并直接启动；已配置好时可输入 `2` 直接启动，权限/更新、USB 检查、串口重配、算法重建、诊断导出和最近日志也都有独立数字快捷项。保持耳机 USB 已连接即可，正常检测不要求拔插。完整现场流程和日志判读见[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
 
 本目录同时保存 Ubuntu x86_64 部署及银河麒麟项目运行脚本：
 
@@ -22,7 +22,7 @@ bash linux/neurobridge-kylin-bootstrap.sh
 - `setup-kylin-python.sh`：银河麒麟 V10 项目 Python 环境一键初始化；系统仅有 Python 3.8 时自动准备经 SHA-256 锁定的项目内 Python 3.11，再选择离线 `wheelhouse` 或当前网络，所有运行时、缓存、临时文件和日志保存在项目内。
 - `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口一键识别；默认直接检查已连接设备，无需拔插，并保存 USB/TTY/驱动快照；仅在显式 `--plug-cycle` 时监控拔插过程和超时；旧版 `lsusb` 不支持 `-nn` 时自动回退。
 - `setup-kylin-serial.sh`：银河麒麟 x86_64 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务；项目启动脚本会处理账号已入组但当前会话权限尚未刷新的情况。
-- `setup-kylin-algorithm.sh`：在银河麒麟 V10 x86_64 本机使用锁定源码构建算法 bridge 到项目 `.runtime/algorithm/`；缺少系统构建依赖时先询问 `yes/no`，进程自检成功后才备份并原子启用项目配置。
+- `setup-kylin-algorithm.sh`：在银河麒麟 V10 x86_64 本机使用项目内锁定 CMake 3.31.6、Eigen 3.3.7 和锁定源码构建算法 bridge 到 `.runtime/algorithm/`；在线自动下载 CMake，离线从忽略提交的 `algorithm-packages/` 读取，进程自检成功后才原子启用配置。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。

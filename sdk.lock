@@ -14,9 +14,13 @@ vendor_path = "third_party/AffectiveCloud-Algorithm-SDK"
 [affective_algorithm_sdk.build]
 cmake_minimum_version = "3.22"
 cxx_standard = "17"
-eigen_version = "5.0.1"
 numcpp_repository = "https://github.com/dpilger26/NumCpp.git"
 numcpp_commit = "cd324a7f09ec1ec4ba2ef2d7bac4861c9a84ee47"
 numcpp_version = "2.11.0"
 vendor_path = "third_party/NumCpp"
 macos_build_status = "source-build-and-synthetic-input-smoke-test"
+
+[affective_algorithm_sdk.build.eigen_versions]
+galaxy_kylin_v10_x86_64 = "3.3.7"
+ubuntu_24_04_x86_64 = "3.4.0"
+macos_poc = "5.0.1"

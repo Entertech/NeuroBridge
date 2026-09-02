@@ -205,7 +205,30 @@ capture_if_available python-path command -v python3
 capture_if_available systemd-version systemctl --version
 capture_if_available glibc-version ldd --version
 capture_if_available cmake-version cmake --version
+project_cmake="$root_dir/.runtime/algorithm/toolchain/cmake-3.31.6-linux-x86_64/bin/cmake"
+if [[ -x $project_cmake ]]; then
+  capture project-cmake-version "$project_cmake" --version
+  capture project-cmake-sha256 sha256sum "$project_cmake"
+  [[ ! -f $root_dir/.runtime/algorithm/toolchain/cmake-3.31.6-linux-x86_64/SOURCE.sha256 ]] \
+    || capture project-cmake-source cat "$root_dir/.runtime/algorithm/toolchain/cmake-3.31.6-linux-x86_64/SOURCE.sha256"
+else
+  warn "Project CMake 3.31.6 is not installed"
+fi
+cmake_archive="$root_dir/algorithm-packages/cmake-3.31.6-linux-x86_64.tar.gz"
+[[ ! -f $cmake_archive ]] || capture project-cmake-archive-sha256 sha256sum "$cmake_archive"
 capture_if_available compiler-version c++ --version
+eigen_macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+if [[ -f $eigen_macros ]]; then
+  capture_shell eigen-version "
+    awk '\$2 == \"EIGEN_WORLD_VERSION\" { world=\$3 }
+         \$2 == \"EIGEN_MAJOR_VERSION\" { major=\$3 }
+         \$2 == \"EIGEN_MINOR_VERSION\" { minor=\$3 }
+         END { print world \".\" major \".\" minor }' '$eigen_macros'
+  "
+else
+  warn "Eigen3 version header is unavailable"
+fi
+[[ ! -f $root_dir/sdk.lock ]] || capture sdk-lock-sha256 sha256sum "$root_dir/sdk.lock"
 capture_if_available collector-sha256 sha256sum "${BASH_SOURCE[0]}"
 if command -v dpkg-query >/dev/null 2>&1; then
   capture dpkg-packages dpkg-query -W '-f=${Package}\t${Version}\t${Architecture}\n'

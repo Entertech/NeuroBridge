@@ -25,6 +25,13 @@ root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 runtime_dir="$root_dir/.runtime"
 algorithm_dir="$runtime_dir/algorithm"
 config_path="$runtime_dir/config/gateway.toml"
+package_dir="$root_dir/algorithm-packages"
+toolchain_dir="$algorithm_dir/toolchain"
+cmake_version="3.31.6"
+cmake_archive="cmake-${cmake_version}-linux-x86_64.tar.gz"
+cmake_url="https://github.com/Kitware/CMake/releases/download/v${cmake_version}/${cmake_archive}"
+cmake_sha256="5a1133ff103c71eb5120e2cc3de922733e7d8a26a98ae716397e8676adb367bf"
+cmake_home="$toolchain_dir/cmake-${cmake_version}-linux-x86_64"
 
 usage() {
   cat <<EOF
@@ -38,8 +45,9 @@ Generated bridge, build files, and logs remain below:
   $algorithm_dir
   $runtime_dir/logs
 
-Run as the normal desktop user. Missing approved system build dependencies can
-be installed after a yes/no confirmation through the detected package manager.
+Run as the normal desktop user. The locked CMake is downloaded into the project
+when needed, or may be copied to algorithm-packages for offline installation.
+Missing compiler/Eigen packages can be installed after a yes/no confirmation.
 EOF
 }
 
@@ -119,12 +127,21 @@ print(f"affectiveSdkVersion={sdk['version']}")
 print(f"affectiveSdkCommit={sdk['commit']}")
 print(f"numCppVersion={build['numcpp_version']}")
 print(f"numCppCommit={build['numcpp_commit']}")
-print(f"lockedEigenVersion={build['eigen_version']}")
+print(f"lockedEigenVersion={build['eigen_versions']['galaxy_kylin_v10_x86_64']}")
 print(f"lockedCmakeMinimum={build['cmake_minimum_version']}")
 print(f"lockedCxxStandard={build['cxx_standard']}")
 PY
 ) || fail "sdk.lock is incomplete or inconsistent with the vendored algorithm source layout."
 printf '%s\n' "$lock_details"
+locked_eigen_version=$(
+  "$python_path" - "$root_dir/sdk.lock" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+lock = tomllib.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(lock["affective_algorithm_sdk"]["build"]["eigen_versions"]["galaxy_kylin_v10_x86_64"])
+PY
+)
 
 cmake_is_usable() {
   command -v cmake >/dev/null 2>&1 || return 1
@@ -136,50 +153,121 @@ try:
     version = tuple(int(part) for part in sys.argv[1].split(".")[:3])
 except ValueError:
     raise SystemExit(1)
-raise SystemExit(0 if version >= (3, 22) else 1)
+raise SystemExit(0 if version == (3, 31, 6) else 1)
 PY
 }
 
+detect_eigen_version() {
+  local macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h world major minor
+  [[ -f $macros ]] || return 1
+  world=$(awk '$2 == "EIGEN_WORLD_VERSION" { print $3; exit }' "$macros")
+  major=$(awk '$2 == "EIGEN_MAJOR_VERSION" { print $3; exit }' "$macros")
+  minor=$(awk '$2 == "EIGEN_MINOR_VERSION" { print $3; exit }' "$macros")
+  [[ $world =~ ^[0-9]+$ && $major =~ ^[0-9]+$ && $minor =~ ^[0-9]+$ ]] || return 1
+  printf '%s.%s.%s\n' "$world" "$major" "$minor"
+}
+
 eigen_is_usable() {
+  local detected
   [[ -d /usr/include/eigen3 ]] || return 1
   [[ -f /usr/share/eigen3/cmake/Eigen3Config.cmake \
     || -f /usr/lib/cmake/eigen3/Eigen3Config.cmake \
     || -f /usr/lib64/cmake/eigen3/Eigen3Config.cmake \
-    || -f /usr/local/share/eigen3/cmake/Eigen3Config.cmake ]]
+    || -f /usr/local/share/eigen3/cmake/Eigen3Config.cmake ]] || return 1
+  detected=$(detect_eigen_version) || return 1
+  [[ $detected == "$locked_eigen_version" ]]
 }
 
-build_dependencies_ready() {
-  command -v c++ >/dev/null 2>&1 && cmake_is_usable && eigen_is_usable
+system_build_dependencies_ready() {
+  command -v c++ >/dev/null 2>&1 && eigen_is_usable
 }
 
 install_build_dependencies() {
   if command -v apt-get >/dev/null 2>&1; then
     echo "packageManager=apt-get"
-    sudo apt-get install -y cmake g++ libeigen3-dev
+    sudo apt-get install -y g++ libeigen3-dev ca-certificates curl
   elif command -v dnf >/dev/null 2>&1; then
     echo "packageManager=dnf"
-    sudo dnf install -y cmake gcc-c++ eigen3-devel
+    sudo dnf install -y gcc-c++ eigen3-devel ca-certificates curl
   elif command -v yum >/dev/null 2>&1; then
     echo "packageManager=yum"
-    sudo yum install -y cmake gcc-c++ eigen3-devel
+    sudo yum install -y gcc-c++ eigen3-devel ca-certificates curl
   else
-    fail "No supported package manager was found. Install CMake 3.22+, a C++17 compiler, and Eigen3 development files, then rerun."
+    fail "No supported package manager was found. Install a C++17 compiler, Eigen3 ${locked_eigen_version}, CA certificates, and curl, then rerun."
   fi
 }
 
-if ! build_dependencies_ready; then
-  echo "Build prerequisites are incomplete. Required: CMake 3.22+, C++17 compiler, Eigen3 headers and CMake config."
+if ! system_build_dependencies_ready; then
+  echo "System build prerequisites are incomplete. Required: C++17 compiler and Eigen3 ${locked_eigen_version}."
   if ask_yes_no "是否使用银河麒麟当前软件源安装算法构建依赖？"; then
     install_build_dependencies || fail "System dependency installation failed. See: $setup_log"
   else
     fail "Dependency installation was cancelled. Configuration was not changed."
   fi
 fi
-build_dependencies_ready || fail \
-  "Build dependencies remain unavailable after installation. Check CMake version and Eigen3 development files. Configuration was not changed."
+system_build_dependencies_ready || fail \
+  "Build dependencies remain unavailable after installation. Expected Eigen3 ${locked_eigen_version}; detected $(detect_eigen_version 2>/dev/null || printf unknown). Configuration was not changed."
+
+prepare_project_cmake() {
+  local archive_path="$package_dir/$cmake_archive"
+  local cached_archive="$runtime_dir/downloads/$cmake_archive"
+  local actual_sha extract_dir extracted
+  if [[ -x $cmake_home/bin/cmake ]]; then
+    export PATH="$cmake_home/bin:$PATH"
+    if cmake_is_usable; then
+      echo "projectCmakeReused=true"
+      return 0
+    fi
+    fail "Project CMake exists but has an unexpected version: $cmake_home"
+  fi
+
+  if [[ ! -f $archive_path ]]; then
+    archive_path=$cached_archive
+  fi
+  if [[ ! -f $archive_path ]]; then
+    command -v curl >/dev/null 2>&1 || fail \
+      "curl is unavailable. Copy $cmake_archive to $package_dir and choose menu 6 again."
+    install -d -m 0750 "$runtime_dir/downloads"
+    echo "Downloading locked project CMake ${cmake_version}"
+    echo "downloadUrl=$cmake_url"
+    curl --fail --location --retry 3 --output "$cached_archive.part" "$cmake_url" \
+      || fail "CMake download failed. Copy $cmake_archive to $package_dir for offline setup."
+    mv -f -- "$cached_archive.part" "$cached_archive"
+    archive_path=$cached_archive
+  fi
+
+  actual_sha=$(sha256sum "$archive_path" | awk '{print $1}')
+  [[ $actual_sha == "$cmake_sha256" ]] || fail \
+    "CMake archive SHA-256 mismatch: file=$archive_path expected=$cmake_sha256 actual=$actual_sha"
+  install -d -m 0750 "$toolchain_dir"
+  extract_dir="$toolchain_dir/.extract-${cmake_version}-$$"
+  [[ $extract_dir == "$toolchain_dir"/.extract-* && $toolchain_dir != / ]] || fail "Unsafe CMake extraction path."
+  rm -rf -- "$extract_dir"
+  install -d -m 0750 "$extract_dir"
+  tar -xzf "$archive_path" -C "$extract_dir" || {
+    rm -rf -- "$extract_dir"
+    fail "CMake archive extraction failed: $archive_path"
+  }
+  extracted="$extract_dir/cmake-${cmake_version}-linux-x86_64"
+  [[ -x $extracted/bin/cmake ]] || {
+    rm -rf -- "$extract_dir"
+    fail "CMake archive did not contain the expected executable."
+  }
+  mv -- "$extracted" "$cmake_home"
+  rm -rf -- "$extract_dir"
+  printf '%s  %s\n' "$cmake_sha256" "$cmake_archive" >"$cmake_home/SOURCE.sha256"
+  export PATH="$cmake_home/bin:$PATH"
+  cmake_is_usable || fail "Installed project CMake failed its version check."
+  echo "projectCmakeInstalled=true"
+  echo "projectCmakeArchive=$archive_path"
+  echo "projectCmakeSha256=$cmake_sha256"
+}
+
+prepare_project_cmake
 
 echo "cmake=$(cmake --version | head -n 1)"
 echo "compiler=$(c++ --version | head -n 1)"
+echo "eigen=$(detect_eigen_version)"
 attempt_dir="$algorithm_dir/attempt-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 install -d -m 0750 "$attempt_dir"
 echo "buildAttempt=$attempt_dir"

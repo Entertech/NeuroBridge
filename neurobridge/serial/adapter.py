@@ -378,6 +378,7 @@ class SerialAdapter:
             "controlResponses": 0,
             "controlResponseBytes": 0,
             "controlTimeouts": 0,
+            "controlUnexpectedResponses": 0,
             "streamHandshakeFrames": 0,
             "startedAtMonotonic": time.monotonic(),
             "lastSummaryAtMonotonic": 0.0,
@@ -556,17 +557,34 @@ class SerialAdapter:
                         self.config.command_response_timeout_ms,
                     )
                     raise TimeoutError("Serial start command received no response")
+                if initial != EXPECTED_CONTROL_ACK:
+                    await self.status("connectionState", "validation_failed")
+                    classification = _classify_control_response(initial)[0]
+                    LOG.error(
+                        "Serial device validation failed: attempt=%s target=%s command=E1 "
+                        "reason=unexpected_response responseClassification=%s expectedAck01=true "
+                        "responseBytes=%s payloadLogged=false",
+                        attempt,
+                        _safe_log_text(self._target),
+                        classification,
+                        len(initial),
+                    )
+                    raise ConnectionError(
+                        f"Serial start command returned an unexpected response: {classification}"
+                    )
                 self._capture_started = True
                 await self.status("connectionState", "validated")
                 LOG.info(
                     "Serial device validation succeeded: attempt=%s target=%s command=E1 "
-                    "responseBytes=%s policy=any_non_empty_response",
+                    "responseBytes=%s policy=single_byte_0x01",
                     attempt,
                     _safe_log_text(self._target),
                     len(initial),
                 )
                 phase = "streaming"
-                await self._stream(initial)
+                # The one-byte ACK is control-plane data and must never be fed
+                # into the 28-byte biological-data frame parser.
+                await self._stream(b"")
                 if not self._stopping:
                     raise ConnectionError("Serial stream ended")
             except asyncio.CancelledError:
@@ -721,13 +739,9 @@ class SerialAdapter:
             previous_timeout = getattr(client, "timeout", None)
             client.timeout = self.config.command_response_timeout_ms / 1000
             try:
-                # One byte is sufficient to confirm success and returns as soon
-                # as the first response byte arrives. Drain only bytes already
-                # buffered so a short response does not wait for the full timeout.
+                # The device contract defines an exact one-byte 0x01 ACK. Read
+                # exactly one byte and leave later stream data for _stream().
                 response = bytes(await asyncio.to_thread(client.read, 1))
-                waiting = min(max(int(getattr(client, "in_waiting", 0)), 0), 255)
-                if response and waiting:
-                    response += bytes(await asyncio.to_thread(client.read, waiting))
             finally:
                 client.timeout = previous_timeout
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -741,12 +755,17 @@ class SerialAdapter:
                 longest_handshake_prefix,
                 single_byte_hex,
             ) = _classify_control_response(response)
-            log_response = LOG.warning if "handshake" in classification else LOG.info
+            success = expected_ack_01
+            if not success:
+                self._stats["controlUnexpectedResponses"] = (
+                    int(self._stats["controlUnexpectedResponses"]) + 1
+                )
+            log_response = LOG.info if success else LOG.warning
             log_response(
                 "Serial control response received: command=%s responseBytes=%s durationMs=%s "
                 "responseClassification=%s expectedAck01=%s singleByteHex=%s "
-                "fixedHandshakeFrames=%s longestHandshakePrefixBytes=%s success=true "
-                "acceptedByCurrentPolicy=true payloadLogged=false",
+                "fixedHandshakeFrames=%s longestHandshakePrefixBytes=%s success=%s "
+                "acceptedByCurrentPolicy=%s payloadLogged=false",
                 name,
                 len(response),
                 duration_ms,
@@ -755,6 +774,8 @@ class SerialAdapter:
                 single_byte_hex,
                 fixed_handshake_frames,
                 longest_handshake_prefix,
+                str(success).lower(),
+                str(success).lower(),
             )
         else:
             self._stats["controlTimeouts"] = int(self._stats["controlTimeouts"]) + 1
@@ -776,9 +797,11 @@ class SerialAdapter:
             try:
                 response = await self._send_control(STOP_COMMAND, "stop")
                 LOG.info(
-                    "Serial stop command completed: reason=%s responseReceived=%s",
+                    "Serial stop command completed: reason=%s responseReceived=%s responseAccepted=%s "
+                    "policy=single_byte_0x01",
                     reason,
                     bool(response),
+                    response == EXPECTED_CONTROL_ACK,
                 )
             except Exception:
                 LOG.exception("Serial stop command failed: reason=%s", reason)
@@ -959,7 +982,8 @@ class SerialAdapter:
             "highestSequence=%s expectedPackets=%s receivedUniquePackets=%s lostPackets=%s "
             "lossRatePercent=%.6f intervalExpectedPackets=%s intervalReceivedUniquePackets=%s "
             "intervalLostPackets=%s intervalLossRatePercent=%.6f duplicates=%s outOfOrder=%s late=%s "
-            "controlResponses=%s controlResponseBytes=%s controlTimeouts=%s streamHandshakeFrames=%s",
+            "controlResponses=%s controlResponseBytes=%s controlTimeouts=%s "
+            "controlUnexpectedResponses=%s streamHandshakeFrames=%s",
             reason,
             _safe_log_text(self._target),
             time.monotonic() - float(self._stats["startedAtMonotonic"]),
@@ -985,6 +1009,7 @@ class SerialAdapter:
             self._stats["controlResponses"],
             self._stats["controlResponseBytes"],
             self._stats["controlTimeouts"],
+            self._stats["controlUnexpectedResponses"],
             self._stats["streamHandshakeFrames"],
         )
         self._last_summary_snapshot = snapshot

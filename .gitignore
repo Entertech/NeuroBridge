@@ -2,6 +2,7 @@
 venv/
 .runtime/
 wheelhouse/
+algorithm-packages/
 python-runtime/
 __pycache__/
 *.py[cod]

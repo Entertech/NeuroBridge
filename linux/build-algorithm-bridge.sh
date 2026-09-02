@@ -13,8 +13,8 @@ fail() {
 [[ -r /etc/os-release ]] || fail "Cannot identify the operating system."
 . /etc/os-release
 case ${ID,,} in
-  ubuntu) platform=ubuntu ;;
-  kylin) platform=galaxy-kylin ;;
+  ubuntu) platform=ubuntu; eigen_lock_key=ubuntu_24_04_x86_64 ;;
+  kylin) platform=galaxy-kylin; eigen_lock_key=galaxy_kylin_v10_x86_64 ;;
   *) fail "The algorithm bridge build supports Ubuntu or Galaxy Kylin; detected ID=${ID:-unknown}." ;;
 esac
 
@@ -55,6 +55,24 @@ for candidate in \
 done
 [[ -n $eigen_config && -d /usr/include/eigen3 ]] || fail \
   "Eigen3 headers/CMake configuration are missing. Install the approved Eigen3 development package for $platform."
+eigen_macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+[[ -f $eigen_macros ]] || fail "Eigen3 version header is missing: $eigen_macros"
+eigen_version=$(awk '
+  $2 == "EIGEN_WORLD_VERSION" { world=$3 }
+  $2 == "EIGEN_MAJOR_VERSION" { major=$3 }
+  $2 == "EIGEN_MINOR_VERSION" { minor=$3 }
+  END { if (world ~ /^[0-9]+$/ && major ~ /^[0-9]+$/ && minor ~ /^[0-9]+$/) print world "." major "." minor }
+' "$eigen_macros")
+expected_eigen_version=$("$python_command" - "$repo_root/sdk.lock" "$eigen_lock_key" <<'PY'
+import sys
+import tomllib
+from pathlib import Path
+lock = tomllib.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(lock["affective_algorithm_sdk"]["build"]["eigen_versions"][sys.argv[2]])
+PY
+)
+[[ -n $eigen_version && $eigen_version == "$expected_eigen_version" ]] || fail \
+  "Eigen3 version mismatch for $platform: expected $expected_eigen_version, detected ${eigen_version:-unknown}."
 sdk_dir="$sdk_root/AffectiveCloud-Algorithm-SDK"
 numcpp_dir="$sdk_root/NumCpp"
 [[ -f "$sdk_dir/cpp/package/CMakeLists.txt" ]] || fail "Vendored AffectiveCloud SDK source is missing from this checkout."
@@ -75,6 +93,7 @@ echo "Kernel: $(uname -r)"
 echo "CMake: $(cmake --version | head -n 1)"
 echo "Compiler: $(c++ --version | head -n 1)"
 echo "Eigen3Config: $eigen_config"
+echo "Eigen3Version: $eigen_version"
 numcpp_prefix="$build_root/numcpp-prefix"
 cmake -Wno-dev -S "$numcpp_dir" -B "$build_root/numcpp" \
   -DCMAKE_BUILD_TYPE=Release -DNUMCPP_NO_USE_BOOST=ON -DCMAKE_INSTALL_PREFIX="$numcpp_prefix"

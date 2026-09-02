@@ -44,7 +44,7 @@ class DeploymentTests(unittest.TestCase):
         )
         self.assertEqual(menu_result.returncode, 0, menu_result.stderr)
         self.assertIn("正在打开 NeuroBridge 银河麒麟数字菜单", menu_result.stdout)
-        self.assertIn("1. 新设备首次配置", menu_result.stdout)
+        self.assertIn("1. 一键准备并启动（推荐，可重复执行）", menu_result.stdout)
 
         self.assertIn('target_branch="codex/serial-usb-transport"', script)
         self.assertIn('elif [[ -f $script_dir/../pyproject.toml ]]', script)
@@ -206,7 +206,7 @@ class DeploymentTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
-        self.assertIn("First-time setup", help_result.stdout)
+        self.assertIn("Prepare everything needed and start", help_result.stdout)
         self.assertIn("Repair project permissions and update source", help_result.stdout)
         self.assertIn("one decision accept yes/no", help_result.stdout)
 
@@ -218,11 +218,14 @@ class DeploymentTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(menu_result.returncode, 0, menu_result.stderr)
-        self.assertIn("1. 新设备首次配置", menu_result.stdout)
-        self.assertIn("2. 修复项目权限并更新代码", menu_result.stdout)
-        self.assertIn("3. 检查当前 USB/串口（无需拔插）", menu_result.stdout)
-        self.assertIn("7. 编译、自检并启用本地算法", menu_result.stdout)
-        self.assertIn("请输入选项 [0-7]", menu_result.stdout)
+        self.assertIn("1. 一键准备并启动（推荐，可重复执行）", menu_result.stdout)
+        self.assertIn("2. 直接启动网关", menu_result.stdout)
+        self.assertIn("3. 修复项目权限并更新代码", menu_result.stdout)
+        self.assertIn("4. 检查当前 USB/串口（无需拔插）", menu_result.stdout)
+        self.assertIn("6. 修复/重新构建本地算法", menu_result.stdout)
+        self.assertIn("7. 导出完整诊断包", menu_result.stdout)
+        self.assertIn("8. 查看最近日志", menu_result.stdout)
+        self.assertIn("请输入选项 [0-8]", menu_result.stdout)
 
         self.assertIn('[[ ${EUID:-$(id -u)} -ne 0 ]]', script)
         self.assertIn("Run without sudo", script)
@@ -254,6 +257,11 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("setup-kylin-gateway-$(date -u", script)
         self.assertIn('"$root_dir/linux/setup-kylin-algorithm.sh"', script)
         self.assertIn("算法尚未准备成功", script)
+        self.assertIn("Python 环境已就绪，跳过重复安装", script)
+        self.assertIn("本地算法已构建并启用，跳过重复编译", script)
+        self.assertIn("返回菜单后输入", script)
+        self.assertIn('config.get("data_source", {}).get("type") == "serial"', script)
+        self.assertIn("--check-only", script)
 
     def test_kylin_usb_serial_diagnosis_prompts_times_out_and_preserves_logs(self) -> None:
         script_path = ROOT / "linux" / "diagnose-kylin-usb-serial.sh"
@@ -350,6 +358,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('default_output_dir="$root_dir/.runtime/diagnostics"', script)
         self.assertIn('work_dir=$(mktemp -d "$output_dir/.neurobridge-kylin-diagnostics.XXXXXX")', script)
         self.assertIn('"$root_dir/.runtime/logs"', script)
+        self.assertIn("project-cmake-version", script)
+        self.assertIn("eigen-version", script)
+        self.assertIn("sdk-lock-sha256", script)
         self.assertIn("Output must stay under the ignored project directory", script)
         self.assertNotIn("cat /etc/neurobridge/gateway.toml", script)
         self.assertNotIn("printenv", script)
@@ -784,7 +795,14 @@ class DeploymentTests(unittest.TestCase):
         self.assertFalse(config.algorithm.enabled)
 
         ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-        for ignored_directory in (".venv/", "venv/", ".runtime/", "wheelhouse/", "python-runtime/"):
+        for ignored_directory in (
+            ".venv/",
+            "venv/",
+            ".runtime/",
+            "wheelhouse/",
+            "algorithm-packages/",
+            "python-runtime/",
+        ):
             self.assertIn(ignored_directory, ignore)
 
         start_script = ROOT / "linux" / "start-kylin-gateway.sh"
@@ -848,6 +866,11 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("Previous algorithm bridge restored", algorithm_setup_source)
         self.assertIn("Configuration was not changed", algorithm_setup_source)
         self.assertIn("[yes/no]", algorithm_setup_source)
+        self.assertIn('cmake_version="3.31.6"', algorithm_setup_source)
+        self.assertIn("5a1133ff103c71eb5120e2cc3de922733e7d8a26a98ae716397e8676adb367bf", algorithm_setup_source)
+        self.assertIn('package_dir="$root_dir/algorithm-packages"', algorithm_setup_source)
+        self.assertIn('export PATH="$cmake_home/bin:$PATH"', algorithm_setup_source)
+        self.assertNotIn("apt-get install -y cmake", algorithm_setup_source)
         self.assertNotIn("git clone", algorithm_setup_source)
         self.assertNotIn("git fetch", algorithm_setup_source)
         algorithm_setup_module = (ROOT / "neurobridge" / "algorithm_setup.py").read_text(encoding="utf-8")
