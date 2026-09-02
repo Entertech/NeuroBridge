@@ -45,6 +45,7 @@ class SerialConfig:
     max_buffer_bytes: int = 65536
     dtr: bool = False
     rts: bool = False
+    identity_state_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,7 @@ def load(path: str | Path) -> GatewayConfig:
     # Parse and validate only the selected strategy. This lets an operator keep
     # dormant strategy sections for a controlled restart-based switch without
     # loading their drivers or being blocked by parameters that are not active.
+    recording_directory = Path(recording.get("directory", "./recordings"))
     serial_config = SerialConfig()
     if data_source_type == "serial":
         serial_device = str(serial.get("device", "auto"))
@@ -242,6 +244,12 @@ def load(path: str | Path) -> GatewayConfig:
         max_buffer_bytes = int(serial.get("max_buffer_bytes", 65536))
         dtr = serial.get("dtr", False)
         rts = serial.get("rts", False)
+        identity_state_file_value = serial.get("identity_state_file")
+        identity_state_file = (
+            Path(identity_state_file_value)
+            if identity_state_file_value
+            else recording_directory.parent / "serial-device-identity.json"
+        )
         if not isinstance(dtr, bool) or not isinstance(rts, bool):
             raise ValueError("serial.dtr and serial.rts must be boolean")
         if baud_rate != 115200:
@@ -259,22 +267,23 @@ def load(path: str | Path) -> GatewayConfig:
         if not 1024 <= max_buffer_bytes <= 4 * 1024 * 1024:
             raise ValueError("serial.max_buffer_bytes must be between 1024 and 4194304")
         serial_config = SerialConfig(
-            serial_device,
-            candidate_types,
-            baud_rate,
-            handshake_timeout_ms,
-            command_response_timeout_ms,
-            data_timeout_seconds,
-            serial_reconnect_delay_seconds,
-            stats_interval_seconds,
-            max_buffer_bytes,
-            dtr,
-            rts,
+            device=serial_device,
+            candidate_types=candidate_types,
+            baud_rate=baud_rate,
+            handshake_timeout_ms=handshake_timeout_ms,
+            command_response_timeout_ms=command_response_timeout_ms,
+            data_timeout_seconds=data_timeout_seconds,
+            reconnect_delay_seconds=serial_reconnect_delay_seconds,
+            stats_interval_seconds=stats_interval_seconds,
+            max_buffer_bytes=max_buffer_bytes,
+            dtr=dtr,
+            rts=rts,
+            identity_state_file=identity_state_file,
         )
     config = GatewayConfig(
         server=ServerConfig(host, port, endpoint),
         ble=BleConfig(bool(ble.get("enabled", False)), ble.get("device_name") or None, str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(), int(ble.get("scan_timeout_seconds", 5)), int(ble.get("reconnect_delay_seconds", 3))),
-        recording=RecordingConfig(Path(recording.get("directory", "./recordings")), recording.get("subject_id") or None, recording.get("replay_recording_id") or None, replay_speed),
+        recording=RecordingConfig(recording_directory, recording.get("subject_id") or None, recording.get("replay_recording_id") or None, replay_speed),
         # Ubuntu installation places the locked native bridge at this fixed path.
         # ``enabled`` is therefore the only setting an operator needs to change
         # after the bridge's real-data POC has been approved.  An explicit command

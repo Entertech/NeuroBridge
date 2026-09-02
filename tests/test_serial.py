@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 import time
 from types import SimpleNamespace
 import unittest
@@ -67,6 +69,19 @@ class SlowEmptySerial(FakeSerial):
         return b""
 
 
+class StartDrivenSerial(SlowEmptySerial):
+    def __init__(self, resumed_frame: bytes | None) -> None:
+        super().__init__([])
+        self.resumed_frame = resumed_frame
+
+    def write(self, value: bytes) -> int:
+        written = super().write(value)
+        if value == START_COMMAND and self.resumed_frame is not None:
+            self.reads.append(self.resumed_frame)
+            self.resumed_frame = None
+        return written
+
+
 def frame(sequence: int, fill: int = 1, heart_rate: int = 60) -> bytes:
     return (
         FRAME_HEADER
@@ -110,6 +125,19 @@ class SequenceLossTrackerTests(unittest.TestCase):
 
 
 class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def stable_identity(usb_serial: str = "HEADBAND-001") -> dict[str, str | None]:
+        return {
+            "resolvedPath": "/dev/ttyUSB0",
+            "vid": "1234",
+            "pid": "5678",
+            "usbSerial": usb_serial,
+            "interface": "00",
+            "driver": "ftdi_sio",
+            "usbParent": "/sys/devices/pci/usb1/1-1",
+            "physicalPath": "/sys/devices/pci/usb1/1-1/1-1:1.0/ttyUSB0",
+        }
+
     async def test_discovery_inventory_explains_missing_nodes_and_fixed_path(self) -> None:
         entries = {
             "/dev/serial/by-id/*": ["/dev/serial/by-id/a"],
@@ -476,6 +504,227 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(states[-1], ("connectionState", "disconnected"))
         self.assertTrue(client.closed)
+
+    async def test_process_restart_resumes_trusted_device_without_second_handshake(self) -> None:
+        with TemporaryDirectory() as directory:
+            state_file = Path(directory) / "serial-device-identity.json"
+            config = SerialConfig(
+                handshake_timeout_ms=10,
+                command_response_timeout_ms=30,
+                data_timeout_seconds=0.1,
+                identity_state_file=state_file,
+            )
+            identity = self.stable_identity()
+
+            first_client = FakeSerial([HANDSHAKE, b"\x01", frame(7, 4, 63)])
+            first_adapter: SerialAdapter
+
+            async def stop_first(event: DevicePacket) -> None:
+                if event.channel == "ff31":
+                    await first_adapter.stop()
+
+            first_adapter = SerialAdapter(
+                config,
+                stop_first,
+                noop,
+                ready,
+                candidate_provider=lambda _config: ["/dev/ttyUSB0"],
+                serial_factory=lambda _path, _config: first_client,
+                identity_provider=lambda _path: identity,
+            )
+            await first_adapter.run()
+            self.assertTrue(state_file.is_file())
+            self.assertEqual(first_client.writes, [HANDSHAKE, START_COMMAND, b"\xE0"])
+
+            resumed_client = StartDrivenSerial(frame(8, 5, 64))
+            resumed_adapter: SerialAdapter
+
+            async def stop_resumed(event: DevicePacket) -> None:
+                if event.channel == "ff31":
+                    await resumed_adapter.stop()
+
+            resumed_adapter = SerialAdapter(
+                config,
+                stop_resumed,
+                noop,
+                ready,
+                candidate_provider=lambda _config: ["/dev/ttyUSB0"],
+                serial_factory=lambda _path, _config: resumed_client,
+                identity_provider=lambda _path: identity,
+            )
+            await resumed_adapter.run()
+            self.assertEqual(resumed_client.writes, [START_COMMAND, b"\xE0"])
+
+    async def test_new_power_on_handshake_takes_precedence_over_saved_identity(self) -> None:
+        with TemporaryDirectory() as directory:
+            state_file = Path(directory) / "serial-device-identity.json"
+            config = SerialConfig(
+                handshake_timeout_ms=10,
+                command_response_timeout_ms=30,
+                identity_state_file=state_file,
+            )
+            identity = self.stable_identity()
+            seed = SerialAdapter(config, noop, noop, noop)
+            seed._save_trusted_identity("/dev/ttyUSB0", identity)
+            client = FakeSerial([HANDSHAKE, b"\x01", frame(9, 5, 64)])
+            adapter: SerialAdapter
+
+            async def receive_and_stop(event: DevicePacket) -> None:
+                if event.channel == "ff31":
+                    await adapter.stop()
+
+            adapter = SerialAdapter(
+                config,
+                receive_and_stop,
+                noop,
+                ready,
+                candidate_provider=lambda _config: ["/dev/ttyUSB0"],
+                serial_factory=lambda _path, _config: client,
+                identity_provider=lambda _path: identity,
+            )
+            await adapter.run()
+            self.assertEqual(client.writes, [HANDSHAKE, START_COMMAND, b"\xE0"])
+
+    async def test_trusted_identity_mismatch_never_sends_e1(self) -> None:
+        with TemporaryDirectory() as directory:
+            state_file = Path(directory) / "serial-device-identity.json"
+            config = SerialConfig(
+                handshake_timeout_ms=10,
+                identity_state_file=state_file,
+            )
+            seed = SerialAdapter(config, noop, noop, noop)
+            seed._save_trusted_identity("/dev/ttyUSB0", self.stable_identity())
+            unknown_client = SlowEmptySerial([])
+            adapter: SerialAdapter
+
+            async def stop_after_error(_reason: str) -> None:
+                await adapter.stop()
+
+            adapter = SerialAdapter(
+                config,
+                noop,
+                noop,
+                ready,
+                error=stop_after_error,
+                candidate_provider=lambda _config: ["/dev/ttyUSB1"],
+                serial_factory=lambda _path, _config: unknown_client,
+                identity_provider=lambda _path: self.stable_identity("OTHER-DEVICE"),
+            )
+            await adapter.run()
+            self.assertEqual(unknown_client.writes, [])
+
+    async def test_first_handshake_blocks_e1_when_identity_cannot_be_persisted_safely(self) -> None:
+        with TemporaryDirectory() as directory:
+            state_file = Path(directory) / "serial-device-identity.json"
+            config = SerialConfig(
+                command_response_timeout_ms=30,
+                identity_state_file=state_file,
+            )
+            client = FakeSerial([HANDSHAKE, b"\x01"])
+            states: list[tuple[str, object]] = []
+            adapter: SerialAdapter
+
+            async def status(name: str, value: object) -> None:
+                states.append((name, value))
+
+            async def stop_after_error(_reason: str) -> None:
+                await adapter.stop()
+
+            adapter = SerialAdapter(
+                config,
+                noop,
+                status,
+                ready,
+                error=stop_after_error,
+                candidate_provider=lambda _config: ["/dev/ttyUSB0"],
+                serial_factory=lambda _path, _config: client,
+                identity_provider=lambda _path: {
+                    "resolvedPath": "/dev/ttyUSB0",
+                    "vid": None,
+                    "pid": None,
+                    "usbSerial": None,
+                    "interface": None,
+                    "driver": None,
+                    "usbParent": None,
+                    "physicalPath": None,
+                },
+            )
+            await adapter.run()
+            self.assertEqual(client.writes, [HANDSHAKE])
+            self.assertIn(("connectionState", "validation_failed"), states)
+            self.assertFalse(state_file.exists())
+
+    async def test_trusted_resume_requires_valid_frame_and_stops_after_timeout(self) -> None:
+        with TemporaryDirectory() as directory:
+            state_file = Path(directory) / "serial-device-identity.json"
+            config = SerialConfig(
+                handshake_timeout_ms=10,
+                data_timeout_seconds=0.03,
+                identity_state_file=state_file,
+            )
+            identity = self.stable_identity()
+            seed = SerialAdapter(config, noop, noop, noop)
+            seed._save_trusted_identity("/dev/ttyUSB0", identity)
+            silent_client = StartDrivenSerial(None)
+            states: list[tuple[str, object]] = []
+            adapter: SerialAdapter
+
+            async def status(name: str, value: object) -> None:
+                states.append((name, value))
+
+            async def stop_after_error(_reason: str) -> None:
+                await adapter.stop()
+
+            adapter = SerialAdapter(
+                config,
+                noop,
+                status,
+                ready,
+                error=stop_after_error,
+                candidate_provider=lambda _config: ["/dev/ttyUSB0"],
+                serial_factory=lambda _path, _config: silent_client,
+                identity_provider=lambda _path: identity,
+            )
+            await adapter.run()
+            self.assertEqual(silent_client.writes, [START_COMMAND, b"\xE0"])
+            self.assertIn(("connectionState", "validation_failed"), states)
+            self.assertNotIn(("connectionState", "validated"), states)
+
+    async def test_restart_after_crash_accepts_preexisting_valid_stream_from_trusted_device(self) -> None:
+        with TemporaryDirectory() as directory:
+            state_file = Path(directory) / "serial-device-identity.json"
+            config = SerialConfig(
+                handshake_timeout_ms=10,
+                data_timeout_seconds=0.1,
+                identity_state_file=state_file,
+            )
+            identity = self.stable_identity()
+            seed = SerialAdapter(config, noop, noop, noop)
+            seed._save_trusted_identity("/dev/ttyUSB0", identity)
+            streaming_client = FakeSerial([frame(21, 6, 65), frame(22, 7, 66)])
+            packets: list[DevicePacket] = []
+            adapter: SerialAdapter
+
+            async def receive_and_stop(event: DevicePacket) -> None:
+                packets.append(event)
+                if event.channel == "ff31":
+                    await adapter.stop()
+
+            adapter = SerialAdapter(
+                config,
+                receive_and_stop,
+                noop,
+                ready,
+                candidate_provider=lambda _config: ["/dev/ttyUSB0"],
+                serial_factory=lambda _path, _config: streaming_client,
+                identity_provider=lambda _path: identity,
+            )
+            await adapter.run()
+            self.assertEqual(streaming_client.writes, [START_COMMAND, b"\xE0"])
+            self.assertEqual(
+                [event.channel for event in packets],
+                ["serial.frame", "ff31", "ff51", "serial.frame", "ff31", "ff51"],
+            )
 
     async def test_algorithm_not_ready_after_handshake_validation_blocks_e1(self) -> None:
         client = FakeSerial([HANDSHAKE, b"\x01"])

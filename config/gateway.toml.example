@@ -61,6 +61,9 @@ max_buffer_bytes = 65536
 # jointly confirmed with the device team because DTR/RTS can reset hardware.
 dtr = false
 rts = false
+# The validated USB identity defaults to
+# /var/lib/neurobridge/serial-device-identity.json. It is operational state,
+# not configuration or recorded biological data.
 
 [ble]
 # Ignored while data_source.type = "serial". Enable only for BLE regression.

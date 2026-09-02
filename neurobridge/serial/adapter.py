@@ -6,8 +6,11 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 from glob import glob
+import json
 import logging
+import os
 from pathlib import Path
+import tempfile
 import time
 from typing import Any, Awaitable, Callable, Iterable
 
@@ -30,6 +33,7 @@ SEQUENCE_HALF_RANGE = 1 << 15
 RECENT_SEQUENCE_WINDOW = 4096
 LOG_TEXT_LIMIT = 512
 DISCARDED_BYTES_LOG_INTERVAL = 4096
+IDENTITY_STATE_VERSION = 1
 
 
 def _safe_log_text(value: object, limit: int = LOG_TEXT_LIMIT) -> str:
@@ -273,6 +277,73 @@ def serial_candidate_metadata(path: str) -> dict[str, str | None]:
     return metadata
 
 
+def _identity_matches(
+    saved: dict[str, object],
+    path: str,
+    current: dict[str, str | None],
+    configured_device: str,
+) -> tuple[bool, str]:
+    """Match only stable identity evidence from a previously handshaken device."""
+
+    saved_path = saved.get("path")
+    if (
+        isinstance(saved_path, str)
+        and Path(saved_path).parent == Path("/dev/serial/by-id")
+        and saved_path == path
+    ):
+        return True, "by_id_path"
+
+    saved_serial = saved.get("usbSerial")
+    if saved_serial and saved.get("vid") and saved.get("pid") and saved.get("interface"):
+        if all(
+            saved.get(key) == current.get(key)
+            for key in ("vid", "pid", "usbSerial", "interface")
+        ):
+            return True, "usb_serial_interface"
+        # Never downgrade to physical topology after a stronger saved serial
+        # number disagrees: a different unit may be plugged into the same port.
+        return False, "usb_serial_mismatch"
+
+    saved_parent = saved.get("usbParent")
+    if (
+        saved_parent
+        and saved.get("vid")
+        and saved.get("pid")
+        and saved.get("interface")
+        and all(
+            saved.get(key) == current.get(key)
+            for key in ("vid", "pid", "usbParent", "interface")
+        )
+    ):
+        return True, "usb_physical_interface"
+
+    if (
+        configured_device != "auto"
+        and saved_path == path == configured_device
+        and saved.get("resolvedPath") == current.get("resolvedPath")
+    ):
+        return True, "configured_resolved_path"
+    return False, "none"
+
+
+def _valid_frame_offset(buffer: bytes | bytearray) -> int | None:
+    """Return the first complete structurally valid frame without consuming it."""
+
+    search_from = 0
+    while True:
+        offset = buffer.find(FRAME_HEADER, search_from)
+        if offset < 0:
+            return None
+        if len(buffer) - offset < FRAME_BYTES:
+            return None
+        if (
+            buffer[offset + 3] == FRAME_BYTES
+            and buffer[offset + FRAME_BYTES - 3 : offset + FRAME_BYTES] == FRAME_TAIL
+        ):
+            return offset
+        search_from = offset + 1
+
+
 def _open_serial(path: str, config: SerialConfig) -> Any:
     try:
         import serial
@@ -318,6 +389,7 @@ class SerialAdapter:
         *,
         candidate_provider: Callable[[SerialConfig], Iterable[str]] = discover_serial_candidates,
         serial_factory: Callable[[str, SerialConfig], Any] = _open_serial,
+        identity_provider: Callable[[str], dict[str, str | None]] = serial_candidate_metadata,
     ) -> None:
         self.config = config
         self.packet = packet
@@ -326,16 +398,97 @@ class SerialAdapter:
         self.error = error
         self.candidate_provider = candidate_provider
         self.serial_factory = serial_factory
+        self.identity_provider = identity_provider
         self._client: Any | None = None
         self._target: str | None = None
         self._stopping = False
         self._capture_started = False
+        self._trusted_probe_initial = b""
         self._io_lock = asyncio.Lock()
         self._stop_lock = asyncio.Lock()
         self._loss = SequenceLossTracker()
         self._last_summary_snapshot = self._loss.snapshot()
         self._stats: dict[str, int | float] = {}
         self._reset_stats()
+
+    def _load_trusted_identity(self) -> dict[str, object] | None:
+        state_file = self.config.identity_state_file
+        if state_file is None:
+            return None
+        try:
+            raw = json.loads(state_file.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict) or raw.get("version") != IDENTITY_STATE_VERSION:
+                raise ValueError("unsupported identity state version")
+            identity = raw.get("identity")
+            if not isinstance(identity, dict):
+                raise ValueError("identity state has no identity object")
+            LOG.info("Serial trusted identity loaded: stateFile=%s", _safe_log_text(state_file))
+            return identity
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            LOG.warning(
+                "Serial trusted identity ignored: stateFile=%s errorType=%s reason=%s",
+                _safe_log_text(state_file),
+                type(exc).__name__,
+                _safe_log_text(exc),
+            )
+            return None
+
+    def _save_trusted_identity(self, path: str, identity: dict[str, str | None]) -> bool:
+        state_file = self.config.identity_state_file
+        if state_file is None:
+            return True
+        saved_identity: dict[str, object] = {"path": path, **identity}
+        recoverable, _basis = _identity_matches(
+            saved_identity, path, identity, self.config.device
+        )
+        if not recoverable:
+            LOG.error(
+                "Serial trusted identity is not strict enough to persist: path=%s "
+                "requiresByIdOrUsbSerialOrPhysicalInterface=true",
+                _safe_log_text(path),
+            )
+            return False
+        payload = {
+            "version": IDENTITY_STATE_VERSION,
+            "savedAtMs": wall_clock_ms(),
+            "identity": saved_identity,
+        }
+        temporary_path: Path | None = None
+        try:
+            state_file.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{state_file.name}.", dir=state_file.parent
+            )
+            temporary_path = Path(temporary_name)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as destination:
+                json.dump(payload, destination, ensure_ascii=True, sort_keys=True)
+                destination.write("\n")
+                destination.flush()
+                os.fsync(destination.fileno())
+            os.chmod(temporary_path, 0o600)
+            os.replace(temporary_path, state_file)
+            LOG.info(
+                "Serial trusted identity saved after handshake validation: stateFile=%s path=%s",
+                _safe_log_text(state_file),
+                _safe_log_text(path),
+            )
+            return True
+        except OSError as exc:
+            LOG.warning(
+                "Serial trusted identity could not be saved: stateFile=%s errorType=%s reason=%s",
+                _safe_log_text(state_file),
+                type(exc).__name__,
+                _safe_log_text(exc),
+            )
+            return False
+        finally:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def _reset_stats(self) -> None:
         self._loss = SequenceLossTracker()
@@ -366,9 +519,12 @@ class SerialAdapter:
             attempt += 1
             phase = "discover"
             target_selected = False
+            resume_without_handshake = False
+            selected_identity: dict[str, str | None] | None = None
             try:
                 await self.status("connectionState", "connecting")
                 candidates = list(self.candidate_provider(self.config))
+                trusted_identity = self._load_trusted_identity()
                 inventory = _serial_discovery_inventory(self.config)
                 LOG.info(
                     "Serial discovery started: attempt=%s candidates=%s deviceMode=%s handshakeTimeoutMs=%s "
@@ -382,8 +538,10 @@ class SerialAdapter:
                     inventory["ttyUSBEntries"],
                     inventory["configuredPathExists"],
                 )
+                candidate_identities: dict[str, dict[str, str | None]] = {}
                 for index, path in enumerate(candidates, start=1):
-                    identity = serial_candidate_metadata(path)
+                    identity = self.identity_provider(path)
+                    candidate_identities[path] = identity
                     LOG.info(
                         "Serial candidate discovered: attempt=%s candidateIndex=%s candidateCount=%s path=%s "
                         "resolvedPath=%s vid=%s pid=%s usbSerial=%s usbParent=%s interface=%s driver=%s physicalPath=%s",
@@ -433,13 +591,28 @@ class SerialAdapter:
                             len(candidates),
                             _safe_log_text(path),
                         )
-                        if await self._await_handshake(client, path, attempt, index, len(candidates)):
+                        identity = candidate_identities[path]
+                        trusted_match, match_basis = (
+                            _identity_matches(trusted_identity, path, identity, self.config.device)
+                            if trusted_identity is not None
+                            else (False, "none")
+                        )
+                        handshake_received = await self._await_handshake(
+                            client,
+                            path,
+                            attempt,
+                            index,
+                            len(candidates),
+                            allow_silent_resume=trusted_match,
+                        )
+                        if handshake_received or trusted_match:
                             self._client, self._target = client, path
                             target_selected = True
-                            identity = serial_candidate_metadata(path)
+                            selected_identity = identity
+                            resume_without_handshake = not handshake_received
                             LOG.info(
                                 "Serial target selected: path=%s resolvedPath=%s vid=%s pid=%s usbSerial=%s "
-                                "usbParent=%s interface=%s driver=%s physicalPath=%s",
+                                "usbParent=%s interface=%s driver=%s physicalPath=%s selectionMode=%s matchBasis=%s",
                                 _safe_log_text(path),
                                 _safe_log_text(identity["resolvedPath"]),
                                 identity["vid"],
@@ -449,6 +622,8 @@ class SerialAdapter:
                                 identity["interface"],
                                 identity["driver"],
                                 _safe_log_text(identity["physicalPath"]),
+                                "trusted_resume" if resume_without_handshake else "power_on_handshake",
+                                match_basis if resume_without_handshake else "fixed_handshake",
                             )
                             # A valid device handshake proves that the USB-derived
                             # serial link is connected. Algorithm and start-command
@@ -489,45 +664,63 @@ class SerialAdapter:
                     raise TimeoutError("No serial candidate produced the fixed handshake")
 
                 self._reset_stats()
-                phase = "handshake_ack_response"
                 await self.status("connectionState", "validating")
-                LOG.info(
-                    "Serial handshake validation started: attempt=%s target=%s "
-                    "ackBytes=%s expectedResponse=single_byte_0x01",
-                    attempt,
-                    _safe_log_text(self._target),
-                    len(HANDSHAKE),
-                )
-                try:
-                    response = await self._send_handshake_ack()
-                except Exception:
-                    await self.status("connectionState", "validation_failed")
-                    LOG.exception(
-                        "Serial handshake validation failed: attempt=%s target=%s "
-                        "reason=ack_write_or_response_read_error",
+                if resume_without_handshake:
+                    LOG.info(
+                        "Serial trusted-device resume selected: attempt=%s target=%s "
+                        "handshakeRequired=false validation=first_valid_frame_after_E1",
                         attempt,
                         _safe_log_text(self._target),
                     )
-                    raise
-                if not response:
-                    await self.status("connectionState", "validation_failed")
-                    LOG.error(
-                        "Serial handshake validation failed: attempt=%s target=%s "
-                        "reason=response_timeout timeoutMs=%s",
+                else:
+                    phase = "handshake_ack_response"
+                    LOG.info(
+                        "Serial handshake validation started: attempt=%s target=%s "
+                        "ackBytes=%s expectedResponse=single_byte_0x01",
                         attempt,
                         _safe_log_text(self._target),
-                        self.config.command_response_timeout_ms,
+                        len(HANDSHAKE),
                     )
-                    raise TimeoutError(
-                        "Serial handshake ACK did not receive standalone 0x01 before timeout"
+                    try:
+                        response = await self._send_handshake_ack()
+                    except Exception:
+                        await self.status("connectionState", "validation_failed")
+                        LOG.exception(
+                            "Serial handshake validation failed: attempt=%s target=%s "
+                            "reason=ack_write_or_response_read_error",
+                            attempt,
+                            _safe_log_text(self._target),
+                        )
+                        raise
+                    if not response:
+                        await self.status("connectionState", "validation_failed")
+                        LOG.error(
+                            "Serial handshake validation failed: attempt=%s target=%s "
+                            "reason=response_timeout timeoutMs=%s",
+                            attempt,
+                            _safe_log_text(self._target),
+                            self.config.command_response_timeout_ms,
+                        )
+                        raise TimeoutError(
+                            "Serial handshake ACK did not receive standalone 0x01 before timeout"
+                        )
+                    LOG.info(
+                        "Serial handshake validation succeeded: attempt=%s target=%s "
+                        "responseBytes=%s policy=single_byte_0x01",
+                        attempt,
+                        _safe_log_text(self._target),
+                        len(response),
                     )
-                LOG.info(
-                    "Serial handshake validation succeeded: attempt=%s target=%s "
-                    "responseBytes=%s policy=single_byte_0x01",
-                    attempt,
-                    _safe_log_text(self._target),
-                    len(response),
-                )
+                    if (
+                        selected_identity is not None
+                        and self._target is not None
+                        and not self._save_trusted_identity(self._target, selected_identity)
+                    ):
+                        await self.status("connectionState", "validation_failed")
+                        raise OSError(
+                            "Validated serial identity could not be persisted safely; "
+                            "start command was not sent"
+                        )
 
                 phase = "algorithm_initialize"
                 LOG.info(
@@ -564,15 +757,38 @@ class SerialAdapter:
                     )
                     raise
                 self._capture_started = True
+                initial_stream = b""
+                if resume_without_handshake:
+                    phase = "trusted_resume_frame_validation"
+                    try:
+                        initial_stream = await self._await_first_valid_frame(
+                            self._trusted_probe_initial
+                        )
+                    except Exception as exc:
+                        await self.status("connectionState", "validation_failed")
+                        log_resume_failure = (
+                            LOG.error
+                            if isinstance(exc, (ConnectionError, TimeoutError, OSError))
+                            else LOG.exception
+                        )
+                        log_resume_failure(
+                            "Serial trusted-device resume validation failed: attempt=%s target=%s "
+                            "reason=no_valid_frame_after_E1 timeoutSeconds=%.3f",
+                            attempt,
+                            _safe_log_text(self._target),
+                            self.config.data_timeout_seconds,
+                        )
+                        raise
                 await self.status("connectionState", "validated")
                 LOG.info(
                     "Serial capture enabled: attempt=%s target=%s command=E1 "
-                    "responseExpected=false connectionState=validated",
+                    "responseExpected=false connectionState=validated validationMode=%s",
                     attempt,
                     _safe_log_text(self._target),
+                    "first_valid_frame" if resume_without_handshake else "handshake_ack_01",
                 )
                 phase = "streaming"
-                await self._stream(b"")
+                await self._stream(initial_stream)
                 if not self._stopping:
                     raise ConnectionError("Serial stream ended")
             except asyncio.CancelledError:
@@ -598,6 +814,7 @@ class SerialAdapter:
                 self._client = None
                 self._target = None
                 self._capture_started = False
+                self._trusted_probe_initial = b""
                 await self.status(
                     "connectionState",
                     "disconnected" if target_selected else "not_connected",
@@ -618,6 +835,8 @@ class SerialAdapter:
         attempt: int,
         index: int,
         candidate_count: int,
+        *,
+        allow_silent_resume: bool = False,
     ) -> bool:
         deadline = time.monotonic() + self.config.handshake_timeout_ms / 1000
         buffer = bytearray()
@@ -628,6 +847,7 @@ class SerialAdapter:
         buffer_truncations = 0
         longest_prefix_bytes = 0
         started = time.monotonic()
+        self._trusted_probe_initial = b""
         while not self._stopping and time.monotonic() < deadline:
             chunk = await asyncio.to_thread(client.read, 256)
             reads += 1
@@ -642,6 +862,21 @@ class SerialAdapter:
                 del buffer[:overflow]
                 discarded_bytes += overflow
                 buffer_truncations += 1
+            if allow_silent_resume and _valid_frame_offset(buffer) is not None:
+                self._trusted_probe_initial = bytes(buffer)
+                LOG.info(
+                    "Serial trusted candidate is already streaming: attempt=%s candidateIndex=%s "
+                    "candidateCount=%s path=%s reads=%s readBytes=%s bufferedBytes=%s "
+                    "nextAction=trusted_resume payloadLogged=false",
+                    attempt,
+                    index,
+                    candidate_count,
+                    _safe_log_text(path),
+                    reads,
+                    read_bytes,
+                    len(buffer),
+                )
+                return False
             offset = buffer.find(HANDSHAKE)
             if offset < 0:
                 if len(buffer) > len(HANDSHAKE) - 1:
@@ -679,7 +914,21 @@ class SerialAdapter:
             )
             return True
         duration_ms = int((time.monotonic() - started) * 1000)
-        if read_bytes:
+        if allow_silent_resume:
+            LOG.info(
+                "Serial power-on handshake not observed for trusted candidate: attempt=%s "
+                "candidateIndex=%s candidateCount=%s path=%s reads=%s nonEmptyReads=%s "
+                "readBytes=%s durationMs=%s nextAction=trusted_resume payloadLogged=false",
+                attempt,
+                index,
+                candidate_count,
+                _safe_log_text(path),
+                reads,
+                non_empty_reads,
+                read_bytes,
+                duration_ms,
+            )
+        elif read_bytes:
             LOG.warning(
                 "Serial candidate produced bytes but no valid handshake: attempt=%s candidateIndex=%s "
                 "candidateCount=%s path=%s reads=%s nonEmptyReads=%s readBytes=%s discardedBytes=%s "
@@ -711,6 +960,58 @@ class SerialAdapter:
                 duration_ms,
             )
         return False
+
+    async def _await_first_valid_frame(self, initial: bytes = b"") -> bytes:
+        """Confirm an E1 resume before exposing the device as validated."""
+
+        if self._client is None:
+            raise ConnectionError("Cannot validate serial resume without a client")
+        client = self._client
+        buffer = bytearray(initial)
+        post_command_buffer = bytearray()
+        started = time.monotonic()
+        deadline = started + self.config.data_timeout_seconds
+        previous_timeout = getattr(client, "timeout", None)
+        try:
+            if initial:
+                LOG.info(
+                    "Serial pre-existing trusted stream retained before E1 validation: "
+                    "target=%s bufferedBytes=%s payloadLogged=false",
+                    _safe_log_text(self._target),
+                    len(buffer),
+                )
+            while not self._stopping and time.monotonic() < deadline:
+                remaining = deadline - time.monotonic()
+                client.timeout = min(0.1, max(0.001, remaining))
+                async with self._io_lock:
+                    chunk = bytes(await asyncio.to_thread(client.read, 4096))
+                if not chunk:
+                    await asyncio.sleep(min(0.01, max(0.0, remaining)))
+                    continue
+                buffer.extend(chunk)
+                post_command_buffer.extend(chunk)
+                if len(buffer) > self.config.max_buffer_bytes:
+                    del buffer[: len(buffer) - self.config.max_buffer_bytes]
+                if len(post_command_buffer) > self.config.max_buffer_bytes:
+                    del post_command_buffer[
+                        : len(post_command_buffer) - self.config.max_buffer_bytes
+                    ]
+                if _valid_frame_offset(post_command_buffer) is not None:
+                    LOG.info(
+                        "Serial trusted-device resume confirmed: target=%s durationMs=%s "
+                        "bufferedBytes=%s validFrameBytes=%s payloadLogged=false",
+                        _safe_log_text(self._target),
+                        int((time.monotonic() - started) * 1000),
+                        len(buffer),
+                        FRAME_BYTES,
+                    )
+                    return bytes(buffer)
+        finally:
+            client.timeout = previous_timeout
+        raise TimeoutError(
+            f"No valid serial data frame after trusted-device E1 resume for "
+            f"{self.config.data_timeout_seconds:.3f} seconds"
+        )
 
     async def _send_handshake_ack(self) -> bytes:
         if self._client is None:

@@ -31,6 +31,10 @@ stats_interval_seconds = 10
 max_buffer_bytes = 65536
 dtr = false
 rts = false
+# After the first validated power-on handshake, the gateway stores the strict
+# USB identity in .runtime/serial-device-identity.json. This allows E0/service
+# restart recovery without requiring a handshake that the powered device will
+# not send again. Unknown identities never receive E1.
 
 [recording]
 directory = ".runtime/recordings"
