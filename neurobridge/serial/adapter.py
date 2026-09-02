@@ -520,6 +520,7 @@ class SerialAdapter:
             phase = "discover"
             target_selected = False
             resume_without_handshake = False
+            trusted_device_already_streaming = False
             selected_identity: dict[str, str | None] | None = None
             try:
                 await self.status("connectionState", "connecting")
@@ -610,6 +611,9 @@ class SerialAdapter:
                             target_selected = True
                             selected_identity = identity
                             resume_without_handshake = not handshake_received
+                            trusted_device_already_streaming = bool(
+                                resume_without_handshake and self._trusted_probe_initial
+                            )
                             LOG.info(
                                 "Serial target selected: path=%s resolvedPath=%s vid=%s pid=%s usbSerial=%s "
                                 "usbParent=%s interface=%s driver=%s physicalPath=%s selectionMode=%s matchBasis=%s",
@@ -668,9 +672,15 @@ class SerialAdapter:
                 if resume_without_handshake:
                     LOG.info(
                         "Serial trusted-device resume selected: attempt=%s target=%s "
-                        "handshakeRequired=false validation=first_valid_frame_after_E1",
+                        "handshakeRequired=false captureState=%s nextAction=%s",
                         attempt,
                         _safe_log_text(self._target),
+                        "already_streaming"
+                        if trusted_device_already_streaming
+                        else "silent",
+                        "adopt_existing_stream"
+                        if trusted_device_already_streaming
+                        else "send_E1_then_validate_frame",
                     )
                 else:
                     phase = "handshake_ack_response"
@@ -738,55 +748,66 @@ class SerialAdapter:
                         _safe_log_text(self._target),
                     )
                     raise ConnectionError("Local algorithm is not ready; serial start command was not sent")
-                phase = "start_command_write"
-                LOG.info(
-                    "Serial capture enable started: attempt=%s target=%s algorithmReady=true "
-                    "command=E1 responseExpected=false",
-                    attempt,
-                    _safe_log_text(self._target),
-                )
-                try:
-                    await self._send_command(START_COMMAND, "start")
-                except Exception:
-                    await self.status("connectionState", "validation_failed")
-                    LOG.exception(
-                        "Serial capture enable failed: attempt=%s target=%s command=E1 "
-                        "reason=control_write_error responseExpected=false",
+                initial_stream = b""
+                if trusted_device_already_streaming:
+                    initial_stream = self._trusted_probe_initial
+                    self._capture_started = True
+                    await self.status("connectionState", "validated")
+                    LOG.info(
+                        "Serial active capture adopted: attempt=%s target=%s commandSent=false "
+                        "observedValidFrame=true connectionState=validated",
                         attempt,
                         _safe_log_text(self._target),
                     )
-                    raise
-                self._capture_started = True
-                initial_stream = b""
-                if resume_without_handshake:
-                    phase = "trusted_resume_frame_validation"
+                else:
+                    phase = "start_command_write"
+                    LOG.info(
+                        "Serial capture enable started: attempt=%s target=%s algorithmReady=true "
+                        "command=E1 responseExpected=false",
+                        attempt,
+                        _safe_log_text(self._target),
+                    )
                     try:
-                        initial_stream = await self._await_first_valid_frame(
-                            self._trusted_probe_initial
-                        )
-                    except Exception as exc:
+                        await self._send_command(START_COMMAND, "start")
+                    except Exception:
                         await self.status("connectionState", "validation_failed")
-                        log_resume_failure = (
-                            LOG.error
-                            if isinstance(exc, (ConnectionError, TimeoutError, OSError))
-                            else LOG.exception
-                        )
-                        log_resume_failure(
-                            "Serial trusted-device resume validation failed: attempt=%s target=%s "
-                            "reason=no_valid_frame_after_E1 timeoutSeconds=%.3f",
+                        LOG.exception(
+                            "Serial capture enable failed: attempt=%s target=%s command=E1 "
+                            "reason=control_write_error responseExpected=false",
                             attempt,
                             _safe_log_text(self._target),
-                            self.config.data_timeout_seconds,
                         )
                         raise
-                await self.status("connectionState", "validated")
-                LOG.info(
-                    "Serial capture enabled: attempt=%s target=%s command=E1 "
-                    "responseExpected=false connectionState=validated validationMode=%s",
-                    attempt,
-                    _safe_log_text(self._target),
-                    "first_valid_frame" if resume_without_handshake else "handshake_ack_01",
-                )
+                    self._capture_started = True
+                    if resume_without_handshake:
+                        phase = "trusted_resume_frame_validation"
+                        try:
+                            initial_stream = await self._await_first_valid_frame()
+                        except Exception as exc:
+                            await self.status("connectionState", "validation_failed")
+                            log_resume_failure = (
+                                LOG.error
+                                if isinstance(exc, (ConnectionError, TimeoutError, OSError))
+                                else LOG.exception
+                            )
+                            log_resume_failure(
+                                "Serial trusted-device resume validation failed: attempt=%s target=%s "
+                                "reason=no_valid_frame_after_E1 timeoutSeconds=%.3f",
+                                attempt,
+                                _safe_log_text(self._target),
+                                self.config.data_timeout_seconds,
+                            )
+                            raise
+                    await self.status("connectionState", "validated")
+                    LOG.info(
+                        "Serial capture enabled: attempt=%s target=%s command=E1 "
+                        "responseExpected=false connectionState=validated validationMode=%s",
+                        attempt,
+                        _safe_log_text(self._target),
+                        "first_valid_frame"
+                        if resume_without_handshake
+                        else "handshake_ack_01",
+                    )
                 phase = "streaming"
                 await self._stream(initial_stream)
                 if not self._stopping:
@@ -838,7 +859,15 @@ class SerialAdapter:
         *,
         allow_silent_resume: bool = False,
     ) -> bool:
-        deadline = time.monotonic() + self.config.handshake_timeout_ms / 1000
+        probe_timeout_seconds = self.config.handshake_timeout_ms / 1000
+        if allow_silent_resume:
+            # A trusted candidate may already be streaming after an unclean
+            # gateway exit. Observe for the configured valid-data timeout so a
+            # temporarily delayed frame is not mistaken for a stopped device.
+            probe_timeout_seconds = max(
+                probe_timeout_seconds, self.config.data_timeout_seconds
+            )
+        deadline = time.monotonic() + probe_timeout_seconds
         buffer = bytearray()
         read_bytes = 0
         reads = 0
@@ -961,25 +990,17 @@ class SerialAdapter:
             )
         return False
 
-    async def _await_first_valid_frame(self, initial: bytes = b"") -> bytes:
+    async def _await_first_valid_frame(self) -> bytes:
         """Confirm an E1 resume before exposing the device as validated."""
 
         if self._client is None:
             raise ConnectionError("Cannot validate serial resume without a client")
         client = self._client
-        buffer = bytearray(initial)
-        post_command_buffer = bytearray()
+        buffer = bytearray()
         started = time.monotonic()
         deadline = started + self.config.data_timeout_seconds
         previous_timeout = getattr(client, "timeout", None)
         try:
-            if initial:
-                LOG.info(
-                    "Serial pre-existing trusted stream retained before E1 validation: "
-                    "target=%s bufferedBytes=%s payloadLogged=false",
-                    _safe_log_text(self._target),
-                    len(buffer),
-                )
             while not self._stopping and time.monotonic() < deadline:
                 remaining = deadline - time.monotonic()
                 client.timeout = min(0.1, max(0.001, remaining))
@@ -989,14 +1010,9 @@ class SerialAdapter:
                     await asyncio.sleep(min(0.01, max(0.0, remaining)))
                     continue
                 buffer.extend(chunk)
-                post_command_buffer.extend(chunk)
                 if len(buffer) > self.config.max_buffer_bytes:
                     del buffer[: len(buffer) - self.config.max_buffer_bytes]
-                if len(post_command_buffer) > self.config.max_buffer_bytes:
-                    del post_command_buffer[
-                        : len(post_command_buffer) - self.config.max_buffer_bytes
-                    ]
-                if _valid_frame_offset(post_command_buffer) is not None:
+                if _valid_frame_offset(buffer) is not None:
                     LOG.info(
                         "Serial trusted-device resume confirmed: target=%s durationMs=%s "
                         "bufferedBytes=%s validFrameBytes=%s payloadLogged=false",

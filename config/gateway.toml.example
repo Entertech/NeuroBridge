@@ -63,7 +63,8 @@ dtr = false
 rts = false
 # The validated USB identity defaults to
 # /var/lib/neurobridge/serial-device-identity.json. It is operational state,
-# not configuration or recorded biological data.
+# not configuration or recorded biological data. Restart recovery observes
+# whether the matching device is already streaming before deciding to send E1.
 
 [ble]
 # Ignored while data_source.type = "serial". Enable only for BLE regression.

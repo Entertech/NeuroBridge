@@ -720,10 +720,10 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
                 identity_provider=lambda _path: identity,
             )
             await adapter.run()
-            self.assertEqual(streaming_client.writes, [START_COMMAND, b"\xE0"])
+            self.assertEqual(streaming_client.writes, [b"\xE0"])
             self.assertEqual(
                 [event.channel for event in packets],
-                ["serial.frame", "ff31", "ff51", "serial.frame", "ff31", "ff51"],
+                ["serial.frame", "ff31", "ff51"],
             )
 
     async def test_algorithm_not_ready_after_handshake_validation_blocks_e1(self) -> None:
