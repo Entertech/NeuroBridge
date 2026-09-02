@@ -9,7 +9,7 @@ import tempfile
 import unittest
 import zipfile
 
-from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, RecordingConfig, ServerConfig
+from neurobridge.config import AlgorithmConfig, BleConfig, DataSourceConfig, GatewayConfig, RecordingConfig, ServerConfig
 from neurobridge.device.packet import DevicePacket
 from neurobridge.algorithm.runner import AlgorithmRunner
 from neurobridge.ble.flowtime import FF51, REQUIRED_NOTIFICATION_CHARACTERISTICS, FlowtimeAdapter, wear_state_from_packet
@@ -170,9 +170,26 @@ class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
             gateway.algorithm = fake
             await gateway.start()
             self.assertEqual(fake.initializations, 0)
-            await gateway.on_device_ready()
+            self.assertTrue(await gateway.on_device_ready())
             self.assertEqual(fake.initializations, 1)
             self.assertEqual(gateway.status["algorithmState"], "ready")
+
+    async def test_algorithm_not_ready_is_logged_and_returns_false(self) -> None:
+        class FakeAlgorithm:
+            available = False
+            error = "bridge process unavailable"
+            async def initialize(self) -> None:
+                pass
+            async def stop(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = Gateway(config(Path(directory)))
+            gateway.algorithm = FakeAlgorithm()
+            with self.assertLogs("neurobridge.business.gateway", level="ERROR") as logs:
+                self.assertFalse(await gateway.on_device_ready())
+            self.assertEqual(gateway.status["algorithmState"], "error")
+            self.assertIn("bridge process unavailable", "\n".join(logs.output))
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
@@ -228,8 +245,16 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def test_serial_full_frame_and_transport_metadata_are_internal_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            gateway = Gateway(config(root))
-            await gateway.update_status("connectionState", "connected")
+            gateway_config = config(root)
+            gateway_config = GatewayConfig(
+                gateway_config.server,
+                gateway_config.ble,
+                gateway_config.recording,
+                gateway_config.algorithm,
+                data_source=DataSourceConfig("serial"),
+            )
+            gateway = Gateway(gateway_config)
+            await gateway.update_status("connectionState", "validated")
             recording_id = str(gateway.store.recording_id)
             raw_frame = b"f" * 28
             await gateway.receive_device_packet(DevicePacket("serial", "serial.frame", raw_frame, 1234))
@@ -241,6 +266,29 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rows[0]["channel"], "serial.frame")
             self.assertEqual(base64.b64decode(rows[0]["bytesBase64"]), raw_frame)
             self.assertFalse((root / "sessions" / recording_id / "internal-device").exists())
+
+    async def test_serial_packets_are_blocked_until_validation_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway_config = config(Path(directory))
+            gateway_config = GatewayConfig(
+                gateway_config.server,
+                gateway_config.ble,
+                gateway_config.recording,
+                gateway_config.algorithm,
+                data_source=DataSourceConfig("serial"),
+            )
+            gateway = Gateway(gateway_config)
+            self.assertEqual(gateway.status["connectionState"], "not_connected")
+            await gateway.update_status("connectionState", "connected")
+            self.assertFalse(gateway.live)
+            with self.assertLogs("neurobridge.business.gateway", level="WARNING") as logs:
+                await gateway.receive_device_packet(DevicePacket("serial", "ff31", b"e" * EEG_PACKET_BYTES, 1234))
+            self.assertIn("blocked before validation success", "\n".join(logs.output))
+            self.assertIsNone(gateway.store.recording_id)
+
+            await gateway.update_status("connectionState", "validated")
+            self.assertTrue(gateway.live)
+            self.assertIsNotNone(gateway.store.recording_id)
 
     async def test_window_observer_receives_algorithm_output(self) -> None:
         class Algorithm:

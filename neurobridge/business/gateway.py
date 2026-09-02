@@ -69,7 +69,8 @@ class Gateway:
         self.assembler = WindowAssembler()
         self.store = RecordingStore(config.recording.directory)
         self.algorithm = AlgorithmRunner(config.algorithm)
-        self.status: dict[str, Any] = {"connectionState": "disconnected", "wearState": "unknown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
+        initial_connection_state = "not_connected" if config.data_source.type == "serial" else "disconnected"
+        self.status: dict[str, Any] = {"connectionState": initial_connection_state, "wearState": "unknown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
         # This is deliberately an operational-only field: the released B-side
         # status contract is unchanged.  Linux operators can inspect it in the
         # durable gateway log, matching the failure detail shown by the macOS
@@ -101,7 +102,12 @@ class Gateway:
 
     @property
     def live(self) -> bool:
-        return self.status["connectionState"] == "connected"
+        return self._connection_state_is_live(self.status["connectionState"])
+
+    def _connection_state_is_live(self, state: object) -> bool:
+        if self.config.data_source.type == "serial":
+            return state == "validated"
+        return state == "connected"
 
     @property
     def replay_available(self) -> bool:
@@ -139,24 +145,59 @@ class Gateway:
         self.store.stop()
         LOG.info("Gateway stopped: bootId=%s", self.boot_id)
 
-    async def on_device_ready(self) -> None:
-        """Start a fresh local algorithm session before publishing connected state."""
-        await self.algorithm.initialize()
+    async def on_device_ready(self) -> bool:
+        """Prepare a fresh local algorithm session and report whether it is usable."""
+        LOG.info(
+            "Local algorithm preparation started: transport=%s algorithmEnabled=%s",
+            self.config.data_source.type,
+            self.config.algorithm.enabled,
+        )
+        try:
+            await self.algorithm.initialize()
+        except Exception as exc:
+            self.status["algorithmState"] = "error"
+            LOG.exception(
+                "Local algorithm preparation failed: transport=%s algorithmState=error "
+                "errorType=%s reason=%s",
+                self.config.data_source.type,
+                type(exc).__name__,
+                safe_log_text(exc),
+            )
+            return False
         self.status["algorithmState"] = "ready" if self.algorithm.available else ("error" if self.algorithm.error else "unavailable")
-        if self.status["algorithmState"] == "error":
-            LOG.error("Device capture initialized: algorithmState=error reason=%s", safe_log_text(self.algorithm.error))
-        else:
-            LOG.info("Device capture initialized: algorithmState=%s", self.status["algorithmState"])
+        if self.status["algorithmState"] == "ready":
+            LOG.info("Local algorithm preparation succeeded: transport=%s algorithmState=ready", self.config.data_source.type)
+            return True
+        reason = self.algorithm.error or (
+            "algorithm_disabled_by_configuration"
+            if not self.config.algorithm.enabled
+            else "algorithm_process_not_available"
+        )
+        LOG.error(
+            "Local algorithm preparation failed: transport=%s algorithmState=%s reason=%s",
+            self.config.data_source.type,
+            self.status["algorithmState"],
+            safe_log_text(reason),
+        )
+        return False
 
     async def update_status(self, name: str, value: object) -> None:
         previous = self.status.get(name)
+        was_live = name == "connectionState" and self._connection_state_is_live(previous)
+        becomes_live = name == "connectionState" and self._connection_state_is_live(value)
         self.status[name] = value
-        if name == "connectionState" and value == "connected" and previous != "connected":
+        if name == "connectionState" and value in {"connected", "validated"} and previous != value:
             self.connection_error = None
+        if becomes_live and not was_live:
             await self._stop_replay()
             self._reset_capture_stats()
             recording_id = self.store.start(now_ms())
-            LOG.info("Headband connected; recording started: recordingId=%s", recording_id)
+            LOG.info(
+                "Headband data path ready; recording started: transport=%s connectionState=%s recordingId=%s",
+                self.config.data_source.type,
+                value,
+                recording_id,
+            )
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
             await self._cancel_window_flush()
             last = self.assembler.flush()
@@ -167,7 +208,7 @@ class Gateway:
             self._log_capture_summary("disconnected")
             self._capture_final_summary_logged = True
             self.store.stop()
-            LOG.info("Headband disconnected; recording stopped")
+            LOG.info("Headband disconnected; algorithm and recording stopped")
         if previous != value:
             if name == "connectionState":
                 LOG.info(
@@ -197,6 +238,15 @@ class Gateway:
 
     async def receive_device_packet(self, packet: DevicePacket) -> None:
         """Consume the transport-neutral event emitted by a selected adapter."""
+
+        if packet.transport == "serial" and self.status["connectionState"] != "validated":
+            LOG.warning(
+                "Serial device packet blocked before validation success: connectionState=%s channel=%s bytes=%s",
+                self.status["connectionState"],
+                packet.channel,
+                len(packet.value),
+            )
+            return
 
         characteristic = packet.channel
         value = packet.value
@@ -426,7 +476,7 @@ class Gateway:
         for session in tuple(self.sessions):
             for subscription in tuple(session.subscriptions.values()):
                 if "status" in subscription.streams:
-                    payload = {"status": {name: self.status[name] for name in ("connectionState", "wearState", "batteryPercent", "signalQuality")}}
+                    payload = {"status": {name: self.status[name] for name in ("connectionState", "wearState", "batteryPercent", "signalQuality", "algorithmState")}}
                     await subscription.send(envelope(200, self.event_data("status", subscription.id, now_ms(), self.mode(), True, payload)))
 
     def error(self, request_id: str | None, error: ProtocolError) -> dict:

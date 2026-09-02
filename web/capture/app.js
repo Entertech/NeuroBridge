@@ -18,6 +18,7 @@ const elements = {
   gatewayMessage: document.querySelector("#gatewayMessage"),
   mode: document.querySelector("#modeValue"),
   deviceState: document.querySelector("#deviceState"),
+  algorithmState: document.querySelector("#algorithmState"),
   subscriptionState: document.querySelector("#subscriptionState"),
   eventCount: document.querySelector("#eventCount"),
   eegCount: document.querySelector("#eegCount"),
@@ -38,6 +39,27 @@ let dataRecords = [];
 let protocolLines = [];
 let stats = createStats();
 let displayFormat = "hex";
+let deviceConnectionState = null;
+
+const DEVICE_STATE_LABELS = {
+  not_connected: "未连接",
+  connecting: "连接中",
+  connected: "已连接",
+  validating: "校验中",
+  validation_failed: "校验失败",
+  validated: "校验成功",
+  disconnected: "已断开",
+};
+
+const DEVICE_STATE_MESSAGES = {
+  not_connected: "尚未找到可识别的 USB 串口设备，网关会继续遍历候选串口。",
+  connecting: "正在遍历并打开 USB 串口，等待固定握手。",
+  connected: "已收到目标设备握手并独占串口，正在准备本地算法。",
+  validating: "本地算法已准备完成，已发送 E1，正在等待设备响应。",
+  validation_failed: "设备校验失败；算法未就绪时不会发送 E1，E1 无响应时也不会进入数据阶段。请导出日志排查。",
+  validated: "设备校验成功，可以接收并转发耳机数据。",
+  disconnected: "已识别的 USB 串口连接已断开，网关将按配置重新连接。",
+};
 
 if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
   elements.endpoint.value = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
@@ -243,7 +265,17 @@ function updateStatus(data) {
   if (!result || typeof result !== "object") return;
   if (result.mode !== undefined) elements.mode.textContent = result.mode;
   const status = result.status || result.payload?.status || result;
-  if (status.connectionState !== undefined) elements.deviceState.textContent = status.connectionState;
+  if (status.connectionState !== undefined) {
+    const nextState = String(status.connectionState);
+    const changed = nextState !== deviceConnectionState;
+    deviceConnectionState = nextState;
+    elements.deviceState.textContent = `${DEVICE_STATE_LABELS[nextState] || nextState} · ${nextState}`;
+    if (changed) {
+      appendDataRecord({ type: "note", text: `设备状态：${DEVICE_STATE_LABELS[nextState] || nextState}（${nextState}）` });
+      if (DEVICE_STATE_MESSAGES[nextState]) elements.gatewayMessage.textContent = DEVICE_STATE_MESSAGES[nextState];
+    }
+  }
+  if (status.algorithmState !== undefined) elements.algorithmState.textContent = String(status.algorithmState);
 }
 
 function handleMessage(message) {
@@ -344,7 +376,9 @@ function exportDiagnosticLog() {
     `gatewayState=${elements.gatewayState.textContent}`,
     `gatewayMessage=${elements.gatewayMessage.textContent}`,
     `mode=${elements.mode.textContent}`,
-    `deviceConnectionState=${elements.deviceState.textContent}`,
+    `deviceConnectionState=${deviceConnectionState ?? "unknown"}`,
+    `deviceConnectionStateLabel=${elements.deviceState.textContent}`,
+    `algorithmState=${elements.algorithmState.textContent}`,
     `subscriptionState=${elements.subscriptionState.textContent}`,
     `displayFormat=${displayFormat}`,
     `dataEvents=${stats.events}`,

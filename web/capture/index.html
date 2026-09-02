@@ -62,6 +62,7 @@
         <div class="metrics">
           <div><span>数据模式</span><strong id="modeValue">—</strong></div>
           <div><span>耳机连接</span><strong id="deviceState">—</strong></div>
+          <div><span>本地算法</span><strong id="algorithmState">—</strong></div>
           <div><span>订阅状态</span><strong id="subscriptionState">未订阅</strong></div>
           <div><span>数据事件</span><strong id="eventCount">0</strong></div>
           <div><span>EEG 包 / 字节</span><strong id="eegCount">0 / 0</strong></div>
@@ -70,6 +71,9 @@
           <div><span>页面推算丢包</span><strong id="lostPackets">0</strong></div>
           <div><span>页面推算丢包率</span><strong id="lossRate">0.000000%</strong></div>
         </div>
+        <p class="control-note">
+          USB 串口状态依次为：未连接 → 连接中 → 已连接（固定握手已通过）→ 校验中（算法已就绪并发送 E1）→ 校验成功。算法未就绪或 E1 无响应会进入校验失败；只有校验成功后网关才接收和转发实时数据。
+        </p>
       </section>
 
       <section class="logs" aria-labelledby="rawTitle">

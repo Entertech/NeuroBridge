@@ -8,7 +8,7 @@ NeuroBridge 是将回车科技头环数据接入本机浏览器或兼容第三�
 
 仓库现已包含可部署的 Python 网关：`neurobridge/`。它通过策略模式提供两种可切换的访问拓扑：当前默认 `local_browser` 让同一台网关主机上的浏览器通过 `127.0.0.1` 使用 WebSocket；兼容策略 `wired_b_side` 保留独立 B 端主机的专用网线访问。两种策略复用相同的消息契约、600 ms 批量数据、订阅、录播和持久化逻辑。
 
-设备侧也使用独立策略：`data_source.type = "serial"` 选择当前 USB 派生 TTY 方案，`"bluetooth"` 切回 Flowtime BLE，一次只运行一种；`"usb"` 仅为原生 HID/Bulk/Interrupt 预留，协议未确认时会拒绝启动并提示改用串口。串口策略会稳定排序并逐个探测 `/dev/serial/by-id/`、`ttyACM*`、`ttyUSB*`，收到首个固定握手后立即 ACK 并停止遍历；`0xE1`/`0xE0` 收到任意非空响应即成功。16 位大端序号用于输出累计和区间丢包率，日志不记录控制响应原文或完整脑波帧。完整 28 字节设备帧只写入受保护的内部录制目录，不进入现有采集包、诊断包或北向消息。
+设备侧也使用独立策略：`data_source.type = "serial"` 选择当前 USB 派生 TTY 方案，`"bluetooth"` 切回 Flowtime BLE，一次只运行一种；`"usb"` 仅为原生 HID/Bulk/Interrupt 预留，协议未确认时会拒绝启动并提示改用串口。串口策略会稳定排序并逐个探测 `/dev/serial/by-id/`、`ttyACM*`、`ttyUSB*`，收到首个固定握手后立即 ACK、停止遍历并进入 `connected`；本地算法准备成功后才进入 `validating` 并发送 `0xE1`，收到任意非空响应后进入 `validated`，只有此时才读取和转发实时数据。算法失败或 `0xE1` 无响应进入 `validation_failed` 并记录原因，关闭串口后为 `disconnected`；从未找到目标设备则回到 `not_connected`。`0xE0` 同样以任意非空响应为成功。16 位大端序号用于输出累计和区间丢包率，日志不记录控制响应原文或完整脑波帧。完整 28 字节设备帧只写入受保护的内部录制目录，不进入现有采集包、诊断包或北向消息。
 
 已具备运行环境和 `/etc/neurobridge/gateway.toml` 的银河麒麟 x86_64 设备，推荐一键启用串口并重启服务：
 

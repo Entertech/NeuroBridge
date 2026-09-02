@@ -78,6 +78,10 @@ async def noop(*_args) -> None:
     return None
 
 
+async def ready() -> bool:
+    return True
+
+
 class SequenceLossTrackerTests(unittest.TestCase):
     def test_rfc_style_loss_handles_gap_recovery_duplicate_and_wrap(self) -> None:
         tracker = SequenceLossTracker()
@@ -420,13 +424,104 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             SerialConfig(),
             packet,
             status,
-            noop,
+            ready,
             candidate_provider=lambda _config: ["/dev/ttyACM-test"],
             serial_factory=lambda _path, _config: client,
         )
         await adapter.run()
         self.assertEqual(client.writes, [HANDSHAKE, b"\xE1", b"\xE0"])
         self.assertEqual([channel for channel, _value in packets], ["serial.frame", "ff31", "ff51"])
-        self.assertIn(("connectionState", "connected"), states)
+        self.assertEqual(
+            states,
+            [
+                ("connectionState", "connecting"),
+                ("connectionState", "connected"),
+                ("connectionState", "validating"),
+                ("connectionState", "validated"),
+                ("connectionState", "disconnected"),
+            ],
+        )
         self.assertEqual(states[-1], ("connectionState", "disconnected"))
         self.assertTrue(client.closed)
+
+    async def test_algorithm_not_ready_blocks_e1_and_reports_validation_failure(self) -> None:
+        client = FakeSerial([HANDSHAKE])
+        states: list[tuple[str, object]] = []
+        errors: list[str] = []
+        adapter: SerialAdapter
+
+        async def not_ready() -> bool:
+            return False
+
+        async def status(name: str, value: object) -> None:
+            states.append((name, value))
+
+        async def stop_after_error(reason: str) -> None:
+            errors.append(reason)
+            await adapter.stop()
+
+        adapter = SerialAdapter(
+            SerialConfig(),
+            noop,
+            status,
+            not_ready,
+            error=stop_after_error,
+            candidate_provider=lambda _config: ["/dev/ttyUSB-test"],
+            serial_factory=lambda _path, _config: client,
+        )
+        with self.assertLogs("neurobridge.serial.adapter", level="ERROR") as logs:
+            await adapter.run()
+
+        self.assertEqual(client.writes, [HANDSHAKE])
+        self.assertEqual(
+            states,
+            [
+                ("connectionState", "connecting"),
+                ("connectionState", "connected"),
+                ("connectionState", "validation_failed"),
+                ("connectionState", "disconnected"),
+            ],
+        )
+        self.assertIn("startCommandSent=false", "\n".join(logs.output))
+        self.assertIn("Local algorithm is not ready", errors[0])
+
+    async def test_e1_timeout_reports_validation_failure_and_never_streams(self) -> None:
+        client = FakeSerial([HANDSHAKE])
+        states: list[tuple[str, object]] = []
+        packets: list[DevicePacket] = []
+        adapter: SerialAdapter
+
+        async def packet(event: DevicePacket) -> None:
+            packets.append(event)
+
+        async def status(name: str, value: object) -> None:
+            states.append((name, value))
+
+        async def stop_after_error(_reason: str) -> None:
+            await adapter.stop()
+
+        adapter = SerialAdapter(
+            SerialConfig(),
+            packet,
+            status,
+            ready,
+            error=stop_after_error,
+            candidate_provider=lambda _config: ["/dev/ttyUSB-test"],
+            serial_factory=lambda _path, _config: client,
+        )
+        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
+            await adapter.run()
+
+        self.assertEqual(client.writes, [HANDSHAKE, b"\xE1"])
+        self.assertEqual(packets, [])
+        self.assertEqual(
+            states,
+            [
+                ("connectionState", "connecting"),
+                ("connectionState", "connected"),
+                ("connectionState", "validating"),
+                ("connectionState", "validation_failed"),
+                ("connectionState", "disconnected"),
+            ],
+        )
+        self.assertIn("reason=response_timeout", "\n".join(logs.output))

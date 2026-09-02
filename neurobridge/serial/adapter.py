@@ -341,7 +341,7 @@ class SerialAdapter:
         config: SerialConfig,
         packet: Callable[[DevicePacket], Awaitable[None]],
         status: Callable[[str, object], Awaitable[None]],
-        device_ready: Callable[[], Awaitable[None]],
+        device_ready: Callable[[], Awaitable[bool]],
         error: Callable[[str], Awaitable[None]] | None = None,
         *,
         candidate_provider: Callable[[SerialConfig], Iterable[str]] = discover_serial_candidates,
@@ -388,6 +388,7 @@ class SerialAdapter:
         while not self._stopping:
             attempt += 1
             phase = "discover"
+            target_selected = False
             try:
                 await self.status("connectionState", "connecting")
                 candidates = list(self.candidate_provider(self.config))
@@ -457,6 +458,7 @@ class SerialAdapter:
                         )
                         if await self._await_handshake(client, path, attempt, index, len(candidates)):
                             self._client, self._target = client, path
+                            target_selected = True
                             identity = serial_candidate_metadata(path)
                             LOG.info(
                                 "Serial target selected: path=%s resolvedPath=%s vid=%s pid=%s usbSerial=%s "
@@ -471,6 +473,11 @@ class SerialAdapter:
                                 identity["driver"],
                                 _safe_log_text(identity["physicalPath"]),
                             )
+                            # A valid device handshake proves that the USB-derived
+                            # serial link is connected. Algorithm and start-command
+                            # checks are represented by the following validation
+                            # states instead of overloading "connected".
+                            await self.status("connectionState", "connected")
                             break
                         invalid_handshake_candidate_count += 1
                     except Exception as exc:
@@ -506,13 +513,58 @@ class SerialAdapter:
 
                 self._reset_stats()
                 phase = "algorithm_initialize"
-                await self.device_ready()
+                LOG.info(
+                    "Serial local algorithm preparation started: attempt=%s target=%s startCommandSent=false",
+                    attempt,
+                    _safe_log_text(self._target),
+                )
+                algorithm_ready = await self.device_ready()
+                if not algorithm_ready:
+                    await self.status("connectionState", "validation_failed")
+                    LOG.error(
+                        "Serial validation failed before start command: attempt=%s target=%s "
+                        "reason=local_algorithm_not_ready startCommandSent=false",
+                        attempt,
+                        _safe_log_text(self._target),
+                    )
+                    raise ConnectionError("Local algorithm is not ready; serial start command was not sent")
                 phase = "start_command_response"
-                initial = await self._send_control(START_COMMAND, "start")
+                await self.status("connectionState", "validating")
+                LOG.info(
+                    "Serial device validation started: attempt=%s target=%s algorithmReady=true command=E1",
+                    attempt,
+                    _safe_log_text(self._target),
+                )
+                try:
+                    initial = await self._send_control(START_COMMAND, "start")
+                except Exception:
+                    await self.status("connectionState", "validation_failed")
+                    LOG.exception(
+                        "Serial device validation failed: attempt=%s target=%s command=E1 "
+                        "reason=control_write_or_read_error",
+                        attempt,
+                        _safe_log_text(self._target),
+                    )
+                    raise
                 if not initial:
+                    await self.status("connectionState", "validation_failed")
+                    LOG.error(
+                        "Serial device validation failed: attempt=%s target=%s command=E1 "
+                        "reason=response_timeout timeoutMs=%s",
+                        attempt,
+                        _safe_log_text(self._target),
+                        self.config.command_response_timeout_ms,
+                    )
                     raise TimeoutError("Serial start command received no response")
                 self._capture_started = True
-                await self.status("connectionState", "connected")
+                await self.status("connectionState", "validated")
+                LOG.info(
+                    "Serial device validation succeeded: attempt=%s target=%s command=E1 "
+                    "responseBytes=%s policy=any_non_empty_response",
+                    attempt,
+                    _safe_log_text(self._target),
+                    len(initial),
+                )
                 phase = "streaming"
                 await self._stream(initial)
                 if not self._stopping:
@@ -540,7 +592,10 @@ class SerialAdapter:
                 self._client = None
                 self._target = None
                 self._capture_started = False
-                await self.status("connectionState", "disconnected")
+                await self.status(
+                    "connectionState",
+                    "disconnected" if target_selected else "not_connected",
+                )
             if not self._stopping:
                 LOG.info(
                     "Serial reconnect scheduled: attempt=%s nextAttempt=%s delaySeconds=%s",
