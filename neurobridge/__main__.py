@@ -82,7 +82,7 @@ async def run(config_path: str) -> None:
     if config.data_source.type == "serial":
         LOG.info(
             "Serial runtime configuration: device=%s candidateTypes=%s baudRate=%s handshakeTimeoutMs=%s "
-            "commandResponseTimeoutMs=%s dataTimeoutSeconds=%s reconnectDelaySeconds=%s "
+            "handshakeAckResponseTimeoutMs=%s dataTimeoutSeconds=%s reconnectDelaySeconds=%s "
             "statsIntervalSeconds=%s maxBufferBytes=%s dtr=%s rts=%s",
             config.serial.device,
             ",".join(config.serial.candidate_types),

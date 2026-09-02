@@ -30,7 +30,7 @@ bash linux/neurobridge-kylin-bootstrap.sh
 
 本文用于 Ubuntu 24.04 LTS x86_64 兼容/回归环境；正式银河麒麟部署见内部麒麟手册。当前默认 `local_browser` 策略让网页、WebSocket 和下载仅监听 `127.0.0.1`，不需要独立 B 端主机或数据专用网线。旧 `wired_b_side` 策略仍保留，但只能使用双方确认的隔离有线网络。
 
-银河麒麟分步脚本仍保留给故障恢复：`setup-kylin-python.sh`、`diagnose-kylin-usb-serial.sh`、`setup-kylin-serial.sh`、`setup-kylin-algorithm.sh` 和 `start-kylin-gateway.sh`。只有排查物理枚举过程时才使用诊断脚本的 `--plug-cycle --timeout 60`。串口模式必须先通过本地算法进程自检，启动脚本不允许以关闭算法或项目外 bridge 绕过 `E1` 门禁。
+银河麒麟分步脚本仍保留给故障恢复：`setup-kylin-python.sh`、`diagnose-kylin-usb-serial.sh`、`setup-kylin-serial.sh`、`setup-kylin-algorithm.sh` 和 `start-kylin-gateway.sh`。只有排查物理枚举过程时才使用诊断脚本的 `--plug-cycle --timeout 60`。串口模式先回写握手 ACK 并等待设备的 `01` 校验结果，再准备本地算法；启动脚本不允许以关闭算法或项目外 bridge 绕过无响应 `E1` 的发送门禁。
 
 > 默认本机地址固定使用 `127.0.0.1`。文中的 `192.168.88.10`、`192.168.88.20` 和网卡名仅用于兼容有线策略，切换前必须确认现场参数。
 
@@ -348,7 +348,7 @@ git pull --ff-only
 | 日志出现无法绑定地址 | 用 `ip -br addr` 检查专用网卡；`[server].host` 必须是该主机实际拥有的私有或回环 IP，不能填写 DNS 名称、通配地址或 B 端地址。 |
 | B 端无法建立 WebSocket | 确认网线、两端 IP/掩码、专用网卡防火墙、端口和 `path`；握手必须提供 `neurobridge.v1` 子协议。连接恢复后先 `getStatus`，再重新订阅。 |
 | `neurobridge-dhcp.service` 显示未运行 | 在 `static` 模式下这是预期行为：其 `ExecCondition` 会跳过 DHCP 服务。只有配置为 `dhcp` 并填写完整 DHCP 参数后才应运行。 |
-| 未收到实时数据 | 先从启动日志确认 `transport=serial` 或 `bluetooth`。串口检查候选/握手、`0xE1` 响应、有效帧超时和累计/区间丢包；BLE 检查 `[ble].enabled`、控制器、名称/UUID。不要仅凭服务进程存活或串口有字节判断头环已连接。 |
+| 未收到实时数据 | 先从启动日志确认 `transport=serial` 或 `bluetooth`。串口检查候选/握手、ACK 后的 `01`、无响应 `0xE1` 是否写入、有效帧超时和累计/区间丢包；BLE 检查 `[ble].enabled`、控制器、名称/UUID。不要仅凭服务进程存活或串口有字节判断头环已连接。 |
 | 离线时没有录播数据 | 检查 `[recording].directory` 是否指向存放历史会话的目录，并确认其中至少有一个非空会话；网关会自动选择最新会话。若填写了 `replay_recording_id`，该会话无效时会回退到自动选择。 |
 | 下载接口不可用 | 确认 `[download].enabled = true`、监听 IP/端口与防火墙配置一致；只有已结束的录制会话能导出。 |
 

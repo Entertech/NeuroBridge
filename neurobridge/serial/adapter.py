@@ -18,7 +18,7 @@ LOG = logging.getLogger(__name__)
 HANDSHAKE = bytes.fromhex("AA 55 01 01 01 01 6F")
 START_COMMAND = b"\xE1"
 STOP_COMMAND = b"\xE0"
-EXPECTED_CONTROL_ACK = b"\x01"
+EXPECTED_HANDSHAKE_ACK_RESPONSE = b"\x01"
 FRAME_HEADER = b"\xAA\xAA\xAA"
 FRAME_TAIL = b"\xBB\xBB\xBB"
 FRAME_BYTES = 28
@@ -63,12 +63,12 @@ def _longest_handshake_prefix(data: bytes | bytearray) -> int:
     )
 
 
-def _classify_control_response(response: bytes) -> tuple[str, bool, int, int, str]:
-    """Describe a short control response without logging its complete payload."""
+def _classify_handshake_ack_response(response: bytes) -> tuple[str, bool, int, int, str]:
+    """Describe the handshake ACK result without logging its complete payload."""
 
     fixed_handshake_frames = response.count(HANDSHAKE)
     longest_handshake_prefix = _longest_handshake_prefix(response)
-    expected_ack_01 = response == EXPECTED_CONTROL_ACK
+    expected_ack_01 = response == EXPECTED_HANDSHAKE_ACK_RESPONSE
     if expected_ack_01:
         classification = "single_byte_0x01"
     elif response == HANDSHAKE:
@@ -513,6 +513,59 @@ class SerialAdapter:
                     raise TimeoutError("No serial candidate produced the fixed handshake")
 
                 self._reset_stats()
+                phase = "handshake_ack_response"
+                await self.status("connectionState", "validating")
+                LOG.info(
+                    "Serial handshake validation started: attempt=%s target=%s "
+                    "ackBytes=%s expectedResponse=single_byte_0x01",
+                    attempt,
+                    _safe_log_text(self._target),
+                    len(HANDSHAKE),
+                )
+                try:
+                    response = await self._send_handshake_ack()
+                except Exception:
+                    await self.status("connectionState", "validation_failed")
+                    LOG.exception(
+                        "Serial handshake validation failed: attempt=%s target=%s "
+                        "reason=ack_write_or_response_read_error",
+                        attempt,
+                        _safe_log_text(self._target),
+                    )
+                    raise
+                if not response:
+                    await self.status("connectionState", "validation_failed")
+                    LOG.error(
+                        "Serial handshake validation failed: attempt=%s target=%s "
+                        "reason=response_timeout timeoutMs=%s",
+                        attempt,
+                        _safe_log_text(self._target),
+                        self.config.command_response_timeout_ms,
+                    )
+                    raise TimeoutError("Serial handshake ACK received no validation response")
+                if response != EXPECTED_HANDSHAKE_ACK_RESPONSE:
+                    await self.status("connectionState", "validation_failed")
+                    classification = _classify_handshake_ack_response(response)[0]
+                    LOG.error(
+                        "Serial handshake validation failed: attempt=%s target=%s "
+                        "reason=unexpected_response responseClassification=%s expectedAck01=true "
+                        "responseBytes=%s payloadLogged=false",
+                        attempt,
+                        _safe_log_text(self._target),
+                        classification,
+                        len(response),
+                    )
+                    raise ConnectionError(
+                        f"Serial handshake ACK returned an unexpected response: {classification}"
+                    )
+                LOG.info(
+                    "Serial handshake validation succeeded: attempt=%s target=%s "
+                    "responseBytes=%s policy=single_byte_0x01",
+                    attempt,
+                    _safe_log_text(self._target),
+                    len(response),
+                )
+
                 phase = "algorithm_initialize"
                 LOG.info(
                     "Serial local algorithm preparation started: attempt=%s target=%s startCommandSent=false",
@@ -529,61 +582,33 @@ class SerialAdapter:
                         _safe_log_text(self._target),
                     )
                     raise ConnectionError("Local algorithm is not ready; serial start command was not sent")
-                phase = "start_command_response"
-                await self.status("connectionState", "validating")
+                phase = "start_command_write"
                 LOG.info(
-                    "Serial device validation started: attempt=%s target=%s algorithmReady=true command=E1",
+                    "Serial capture enable started: attempt=%s target=%s algorithmReady=true "
+                    "command=E1 responseExpected=false",
                     attempt,
                     _safe_log_text(self._target),
                 )
                 try:
-                    initial = await self._send_control(START_COMMAND, "start")
+                    await self._send_command(START_COMMAND, "start")
                 except Exception:
                     await self.status("connectionState", "validation_failed")
                     LOG.exception(
-                        "Serial device validation failed: attempt=%s target=%s command=E1 "
-                        "reason=control_write_or_read_error",
+                        "Serial capture enable failed: attempt=%s target=%s command=E1 "
+                        "reason=control_write_error responseExpected=false",
                         attempt,
                         _safe_log_text(self._target),
                     )
                     raise
-                if not initial:
-                    await self.status("connectionState", "validation_failed")
-                    LOG.error(
-                        "Serial device validation failed: attempt=%s target=%s command=E1 "
-                        "reason=response_timeout timeoutMs=%s",
-                        attempt,
-                        _safe_log_text(self._target),
-                        self.config.command_response_timeout_ms,
-                    )
-                    raise TimeoutError("Serial start command received no response")
-                if initial != EXPECTED_CONTROL_ACK:
-                    await self.status("connectionState", "validation_failed")
-                    classification = _classify_control_response(initial)[0]
-                    LOG.error(
-                        "Serial device validation failed: attempt=%s target=%s command=E1 "
-                        "reason=unexpected_response responseClassification=%s expectedAck01=true "
-                        "responseBytes=%s payloadLogged=false",
-                        attempt,
-                        _safe_log_text(self._target),
-                        classification,
-                        len(initial),
-                    )
-                    raise ConnectionError(
-                        f"Serial start command returned an unexpected response: {classification}"
-                    )
                 self._capture_started = True
                 await self.status("connectionState", "validated")
                 LOG.info(
-                    "Serial device validation succeeded: attempt=%s target=%s command=E1 "
-                    "responseBytes=%s policy=single_byte_0x01",
+                    "Serial capture enabled: attempt=%s target=%s command=E1 "
+                    "responseExpected=false connectionState=validated",
                     attempt,
                     _safe_log_text(self._target),
-                    len(initial),
                 )
                 phase = "streaming"
-                # The one-byte ACK is control-plane data and must never be fed
-                # into the 28-byte biological-data frame parser.
                 await self._stream(b"")
                 if not self._stopping:
                     raise ConnectionError("Serial stream ended")
@@ -674,12 +699,10 @@ class SerialAdapter:
                     total_discarded_before_handshake,
                     longest_prefix_bytes,
                 )
-            await asyncio.to_thread(client.write, HANDSHAKE)
-            await self._flush(client)
             LOG.info(
-                "Serial handshake accepted and ACK sent: attempt=%s candidateIndex=%s candidateCount=%s path=%s "
+                "Serial handshake request accepted: attempt=%s candidateIndex=%s candidateCount=%s path=%s "
                 "reads=%s nonEmptyReads=%s readBytes=%s discardedBeforeHandshake=%s bufferTruncations=%s "
-                "durationMs=%s traversalStopped=true",
+                "durationMs=%s traversalStopped=true ackSent=false",
                 attempt,
                 index,
                 candidate_count,
@@ -726,7 +749,7 @@ class SerialAdapter:
             )
         return False
 
-    async def _send_control(self, command: bytes, name: str) -> bytes:
+    async def _send_handshake_ack(self) -> bytes:
         if self._client is None:
             return b""
         client = self._client
@@ -734,13 +757,17 @@ class SerialAdapter:
         async with self._io_lock:
             if hasattr(client, "reset_input_buffer"):
                 await asyncio.to_thread(client.reset_input_buffer)
-            await asyncio.to_thread(client.write, command)
+            written = await asyncio.to_thread(client.write, HANDSHAKE)
+            if written != len(HANDSHAKE):
+                raise OSError(
+                    f"Serial handshake ACK write was incomplete: expected={len(HANDSHAKE)} actual={written}"
+                )
             await self._flush(client)
             previous_timeout = getattr(client, "timeout", None)
             client.timeout = self.config.command_response_timeout_ms / 1000
             try:
-                # The device contract defines an exact one-byte 0x01 ACK. Read
-                # exactly one byte and leave later stream data for _stream().
+                # The device validates the echoed seven-byte handshake ACK and
+                # returns exactly one byte: 0x01. E1/E0 have no response.
                 response = bytes(await asyncio.to_thread(client.read, 1))
             finally:
                 client.timeout = previous_timeout
@@ -754,7 +781,7 @@ class SerialAdapter:
                 fixed_handshake_frames,
                 longest_handshake_prefix,
                 single_byte_hex,
-            ) = _classify_control_response(response)
+            ) = _classify_handshake_ack_response(response)
             success = expected_ack_01
             if not success:
                 self._stats["controlUnexpectedResponses"] = (
@@ -762,11 +789,10 @@ class SerialAdapter:
                 )
             log_response = LOG.info if success else LOG.warning
             log_response(
-                "Serial control response received: command=%s responseBytes=%s durationMs=%s "
+                "Serial handshake ACK response received: command=handshake_ack responseBytes=%s durationMs=%s "
                 "responseClassification=%s expectedAck01=%s singleByteHex=%s "
                 "fixedHandshakeFrames=%s longestHandshakePrefixBytes=%s success=%s "
                 "acceptedByCurrentPolicy=%s payloadLogged=false",
-                name,
                 len(response),
                 duration_ms,
                 classification,
@@ -780,12 +806,34 @@ class SerialAdapter:
         else:
             self._stats["controlTimeouts"] = int(self._stats["controlTimeouts"]) + 1
             LOG.warning(
-                "Serial control response timed out: command=%s timeoutMs=%s durationMs=%s success=false",
-                name,
+                "Serial handshake ACK response timed out: command=handshake_ack timeoutMs=%s "
+                "durationMs=%s success=false",
                 self.config.command_response_timeout_ms,
                 duration_ms,
             )
         return response
+
+    async def _send_command(self, command: bytes, name: str) -> None:
+        """Write a protocol command which intentionally has no response."""
+
+        if self._client is None:
+            raise ConnectionError(f"Serial command cannot be sent without a client: {name}")
+        started = time.monotonic()
+        async with self._io_lock:
+            written = await asyncio.to_thread(self._client.write, command)
+            if written != len(command):
+                raise OSError(
+                    f"Serial command write was incomplete: command={name} "
+                    f"expected={len(command)} actual={written}"
+                )
+            await self._flush(self._client)
+        LOG.info(
+            "Serial command sent: command=%s commandBytes=%s durationMs=%s "
+            "responseExpected=false success=true",
+            name,
+            len(command),
+            int((time.monotonic() - started) * 1000),
+        )
 
     async def _send_stop_best_effort(self, reason: str) -> None:
         async with self._stop_lock:
@@ -795,13 +843,10 @@ class SerialAdapter:
             # service-stop and adapter-cleanup paths cannot both send 0xE0.
             self._capture_started = False
             try:
-                response = await self._send_control(STOP_COMMAND, "stop")
+                await self._send_command(STOP_COMMAND, "stop")
                 LOG.info(
-                    "Serial stop command completed: reason=%s responseReceived=%s responseAccepted=%s "
-                    "policy=single_byte_0x01",
+                    "Serial stop command completed: reason=%s responseExpected=false success=true",
                     reason,
-                    bool(response),
-                    response == EXPECTED_CONTROL_ACK,
                 )
             except Exception:
                 LOG.exception("Serial stop command failed: reason=%s", reason)

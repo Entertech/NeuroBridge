@@ -986,6 +986,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('rawPayloadExported=false', javascript)
         self.assertIn('key === "bytesBase64"', javascript)
         self.assertIn("URL.createObjectURL", javascript)
+        self.assertIn("等待设备返回校验结果 01", javascript)
+        self.assertIn("E1 本身没有响应", javascript)
+        self.assertIn("无响应 E1 已写入", html)
         self.assertNotIn("navigator.serial", javascript)
         self.assertNotIn("requestPort", javascript)
         for forbidden in ("fetch(", "XMLHttpRequest", "EventSource", "https://"):
