@@ -4,98 +4,101 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <title>NeuroBridge · USB 串口采集日志检查</title>
+    <title>NeuroBridge · 耳机数据查看</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main>
       <header class="hero">
-        <p class="eyebrow">NEUROBRIDGE / USB SERIAL / OFFLINE</p>
-        <h1>USB 串口采集<br />日志检查</h1>
+        <p class="eyebrow">NEUROBRIDGE / GATEWAY DATA VIEWER</p>
+        <h1>耳机数据<br />实时查看</h1>
         <p class="intro">
-          直接双击本页即可使用。选择或粘贴 NeuroBridge 运行日志后，页面会在本机浏览器中检查串口发现、固定握手、
-          <code>0xE1</code> 响应和 28 字节数据帧；不会请求接口、连接服务或上传文件。
+          本页只连接正在运行的 NeuroBridge 网关，不直接访问 USB 串口。点击“开始接收”后，
+          网关通过 WebSocket 转发 EEG、心率和设备状态；页面打印原始 HEX，并解析序列号和六路 EEG 原始值。
         </p>
       </header>
 
       <section class="card overview" aria-labelledby="overviewTitle">
         <div class="section-heading">
-          <div>
-            <p class="label">当前方案</p>
-            <h2 id="overviewTitle">耳机 → USB 转串口 → 网关 → 本机浏览器</h2>
-          </div>
-          <span class="offline-badge">完全静态</span>
+          <div><p class="label">数据链路</p><h2 id="overviewTitle">耳机 → USB 串口 → 网关服务 → 当前网页</h2></div>
+          <span class="service-badge">网关托管</span>
         </div>
         <dl class="protocol-grid">
-          <div><dt>串口参数</dt><dd>115200 · 8-N-1 · 无流控</dd></div>
-          <div><dt>固定握手 / ACK</dt><dd>AA 55 01 01 01 01 6F</dd></div>
-          <div><dt>启动指令</dt><dd>E1</dd></div>
-          <div><dt>重点观察响应</dt><dd>单字节 01</dd></div>
-          <div><dt>数据帧</dt><dd>28 字节 · AA AA AA … BB BB BB</dd></div>
-          <div><dt>隐私</dt><dd>只在当前页面内解析</dd></div>
+          <div><dt>网页入口</dt><dd>127.0.0.1:8080/capture/</dd></div>
+          <div><dt>数据通道</dt><dd>WebSocket · neurobridge.v1</dd></div>
+          <div><dt>原始数据</dt><dd>eeg.raw · hr.raw</dd></div>
+          <div><dt>开始接收</dt><dd>subscribe</dd></div>
+          <div><dt>停止接收</dt><dd>unsubscribe</dd></div>
+          <div><dt>串口占用</dt><dd>始终由网关独占</dd></div>
         </dl>
       </section>
 
-      <section class="card input-card" aria-labelledby="inputTitle">
-        <div class="section-heading input-heading">
-          <div>
-            <p class="label">输入日志</p>
-            <h2 id="inputTitle">选择文件或粘贴内容</h2>
-          </div>
-          <span id="fileName" class="file-name">尚未选择文件</span>
-        </div>
-        <div class="actions">
-          <label class="button" for="logFile">选择日志文件</label>
-          <input id="logFile" type="file" accept=".log,.txt,text/plain" />
-          <button id="analyzeButton" type="button">分析粘贴内容</button>
-          <button id="clearButton" class="secondary" type="button">清空</button>
-        </div>
-        <textarea id="logInput" spellcheck="false" placeholder="粘贴 .runtime/logs/neurobridge.log 中的相关内容……"></textarea>
-        <p id="message" class="message" role="status">等待日志。页面不会自动访问网关或任何网络地址。</p>
-      </section>
-
-      <section class="result-grid" aria-label="采集链路检查结果">
-        <article class="result-card" data-result="serial">
-          <p class="step">01 / 串口</p><h3>设备候选</h3><p class="result" id="serialResult">等待日志</p>
-        </article>
-        <article class="result-card" data-result="handshake">
-          <p class="step">02 / 握手</p><h3>握手与 ACK</h3><p class="result" id="handshakeResult">等待日志</p>
-        </article>
-        <article class="result-card" data-result="control">
-          <p class="step">03 / 控制</p><h3>E1 响应</h3><p class="result" id="controlResult">等待日志</p>
-        </article>
-        <article class="result-card" data-result="frames">
-          <p class="step">04 / 数据</p><h3>有效数据帧</h3><p class="result" id="framesResult">等待日志</p>
-        </article>
-      </section>
-
-      <section class="card diagnosis" aria-labelledby="diagnosisTitle">
+      <section class="card" aria-labelledby="connectTitle">
         <div class="section-heading">
-          <div><p class="label">自动结论</p><h2 id="diagnosisTitle">下一步判断</h2></div>
-          <span id="overallState" class="state-badge" data-state="idle">待分析</span>
+          <div><p class="label">连接</p><h2 id="connectTitle">连接当前网关服务</h2></div>
+          <span id="gatewayState" class="state-badge" data-state="idle">未连接</span>
         </div>
-        <p id="diagnosisText" class="diagnosis-text">导入日志后，这里会给出最直接的现场判断。</p>
-        <div id="metrics" class="metrics" hidden>
-          <div><span>响应分类</span><strong id="responseClassification">—</strong></div>
-          <div><span>响应字节数</span><strong id="responseBytes">—</strong></div>
-          <div><span>读取字节数</span><strong id="readBytes">—</strong></div>
-          <div><span>有效帧数</span><strong id="frameCount">—</strong></div>
-          <div><span>丢弃字节数</span><strong id="discardedBytes">—</strong></div>
-          <div><span>数据阶段握手数</span><strong id="streamHandshakeFrames">—</strong></div>
-          <div><span>丢包率</span><strong id="lossRate">—</strong></div>
+        <label class="endpoint-row" for="endpoint">
+          <span>WebSocket 地址</span>
+          <input id="endpoint" type="url" value="ws://127.0.0.1:8765/neurobridge/v1/ws" spellcheck="false" />
+        </label>
+        <div class="actions">
+          <button id="connectButton" type="button">连接网关</button>
+          <button id="disconnectButton" class="secondary" type="button" disabled>断开网页</button>
+          <button id="statusButton" class="secondary" type="button" disabled>查询状态</button>
+          <button id="startButton" type="button" disabled>开始接收</button>
+          <button id="stopButton" class="danger" type="button" disabled>停止接收</button>
+          <button id="clearButton" class="secondary" type="button">清空显示</button>
+        </div>
+        <p id="gatewayMessage" class="message" role="status">正在等待连接网关。</p>
+        <p class="control-note">
+          “开始/停止”只控制当前网页是否订阅数据，不会停止网关进程、USB 串口或设备连接。关闭网页后，网关仍正常运行。
+        </p>
+      </section>
+
+      <section class="card" aria-labelledby="statusTitle">
+        <div class="section-heading"><div><p class="label">状态</p><h2 id="statusTitle">网关与数据统计</h2></div></div>
+        <div class="metrics">
+          <div><span>数据模式</span><strong id="modeValue">—</strong></div>
+          <div><span>耳机连接</span><strong id="deviceState">—</strong></div>
+          <div><span>订阅状态</span><strong id="subscriptionState">未订阅</strong></div>
+          <div><span>数据事件</span><strong id="eventCount">0</strong></div>
+          <div><span>EEG 包 / 字节</span><strong id="eegCount">0 / 0</strong></div>
+          <div><span>HR 包 / 字节</span><strong id="hrCount">0 / 0</strong></div>
+          <div><span>最新序列号</span><strong id="sequenceValue">—</strong></div>
+          <div><span>页面推算丢包</span><strong id="lostPackets">0</strong></div>
+          <div><span>页面推算丢包率</span><strong id="lossRate">0.000000%</strong></div>
         </div>
       </section>
 
-      <section class="logs" aria-labelledby="eventsTitle">
-        <div class="logs-title"><h2 id="eventsTitle">关键日志</h2><span>只显示与本次 USB 串口链路有关的行</span></div>
-        <pre id="keyEvents">等待日志……</pre>
+      <section class="logs" aria-labelledby="rawTitle">
+        <div class="logs-title">
+          <div><h2 id="rawTitle">耳机原始数据</h2><span>网关转发 · 每个字节空格分隔 · 每个数据点用 | 分隔 · 最多保留 800 行</span></div>
+          <div class="format-switch" role="group" aria-label="数据显示格式">
+            <button id="hexFormatButton" class="format-button active" type="button" aria-pressed="true">16 进制</button>
+            <button id="decimalFormatButton" class="format-button" type="button" aria-pressed="false">10 进制</button>
+          </div>
+        </div>
+        <pre id="rawData" aria-live="polite">等待网关数据……</pre>
+      </section>
+
+      <section class="logs" aria-labelledby="decodedTitle">
+        <div class="logs-title"><h2 id="decodedTitle">数据解析</h2><span>EEG 序列号、六路 24 位无符号原始值、心率原始值</span></div>
+        <pre id="decodedData" aria-live="polite">等待网关数据……</pre>
+      </section>
+
+      <section class="logs" aria-labelledby="protocolTitle">
+        <div class="logs-title"><h2 id="protocolTitle">WebSocket 协议日志</h2><span>请求、响应和事件 · 最多保留 300 行</span></div>
+        <pre id="protocolLog" aria-live="polite">等待连接网关……</pre>
       </section>
 
       <section class="card privacy-note">
-        <strong>静态与隐私说明</strong>
-        <p>本目录只有 HTML、CSS 和 JavaScript。页面不使用网络请求、WebSocket、CDN、后端 API 或遥测；关闭页面后不会保留所选日志。</p>
+        <strong>运行边界</strong>
+        <p>页面资源和 WebSocket 都由本机网关提供，只访问配置好的网关地址；不直接访问串口，不上传数据，不使用 CDN、遥测或浏览器持久化存储。</p>
       </section>
     </main>
+    <script src="../version.js"></script>
+    <script src="../runtime-config.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

@@ -58,12 +58,12 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 ## 仓库结构
 
 - `neurobridge/`：跨平台网关核心，不依赖 macOS、Windows 或 Linux 的启动方式。
-- `web/`：无构建步骤的静态网页；`capture/` 是可直接双击使用的 USB 串口日志检查页，`b-client-test/` 是连接网关 WebSocket 的 B 端联调页。
+- `web/`：由网关托管、无构建步骤的静态网页；`capture/` 是通过网关 WebSocket 查看耳机原始数据的页面，`b-client-test/` 是完整的 B 端协议联调页。
 - `mac/`：仅 macOS POC 的启动器、蓝牙验证、原生算法 bridge 与本机配置模板。
 - `linux/`：Ubuntu 部署脚本、systemd 单元与日志轮转配置。
 - `windows/`：Windows 平台接入说明；当前没有经过验证的 Windows 服务启动器或部署脚本。
 
-网页不再放入平台目录。`web/capture/index.html` 不依赖本地采集服务，直接双击即可导入日志；页面只在浏览器内分析内容，不上传文件。`b-client-test/` 仍通过网关提供的本机页面连接北向 WebSocket。
+网页不再放入平台目录。两个页面都由当前网关的回环 HTTP 服务托管并连接同一个北向 WebSocket，不直接访问 USB 串口，也不控制 systemd 进程。
 
 ## 按平台使用
 
@@ -72,10 +72,10 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 | Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 首期部署入口；安装为 systemd 服务。 |
 | macOS 真实头环 POC | [`mac/start-poc.command`](mac/start-poc.command) | 一键启动本机采集、算法 bridge 和控制台；详见 [`mac/README.md`](mac/README.md)。 |
 | Windows 网关 | [`windows/README.md`](windows/README.md) | 尚未完成设备、算法和后台服务验证，不能作为交付部署入口。 |
-| USB 串口日志检查页 | [`web/capture/`](web/capture/) | 完全静态；直接双击 `index.html` 后选择或粘贴本地运行日志，无需服务。 |
+| 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；可订阅/停止页面数据并打印 EEG、HR 原始值。 |
 | 本机可视化/兼容 B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 默认由网关在回环地址提供；兼容模式仍可作为独立 B 端联调页。 |
 
-默认本机场景启动网关后访问 `http://127.0.0.1:8080/`，B 端联调页面会使用 `ws://127.0.0.1:8765/neurobridge/v1/ws`。设备连接、算法、录制和协议处理仍由后台网关负责。独立的 `web/capture/index.html` 只负责离线读取运行日志，可通过 `file://` 直接打开，不会控制设备或连接网关。
+默认本机场景启动网关后访问 `http://127.0.0.1:8080/` 使用完整联调台，访问 `http://127.0.0.1:8080/capture/` 查看耳机原始数据。两个页面都使用网关动态注入的 `ws://127.0.0.1:8765/neurobridge/v1/ws`。`capture` 的开始/停止按钮只订阅或取消当前网页的数据推送，设备连接、串口、算法、录制和服务生命周期仍由后台网关负责。
 
 ## 首期交付结论
 

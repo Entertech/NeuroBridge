@@ -852,20 +852,26 @@ class DeploymentTests(unittest.TestCase):
         self.assertTrue((ROOT / "web" / "b-client-test" / "runtime-config.js").is_file())
         self.assertFalse((ROOT / "mac" / "capture").exists())
 
-    def test_capture_log_viewer_is_static_offline_and_serial_aware(self) -> None:
+    def test_capture_viewer_uses_the_running_gateway_without_opening_serial(self) -> None:
         capture_root = ROOT / "web" / "capture"
         html = (capture_root / "index.html").read_text(encoding="utf-8")
         javascript = (capture_root / "app.js").read_text(encoding="utf-8")
         self.assertIn('href="./styles.css"', html)
         self.assertIn('src="./app.js"', html)
-        self.assertIn('type="file"', html)
-        self.assertIn('id="logInput"', html)
-        self.assertIn("USB 串口", html)
-        self.assertIn("single_byte_0x01", javascript)
-        self.assertIn("fixed_handshake", javascript)
-        self.assertIn("Serial valid-frame timeout", javascript)
-        self.assertIn("FileReader", javascript)
-        for forbidden in ("fetch(", "XMLHttpRequest", "new WebSocket", "EventSource", "https://", "http://"):
+        self.assertIn('src="../runtime-config.js"', html)
+        self.assertIn("不直接访问 USB 串口", html)
+        self.assertIn('new WebSocket(endpoint, SUBPROTOCOL)', javascript)
+        self.assertIn('["eeg.raw", "hr.raw", "status"]', javascript)
+        self.assertIn('sendRequest("unsubscribe"', javascript)
+        self.assertIn("bytesFromBase64", javascript)
+        self.assertIn("parseEegPacket", javascript)
+        self.assertIn('id="hexFormatButton"', html)
+        self.assertIn('id="decimalFormatButton"', html)
+        self.assertIn('points.join(" | ")', javascript)
+        self.assertIn('Array.from(bytes, (value) => String(value)).join(" ")', javascript)
+        self.assertNotIn("navigator.serial", javascript)
+        self.assertNotIn("requestPort", javascript)
+        for forbidden in ("fetch(", "XMLHttpRequest", "EventSource", "https://"):
             self.assertNotIn(forbidden, javascript)
             self.assertNotIn(forbidden, html)
 

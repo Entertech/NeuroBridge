@@ -15,12 +15,35 @@ from .strategy import access_strategy
 LOG = logging.getLogger(__name__)
 MAX_REQUEST_HEADER_BYTES = 16 * 1024
 ASSETS = {
-    "/": ("index.html", "text/html; charset=utf-8"),
-    "/index.html": ("index.html", "text/html; charset=utf-8"),
-    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
-    "/version.js": ("version.js", "text/javascript; charset=utf-8"),
-    "/styles.css": ("styles.css", "text/css; charset=utf-8"),
+    "/": ("b-client-test/index.html", "text/html; charset=utf-8"),
+    "/index.html": ("b-client-test/index.html", "text/html; charset=utf-8"),
+    "/app.js": ("b-client-test/app.js", "text/javascript; charset=utf-8"),
+    "/version.js": ("b-client-test/version.js", "text/javascript; charset=utf-8"),
+    "/styles.css": ("b-client-test/styles.css", "text/css; charset=utf-8"),
+    "/capture": ("capture/index.html", "text/html; charset=utf-8"),
+    "/capture/": ("capture/index.html", "text/html; charset=utf-8"),
+    "/capture/index.html": ("capture/index.html", "text/html; charset=utf-8"),
+    "/capture/app.js": ("capture/app.js", "text/javascript; charset=utf-8"),
+    "/capture/styles.css": ("capture/styles.css", "text/css; charset=utf-8"),
 }
+
+
+def _asset_path(directory: Path, relative_name: str) -> Path:
+    """Resolve bundled assets while retaining the old custom-directory layout."""
+
+    direct = directory / relative_name
+    if direct.is_file():
+        return direct
+    group, filename = relative_name.split("/", 1)
+    if group == "b-client-test":
+        legacy = directory / filename
+        if legacy.is_file():
+            return legacy
+    elif group == "capture":
+        sibling = directory.parent / "capture" / filename
+        if sibling.is_file():
+            return sibling
+    return direct
 
 
 def resolve_ui_directory(config: GatewayConfig) -> Path:
@@ -29,12 +52,14 @@ def resolve_ui_directory(config: GatewayConfig) -> Path:
         candidates.append(config.local_ui.directory)
     candidates.extend(
         (
-            Path(__file__).resolve().parents[2] / "web" / "b-client-test",
+            Path(__file__).resolve().parents[2] / "web",
+            Path("/opt/neurobridge/web"),
             Path("/opt/neurobridge/web/b-client-test"),
         )
     )
     for candidate in candidates:
-        if all((candidate / name).is_file() for name, _content_type in ASSETS.values()):
+        primary_assets = ("b-client-test/index.html", "b-client-test/app.js", "b-client-test/version.js", "b-client-test/styles.css")
+        if all(_asset_path(candidate, name).is_file() for name in primary_assets):
             return candidate
     raise FileNotFoundError("Local browser UI assets were not found; configure local_ui.directory")
 
@@ -117,7 +142,14 @@ async def _handle_client(
             content_type = "text/javascript; charset=utf-8"
         elif path in ASSETS:
             filename, content_type = ASSETS[path]
-            body = (ui_directory / filename).read_bytes()
+            asset = _asset_path(ui_directory, filename)
+            if not asset.is_file():
+                body = b"Not found\n"
+                response = _response(config, 404, "Not Found", "text/plain; charset=utf-8", body)
+                writer.write(response if method == "GET" else response[:-len(body)])
+                await writer.drain()
+                return
+            body = asset.read_bytes()
         else:
             body = b"Not found\n"
             response = _response(config, 404, "Not Found", "text/plain; charset=utf-8", body)

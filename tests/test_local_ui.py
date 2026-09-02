@@ -29,6 +29,10 @@ class LocalUiIntegrationTests(unittest.IsolatedAsyncioTestCase):
         root = Path(self.directory.name)
         for filename in ("index.html", "app.js", "version.js", "styles.css"):
             (root / filename).write_text(f"asset:{filename}\n", encoding="utf-8")
+        capture = root / "capture"
+        capture.mkdir()
+        for filename in ("index.html", "app.js", "styles.css"):
+            (capture / filename).write_text(f"capture:{filename}\n", encoding="utf-8")
         self.ui_port = unused_port()
         self.websocket_port = unused_port()
         self.config = GatewayConfig(
@@ -69,6 +73,13 @@ class LocalUiIntegrationTests(unittest.IsolatedAsyncioTestCase):
             f'window.NEUROBRIDGE_B_CLIENT_ENDPOINT = "ws://127.0.0.1:{self.websocket_port}/neurobridge/v1/ws";'.encode("ascii"),
             response,
         )
+
+    async def test_serves_capture_viewer_from_the_same_gateway(self) -> None:
+        page = await self.request("/capture/")
+        script = await self.request("/capture/app.js")
+        self.assertIn(b"HTTP/1.1 200 OK", page)
+        self.assertTrue(page.endswith(b"capture:index.html\n"))
+        self.assertTrue(script.endswith(b"capture:app.js\n"))
 
     async def test_rejects_unapproved_host_and_unknown_paths(self) -> None:
         bad_host = await self.request("/", host="example.com")

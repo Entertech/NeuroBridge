@@ -1,175 +1,332 @@
+"use strict";
+
+const PROTOCOL_VERSION = window.NEUROBRIDGE_VERSION.protocolVersion;
+const SUBPROTOCOL = "neurobridge.v1";
+const MAX_DATA_LINES = 800;
+const MAX_PROTOCOL_LINES = 300;
+
 const elements = {
-  file: document.querySelector('#logFile'),
-  fileName: document.querySelector('#fileName'),
-  input: document.querySelector('#logInput'),
-  analyze: document.querySelector('#analyzeButton'),
-  clear: document.querySelector('#clearButton'),
-  message: document.querySelector('#message'),
-  serial: document.querySelector('#serialResult'),
-  handshake: document.querySelector('#handshakeResult'),
-  control: document.querySelector('#controlResult'),
-  frames: document.querySelector('#framesResult'),
-  overall: document.querySelector('#overallState'),
-  diagnosis: document.querySelector('#diagnosisText'),
-  metrics: document.querySelector('#metrics'),
-  responseClassification: document.querySelector('#responseClassification'),
-  responseBytes: document.querySelector('#responseBytes'),
-  readBytes: document.querySelector('#readBytes'),
-  frameCount: document.querySelector('#frameCount'),
-  discardedBytes: document.querySelector('#discardedBytes'),
-  streamHandshakeFrames: document.querySelector('#streamHandshakeFrames'),
-  lossRate: document.querySelector('#lossRate'),
-  keyEvents: document.querySelector('#keyEvents'),
+  endpoint: document.querySelector("#endpoint"),
+  connect: document.querySelector("#connectButton"),
+  disconnect: document.querySelector("#disconnectButton"),
+  status: document.querySelector("#statusButton"),
+  start: document.querySelector("#startButton"),
+  stop: document.querySelector("#stopButton"),
+  clear: document.querySelector("#clearButton"),
+  gatewayState: document.querySelector("#gatewayState"),
+  gatewayMessage: document.querySelector("#gatewayMessage"),
+  mode: document.querySelector("#modeValue"),
+  deviceState: document.querySelector("#deviceState"),
+  subscriptionState: document.querySelector("#subscriptionState"),
+  eventCount: document.querySelector("#eventCount"),
+  eegCount: document.querySelector("#eegCount"),
+  hrCount: document.querySelector("#hrCount"),
+  sequence: document.querySelector("#sequenceValue"),
+  lostPackets: document.querySelector("#lostPackets"),
+  lossRate: document.querySelector("#lossRate"),
+  hexFormat: document.querySelector("#hexFormatButton"),
+  decimalFormat: document.querySelector("#decimalFormatButton"),
+  rawData: document.querySelector("#rawData"),
+  decodedData: document.querySelector("#decodedData"),
+  protocolLog: document.querySelector("#protocolLog"),
 };
 
-const relevantPatterns = [
-  /Serial discovery/i,
-  /Serial candidate/i,
-  /Serial permission/i,
-  /handshake/i,
-  /ACK sent/i,
-  /Serial target selected/i,
-  /Serial control response/i,
-  /Serial valid-frame timeout/i,
-  /Serial invalid frame/i,
-  /Serial capture summary/i,
-  /Serial connection failed/i,
-  /Serial reconnect scheduled/i,
-];
-const handshakeResponseClassifications = new Set([
-  'fixed_handshake',
-  'contains_fixed_handshake',
-  'partial_handshake',
-]);
+let socket = null;
+let subscriptionId = null;
+let dataRecords = [];
+let protocolLines = [];
+let stats = createStats();
+let displayFormat = "hex";
 
-function lastMatch(text, pattern) {
-  const matches = [...text.matchAll(pattern)];
-  return matches.length ? matches[matches.length - 1] : null;
+if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
+  elements.endpoint.value = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
 }
 
-function valueFrom(text, field) {
-  const match = lastMatch(text, new RegExp(`(?:^|\\s)${field}=([^\\s]+)`, 'gim'));
-  return match ? match[1] : null;
+function createStats() {
+  return { events: 0, eegPackets: 0, eegBytes: 0, hrPackets: 0, hrBytes: 0, lost: 0, receivedUnique: 0, lastSequence: null };
 }
 
-function lastLine(text, pattern) {
-  const lines = text.split(/\r?\n/).filter((line) => pattern.test(line));
-  return lines.length ? lines[lines.length - 1] : '';
+function isConnected() {
+  return socket && socket.readyState === WebSocket.OPEN;
 }
 
-function setCard(name, text, state) {
-  elements[name].textContent = text;
-  document.querySelector(`[data-result="${name}"]`).dataset.state = state;
+function requestId() {
+  return window.crypto?.randomUUID?.() || `capture-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function setOverall(state, label, diagnosis) {
-  elements.overall.dataset.state = state;
-  elements.overall.textContent = label;
-  elements.diagnosis.textContent = diagnosis;
+function timeLabel() {
+  return new Date().toLocaleTimeString("zh-CN", { hour12: false });
 }
 
-function analyze(text) {
-  const content = text.trim();
-  if (!content) {
-    elements.message.textContent = '没有可分析的日志内容。请先选择文件或粘贴日志。';
+function setState(state, label, message) {
+  elements.gatewayState.dataset.state = state;
+  elements.gatewayState.textContent = label;
+  if (message) elements.gatewayMessage.textContent = message;
+}
+
+function refreshControls() {
+  const connected = isConnected();
+  elements.connect.disabled = connected || socket?.readyState === WebSocket.CONNECTING;
+  elements.disconnect.disabled = !connected;
+  elements.status.disabled = !connected;
+  elements.start.disabled = !connected || Boolean(subscriptionId);
+  elements.stop.disabled = !connected || !subscriptionId;
+  elements.subscriptionState.textContent = subscriptionId ? `接收中 · ${subscriptionId}` : "未订阅";
+}
+
+function appendLine(lines, target, line, maximum) {
+  lines.push(`${timeLabel()}  ${line}`);
+  if (lines.length > maximum) lines.splice(0, lines.length - maximum);
+  target.textContent = lines.join("\n");
+  target.scrollTop = target.scrollHeight;
+}
+
+function appendDataRecord(record) {
+  dataRecords.push({ ...record, time: timeLabel() });
+  if (dataRecords.length > MAX_DATA_LINES) dataRecords.splice(0, dataRecords.length - MAX_DATA_LINES);
+}
+
+function appendProtocol(direction, value) {
+  const body = typeof value === "string" ? value : JSON.stringify(value);
+  appendLine(protocolLines, elements.protocolLog, `${direction}  ${body}`, MAX_PROTOCOL_LINES);
+}
+
+function bytesFromBase64(value) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function hex(bytes) {
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+}
+
+function formatBytes(bytes) {
+  if (displayFormat === "hex") return hex(bytes);
+  return Array.from(bytes, (value) => String(value)).join(" ");
+}
+
+function unsigned24(bytes, offset) {
+  return (bytes[offset] * 0x10000) + (bytes[offset + 1] * 0x100) + bytes[offset + 2];
+}
+
+function observeSequence(sequence) {
+  if (stats.lastSequence === null) {
+    stats.receivedUnique += 1;
+    stats.lastSequence = sequence;
+  } else {
+    const distance = (sequence - stats.lastSequence + 0x10000) % 0x10000;
+    if (distance === 0) {
+      appendDataRecord({ type: "note", text: `EEG 重复序列号=${sequence}，不计入丢包率` });
+    } else if (distance <= 0x8000) {
+      stats.receivedUnique += 1;
+      if (distance > 1) {
+        stats.lost += distance - 1;
+        appendDataRecord({ type: "note", text: `EEG 序列跳变 ${stats.lastSequence} → ${sequence}，推算丢失 ${distance - 1} 包` });
+      }
+      stats.lastSequence = sequence;
+    } else {
+      appendDataRecord({ type: "note", text: `EEG 乱序或回退 ${stats.lastSequence} → ${sequence}，不计入丢包率` });
+    }
+  }
+}
+
+function parseEegPacket(packet, windowStartMs, windowEndMs) {
+  if (packet.length !== 20) {
+    appendDataRecord({ type: "note", text: `EEG 包长异常：收到 ${packet.length} 字节，期望 20 字节` });
     return;
   }
-
-  const opened = /Serial candidate opened/i.test(content);
-  const target = /Serial target selected/i.test(content);
-  const noCandidates = /no usable candidates|Unable to open any usable serial candidate/i.test(content);
-  const permissionDenied = /Permission denied|permission preflight.*(?:canRead|canWrite)=false/i.test(content);
-  const handshakeAccepted = /Serial handshake accepted and ACK sent/i.test(content);
-  const badHandshake = /produced bytes but no valid handshake/i.test(content);
-  const startResponseLine = lastLine(content, /Serial control response received: command=start/i);
-  const responseClassification = valueFrom(startResponseLine, 'responseClassification');
-  const responseBytes = valueFrom(startResponseLine, 'responseBytes');
-  const expectedAck = valueFrom(startResponseLine, 'expectedAck01');
-  const controlTimeout = /Serial control response timed out/i.test(content);
-  const frameCount = Number(valueFrom(content, 'frames') || 0);
-  const readBytes = valueFrom(content, 'readBytes');
-  const discardedBytes = valueFrom(content, 'discardedBytes');
-  const streamHandshakeFrames = Number(valueFrom(content, 'streamHandshakeFrames') || 0);
-  const lossRate = valueFrom(content, 'lossRatePercent');
-  const frameTimeout = /Serial valid-frame timeout/i.test(content);
-
-  if (target) setCard('serial', '已打开并选中目标串口', 'ok');
-  else if (permissionDenied) setCard('serial', '串口存在，但当前进程权限不足', 'error');
-  else if (noCandidates) setCard('serial', '没有可打开的串口候选', 'error');
-  else if (opened) setCard('serial', '已打开候选，尚未确认目标', 'warn');
-  else setCard('serial', '日志中没有串口打开记录', 'idle');
-
-  if (handshakeAccepted) setCard('handshake', '固定握手正确，ACK 已发送', 'ok');
-  else if (badHandshake) setCard('handshake', '收到字节，但固定握手不匹配', 'error');
-  else setCard('handshake', '日志中没有有效握手记录', 'idle');
-
-  if (responseClassification === 'single_byte_0x01' && expectedAck === 'true') {
-    setCard('control', '已确认收到单字节 0x01', 'ok');
-  } else if (handshakeResponseClassifications.has(responseClassification)) {
-    setCard('control', '收到的是握手内容，不是明确的 0x01', 'error');
-  } else if (responseClassification) {
-    setCard('control', `已收到响应：${responseClassification}`, 'warn');
-  } else if (controlTimeout) {
-    setCard('control', '控制响应超时', 'error');
-  } else {
-    setCard('control', '旧日志缺少响应分类，请更新程序后重试', 'idle');
-  }
-
-  if (frameCount > 0) setCard('frames', `已解析 ${frameCount} 个有效帧`, 'ok');
-  else if (frameTimeout) setCard('frames', '持续收到或等待数据，但有效帧为 0', 'error');
-  else setCard('frames', '日志中尚无有效帧统计', 'idle');
-
-  if (frameCount > 0) {
-    setOverall('ok', '链路有数据', 'USB 串口、控制阶段和数据分帧已经运行；继续结合丢包率和算法日志验收。');
-  } else if ((handshakeResponseClassifications.has(responseClassification) || streamHandshakeFrames > 0) && frameTimeout) {
-    setOverall('error', '疑似仍在握手', '0xE1 后收到的内容被识别为固定握手，且有效帧持续为 0。优先让设备方确认收到 ACK 后是否停止握手，以及 0xE1 后是否应返回单字节 0x01。');
-  } else if (responseClassification === 'single_byte_0x01' && frameTimeout) {
-    setOverall('error', '响应成功但帧不匹配', '已经确认收到 0x01，但没有解析出 28 字节帧。应核对设备实际数据是否符合 AA AA AA 1C … BB BB BB。');
-  } else if (permissionDenied || noCandidates) {
-    setOverall('error', '先解决串口访问', '程序尚未进入设备协议阶段。先处理串口节点、驱动、权限或占用问题。');
-  } else if (badHandshake) {
-    setOverall('error', '握手不匹配', '串口基本读写已经工作，但收到的字节不是约定的固定 7 字节握手。');
-  } else {
-    setOverall('warn', '信息不足', '日志不足以完成判断。请使用更新后的程序运行至少一个连接和 5 秒数据超时周期，再导出日志。');
-  }
-
-  elements.metrics.hidden = false;
-  elements.responseClassification.textContent = responseClassification || '未记录';
-  elements.responseBytes.textContent = responseBytes || '未记录';
-  elements.readBytes.textContent = readBytes || '未记录';
-  elements.frameCount.textContent = String(frameCount);
-  elements.discardedBytes.textContent = discardedBytes || '未记录';
-  elements.streamHandshakeFrames.textContent = String(streamHandshakeFrames);
-  elements.lossRate.textContent = lossRate ? `${lossRate}%` : '未记录';
-
-  const relevant = content.split(/\r?\n/).filter((line) => relevantPatterns.some((pattern) => pattern.test(line)));
-  elements.keyEvents.textContent = relevant.slice(-160).join('\n') || '没有识别到 USB 串口关键日志。';
-  elements.message.textContent = `已在本机分析 ${content.split(/\r?\n/).length} 行日志；未发送任何网络请求。`;
+  const sequence = (packet[0] << 8) | packet[1];
+  const values = Array.from({ length: 6 }, (_, index) => unsigned24(packet, 2 + (index * 3)));
+  observeSequence(sequence);
+  appendDataRecord({ type: "eeg", bytes: packet, sequence, values, windowStartMs, windowEndMs });
 }
 
-elements.file.addEventListener('change', () => {
-  const [file] = elements.file.files;
-  if (!file) return;
-  elements.fileName.textContent = file.name;
-  const reader = new FileReader();
-  reader.addEventListener('load', () => {
-    elements.input.value = String(reader.result || '');
-    analyze(elements.input.value);
-  });
-  reader.addEventListener('error', () => {
-    elements.message.textContent = '无法读取该文件，请确认它是本地文本日志。';
-  });
-  reader.readAsText(file, 'utf-8');
-});
+function printRawStream(name, raw) {
+  if (!raw || raw.encoding !== "base64" || typeof raw.bytesBase64 !== "string") return;
+  try {
+    const bytes = bytesFromBase64(raw.bytesBase64);
+    const packetBytes = Number(raw.packetBytes);
+    const packetCount = Number(raw.packetCount);
+    if (name === "EEG") {
+      stats.eegPackets += packetCount;
+      stats.eegBytes += bytes.length;
+      if (packetBytes > 0) {
+        for (let offset = 0; offset + packetBytes <= bytes.length; offset += packetBytes) {
+          parseEegPacket(bytes.slice(offset, offset + packetBytes), raw.windowStartMs, raw.windowEndMs);
+        }
+        if (bytes.length % packetBytes) appendDataRecord({ type: "note", text: `EEG 窗口存在 ${bytes.length % packetBytes} 个无法组成完整包的尾部字节` });
+      }
+    } else {
+      stats.hrPackets += packetCount;
+      stats.hrBytes += bytes.length;
+      for (const value of bytes) {
+        appendDataRecord({ type: "hr", bytes: Uint8Array.of(value), value, windowStartMs: raw.windowStartMs, windowEndMs: raw.windowEndMs });
+      }
+    }
+  } catch (error) {
+    appendDataRecord({ type: "note", text: `${name} Base64 解码失败：${error.message}` });
+  }
+}
 
-elements.analyze.addEventListener('click', () => analyze(elements.input.value));
-elements.clear.addEventListener('click', () => {
-  elements.file.value = '';
-  elements.fileName.textContent = '尚未选择文件';
-  elements.input.value = '';
-  elements.metrics.hidden = true;
-  elements.keyEvents.textContent = '等待日志……';
-  elements.message.textContent = '等待日志。页面不会自动访问网关或任何网络地址。';
-  ['serial', 'handshake', 'control', 'frames'].forEach((name) => setCard(name, '等待日志', 'idle'));
-  setOverall('idle', '待分析', '导入日志后，这里会给出最直接的现场判断。');
-});
+function rawRecordText(record) {
+  if (record.type === "note") return `提示 | ${record.text}`;
+  const window = `窗口[${record.windowStartMs}-${record.windowEndMs}]`;
+  if (record.type === "hr") return `${window} | HR [${formatBytes(record.bytes)}]`;
+  const points = [
+    `SEQ [${formatBytes(record.bytes.slice(0, 2))}]`,
+    ...Array.from({ length: 6 }, (_, index) => `EEG${index + 1} [${formatBytes(record.bytes.slice(2 + (index * 3), 5 + (index * 3)))}]`),
+  ];
+  return `${window} | ${points.join(" | ")}`;
+}
+
+function decodedRecordText(record) {
+  if (record.type === "note") return record.text;
+  if (record.type === "hr") {
+    return displayFormat === "hex" ? `HR=0x${record.value.toString(16).padStart(2, "0").toUpperCase()}` : `HR=${record.value}`;
+  }
+  if (displayFormat === "hex") {
+    const values = record.values.map((value, index) => `EEG${index + 1}=0x${value.toString(16).padStart(6, "0").toUpperCase()}`);
+    return `SEQ=0x${record.sequence.toString(16).padStart(4, "0").toUpperCase()} | ${values.join(" | ")}`;
+  }
+  return `SEQ=${record.sequence} | ${record.values.map((value, index) => `EEG${index + 1}=${value}`).join(" | ")}`;
+}
+
+function renderData() {
+  if (!dataRecords.length) {
+    elements.rawData.textContent = "等待网关数据……";
+    elements.decodedData.textContent = "等待网关数据……";
+    return;
+  }
+  elements.rawData.textContent = dataRecords.map((record) => `${record.time}  ${rawRecordText(record)}`).join("\n");
+  elements.decodedData.textContent = dataRecords.map((record) => `${record.time}  ${decodedRecordText(record)}`).join("\n");
+  elements.rawData.scrollTop = elements.rawData.scrollHeight;
+  elements.decodedData.scrollTop = elements.decodedData.scrollHeight;
+}
+
+function setDisplayFormat(format) {
+  displayFormat = format;
+  const hexadecimal = format === "hex";
+  elements.hexFormat.classList.toggle("active", hexadecimal);
+  elements.decimalFormat.classList.toggle("active", !hexadecimal);
+  elements.hexFormat.setAttribute("aria-pressed", String(hexadecimal));
+  elements.decimalFormat.setAttribute("aria-pressed", String(!hexadecimal));
+  renderData();
+}
+
+function updateMetrics() {
+  elements.eventCount.textContent = String(stats.events);
+  elements.eegCount.textContent = `${stats.eegPackets} / ${stats.eegBytes}`;
+  elements.hrCount.textContent = `${stats.hrPackets} / ${stats.hrBytes}`;
+  elements.sequence.textContent = stats.lastSequence === null ? "—" : String(stats.lastSequence);
+  elements.lostPackets.textContent = String(stats.lost);
+  const expected = stats.receivedUnique + stats.lost;
+  elements.lossRate.textContent = `${(expected ? (stats.lost / expected) * 100 : 0).toFixed(6)}%`;
+}
+
+function updateStatus(data) {
+  const result = data?.result && typeof data.result === "object" ? data.result : data;
+  if (!result || typeof result !== "object") return;
+  if (result.mode !== undefined) elements.mode.textContent = result.mode;
+  const status = result.status || result.payload?.status || result;
+  if (status.connectionState !== undefined) elements.deviceState.textContent = status.connectionState;
+}
+
+function handleMessage(message) {
+  appendProtocol("←", message);
+  if (message.code !== 200) {
+    setState("error", "请求失败", `${message.message || "网关返回错误"}（code=${message.code ?? "未知"}）`);
+    return;
+  }
+  const data = message.data || {};
+  updateStatus(data);
+  if (data.action === "subscribe" && data.result?.subscriptionId) {
+    subscriptionId = data.result.subscriptionId;
+    setState("ok", "接收中", "订阅成功，正在等待网关转发耳机数据。即使数据暂未到达，网关服务仍保持运行。");
+    refreshControls();
+  } else if (data.action === "unsubscribe") {
+    subscriptionId = null;
+    setState("ok", "已连接", "已停止向当前网页推送数据；网关后台和耳机连接未停止。再次点击“开始接收”即可恢复。");
+    refreshControls();
+  }
+  if (data.event === "data" || data.event === "status") {
+    stats.events += 1;
+    const payload = data.payload || {};
+    printRawStream("EEG", payload.eegRaw);
+    printRawStream("HR", payload.hrRaw);
+    renderData();
+    updateMetrics();
+  }
+}
+
+function sendRequest(action, params) {
+  if (!isConnected()) {
+    setState("error", "未连接", "请先连接网关。网页不会直接访问 USB 串口。只要网关服务未运行，网页就无法接收数据。");
+    return false;
+  }
+  const payload = { protocolVersion: PROTOCOL_VERSION, messageType: "request", requestId: requestId(), action, params };
+  socket.send(JSON.stringify(payload));
+  appendProtocol("→", payload);
+  return true;
+}
+
+function connect() {
+  const endpoint = elements.endpoint.value.trim();
+  if (!endpoint.startsWith("ws://") && !endpoint.startsWith("wss://")) {
+    setState("error", "地址错误", "WebSocket 地址必须以 ws:// 或 wss:// 开头。");
+    return;
+  }
+  try {
+    setState("warn", "正在连接", `正在连接当前网关：${endpoint}`);
+    socket = new WebSocket(endpoint, SUBPROTOCOL);
+    refreshControls();
+  } catch (error) {
+    socket = null;
+    setState("error", "连接失败", error.message);
+    refreshControls();
+    return;
+  }
+  socket.addEventListener("open", () => {
+    setState("ok", "已连接", "网关已连接。正在自动查询状态；点击“开始接收”后打印耳机数据。");
+    refreshControls();
+    sendRequest("getStatus", {});
+  });
+  socket.addEventListener("message", (event) => {
+    try {
+      handleMessage(JSON.parse(event.data));
+    } catch (error) {
+      appendProtocol("ERROR", `无法解析网关消息：${error.message}；原文=${event.data}`);
+    }
+  });
+  socket.addEventListener("error", () => {
+    setState("error", "连接异常", "无法连接网关。请确认 NeuroBridge 正在运行，并通过网关提供的 http://127.0.0.1:8080/capture/ 打开本页。");
+  });
+  socket.addEventListener("close", (event) => {
+    appendProtocol("SYSTEM", `WebSocket 已断开 code=${event.code}${event.reason ? ` reason=${event.reason}` : ""}`);
+    socket = null;
+    subscriptionId = null;
+    setState("idle", "已断开", "网页与网关的连接已断开；网关进程和 USB 串口不会因此停止。");
+    refreshControls();
+  });
+}
+
+function clearDisplay() {
+  dataRecords = [];
+  protocolLines = [];
+  stats = createStats();
+  elements.rawData.textContent = "等待网关数据……";
+  elements.decodedData.textContent = "等待网关数据……";
+  elements.protocolLog.textContent = isConnected() ? "显示已清空，网关仍保持连接。" : "等待连接网关……";
+  updateMetrics();
+}
+
+elements.connect.addEventListener("click", connect);
+elements.disconnect.addEventListener("click", () => socket?.close(1000, "capture page disconnect"));
+elements.status.addEventListener("click", () => sendRequest("getStatus", {}));
+elements.start.addEventListener("click", () => sendRequest("subscribe", { streams: ["eeg.raw", "hr.raw", "status"], includeInvalid: true }));
+elements.stop.addEventListener("click", () => subscriptionId && sendRequest("unsubscribe", { subscriptionId }));
+elements.clear.addEventListener("click", clearDisplay);
+elements.hexFormat.addEventListener("click", () => setDisplayFormat("hex"));
+elements.decimalFormat.addEventListener("click", () => setDisplayFormat("decimal"));
+
+refreshControls();
+updateMetrics();
