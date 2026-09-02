@@ -49,6 +49,7 @@
           <button id="startButton" type="button" disabled>开始接收</button>
           <button id="stopButton" class="danger" type="button" disabled>停止接收</button>
           <button id="clearButton" class="secondary" type="button">清空显示</button>
+          <button id="exportButton" class="secondary" type="button">导出诊断日志</button>
         </div>
         <p id="gatewayMessage" class="message" role="status">正在等待连接网关。</p>
         <p class="control-note">
@@ -94,7 +95,7 @@
 
       <section class="card privacy-note">
         <strong>运行边界</strong>
-        <p>页面资源和 WebSocket 都由本机网关提供，只访问配置好的网关地址；不直接访问串口，不上传数据，不使用 CDN、遥测或浏览器持久化存储。</p>
+        <p>页面资源和 WebSocket 都由本机网关提供，只访问配置好的网关地址；不直接访问串口，不上传数据，不使用 CDN、遥测或浏览器持久化存储。导出的诊断日志会隐藏完整 EEG/心率原始数据及 Base64 内容，只保留状态、计数和异常信息。</p>
       </section>
     </main>
     <script src="../version.js"></script>

@@ -13,6 +13,7 @@ const elements = {
   start: document.querySelector("#startButton"),
   stop: document.querySelector("#stopButton"),
   clear: document.querySelector("#clearButton"),
+  export: document.querySelector("#exportButton"),
   gatewayState: document.querySelector("#gatewayState"),
   gatewayMessage: document.querySelector("#gatewayMessage"),
   mode: document.querySelector("#modeValue"),
@@ -87,8 +88,22 @@ function appendDataRecord(record) {
 }
 
 function appendProtocol(direction, value) {
-  const body = typeof value === "string" ? value : JSON.stringify(value);
+  const body = typeof value === "string" ? value : JSON.stringify(redactProtocolValue(value));
   appendLine(protocolLines, elements.protocolLog, `${direction}  ${body}`, MAX_PROTOCOL_LINES);
+}
+
+function redactProtocolValue(value) {
+  if (Array.isArray(value)) return value.map(redactProtocolValue);
+  if (!value || typeof value !== "object") return value;
+  const result = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key === "bytesBase64") {
+      result[key] = `[REDACTED raw payload; byteLength=${value.byteLength ?? "unknown"}]`;
+    } else {
+      result[key] = redactProtocolValue(item);
+    }
+  }
+  return result;
 }
 
 function bytesFromBase64(value) {
@@ -294,7 +309,7 @@ function connect() {
     try {
       handleMessage(JSON.parse(event.data));
     } catch (error) {
-      appendProtocol("ERROR", `无法解析网关消息：${error.message}；原文=${event.data}`);
+      appendProtocol("ERROR", `无法解析网关消息：${error.message}；接收字符数=${String(event.data).length}；原文未记录`);
     }
   });
   socket.addEventListener("error", () => {
@@ -319,12 +334,56 @@ function clearDisplay() {
   updateMetrics();
 }
 
+function exportDiagnosticLog() {
+  const generatedAt = new Date();
+  const notes = dataRecords.filter((record) => record.type === "note");
+  const lines = [
+    "# NeuroBridge Capture Diagnostic Log",
+    `generatedAtUtc=${generatedAt.toISOString()}`,
+    `endpoint=${elements.endpoint.value.trim()}`,
+    `gatewayState=${elements.gatewayState.textContent}`,
+    `gatewayMessage=${elements.gatewayMessage.textContent}`,
+    `mode=${elements.mode.textContent}`,
+    `deviceConnectionState=${elements.deviceState.textContent}`,
+    `subscriptionState=${elements.subscriptionState.textContent}`,
+    `displayFormat=${displayFormat}`,
+    `dataEvents=${stats.events}`,
+    `eegPackets=${stats.eegPackets}`,
+    `eegBytes=${stats.eegBytes}`,
+    `hrPackets=${stats.hrPackets}`,
+    `hrBytes=${stats.hrBytes}`,
+    `latestSequence=${stats.lastSequence ?? "none"}`,
+    `estimatedLostPackets=${stats.lost}`,
+    `receivedUniquePackets=${stats.receivedUnique}`,
+    "rawPayloadExported=false",
+    "",
+    "[SEQUENCE_AND_PARSE_NOTES]",
+    ...(notes.length ? notes.map((record) => `${record.time}  ${record.text}`) : ["none"]),
+    "",
+    "[REDACTED_WEBSOCKET_PROTOCOL_LOG]",
+    ...(protocolLines.length ? protocolLines : ["none"]),
+    "",
+  ];
+  const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `neurobridge-capture-diagnostics-${generatedAt.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}.log`;
+  const filename = link.download;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  elements.gatewayMessage.textContent = `诊断日志已导出：${filename}；完整 EEG/心率原始数据未写入文件。`;
+}
+
 elements.connect.addEventListener("click", connect);
 elements.disconnect.addEventListener("click", () => socket?.close(1000, "capture page disconnect"));
 elements.status.addEventListener("click", () => sendRequest("getStatus", {}));
 elements.start.addEventListener("click", () => sendRequest("subscribe", { streams: ["eeg.raw", "hr.raw", "status"], includeInvalid: true }));
 elements.stop.addEventListener("click", () => subscriptionId && sendRequest("unsubscribe", { subscriptionId }));
 elements.clear.addEventListener("click", clearDisplay);
+elements.export.addEventListener("click", exportDiagnosticLog);
 elements.hexFormat.addEventListener("click", () => setDisplayFormat("hex"));
 elements.decimalFormat.addEventListener("click", () => setDisplayFormat("decimal"));
 

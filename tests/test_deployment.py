@@ -869,6 +869,11 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('id="decimalFormatButton"', html)
         self.assertIn('points.join(" | ")', javascript)
         self.assertIn('Array.from(bytes, (value) => String(value)).join(" ")', javascript)
+        self.assertIn('id="exportButton"', html)
+        self.assertIn("exportDiagnosticLog", javascript)
+        self.assertIn('rawPayloadExported=false', javascript)
+        self.assertIn('key === "bytesBase64"', javascript)
+        self.assertIn("URL.createObjectURL", javascript)
         self.assertNotIn("navigator.serial", javascript)
         self.assertNotIn("requestPort", javascript)
         for forbidden in ("fetch(", "XMLHttpRequest", "EventSource", "https://"):
