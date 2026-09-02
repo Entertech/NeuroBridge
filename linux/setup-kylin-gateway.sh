@@ -102,9 +102,9 @@ ask_yes_no() {
   while true; do
     printf '%s [yes/no]: ' "$prompt"
     IFS= read -r answer || return 1
-    case ${answer,,} in
-      yes|y) return 0 ;;
-      no|n) return 1 ;;
+    case $answer in
+      [Yy][Ee][Ss]|[Yy]) return 0 ;;
+      [Nn][Oo]|[Nn]) return 1 ;;
       *) printf '请输入 yes 或 no。\n' ;;
     esac
   done
@@ -141,7 +141,7 @@ repair_project_permissions() {
   log_message "将只修复已校验项目：$root_dir"
   if ! ask_yes_no "是否修复这个项目的所有权和 Git 写权限？"; then
     log_message "已取消权限修复。"
-    show_next "./linux/setup-kylin-gateway.sh（选择 2）"
+    show_next "bash linux/neurobridge-kylin-bootstrap.sh（选择 2）"
     return 1
   fi
 
@@ -181,18 +181,18 @@ repair_and_update() {
   run_step "检查 Git 工作区" git -C "$root_dir" status --short --branch || return 1
   run_step "以普通用户更新代码" git -C "$root_dir" pull --ff-only || {
     log_message "更新失败。完整输出已保存在助手日志。"
-    show_next "./linux/setup-kylin-gateway.sh（选择 2 重试）"
+    show_next "bash linux/neurobridge-kylin-bootstrap.sh（选择 2 重试）"
     return 1
   }
   after_revision=$(git -C "$root_dir" rev-parse HEAD 2>/dev/null) || return 1
   if [[ $before_revision != "$after_revision" ]]; then
     log_message "代码已从 $before_revision 更新到 $after_revision。"
     log_message "为避免继续运行更新前的脚本，本助手现在退出。"
-    show_next "./linux/setup-kylin-gateway.sh"
+    show_next "bash linux/neurobridge-kylin-bootstrap.sh"
     return 20
   fi
   log_message "代码已经是最新版本。"
-  show_next "./linux/setup-kylin-gateway.sh（选择 1 首次配置，或选择 5 启动）"
+  show_next "bash linux/neurobridge-kylin-bootstrap.sh（选择 1 首次配置，或选择 5 启动）"
 }
 
 check_current_serial() {

@@ -13,6 +13,180 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_kylin_single_file_entry_repairs_old_checkout_and_opens_the_menu(self) -> None:
+        script_path = ROOT / "linux" / "neurobridge-kylin-bootstrap.sh"
+        script = script_path.read_text(encoding="utf-8")
+        self.assertTrue(os.access(script_path, os.X_OK))
+
+        syntax = subprocess.run(
+            ["bash", "-n", str(script_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        help_result = subprocess.run(
+            ["bash", str(script_path), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("Copy this one file into the root", help_result.stdout)
+        self.assertIn("Do not run with sudo", help_result.stdout)
+
+        menu_result = subprocess.run(
+            ["bash", str(script_path)],
+            input="0\n",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(menu_result.returncode, 0, menu_result.stderr)
+        self.assertIn("正在打开 NeuroBridge 银河麒麟数字菜单", menu_result.stdout)
+        self.assertIn("1. 新设备首次配置", menu_result.stdout)
+
+        self.assertIn('target_branch="codex/serial-usb-transport"', script)
+        self.assertIn('elif [[ -f $script_dir/../pyproject.toml ]]', script)
+        self.assertIn('assistant="$project_dir/linux/setup-kylin-gateway.sh"', script)
+        self.assertIn('[[ ${EUID:-$(id -u)} -ne 0 ]]', script)
+        self.assertIn('[[ -n $project_dir && $project_dir != / ]]', script)
+        self.assertIn('[[ -f $project_dir/pyproject.toml ]]', script)
+        self.assertIn('[[ -d $project_dir/.git && ! -L $project_dir/.git ]]', script)
+        self.assertIn('sudo chown -R --no-dereference "$current_uid:$current_gid" "$project_dir"', script)
+        self.assertIn('find "$project_dir" -xdev ! -uid "$current_uid"', script)
+        self.assertIn("本文件不会自动删除它", script)
+        self.assertIn('git -C "$project_dir" pull --ff-only origin "$target_branch"', script)
+        self.assertIn('git -C "$project_dir" fetch origin', script)
+        self.assertIn('git -C "$project_dir" checkout -b "$target_branch" --track', script)
+        self.assertIn('git -C "$project_dir" merge --ff-only "origin/$target_branch"', script)
+        self.assertIn("当前存在已跟踪文件修改", script)
+        self.assertNotIn('sudo git -C "$project_dir"', script)
+        self.assertIn('exec bash "$assistant"', script)
+        self.assertIn('kylin-bootstrap-$(date -u', script)
+
+    def test_kylin_bootstrap_recovers_old_feature_and_master_checkouts(self) -> None:
+        source = (ROOT / "linux" / "neurobridge-kylin-bootstrap.sh").read_text(encoding="utf-8")
+
+        for starting_branch in ("codex/serial-usb-transport", "master"):
+            with self.subTest(starting_branch=starting_branch), tempfile.TemporaryDirectory() as temporary_directory:
+                project = Path(temporary_directory) / "NeuroBridge"
+                project.mkdir()
+                (project / ".git").mkdir()
+                (project / "pyproject.toml").write_text("[project]\nname='bootstrap-test'\n", encoding="utf-8")
+                bootstrap = project / "neurobridge-kylin-bootstrap.sh"
+                bootstrap.write_text(source, encoding="utf-8")
+
+                bin_dir = Path(temporary_directory) / "bin"
+                bin_dir.mkdir()
+                git_log = Path(temporary_directory) / "git.log"
+                fake_git = bin_dir / "git"
+                fake_git.write_text(
+                    "#!/usr/bin/env bash\n"
+                    "printf '%s\\n' \"$*\" >>\"$FAKE_GIT_LOG\"\n"
+                    "case \"$*\" in\n"
+                    "  *'symbolic-ref --quiet --short HEAD'*) printf '%s\\n' \"$FAKE_START_BRANCH\" ;;\n"
+                    "  *'show-ref --verify --quiet refs/heads/codex/serial-usb-transport'*) exit 1 ;;\n"
+                    "  *'pull --ff-only origin codex/serial-usb-transport'*|"
+                    "*'checkout -b codex/serial-usb-transport --track origin/codex/serial-usb-transport'*)\n"
+                    "    mkdir -p \"$FAKE_PROJECT/linux\"\n"
+                    "    printf '%s\\n' '#!/usr/bin/env bash' 'printf '\"'\"'recovered-menu-opened\\n'\"'\"'' "
+                    ">\"$FAKE_PROJECT/linux/setup-kylin-gateway.sh\"\n"
+                    "    ;;\n"
+                    "esac\n",
+                    encoding="utf-8",
+                )
+                fake_git.chmod(0o755)
+
+                environment = os.environ.copy()
+                environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+                environment["FAKE_GIT_LOG"] = str(git_log)
+                environment["FAKE_START_BRANCH"] = starting_branch
+                environment["FAKE_PROJECT"] = str(project)
+                result = subprocess.run(
+                    ["bash", str(bootstrap)],
+                    input="yes\n" if starting_branch == "master" else "",
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=environment,
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr + "\n" + result.stdout)
+                self.assertIn("recovered-menu-opened", result.stdout)
+                commands = git_log.read_text(encoding="utf-8")
+                if starting_branch == "master":
+                    self.assertIn(
+                        "fetch origin refs/heads/codex/serial-usb-transport:"
+                        "refs/remotes/origin/codex/serial-usb-transport",
+                        commands,
+                    )
+                    self.assertIn(
+                        "checkout -b codex/serial-usb-transport --track "
+                        "origin/codex/serial-usb-transport",
+                        commands,
+                    )
+                else:
+                    self.assertIn("pull --ff-only origin codex/serial-usb-transport", commands)
+                self.assertTrue(any((project / ".runtime" / "logs").glob("kylin-bootstrap-*.log")))
+
+    def test_kylin_bootstrap_repairs_unwritable_git_metadata_before_opening_menu(self) -> None:
+        source = (ROOT / "linux" / "neurobridge-kylin-bootstrap.sh").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            project = Path(temporary_directory) / "NeuroBridge"
+            linux_dir = project / "linux"
+            git_dir = project / ".git"
+            linux_dir.mkdir(parents=True)
+            git_dir.mkdir()
+            (project / "pyproject.toml").write_text("[project]\nname='permission-test'\n", encoding="utf-8")
+            bootstrap = project / "neurobridge-kylin-bootstrap.sh"
+            bootstrap.write_text(source, encoding="utf-8")
+            assistant = linux_dir / "setup-kylin-gateway.sh"
+            assistant.write_text("#!/usr/bin/env bash\nprintf 'permission-menu-opened\\n'\n", encoding="utf-8")
+            index = git_dir / "index"
+            index.write_bytes(b"test-index")
+            git_dir.chmod(0o555)
+            index.chmod(0o444)
+
+            bin_dir = Path(temporary_directory) / "bin"
+            bin_dir.mkdir()
+            sudo_log = Path(temporary_directory) / "sudo.log"
+            fake_sudo = bin_dir / "sudo"
+            fake_sudo.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' \"$*\" >>\"$FAKE_SUDO_LOG\"\n"
+                "if [[ $1 == chown ]]; then\n"
+                "  /bin/chmod -R u+rwX \"$FAKE_PROJECT\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "exec \"$@\"\n",
+                encoding="utf-8",
+            )
+            fake_sudo.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+            environment["FAKE_SUDO_LOG"] = str(sudo_log)
+            environment["FAKE_PROJECT"] = str(project)
+            result = subprocess.run(
+                ["bash", str(bootstrap)],
+                input="yes\n",
+                capture_output=True,
+                text=True,
+                check=False,
+                env=environment,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + "\n" + result.stdout)
+            self.assertIn("检测到项目权限异常", result.stdout)
+            self.assertIn("项目权限修复完成", result.stdout)
+            self.assertIn("permission-menu-opened", result.stdout)
+            sudo_commands = sudo_log.read_text(encoding="utf-8")
+            self.assertIn("chown -R --no-dereference", sudo_commands)
+            self.assertIn(str(project), sudo_commands)
+            self.assertTrue(os.access(git_dir, os.W_OK))
+            self.assertTrue(os.access(index, os.W_OK))
+
     def test_kylin_gateway_assistant_guides_setup_and_repairs_git_permissions_safely(self) -> None:
         script_path = ROOT / "linux" / "setup-kylin-gateway.sh"
         script = script_path.read_text(encoding="utf-8")
@@ -69,6 +243,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn('run_step "以普通用户更新代码" sudo', script)
         self.assertIn("为避免继续运行更新前的脚本，本助手现在退出", script)
         self.assertIn('(( result == 20 )) && exit 0', script)
+        self.assertIn('show_next "bash linux/neurobridge-kylin-bootstrap.sh"', script)
         self.assertIn('sudo "$root_dir/linux/diagnose-kylin-usb-serial.sh"', script)
         self.assertIn("检查当前 USB/串口（无需拔插）", script)
         self.assertIn("--plug-cycle --timeout 60", script)
