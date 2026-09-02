@@ -123,6 +123,10 @@ monitor_pids=()
 finalized=false
 result_status=running
 result_code=1
+# systemd 245 on Galaxy Kylin cannot parse every ISO-8601 timezone form. Keep
+# the ISO value for the report and use this portable local-time value for
+# journalctl --since.
+started_at_journal=$(date '+%Y-%m-%d %H:%M:%S')
 started_at=$(date --iso-8601=seconds)
 result_usb_file=
 result_tty_file=
@@ -286,8 +290,8 @@ finalize() {
   stop_monitors
   capture_snapshot after
   if command -v journalctl >/dev/null 2>&1; then
-    capture kernel-journal-window journalctl -k -b --since "$started_at" --no-pager -o short-iso-precise
-    capture gateway-journal-window journalctl -u neurobridge.service -b --since "$started_at" --no-pager -o short-iso-precise
+    capture kernel-journal-window journalctl -k -b --since "$started_at_journal" --no-pager -o short-iso-precise
+    capture gateway-journal-window journalctl -u neurobridge.service -b --since "$started_at_journal" --no-pager -o short-iso-precise
   fi
   if command -v systemctl >/dev/null 2>&1; then
     capture usbguard-status systemctl status usbguard.service --no-pager -l

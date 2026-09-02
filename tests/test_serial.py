@@ -16,6 +16,7 @@ from neurobridge.serial.adapter import (
     START_COMMAND,
     SequenceLossTracker,
     SerialAdapter,
+    _classify_control_response,
     _open_serial,
     _serial_discovery_inventory,
     _serial_candidate_order_key,
@@ -253,7 +254,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("phase=handshake", rendered)
         self.assertNotIn("No serial candidate produced the fixed handshake", rendered)
 
-    async def test_any_nonempty_control_response_is_success_without_logging_payload(self) -> None:
+    async def test_any_nonempty_control_response_is_classified_without_logging_payload(self) -> None:
         client = FakeSerial([b"arbitrary-response"])
         adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
         adapter._client = client
@@ -263,7 +264,45 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.writes, [START_COMMAND])
         rendered = "\n".join(logs.output)
         self.assertIn("responseBytes=18", rendered)
+        self.assertIn("responseClassification=other_nonempty", rendered)
+        self.assertIn("expectedAck01=false", rendered)
+        self.assertIn("payloadLogged=false", rendered)
         self.assertNotIn("arbitrary-response", rendered)
+
+    async def test_single_byte_01_control_response_is_visible_without_raw_payload(self) -> None:
+        client = FakeSerial([b"\x01"])
+        adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
+        adapter._client = client
+        with self.assertLogs("neurobridge.serial.adapter", level="INFO") as logs:
+            response = await adapter._send_control(START_COMMAND, "start")
+        self.assertEqual(response, b"\x01")
+        rendered = "\n".join(logs.output)
+        self.assertIn("responseClassification=single_byte_0x01", rendered)
+        self.assertIn("expectedAck01=true", rendered)
+        self.assertIn("singleByteHex=01", rendered)
+        self.assertIn("success=true", rendered)
+
+    async def test_repeated_handshake_control_response_is_warned_and_classified(self) -> None:
+        client = FakeSerial([HANDSHAKE])
+        adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
+        adapter._client = client
+        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
+            response = await adapter._send_control(START_COMMAND, "start")
+        self.assertEqual(response, HANDSHAKE)
+        rendered = "\n".join(logs.output)
+        self.assertIn("responseClassification=fixed_handshake", rendered)
+        self.assertIn("fixedHandshakeFrames=1", rendered)
+        self.assertIn("longestHandshakePrefixBytes=6", rendered)
+        self.assertIn("acceptedByCurrentPolicy=true", rendered)
+        self.assertNotIn(HANDSHAKE.hex(), rendered.lower())
+
+    def test_partial_handshake_control_response_classification(self) -> None:
+        classification = _classify_control_response(HANDSHAKE[:4])
+        self.assertEqual(classification[0], "partial_handshake")
+        self.assertFalse(classification[1])
+        self.assertEqual(classification[2], 0)
+        self.assertEqual(classification[3], 4)
+        self.assertEqual(classification[4], "not_applicable")
 
     async def test_empty_control_response_is_a_logged_timeout(self) -> None:
         client = FakeSerial([b""])
@@ -323,6 +362,28 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("payloadLogged=false", rendered)
         self.assertNotIn(invalid_length.hex(), rendered)
         self.assertNotIn(invalid_tail.hex(), rendered)
+
+    async def test_fixed_handshake_during_stream_is_counted_without_payload(self) -> None:
+        adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
+        buffer = bytearray(HANDSHAKE + HANDSHAKE)
+        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
+            await adapter._consume_frames(buffer)
+        rendered = "\n".join(logs.output)
+        self.assertIn("Serial fixed handshake observed during data stream", rendered)
+        self.assertIn("streamHandshakeFrames=2", rendered)
+        self.assertIn("payloadLogged=false", rendered)
+        self.assertNotIn(HANDSHAKE.hex(), rendered.lower())
+        with self.assertLogs("neurobridge.serial.adapter", level="INFO") as summaries:
+            adapter._log_stats("test")
+        self.assertIn("streamHandshakeFrames=2", "\n".join(summaries.output))
+
+    async def test_handshake_pattern_inside_valid_frame_is_not_counted(self) -> None:
+        adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
+        valid = bytearray(frame(1))
+        valid[7:14] = HANDSHAKE
+        parsed = await adapter._consume_frames(valid)
+        self.assertEqual(parsed, 1)
+        self.assertEqual(adapter._stats["streamHandshakeFrames"], 0)
 
     async def test_continuous_invalid_bytes_still_trigger_valid_frame_timeout(self) -> None:
         adapter = SerialAdapter(SerialConfig(data_timeout_seconds=0.01), noop, noop, noop)

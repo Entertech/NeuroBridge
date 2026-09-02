@@ -3,55 +3,99 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NeuroBridge · 头环采集 POC</title>
-    <link rel="stylesheet" href="/capture/styles.css" />
+    <meta name="color-scheme" content="dark" />
+    <title>NeuroBridge · USB 串口采集日志检查</title>
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main>
-      <p class="eyebrow">NEUROBRIDGE / MACOS POC</p>
-      <h1>头环采集控制台</h1>
-      <p class="intro">页面打开后将立即在本机扫描已配置头环。连接成功后，网关会订阅设备通知、启动采集，并把完整窗口交给本地算法输入 bridge。</p>
+      <header class="hero">
+        <p class="eyebrow">NEUROBRIDGE / USB SERIAL / OFFLINE</p>
+        <h1>USB 串口采集<br />日志检查</h1>
+        <p class="intro">
+          直接双击本页即可使用。选择或粘贴 NeuroBridge 运行日志后，页面会在本机浏览器中检查串口发现、固定握手、
+          <code>0xE1</code> 响应和 28 字节数据帧；不会请求接口、连接服务或上传文件。
+        </p>
+      </header>
 
-      <section class="card status-card" aria-live="polite">
-        <div class="status-heading">
+      <section class="card overview" aria-labelledby="overviewTitle">
+        <div class="section-heading">
           <div>
-            <p class="label">连接状态</p>
-            <p id="connectionState" class="state">正在准备扫描…</p>
+            <p class="label">当前方案</p>
+            <h2 id="overviewTitle">耳机 → USB 转串口 → 网关 → 本机浏览器</h2>
           </div>
-          <span id="indicator" class="indicator" aria-label="连接状态指示灯"></span>
+          <span class="offline-badge">完全静态</span>
         </div>
-        <dl>
-          <div><dt>算法 bridge</dt><dd id="algorithmState">—</dd></div>
-          <div><dt>录制会话</dt><dd id="recordingId">等待连接</dd></div>
-          <div><dt>WebSocket</dt><dd id="websocketUrl">—</dd></div>
-          <div class="connection-error"><dt>采集初始化</dt><dd id="connectionError">等待扫描</dd></div>
+        <dl class="protocol-grid">
+          <div><dt>串口参数</dt><dd>115200 · 8-N-1 · 无流控</dd></div>
+          <div><dt>固定握手 / ACK</dt><dd>AA 55 01 01 01 01 6F</dd></div>
+          <div><dt>启动指令</dt><dd>E1</dd></div>
+          <div><dt>重点观察响应</dt><dd>单字节 01</dd></div>
+          <div><dt>数据帧</dt><dd>28 字节 · AA AA AA … BB BB BB</dd></div>
+          <div><dt>隐私</dt><dd>只在当前页面内解析</dd></div>
         </dl>
       </section>
 
-      <section class="actions" aria-label="采集操作">
-        <button id="startButton" type="button">重新开始扫描</button>
-        <button id="stopButton" class="secondary" type="button">停止采集</button>
-        <a id="saveButton" class="secondary" href="#" aria-disabled="true">一键保存 ZIP</a>
-        <a class="b-client-link" href="/b-client/" target="_blank" rel="noopener">打开 B 端订阅页</a>
+      <section class="card input-card" aria-labelledby="inputTitle">
+        <div class="section-heading input-heading">
+          <div>
+            <p class="label">输入日志</p>
+            <h2 id="inputTitle">选择文件或粘贴内容</h2>
+          </div>
+          <span id="fileName" class="file-name">尚未选择文件</span>
+        </div>
+        <div class="actions">
+          <label class="button" for="logFile">选择日志文件</label>
+          <input id="logFile" type="file" accept=".log,.txt,text/plain" />
+          <button id="analyzeButton" type="button">分析粘贴内容</button>
+          <button id="clearButton" class="secondary" type="button">清空</button>
+        </div>
+        <textarea id="logInput" spellcheck="false" placeholder="粘贴 .runtime/logs/neurobridge.log 中的相关内容……"></textarea>
+        <p id="message" class="message" role="status">等待日志。页面不会自动访问网关或任何网络地址。</p>
       </section>
 
-      <section class="card note">
-        <p>本页仅绑定本机回环地址。“一键保存 ZIP”会导出当前或最近一次采集会话的原始 EEG、原始心率、独立算法指标文件和清单；下载文件含敏感生理数据，请仅在已授权的受控设备上保存。</p>
+      <section class="result-grid" aria-label="采集链路检查结果">
+        <article class="result-card" data-result="serial">
+          <p class="step">01 / 串口</p><h3>设备候选</h3><p class="result" id="serialResult">等待日志</p>
+        </article>
+        <article class="result-card" data-result="handshake">
+          <p class="step">02 / 握手</p><h3>握手与 ACK</h3><p class="result" id="handshakeResult">等待日志</p>
+        </article>
+        <article class="result-card" data-result="control">
+          <p class="step">03 / 控制</p><h3>E1 响应</h3><p class="result" id="controlResult">等待日志</p>
+        </article>
+        <article class="result-card" data-result="frames">
+          <p class="step">04 / 数据</p><h3>有效数据帧</h3><p class="result" id="framesResult">等待日志</p>
+        </article>
       </section>
-      <p id="message" class="message" role="status"></p>
-      <section class="logs" aria-label="蓝牙接收数据日志">
-        <div class="logs-title"><h2>蓝牙接收数据</h2><span>每 600 ms：流、包数、长度与前 8 字节预览</span></div>
-        <pre id="dataLogs" aria-live="polite">等待头环数据…</pre>
+
+      <section class="card diagnosis" aria-labelledby="diagnosisTitle">
+        <div class="section-heading">
+          <div><p class="label">自动结论</p><h2 id="diagnosisTitle">下一步判断</h2></div>
+          <span id="overallState" class="state-badge" data-state="idle">待分析</span>
+        </div>
+        <p id="diagnosisText" class="diagnosis-text">导入日志后，这里会给出最直接的现场判断。</p>
+        <div id="metrics" class="metrics" hidden>
+          <div><span>响应分类</span><strong id="responseClassification">—</strong></div>
+          <div><span>响应字节数</span><strong id="responseBytes">—</strong></div>
+          <div><span>读取字节数</span><strong id="readBytes">—</strong></div>
+          <div><span>有效帧数</span><strong id="frameCount">—</strong></div>
+          <div><span>丢弃字节数</span><strong id="discardedBytes">—</strong></div>
+          <div><span>数据阶段握手数</span><strong id="streamHandshakeFrames">—</strong></div>
+          <div><span>丢包率</span><strong id="lossRate">—</strong></div>
+        </div>
       </section>
-      <section class="logs" aria-label="算法输出日志">
-        <div class="logs-title"><h2>算法输出</h2><span>显示算法 bridge 返回值</span></div>
-        <pre id="algorithmLogs" aria-live="polite">等待算法 bridge 输出…</pre>
+
+      <section class="logs" aria-labelledby="eventsTitle">
+        <div class="logs-title"><h2 id="eventsTitle">关键日志</h2><span>只显示与本次 USB 串口链路有关的行</span></div>
+        <pre id="keyEvents">等待日志……</pre>
       </section>
-      <section class="logs" aria-label="连接与运行日志">
-        <div class="logs-title"><h2>连接与运行日志</h2><span>扫描、连接、订阅和异常</span></div>
-        <pre id="systemLogs" aria-live="polite">等待本地服务日志…</pre>
+
+      <section class="card privacy-note">
+        <strong>静态与隐私说明</strong>
+        <p>本目录只有 HTML、CSS 和 JavaScript。页面不使用网络请求、WebSocket、CDN、后端 API 或遥测；关闭页面后不会保留所选日志。</p>
       </section>
     </main>
-    <script src="/capture/app.js"></script>
+    <script src="./app.js"></script>
   </body>
 </html>

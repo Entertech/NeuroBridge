@@ -18,6 +18,7 @@ LOG = logging.getLogger(__name__)
 HANDSHAKE = bytes.fromhex("AA 55 01 01 01 01 6F")
 START_COMMAND = b"\xE1"
 STOP_COMMAND = b"\xE0"
+EXPECTED_CONTROL_ACK = b"\x01"
 FRAME_HEADER = b"\xAA\xAA\xAA"
 FRAME_TAIL = b"\xBB\xBB\xBB"
 FRAME_BYTES = 28
@@ -59,6 +60,34 @@ def _longest_handshake_prefix(data: bytes | bytearray) -> int:
     return max(
         (length for length in range(1, len(HANDSHAKE)) if HANDSHAKE[:length] in data),
         default=0,
+    )
+
+
+def _classify_control_response(response: bytes) -> tuple[str, bool, int, int, str]:
+    """Describe a short control response without logging its complete payload."""
+
+    fixed_handshake_frames = response.count(HANDSHAKE)
+    longest_handshake_prefix = _longest_handshake_prefix(response)
+    expected_ack_01 = response == EXPECTED_CONTROL_ACK
+    if expected_ack_01:
+        classification = "single_byte_0x01"
+    elif response == HANDSHAKE:
+        classification = "fixed_handshake"
+    elif fixed_handshake_frames:
+        classification = "contains_fixed_handshake"
+    elif longest_handshake_prefix:
+        classification = "partial_handshake"
+    elif len(response) == 1:
+        classification = "other_single_byte"
+    else:
+        classification = "other_nonempty"
+    single_byte_hex = f"{response[0]:02X}" if len(response) == 1 else "not_applicable"
+    return (
+        classification,
+        expected_ack_01,
+        fixed_handshake_frames,
+        longest_handshake_prefix,
+        single_byte_hex,
     )
 
 
@@ -349,6 +378,7 @@ class SerialAdapter:
             "controlResponses": 0,
             "controlResponseBytes": 0,
             "controlTimeouts": 0,
+            "streamHandshakeFrames": 0,
             "startedAtMonotonic": time.monotonic(),
             "lastSummaryAtMonotonic": 0.0,
         }
@@ -649,11 +679,27 @@ class SerialAdapter:
         if response:
             self._stats["controlResponses"] = int(self._stats["controlResponses"]) + 1
             self._stats["controlResponseBytes"] = int(self._stats["controlResponseBytes"]) + len(response)
-            LOG.info(
-                "Serial control response received: command=%s responseBytes=%s durationMs=%s success=true",
+            (
+                classification,
+                expected_ack_01,
+                fixed_handshake_frames,
+                longest_handshake_prefix,
+                single_byte_hex,
+            ) = _classify_control_response(response)
+            log_response = LOG.warning if "handshake" in classification else LOG.info
+            log_response(
+                "Serial control response received: command=%s responseBytes=%s durationMs=%s "
+                "responseClassification=%s expectedAck01=%s singleByteHex=%s "
+                "fixedHandshakeFrames=%s longestHandshakePrefixBytes=%s success=true "
+                "acceptedByCurrentPolicy=true payloadLogged=false",
                 name,
                 len(response),
                 duration_ms,
+                classification,
+                str(expected_ack_01).lower(),
+                single_byte_hex,
+                fixed_handshake_frames,
+                longest_handshake_prefix,
             )
         else:
             self._stats["controlTimeouts"] = int(self._stats["controlTimeouts"]) + 1
@@ -697,7 +743,8 @@ class SerialAdapter:
             if now - last_frame_at >= self.config.data_timeout_seconds:
                 LOG.warning(
                     "Serial valid-frame timeout: target=%s timeoutSeconds=%.3f readBytes=%s frames=%s "
-                    "invalidFrames=%s discardedBytes=%s bufferOverflows=%s bufferedBytes=%s",
+                    "invalidFrames=%s discardedBytes=%s bufferOverflows=%s bufferedBytes=%s "
+                    "streamHandshakeFrames=%s",
                     _safe_log_text(self._target),
                     self.config.data_timeout_seconds,
                     self._stats["readBytes"],
@@ -706,6 +753,7 @@ class SerialAdapter:
                     self._stats["discardedBytes"],
                     self._stats["bufferOverflows"],
                     len(buffer),
+                    self._stats["streamHandshakeFrames"],
                 )
                 raise TimeoutError(f"No valid serial data frame for {self.config.data_timeout_seconds:.3f} seconds")
             client = self._client
@@ -733,6 +781,7 @@ class SerialAdapter:
         while True:
             offset = buffer.find(FRAME_HEADER)
             if offset < 0:
+                self._record_stream_handshakes(buffer, len(buffer))
                 keep = min(len(buffer), len(FRAME_HEADER) - 1)
                 discarded = len(buffer) - keep
                 if discarded:
@@ -740,6 +789,7 @@ class SerialAdapter:
                     self._record_discarded_bytes(discarded, "frame_header_not_found", len(buffer))
                 return parsed
             if offset:
+                self._record_stream_handshakes(buffer[:offset], len(buffer))
                 del buffer[:offset]
                 self._record_discarded_bytes(offset, "bytes_before_frame_header", len(buffer))
             if len(buffer) < 4:
@@ -796,6 +846,24 @@ class SerialAdapter:
             await self.packet(DevicePacket("serial", "ff31", frame[EEG_START:EEG_END], received_at_ms))
             await self.packet(DevicePacket("serial", "ff51", frame[HR_OFFSET:HR_OFFSET + 1], received_at_ms))
 
+    def _record_stream_handshakes(self, discarded_region: bytes | bytearray, buffered_bytes: int) -> None:
+        """Count fixed handshakes only outside confirmed data frames."""
+
+        handshake_frames = discarded_region.count(HANDSHAKE)
+        if not handshake_frames:
+            return
+        previous = int(self._stats["streamHandshakeFrames"])
+        total = previous + handshake_frames
+        self._stats["streamHandshakeFrames"] = total
+        if total <= 3 or total & (total - 1) == 0:
+            LOG.warning(
+                "Serial fixed handshake observed during data stream: observedNow=%s "
+                "streamHandshakeFrames=%s bufferedBytes=%s payloadLogged=false",
+                handshake_frames,
+                total,
+                buffered_bytes,
+            )
+
     def _record_discarded_bytes(self, discarded: int, reason: str, buffered_bytes: int) -> None:
         previous = int(self._stats["discardedBytes"])
         total = previous + discarded
@@ -836,7 +904,7 @@ class SerialAdapter:
             "highestSequence=%s expectedPackets=%s receivedUniquePackets=%s lostPackets=%s "
             "lossRatePercent=%.6f intervalExpectedPackets=%s intervalReceivedUniquePackets=%s "
             "intervalLostPackets=%s intervalLossRatePercent=%.6f duplicates=%s outOfOrder=%s late=%s "
-            "controlResponses=%s controlResponseBytes=%s controlTimeouts=%s",
+            "controlResponses=%s controlResponseBytes=%s controlTimeouts=%s streamHandshakeFrames=%s",
             reason,
             _safe_log_text(self._target),
             time.monotonic() - float(self._stats["startedAtMonotonic"]),
@@ -862,6 +930,7 @@ class SerialAdapter:
             self._stats["controlResponses"],
             self._stats["controlResponseBytes"],
             self._stats["controlTimeouts"],
+            self._stats["streamHandshakeFrames"],
         )
         self._last_summary_snapshot = snapshot
 

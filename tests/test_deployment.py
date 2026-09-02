@@ -287,6 +287,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("between 5 and 600 seconds", invalid_timeout.stderr)
         self.assertIn("journalctl -k -f", script)
         self.assertIn("journalctl -u neurobridge.service -f", script)
+        self.assertIn("started_at_journal=$(date '+%Y-%m-%d %H:%M:%S')", script)
+        self.assertIn('--since "$started_at_journal"', script)
         self.assertIn("udevadm monitor --kernel --udev --property", script)
         self.assertIn("dmesg --follow --time-format iso", script)
         self.assertIn("$prefix-usb-interfaces.log", script)
@@ -849,6 +851,23 @@ class DeploymentTests(unittest.TestCase):
         self.assertTrue((ROOT / "web" / "b-client-test" / "index.html").is_file())
         self.assertTrue((ROOT / "web" / "b-client-test" / "runtime-config.js").is_file())
         self.assertFalse((ROOT / "mac" / "capture").exists())
+
+    def test_capture_log_viewer_is_static_offline_and_serial_aware(self) -> None:
+        capture_root = ROOT / "web" / "capture"
+        html = (capture_root / "index.html").read_text(encoding="utf-8")
+        javascript = (capture_root / "app.js").read_text(encoding="utf-8")
+        self.assertIn('href="./styles.css"', html)
+        self.assertIn('src="./app.js"', html)
+        self.assertIn('type="file"', html)
+        self.assertIn('id="logInput"', html)
+        self.assertIn("USB 串口", html)
+        self.assertIn("single_byte_0x01", javascript)
+        self.assertIn("fixed_handshake", javascript)
+        self.assertIn("Serial valid-frame timeout", javascript)
+        self.assertIn("FileReader", javascript)
+        for forbidden in ("fetch(", "XMLHttpRequest", "new WebSocket", "EventSource", "https://", "http://"):
+            self.assertNotIn(forbidden, javascript)
+            self.assertNotIn(forbidden, html)
 
     def test_diagnostic_collector_excludes_sensitive_gateway_inputs(self) -> None:
         script = (ROOT / "linux" / "collect-ubuntu-build-diagnostics.sh").read_text(encoding="utf-8")

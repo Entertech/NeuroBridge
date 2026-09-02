@@ -326,7 +326,11 @@ async def run(args: argparse.Namespace) -> None:
     httpd = ThreadingHTTPServer((args.ui_host, args.ui_port), handler_factory(controller, loop, logs))
     http_thread = threading.Thread(target=httpd.serve_forever, name="mac-poc-http", daemon=True)
     http_thread.start()
-    LOG.info("Open http://%s:%s/ to start local headband capture", args.ui_host, args.ui_port)
+    # The shared capture page is now a service-independent static log viewer.
+    # Keep this legacy BLE POC usable by starting capture with the process
+    # instead of relying on a page-side POST request.
+    await controller.start()
+    LOG.info("macOS headband capture started; offline log viewer=http://%s:%s/", args.ui_host, args.ui_port)
     stopped = asyncio.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signum, stopped.set)

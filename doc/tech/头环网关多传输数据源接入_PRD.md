@@ -400,7 +400,7 @@ lossRatePercent = lostPackets / expectedPackets × 100%
 
 `receivedUniquePackets` 只统计唯一序列号；重复包单独计入 `duplicates`，不改善丢包率。有限窗口内后到的乱序包计入 `outOfOrder` 并补回此前缺口，因此累计 `lostPackets` 可下降；超过窗口的旧包计入 `late`。`0xFFFF → 0x0000` 视为正常回绕。周期日志以相邻快照差值给出 `intervalExpectedPackets`、`intervalReceivedUniquePackets`、`intervalLostPackets` 和 `intervalLossRatePercent`，同时保留连接累计值，避免只看瞬时跳号或只看全程平均值造成误判。
 
-日志不得记录控制响应原文、完整 28 字节帧或算法输入。控制命令只记录 `command`、`responseBytes`、`durationMs`、`success`；串口汇总记录目标路径、运行时长、帧/字节数、非法帧、丢弃/溢出、首末序列、累计与区间丢包、重复/乱序/迟到、控制响应次数/字节数/超时次数。持续收到垃圾字节但没有有效帧时仍必须按有效帧超时断开重连，不能把“有字节”误判为链路健康。
+日志不得记录控制响应完整原文、完整 28 字节帧或算法输入。控制命令记录 `command`、`responseBytes`、`durationMs`、`responseClassification`、`expectedAck01`、仅单字节响应的 `singleByteHex`、`fixedHandshakeFrames`、`longestHandshakePrefixBytes`、`success`与 `payloadLogged=false`。分类至少区分单字节 `0x01`、完整固定握手、包含固定握手、部分握手前缀和其他非空响应；在设备方最终确认 `0x01` 为唯一成功 ACK 前，只增强可观测性，不改变现有“任意非空响应成功”策略。进入数据阶段后仍匹配到完整固定握手时，限频记录 `Serial fixed handshake observed during data stream` 并累计 `streamHandshakeFrames`。串口汇总记录目标路径、运行时长、帧/字节数、数据阶段握手数、非法帧、丢弃/溢出、首末序列、累计与区间丢包、重复/乱序/迟到、控制响应次数/字节数/超时次数。持续收到垃圾字节但没有有效帧时仍必须按有效帧超时断开重连，不能把“有字节”误判为链路健康。
 
 ### 6.5 原生 USB 传输
 
