@@ -13,7 +13,7 @@ Usage: ./linux/setup-kylin-gateway.sh
 Galaxy Kylin project assistant. It provides a numeric menu for:
   1. Prepare everything needed and start (recommended, safe to repeat)
   2. Start the already configured gateway
-  3. Repair project permissions and update source
+  3. Update source from the network (optional)
   4. Check the currently connected USB/serial device
   5. Regenerate the project serial configuration
   6. Build, verify, and enable the local algorithm
@@ -54,13 +54,13 @@ validate_project_root() {
 init_log() {
   [[ -z $setup_log ]] || return 0
   if ! mkdir -p -- "$runtime_dir/logs" 2>/dev/null; then
-    printf 'WARNING: 当前项目不可写，选择 2 修复权限后才会开始保存助手日志。\n' >&2
+    printf 'WARNING: 当前项目不可写，输入 1 检查并修复权限后才会开始保存助手日志。\n' >&2
     return 1
   fi
   setup_log="$runtime_dir/logs/setup-kylin-gateway-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
   if ! touch "$setup_log" 2>/dev/null; then
     setup_log=
-    printf 'WARNING: 无法创建助手日志，选择 2 修复项目权限。\n' >&2
+    printf 'WARNING: 无法创建助手日志，输入 1 检查并修复项目权限。\n' >&2
     return 1
   fi
   chmod 0600 "$setup_log" 2>/dev/null || true
@@ -147,7 +147,7 @@ repair_project_permissions() {
   log_message "将只修复已校验项目：$root_dir"
   if ! ask_yes_no "是否修复这个项目的所有权和 Git 写权限？"; then
     log_message "已取消权限修复。"
-    show_menu_action 3 "bash linux/neurobridge-kylin-bootstrap.sh"
+    log_message "权限修复已取消。日常启动不需要 Git；可返回菜单输入 1。"
     return 1
   fi
 
@@ -187,7 +187,7 @@ repair_and_update() {
   run_step "检查 Git 工作区" git -C "$root_dir" status --short --branch || return 1
   run_step "以普通用户更新代码" git -C "$root_dir" pull --ff-only || {
     log_message "更新失败。完整输出已保存在助手日志。"
-    show_menu_action 3 "bash linux/neurobridge-kylin-bootstrap.sh"
+    log_message "联网更新失败，但不影响已有版本继续运行；返回菜单输入 1 或 2。"
     return 1
   }
   after_revision=$(git -C "$root_dir" rev-parse HEAD 2>/dev/null) || return 1
@@ -353,7 +353,7 @@ show_menu() {
 NeuroBridge 银河麒麟一键助手
   1. 一键准备并启动（推荐，可重复执行）
   2. 直接启动网关（已经配置好时）
-  3. 修复项目权限并更新代码
+  3. 联网更新代码（可选，离线不要选）
   4. 检查当前 USB/串口（无需拔插）
   5. 重新生成 USB 串口配置
   6. 修复/重新构建本地算法

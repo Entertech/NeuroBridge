@@ -6,7 +6,7 @@
 bash linux/neurobridge-kylin-bootstrap.sh
 ```
 
-`linux/neurobridge-kylin-bootstrap.sh` 是现场操作员唯一需要运行的文件：它先处理旧代码或 Git 权限问题，再打开数字菜单。无法拉取的旧设备可只接收这个文件并把它放到项目根目录，以 `bash neurobridge-kylin-bootstrap.sh` 运行；复制后的根目录文件名不会与仓库内跟踪路径冲突。通常只需输入 `1`，助手会跳过已完成步骤并直接启动；已配置好时可输入 `2` 直接启动，权限/更新、USB 检查、串口重配、算法重建、诊断导出和最近日志也都有独立数字快捷项。保持耳机 USB 已连接即可，正常检测不要求拔插。完整现场流程和日志判读见[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
+`linux/neurobridge-kylin-bootstrap.sh` 是完整项目的日常启动入口，启动时绝不运行 `git fetch` 或 `git pull`。通常只需输入 `1`，助手会跳过已完成步骤并直接启动；已配置好时可输入 `2`。菜单 `3` 仅用于网络可用时主动更新，不会被普通启动自动选择。无法拉取的旧设备由开发机运行 `./tools/build-kylin-offline-update.sh`，只传输生成的 `neurobridge-kylin-offline-update.run`，目标机执行一次后会自动打开菜单。保持耳机 USB 已连接即可，正常检测不要求拔插。完整现场流程见[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
 
 本目录同时保存 Ubuntu x86_64 部署及银河麒麟项目运行脚本：
 
@@ -17,7 +17,8 @@ bash linux/neurobridge-kylin-bootstrap.sh
 - `../config/ssh-operations.example.txt`：快速模式模板；实际 `ssh-operations.txt` 被 Git 忽略，可按现场要求保存明文密码。
 - `collect-ubuntu-build-diagnostics.sh`：收集编译日志、工具版本和 CMake 诊断，不包含现场配置或原始数据。
 - `collect-kylin-runtime-diagnostics.sh`：供 N100/N150 银河麒麟 V10 现场离线采集系统、服务、journal、USB/TTY、网络、依赖和应用日志；它是诊断工具，不是麒麟安装器。
-- `neurobridge-kylin-bootstrap.sh`：可单独传给旧设备的权限恢复与分支引导文件；会记录日志，PR 未合入 `master` 时明确引导到 `codex/serial-usb-transport`，随后打开数字菜单。
+- `neurobridge-kylin-bootstrap.sh`：完整项目的无网络日常启动入口；只处理必要权限并打开数字菜单，不更新源码。
+- `../tools/build-kylin-offline-update.sh`：开发机生成单个 `.run` 离线更新文件；内嵌已提交分支的 Git bundle 和 SHA-256，目标机只从本地 bundle 快进，不访问远端。
 - `setup-kylin-gateway.sh`：银河麒麟 V10 项目一键上手、权限恢复、更新、配置、启动与诊断菜单；以普通用户运行，只在必要步骤调用 `sudo`，Git 更新永远不使用 `sudo`。
 - `setup-kylin-python.sh`：银河麒麟 V10 项目 Python 环境一键初始化；系统仅有 Python 3.8 时自动准备经 SHA-256 锁定的项目内 Python 3.11，再选择离线 `wheelhouse` 或当前网络，所有运行时、缓存、临时文件和日志保存在项目内。
 - `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口一键识别；默认直接检查已连接设备，无需拔插，并保存 USB/TTY/驱动快照；仅在显式 `--plug-cycle` 时监控拔插过程和超时；旧版 `lsusb` 不支持 `-nn` 时自动回退。

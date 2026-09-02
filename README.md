@@ -10,13 +10,13 @@ NeuroBridge 是将回车科技头环数据接入本机浏览器或兼容第三�
 
 设备侧也使用独立策略：`data_source.type = "serial"` 选择当前 USB 派生 TTY 方案，`"bluetooth"` 切回 Flowtime BLE，一次只运行一种；`"usb"` 仅为原生 HID/Bulk/Interrupt 预留，协议未确认时会拒绝启动并提示改用串口。串口策略会稳定排序并逐个探测 `/dev/serial/by-id/`、`ttyACM*`、`ttyUSB*`，收到首个固定握手后立即 ACK、停止遍历并进入 `connected`；银河麒麟一键流程使用项目内锁定的 CMake 3.31.6、目标系统 Eigen 3.3.7 与仓库源码，将 C++ 算法 bridge 构建到 `.runtime/algorithm/`，进程自检成功后才启用配置。本地算法准备成功后才进入 `validating` 并发送 `0xE1`，只有收到单字节 `0x01` 应答才进入 `validated` 并读取、转发实时数据。超时、`AA` 握手残片、完整握手或任何其他应答均进入 `validation_failed` 并记录脱敏分类；关闭串口后为 `disconnected`，从未找到目标设备则回到 `not_connected`。`0xE0` 也只把单字节 `0x01` 记为成功，但无论停止应答是否成功都释放资源。16 位大端序号用于输出累计和区间丢包率，日志不记录控制响应原文或完整脑波帧。完整 28 字节设备帧只写入受保护的内部录制目录，不进入现有采集包、诊断包或北向消息。
 
-已具备运行环境和 `/etc/neurobridge/gateway.toml` 的银河麒麟 x86_64 设备，推荐一键启用串口并重启服务：
+银河麒麟 x86_64 项目的日常入口不会自动访问 Git。耳机 USB 已连接时运行入口并输入 `1`；已有完整配置时也可输入 `2` 直接启动：
 
 ```bash
-sudo ./linux/setup-kylin-serial.sh
+bash linux/neurobridge-kylin-bootstrap.sh
 ```
 
-脚本自动备份并原子更新配置、补充服务账户串口组权限、列出候选设备、验证配置并重启。完整部署、日志字段和导出方法见[银河麒麟 V10 内部手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
+旧设备无法 `git pull` 时，在开发机对已提交且测试通过的分支执行 `./tools/build-kylin-offline-update.sh`，只传输生成的 `neurobridge-kylin-offline-update.run`。目标机在项目根目录运行该单文件；它校验内嵌 Git bundle 后从本地快进代码、保留 `.runtime` 与现场数据，并自动打开菜单，全程不访问远端。完整部署、日志字段和导出方法见[银河麒麟 V10 内部手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
 
 Ubuntu 24.04 x86_64 网关可先用公开 HTTPS 地址匿名获取本仓库源码，不需要 GitHub 账号或密码：
 

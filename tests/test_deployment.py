@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeploymentTests(unittest.TestCase):
-    def test_kylin_single_file_entry_repairs_old_checkout_and_opens_the_menu(self) -> None:
+    def test_kylin_startup_entry_never_updates_source_and_opens_the_menu(self) -> None:
         script_path = ROOT / "linux" / "neurobridge-kylin-bootstrap.sh"
         script = script_path.read_text(encoding="utf-8")
         self.assertTrue(os.access(script_path, os.X_OK))
@@ -32,7 +32,7 @@ class DeploymentTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
-        self.assertIn("Copy this one file into the root", help_result.stdout)
+        self.assertIn("Startup never runs git fetch or git pull", help_result.stdout)
         self.assertIn("Do not run with sudo", help_result.stdout)
 
         menu_result = subprocess.run(
@@ -46,7 +46,6 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("正在打开 NeuroBridge 银河麒麟数字菜单", menu_result.stdout)
         self.assertIn("1. 一键准备并启动（推荐，可重复执行）", menu_result.stdout)
 
-        self.assertIn('target_branch="codex/serial-usb-transport"', script)
         self.assertIn('elif [[ -f $script_dir/../pyproject.toml ]]', script)
         self.assertIn('assistant="$project_dir/linux/setup-kylin-gateway.sh"', script)
         self.assertIn('[[ ${EUID:-$(id -u)} -ne 0 ]]', script)
@@ -55,80 +54,129 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('[[ -d $project_dir/.git && ! -L $project_dir/.git ]]', script)
         self.assertIn('sudo chown -R --no-dereference "$current_uid:$current_gid" "$project_dir"', script)
         self.assertIn('find "$project_dir" -xdev ! -uid "$current_uid"', script)
-        self.assertIn("本文件不会自动删除它", script)
-        self.assertIn('git -C "$project_dir" pull --ff-only origin "$target_branch"', script)
-        self.assertIn('git -C "$project_dir" fetch origin', script)
-        self.assertIn('git -C "$project_dir" checkout -b "$target_branch" --track', script)
-        self.assertIn('git -C "$project_dir" merge --ff-only "origin/$target_branch"', script)
-        self.assertIn("当前存在已跟踪文件修改", script)
-        self.assertNotIn('sudo git -C "$project_dir"', script)
+        self.assertIn("sourceUpdateAttempted=false", script)
+        self.assertIn("启动入口不会自动执行 Git", script)
+        self.assertNotIn('git -C "$project_dir" fetch', script)
+        self.assertNotIn('git -C "$project_dir" checkout', script)
+        self.assertNotIn('git -C "$project_dir" merge', script)
         self.assertIn('exec bash "$assistant"', script)
         self.assertIn('kylin-bootstrap-$(date -u', script)
 
-    def test_kylin_bootstrap_recovers_old_feature_and_master_checkouts(self) -> None:
+    def test_kylin_startup_refuses_incomplete_checkout_without_calling_git(self) -> None:
         source = (ROOT / "linux" / "neurobridge-kylin-bootstrap.sh").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            project = Path(temporary_directory) / "NeuroBridge"
+            project.mkdir()
+            (project / ".git").mkdir()
+            (project / "pyproject.toml").write_text("[project]\nname='bootstrap-test'\n", encoding="utf-8")
+            bootstrap = project / "neurobridge-kylin-bootstrap.sh"
+            bootstrap.write_text(source, encoding="utf-8")
+            bin_dir = Path(temporary_directory) / "bin"
+            bin_dir.mkdir()
+            git_called = Path(temporary_directory) / "git-called"
+            fake_git = bin_dir / "git"
+            fake_git.write_text(
+                "#!/usr/bin/env bash\ntouch \"$GIT_CALLED\"\nexit 99\n",
+                encoding="utf-8",
+            )
+            fake_git.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
+            environment["GIT_CALLED"] = str(git_called)
+            result = subprocess.run(
+                ["bash", str(bootstrap)],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=environment,
+            )
 
-        for starting_branch in ("codex/serial-usb-transport", "master"):
-            with self.subTest(starting_branch=starting_branch), tempfile.TemporaryDirectory() as temporary_directory:
-                project = Path(temporary_directory) / "NeuroBridge"
-                project.mkdir()
-                (project / ".git").mkdir()
-                (project / "pyproject.toml").write_text("[project]\nname='bootstrap-test'\n", encoding="utf-8")
-                bootstrap = project / "neurobridge-kylin-bootstrap.sh"
-                bootstrap.write_text(source, encoding="utf-8")
+            self.assertNotEqual(result.returncode, 0)
+            rendered = result.stdout + result.stderr
+            self.assertIn("启动入口不会自动执行 Git", rendered)
+            self.assertIn("neurobridge-kylin-offline-update.run", rendered)
+            self.assertFalse(git_called.exists())
+            self.assertTrue(any((project / ".runtime" / "logs").glob("kylin-bootstrap-*.log")))
 
-                bin_dir = Path(temporary_directory) / "bin"
-                bin_dir.mkdir()
-                git_log = Path(temporary_directory) / "git.log"
-                fake_git = bin_dir / "git"
-                fake_git.write_text(
-                    "#!/usr/bin/env bash\n"
-                    "printf '%s\\n' \"$*\" >>\"$FAKE_GIT_LOG\"\n"
-                    "case \"$*\" in\n"
-                    "  *'symbolic-ref --quiet --short HEAD'*) printf '%s\\n' \"$FAKE_START_BRANCH\" ;;\n"
-                    "  *'show-ref --verify --quiet refs/heads/codex/serial-usb-transport'*) exit 1 ;;\n"
-                    "  *'pull --ff-only origin codex/serial-usb-transport'*|"
-                    "*'checkout -b codex/serial-usb-transport --track origin/codex/serial-usb-transport'*)\n"
-                    "    mkdir -p \"$FAKE_PROJECT/linux\"\n"
-                    "    printf '%s\\n' '#!/usr/bin/env bash' 'printf '\"'\"'recovered-menu-opened\\n'\"'\"'' "
-                    ">\"$FAKE_PROJECT/linux/setup-kylin-gateway.sh\"\n"
-                    "    ;;\n"
-                    "esac\n",
-                    encoding="utf-8",
-                )
-                fake_git.chmod(0o755)
+    def test_kylin_offline_updater_is_one_file_and_never_uses_origin(self) -> None:
+        builder_source = (ROOT / "tools" / "build-kylin-offline-update.sh").read_text(encoding="utf-8")
+        self.assertIn("networkAccessAttempted=false", builder_source)
+        self.assertIn("__NEUROBRIDGE_GIT_BUNDLE__", builder_source)
+        self.assertNotIn('fetch origin', builder_source)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            source = temporary_root / "source"
+            target = temporary_root / "target"
+            tools_dir = source / "tools"
+            linux_dir = source / "linux"
+            tools_dir.mkdir(parents=True)
+            linux_dir.mkdir()
+            builder = tools_dir / "build-kylin-offline-update.sh"
+            builder.write_text(builder_source, encoding="utf-8")
+            builder.chmod(0o755)
+            (source / "pyproject.toml").write_text("[project]\nname='offline-test'\n", encoding="utf-8")
+            bootstrap = linux_dir / "neurobridge-kylin-bootstrap.sh"
+            bootstrap.write_text("#!/usr/bin/env bash\nprintf 'old-startup\\n'\n", encoding="utf-8")
+            bootstrap.chmod(0o755)
+            subprocess.run(["git", "init", "-b", "codex/test"], cwd=source, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Offline Test"], cwd=source, check=True)
+            subprocess.run(["git", "config", "user.email", "offline@example.invalid"], cwd=source, check=True)
+            subprocess.run(["git", "add", "."], cwd=source, check=True)
+            subprocess.run(["git", "commit", "-m", "old"], cwd=source, check=True, capture_output=True)
+            subprocess.run(["git", "clone", str(source), str(target)], check=True, capture_output=True)
+            subprocess.run(["git", "remote", "remove", "origin"], cwd=target, check=True)
+            runtime_sentinel = target / ".runtime" / "recordings" / "keep.txt"
+            runtime_sentinel.parent.mkdir(parents=True)
+            runtime_sentinel.write_text("preserve-field-data", encoding="utf-8")
 
-                environment = os.environ.copy()
-                environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
-                environment["FAKE_GIT_LOG"] = str(git_log)
-                environment["FAKE_START_BRANCH"] = starting_branch
-                environment["FAKE_PROJECT"] = str(project)
-                result = subprocess.run(
-                    ["bash", str(bootstrap)],
-                    input="yes\n" if starting_branch == "master" else "",
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    env=environment,
-                )
-
-                self.assertEqual(result.returncode, 0, result.stderr + "\n" + result.stdout)
-                self.assertIn("recovered-menu-opened", result.stdout)
-                commands = git_log.read_text(encoding="utf-8")
-                if starting_branch == "master":
-                    self.assertIn(
-                        "fetch origin refs/heads/codex/serial-usb-transport:"
-                        "refs/remotes/origin/codex/serial-usb-transport",
-                        commands,
-                    )
-                    self.assertIn(
-                        "checkout -b codex/serial-usb-transport --track "
-                        "origin/codex/serial-usb-transport",
-                        commands,
-                    )
-                else:
-                    self.assertIn("pull --ff-only origin codex/serial-usb-transport", commands)
-                self.assertTrue(any((project / ".runtime" / "logs").glob("kylin-bootstrap-*.log")))
+            bootstrap.write_text("#!/usr/bin/env bash\nprintf 'updated-startup\\n'\n", encoding="utf-8")
+            subprocess.run(["git", "add", str(bootstrap.relative_to(source))], cwd=source, check=True)
+            subprocess.run(["git", "commit", "-m", "new"], cwd=source, check=True, capture_output=True)
+            expected_revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=source,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            updater = temporary_root / "neurobridge-kylin-offline-update.run"
+            built = subprocess.run(
+                ["bash", str(builder), "--output", str(updater)],
+                cwd=source,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(built.returncode, 0, built.stderr + "\n" + built.stdout)
+            self.assertTrue(updater.is_file())
+            self.assertTrue(os.access(updater, os.X_OK))
+            help_result = subprocess.run(
+                ["bash", str(updater), "--help"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(help_result.returncode, 0, help_result.stderr)
+            self.assertIn("No network access", help_result.stdout)
+            installed = subprocess.run(
+                ["bash", str(updater), "--project-dir", str(target)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(installed.returncode, 0, installed.stderr + "\n" + installed.stdout)
+            self.assertIn("networkAccessAttempted=false", installed.stdout)
+            self.assertIn("updated-startup", installed.stdout)
+            actual_revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=target,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(actual_revision, expected_revision)
+            self.assertEqual(runtime_sentinel.read_text(encoding="utf-8"), "preserve-field-data")
+            self.assertTrue((target / ".runtime" / "offline-update" / "current.txt").is_file())
 
     def test_kylin_bootstrap_repairs_unwritable_git_metadata_before_opening_menu(self) -> None:
         source = (ROOT / "linux" / "neurobridge-kylin-bootstrap.sh").read_text(encoding="utf-8")
@@ -207,7 +255,7 @@ class DeploymentTests(unittest.TestCase):
         )
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
         self.assertIn("Prepare everything needed and start", help_result.stdout)
-        self.assertIn("Repair project permissions and update source", help_result.stdout)
+        self.assertIn("Update source from the network (optional)", help_result.stdout)
         self.assertIn("one decision accept yes/no", help_result.stdout)
 
         menu_result = subprocess.run(
@@ -220,7 +268,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(menu_result.returncode, 0, menu_result.stderr)
         self.assertIn("1. 一键准备并启动（推荐，可重复执行）", menu_result.stdout)
         self.assertIn("2. 直接启动网关", menu_result.stdout)
-        self.assertIn("3. 修复项目权限并更新代码", menu_result.stdout)
+        self.assertIn("3. 联网更新代码（可选，离线不要选）", menu_result.stdout)
         self.assertIn("4. 检查当前 USB/串口（无需拔插）", menu_result.stdout)
         self.assertIn("6. 修复/重新构建本地算法", menu_result.stdout)
         self.assertIn("7. 导出完整诊断包", menu_result.stdout)
