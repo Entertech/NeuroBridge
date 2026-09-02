@@ -55,7 +55,7 @@ const DEVICE_STATE_MESSAGES = {
   not_connected: "尚未找到可识别的 USB 串口设备，网关会继续遍历候选串口。",
   connecting: "正在遍历并打开 USB 串口，等待固定握手。",
   connected: "已收到目标设备握手并独占串口，准备回写握手 ACK。",
-  validating: "已回写握手 ACK，正在等待设备返回校验结果 01；通过后才准备算法并发送 E1。",
+  validating: "已回写握手 ACK，正在等待设备返回校验结果 01；期间若收到完整周期握手会重新 ACK，不会立即失败。",
   validation_failed: "数据路径校验失败；请从日志区分 ACK 未返回 01、算法未就绪或 E1 写入失败。E1 本身没有响应。",
   validated: "ACK 已通过 01 校验、本地算法已就绪且 E1 已写入，可以接收并转发耳机数据。",
   disconnected: "已识别的 USB 串口连接已断开，网关将按配置重新连接。",

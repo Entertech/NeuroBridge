@@ -63,34 +63,6 @@ def _longest_handshake_prefix(data: bytes | bytearray) -> int:
     )
 
 
-def _classify_handshake_ack_response(response: bytes) -> tuple[str, bool, int, int, str]:
-    """Describe the handshake ACK result without logging its complete payload."""
-
-    fixed_handshake_frames = response.count(HANDSHAKE)
-    longest_handshake_prefix = _longest_handshake_prefix(response)
-    expected_ack_01 = response == EXPECTED_HANDSHAKE_ACK_RESPONSE
-    if expected_ack_01:
-        classification = "single_byte_0x01"
-    elif response == HANDSHAKE:
-        classification = "fixed_handshake"
-    elif fixed_handshake_frames:
-        classification = "contains_fixed_handshake"
-    elif longest_handshake_prefix:
-        classification = "partial_handshake"
-    elif len(response) == 1:
-        classification = "other_single_byte"
-    else:
-        classification = "other_nonempty"
-    single_byte_hex = f"{response[0]:02X}" if len(response) == 1 else "not_applicable"
-    return (
-        classification,
-        expected_ack_01,
-        fixed_handshake_frames,
-        longest_handshake_prefix,
-        single_byte_hex,
-    )
-
-
 @dataclass(frozen=True)
 class LossSnapshot:
     base_sequence: int | None
@@ -379,6 +351,10 @@ class SerialAdapter:
             "controlResponseBytes": 0,
             "controlTimeouts": 0,
             "controlUnexpectedResponses": 0,
+            "handshakeAckWrites": 0,
+            "handshakeAckWriteBytes": 0,
+            "handshakeAckRepeatedFrames": 0,
+            "handshakeAckPartialTimeouts": 0,
             "streamHandshakeFrames": 0,
             "startedAtMonotonic": time.monotonic(),
             "lastSummaryAtMonotonic": 0.0,
@@ -542,21 +518,8 @@ class SerialAdapter:
                         _safe_log_text(self._target),
                         self.config.command_response_timeout_ms,
                     )
-                    raise TimeoutError("Serial handshake ACK received no validation response")
-                if response != EXPECTED_HANDSHAKE_ACK_RESPONSE:
-                    await self.status("connectionState", "validation_failed")
-                    classification = _classify_handshake_ack_response(response)[0]
-                    LOG.error(
-                        "Serial handshake validation failed: attempt=%s target=%s "
-                        "reason=unexpected_response responseClassification=%s expectedAck01=true "
-                        "responseBytes=%s payloadLogged=false",
-                        attempt,
-                        _safe_log_text(self._target),
-                        classification,
-                        len(response),
-                    )
-                    raise ConnectionError(
-                        f"Serial handshake ACK returned an unexpected response: {classification}"
+                    raise TimeoutError(
+                        "Serial handshake ACK did not receive standalone 0x01 before timeout"
                     )
                 LOG.info(
                     "Serial handshake validation succeeded: attempt=%s target=%s "
@@ -754,62 +717,149 @@ class SerialAdapter:
             return b""
         client = self._client
         started = time.monotonic()
-        async with self._io_lock:
-            if hasattr(client, "reset_input_buffer"):
-                await asyncio.to_thread(client.reset_input_buffer)
+        timeout_seconds = self.config.command_response_timeout_ms / 1000
+        deadline = started + timeout_seconds
+        response_buffer = bytearray()
+        total_read_bytes = 0
+        unexpected_bytes = 0
+        longest_handshake_prefix = 0
+        repeated_handshake_frames = 0
+        ack_write_count = 0
+        ack_write_bytes = 0
+        response = b""
+
+        async def write_ack() -> None:
+            nonlocal ack_write_count, ack_write_bytes
             written = await asyncio.to_thread(client.write, HANDSHAKE)
             if written != len(HANDSHAKE):
                 raise OSError(
-                    f"Serial handshake ACK write was incomplete: expected={len(HANDSHAKE)} actual={written}"
+                    f"Serial handshake ACK write was incomplete: expected={len(HANDSHAKE)} "
+                    f"actual={written}"
                 )
             await self._flush(client)
+            ack_write_count += 1
+            ack_write_bytes += written
+            self._stats["handshakeAckWrites"] = int(self._stats["handshakeAckWrites"]) + 1
+            self._stats["handshakeAckWriteBytes"] = (
+                int(self._stats["handshakeAckWriteBytes"]) + written
+            )
+
+        async with self._io_lock:
+            if hasattr(client, "reset_input_buffer"):
+                await asyncio.to_thread(client.reset_input_buffer)
+            await write_ack()
+            LOG.info(
+                "Serial handshake ACK written: command=handshake_ack ackWriteCount=%s "
+                "ackWriteBytes=%s repeatedHandshakeFrames=%s writeSuccess=true payloadLogged=false",
+                ack_write_count,
+                ack_write_bytes,
+                repeated_handshake_frames,
+            )
             previous_timeout = getattr(client, "timeout", None)
-            client.timeout = self.config.command_response_timeout_ms / 1000
             try:
-                # The device validates the echoed seven-byte handshake ACK and
-                # returns exactly one byte: 0x01. E1/E0 have no response.
-                response = bytes(await asyncio.to_thread(client.read, 1))
+                # The headset may already have scheduled another periodic
+                # handshake before it processes our ACK. Read one byte at a
+                # time so a complete repeated handshake can be discarded as a
+                # frame and a later standalone 0x01 can be accepted without
+                # consuming the first byte of the biological-data stream.
+                while not self._stopping:
+                    remaining_seconds = deadline - time.monotonic()
+                    if remaining_seconds <= 0:
+                        break
+                    client.timeout = remaining_seconds
+                    chunk = bytes(await asyncio.to_thread(client.read, 1))
+                    if not chunk:
+                        # A real pyserial timeout normally consumes the whole
+                        # remaining interval. Keep the deadline authoritative
+                        # if a driver returns early or a test double is
+                        # non-blocking, without creating a busy loop.
+                        await asyncio.sleep(min(0.01, max(0.0, remaining_seconds)))
+                        continue
+                    total_read_bytes += len(chunk)
+                    response_buffer.extend(chunk)
+                    longest_handshake_prefix = max(
+                        longest_handshake_prefix,
+                        _longest_handshake_prefix(response_buffer),
+                    )
+
+                    if response_buffer == EXPECTED_HANDSHAKE_ACK_RESPONSE:
+                        response = EXPECTED_HANDSHAKE_ACK_RESPONSE
+                        response_buffer.clear()
+                        break
+
+                    if HANDSHAKE.startswith(response_buffer):
+                        if response_buffer == HANDSHAKE:
+                            repeated_handshake_frames += 1
+                            self._stats["handshakeAckRepeatedFrames"] = (
+                                int(self._stats["handshakeAckRepeatedFrames"]) + 1
+                            )
+                            response_buffer.clear()
+                            await write_ack()
+                            LOG.warning(
+                                "Serial repeated handshake received while awaiting ACK result: "
+                                "command=handshake_ack repeatedHandshakeFrames=%s ackWriteCount=%s "
+                                "ackWriteBytes=%s elapsedMs=%s action=ack_resent "
+                                "payloadLogged=false",
+                                repeated_handshake_frames,
+                                ack_write_count,
+                                ack_write_bytes,
+                                int((time.monotonic() - started) * 1000),
+                            )
+                        continue
+
+                    # Do not reinterpret an 0x01 embedded in a malformed or
+                    # unknown response as the standalone ACK result.
+                    unexpected_bytes += len(response_buffer)
+                    response_buffer.clear()
             finally:
                 client.timeout = previous_timeout
         duration_ms = int((time.monotonic() - started) * 1000)
-        if response:
+        self._stats["controlResponseBytes"] = (
+            int(self._stats["controlResponseBytes"]) + total_read_bytes
+        )
+        if total_read_bytes:
             self._stats["controlResponses"] = int(self._stats["controlResponses"]) + 1
-            self._stats["controlResponseBytes"] = int(self._stats["controlResponseBytes"]) + len(response)
-            (
-                classification,
-                expected_ack_01,
-                fixed_handshake_frames,
-                longest_handshake_prefix,
-                single_byte_hex,
-            ) = _classify_handshake_ack_response(response)
-            success = expected_ack_01
-            if not success:
-                self._stats["controlUnexpectedResponses"] = (
-                    int(self._stats["controlUnexpectedResponses"]) + 1
-                )
-            log_response = LOG.info if success else LOG.warning
-            log_response(
-                "Serial handshake ACK response received: command=handshake_ack responseBytes=%s durationMs=%s "
-                "responseClassification=%s expectedAck01=%s singleByteHex=%s "
-                "fixedHandshakeFrames=%s longestHandshakePrefixBytes=%s success=%s "
-                "acceptedByCurrentPolicy=%s payloadLogged=false",
-                len(response),
+        if response:
+            LOG.info(
+                "Serial handshake ACK response received: command=handshake_ack responseBytes=1 "
+                "totalReadBytes=%s durationMs=%s responseClassification=single_byte_0x01 "
+                "expectedAck01=true singleByteHex=01 repeatedHandshakeFrames=%s "
+                "ackWriteCount=%s ackWriteBytes=%s unexpectedBytes=%s "
+                "longestHandshakePrefixBytes=%s success=true acceptedByCurrentPolicy=true "
+                "payloadLogged=false",
+                total_read_bytes,
                 duration_ms,
-                classification,
-                str(expected_ack_01).lower(),
-                single_byte_hex,
-                fixed_handshake_frames,
+                repeated_handshake_frames,
+                ack_write_count,
+                ack_write_bytes,
+                unexpected_bytes,
                 longest_handshake_prefix,
-                str(success).lower(),
-                str(success).lower(),
             )
         else:
             self._stats["controlTimeouts"] = int(self._stats["controlTimeouts"]) + 1
+            if unexpected_bytes or response_buffer:
+                self._stats["controlUnexpectedResponses"] = (
+                    int(self._stats["controlUnexpectedResponses"]) + 1
+                )
+            if response_buffer:
+                self._stats["handshakeAckPartialTimeouts"] = (
+                    int(self._stats["handshakeAckPartialTimeouts"]) + 1
+                )
             LOG.warning(
                 "Serial handshake ACK response timed out: command=handshake_ack timeoutMs=%s "
-                "durationMs=%s success=false",
+                "durationMs=%s totalReadBytes=%s repeatedHandshakeFrames=%s ackWriteCount=%s "
+                "ackWriteBytes=%s unexpectedBytes=%s partialHandshakeBytes=%s "
+                "longestHandshakePrefixBytes=%s expectedAck01=true success=false "
+                "payloadLogged=false",
                 self.config.command_response_timeout_ms,
                 duration_ms,
+                total_read_bytes,
+                repeated_handshake_frames,
+                ack_write_count,
+                ack_write_bytes,
+                unexpected_bytes,
+                len(response_buffer),
+                longest_handshake_prefix,
             )
         return response
 
@@ -1028,7 +1078,9 @@ class SerialAdapter:
             "lossRatePercent=%.6f intervalExpectedPackets=%s intervalReceivedUniquePackets=%s "
             "intervalLostPackets=%s intervalLossRatePercent=%.6f duplicates=%s outOfOrder=%s late=%s "
             "controlResponses=%s controlResponseBytes=%s controlTimeouts=%s "
-            "controlUnexpectedResponses=%s streamHandshakeFrames=%s",
+            "controlUnexpectedResponses=%s handshakeAckWrites=%s handshakeAckWriteBytes=%s "
+            "handshakeAckRepeatedFrames=%s handshakeAckPartialTimeouts=%s "
+            "streamHandshakeFrames=%s",
             reason,
             _safe_log_text(self._target),
             time.monotonic() - float(self._stats["startedAtMonotonic"]),
@@ -1055,6 +1107,10 @@ class SerialAdapter:
             self._stats["controlResponseBytes"],
             self._stats["controlTimeouts"],
             self._stats["controlUnexpectedResponses"],
+            self._stats["handshakeAckWrites"],
+            self._stats["handshakeAckWriteBytes"],
+            self._stats["handshakeAckRepeatedFrames"],
+            self._stats["handshakeAckPartialTimeouts"],
             self._stats["streamHandshakeFrames"],
         )
         self._last_summary_snapshot = snapshot

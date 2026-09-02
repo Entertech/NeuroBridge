@@ -30,7 +30,7 @@ bash linux/neurobridge-kylin-bootstrap.sh
 
 本文用于 Ubuntu 24.04 LTS x86_64 兼容/回归环境；正式银河麒麟部署见内部麒麟手册。当前默认 `local_browser` 策略让网页、WebSocket 和下载仅监听 `127.0.0.1`，不需要独立 B 端主机或数据专用网线。旧 `wired_b_side` 策略仍保留，但只能使用双方确认的隔离有线网络。
 
-银河麒麟分步脚本仍保留给故障恢复：`setup-kylin-python.sh`、`diagnose-kylin-usb-serial.sh`、`setup-kylin-serial.sh`、`setup-kylin-algorithm.sh` 和 `start-kylin-gateway.sh`。只有排查物理枚举过程时才使用诊断脚本的 `--plug-cycle --timeout 60`。串口模式先回写握手 ACK 并等待设备的 `01` 校验结果，再准备本地算法；启动脚本不允许以关闭算法或项目外 bridge 绕过无响应 `E1` 的发送门禁。
+银河麒麟分步脚本仍保留给故障恢复：`setup-kylin-python.sh`、`diagnose-kylin-usb-serial.sh`、`setup-kylin-serial.sh`、`setup-kylin-algorithm.sh` 和 `start-kylin-gateway.sh`。只有排查物理枚举过程时才使用诊断脚本的 `--plug-cycle --timeout 60`。串口模式先回写握手 ACK 并等待设备的独立 `01` 校验结果；等待窗口内的完整周期握手会被重新 ACK，不会因首个 `AA` 立即失败。校验通过后才准备本地算法；启动脚本不允许以关闭算法或项目外 bridge 绕过无响应 `E1` 的发送门禁。
 
 > 默认本机地址固定使用 `127.0.0.1`。文中的 `192.168.88.10`、`192.168.88.20` 和网卡名仅用于兼容有线策略，切换前必须确认现场参数。
 
