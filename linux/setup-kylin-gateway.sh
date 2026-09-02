@@ -17,6 +17,7 @@ Galaxy Kylin project assistant. It provides a numeric menu for:
   4. Generate the project serial configuration
   5. Start the gateway
   6. Export complete diagnostics
+  7. Build, verify, and enable the local algorithm
 
 Run it as the normal desktop user, not with sudo. The assistant requests sudo
 only for the exact steps that need system permissions. Git is always run as
@@ -215,6 +216,10 @@ generate_serial_config() {
   run_step "生成 USB 串口运行配置" sudo "$root_dir/linux/setup-kylin-serial.sh"
 }
 
+setup_algorithm() {
+  run_step "编译、自检并启用本地算法" "$root_dir/linux/setup-kylin-algorithm.sh"
+}
+
 start_gateway() {
   log_message "启动后用本机浏览器打开：http://127.0.0.1:8080/"
   log_message "按 Ctrl+C 停止网关并返回菜单。"
@@ -253,6 +258,11 @@ first_time_setup() {
     show_next "sudo ./linux/setup-kylin-serial.sh"
     return 1
   }
+  setup_algorithm || {
+    log_message "算法尚未准备成功。为保证不会提前发送 E1，本次不启动网关。"
+    show_next "./linux/setup-kylin-algorithm.sh"
+    return 1
+  }
   log_message "首次配置完成。"
   if ask_yes_no "是否现在启动网关？"; then
     start_gateway
@@ -271,6 +281,7 @@ NeuroBridge 银河麒麟一键助手
   4. 生成 USB 串口配置
   5. 启动网关
   6. 导出完整诊断包
+  7. 编译、自检并启用本地算法
   0. 退出
 EOF
 }
@@ -280,7 +291,7 @@ init_log || true
 
 while true; do
   show_menu
-  printf '请输入选项 [0-6]: '
+  printf '请输入选项 [0-7]: '
   IFS= read -r choice || {
     log_message "输入结束，助手退出。"
     exit 0
@@ -319,10 +330,17 @@ while true; do
       export_diagnostics || true
       show_next "find .runtime/diagnostics -maxdepth 1 -name '*.tar.gz' -ls"
       ;;
+    7)
+      if setup_algorithm; then
+        show_next "./linux/start-kylin-gateway.sh"
+      else
+        show_next "tail -n 200 .runtime/logs/setup-kylin-algorithm-*.log"
+      fi
+      ;;
     0)
       log_message "助手已退出。"
       exit 0
       ;;
-    *) printf '无效选项，请输入 0 到 6。\n' ;;
+    *) printf '无效选项，请输入 0 到 7。\n' ;;
   esac
 done

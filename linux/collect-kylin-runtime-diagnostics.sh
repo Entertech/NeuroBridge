@@ -241,6 +241,8 @@ write_deployed_file_metadata() {
     "$root_dir/.runtime/logs" \
     "$root_dir/.runtime/recordings" \
     "$root_dir/.runtime/diagnostics" \
+    "$root_dir/.runtime/algorithm" \
+    "$root_dir/.runtime/algorithm/neurobridge_affective_bridge" \
     /etc/neurobridge/gateway.toml \
     /opt/neurobridge/venv/bin/neurobridge \
     /usr/local/lib/neurobridge/neurobridge_affective_bridge \
@@ -260,6 +262,9 @@ write_deployed_file_metadata() {
 capture deployed-file-metadata write_deployed_file_metadata
 if [[ -x /usr/local/lib/neurobridge/neurobridge_affective_bridge ]]; then
   capture algorithm-bridge-dependencies ldd /usr/local/lib/neurobridge/neurobridge_affective_bridge
+fi
+if [[ -x $root_dir/.runtime/algorithm/neurobridge_affective_bridge ]]; then
+  capture project-algorithm-bridge-dependencies ldd "$root_dir/.runtime/algorithm/neurobridge_affective_bridge"
 fi
 
 # Service lifecycle, restart reasons, recent application logs, and kernel events.

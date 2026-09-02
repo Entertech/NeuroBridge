@@ -48,6 +48,7 @@ filename = "neurobridge.log"
 level = "INFO"
 
 [algorithm]
-# Project-local first-run defaults to raw-data verification. Enable only after
-# the reviewed Kylin algorithm bridge has been installed and verified.
+# Keep this false in source. On Galaxy Kylin V10 x86_64, run
+# ./linux/setup-kylin-algorithm.sh; it enables this only after a target-local
+# build and a process-contract smoke test. Real-data algorithm POC is separate.
 enabled = false

@@ -22,13 +22,14 @@ bash linux/neurobridge-kylin-bootstrap.sh
 - `setup-kylin-python.sh`：银河麒麟 V10 项目 Python 环境一键初始化；系统仅有 Python 3.8 时自动准备经 SHA-256 锁定的项目内 Python 3.11，再选择离线 `wheelhouse` 或当前网络，所有运行时、缓存、临时文件和日志保存在项目内。
 - `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口一键识别；默认直接检查已连接设备，无需拔插，并保存 USB/TTY/驱动快照；仅在显式 `--plug-cycle` 时监控拔插过程和超时；旧版 `lsusb` 不支持 `-nn` 时自动回退。
 - `setup-kylin-serial.sh`：银河麒麟 x86_64 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务；项目启动脚本会处理账号已入组但当前会话权限尚未刷新的情况。
+- `setup-kylin-algorithm.sh`：在银河麒麟 V10 x86_64 本机使用锁定源码构建算法 bridge 到项目 `.runtime/algorithm/`；缺少系统构建依赖时先询问 `yes/no`，进程自检成功后才备份并原子启用项目配置。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。
 
 本文用于 Ubuntu 24.04 LTS x86_64 兼容/回归环境；正式银河麒麟部署见内部麒麟手册。当前默认 `local_browser` 策略让网页、WebSocket 和下载仅监听 `127.0.0.1`，不需要独立 B 端主机或数据专用网线。旧 `wired_b_side` 策略仍保留，但只能使用双方确认的隔离有线网络。
 
-银河麒麟分步脚本仍保留给故障恢复：`setup-kylin-python.sh`、`diagnose-kylin-usb-serial.sh`、`setup-kylin-serial.sh` 和 `start-kylin-gateway.sh`。只有排查物理枚举过程时才使用诊断脚本的 `--plug-cycle --timeout 60`。
+银河麒麟分步脚本仍保留给故障恢复：`setup-kylin-python.sh`、`diagnose-kylin-usb-serial.sh`、`setup-kylin-serial.sh`、`setup-kylin-algorithm.sh` 和 `start-kylin-gateway.sh`。只有排查物理枚举过程时才使用诊断脚本的 `--plug-cycle --timeout 60`。串口模式必须先通过本地算法进程自检，启动脚本不允许以关闭算法或项目外 bridge 绕过 `E1` 门禁。
 
 > 默认本机地址固定使用 `127.0.0.1`。文中的 `192.168.88.10`、`192.168.88.20` 和网卡名仅用于兼容有线策略，切换前必须确认现场参数。
 

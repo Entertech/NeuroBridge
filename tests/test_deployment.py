@@ -221,7 +221,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("1. 新设备首次配置", menu_result.stdout)
         self.assertIn("2. 修复项目权限并更新代码", menu_result.stdout)
         self.assertIn("3. 检查当前 USB/串口（无需拔插）", menu_result.stdout)
-        self.assertIn("请输入选项 [0-6]", menu_result.stdout)
+        self.assertIn("7. 编译、自检并启用本地算法", menu_result.stdout)
+        self.assertIn("请输入选项 [0-7]", menu_result.stdout)
 
         self.assertIn('[[ ${EUID:-$(id -u)} -ne 0 ]]', script)
         self.assertIn("Run without sudo", script)
@@ -251,6 +252,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("下一步命令：", script)
         self.assertIn('runtime_dir="$root_dir/.runtime"', script)
         self.assertIn("setup-kylin-gateway-$(date -u", script)
+        self.assertIn('"$root_dir/linux/setup-kylin-algorithm.sh"', script)
+        self.assertIn("算法尚未准备成功", script)
 
     def test_kylin_usb_serial_diagnosis_prompts_times_out_and_preserves_logs(self) -> None:
         script_path = ROOT / "linux" / "diagnose-kylin-usb-serial.sh"
@@ -653,6 +656,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(script.count("-DNUMCPP_NO_USE_BOOST=ON"), 2)
         self.assertIn('rm -rf "$build_root"', script)
         self.assertIn('tee "$build_log"', script)
+        self.assertIn("galaxy-kylin", script)
+        self.assertIn("CMake 3.22 or newer", script)
         self.assertTrue((ROOT / "third_party" / "AffectiveCloud-Algorithm-SDK" / "cpp" / "package" / "CMakeLists.txt").is_file())
         self.assertTrue((ROOT / "third_party" / "NumCpp" / "CMakeLists.txt").is_file())
 
@@ -811,6 +816,42 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("accessibleCandidates=", start_source)
         self.assertIn("discovery will continue with accessible candidates", start_source)
         self.assertIn("Log out and back in", start_source)
+        self.assertIn("Serial capture requires the local algorithm gate", start_source)
+        self.assertIn('runtime_root / "algorithm"', start_source)
+        self.assertIn("algorithm.command is not an executable regular file", start_source)
+
+        algorithm_setup = ROOT / "linux" / "setup-kylin-algorithm.sh"
+        self.assertTrue(os.access(algorithm_setup, os.X_OK))
+        syntax = subprocess.run(
+            ["bash", "-n", str(algorithm_setup)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        help_result = subprocess.run(
+            ["bash", str(algorithm_setup), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("Galaxy Kylin V10 x86_64", help_result.stdout)
+        algorithm_setup_source = algorithm_setup.read_text(encoding="utf-8")
+        self.assertIn('algorithm_dir="$runtime_dir/algorithm"', algorithm_setup_source)
+        self.assertIn("build-algorithm-bridge.sh", algorithm_setup_source)
+        self.assertIn('sdk.lock is missing or unsafe', algorithm_setup_source)
+        self.assertIn('affectiveSdkCommit=', algorithm_setup_source)
+        self.assertIn('numCppCommit=', algorithm_setup_source)
+        self.assertIn("neurobridge.algorithm_setup", algorithm_setup_source)
+        self.assertIn("--check-only", algorithm_setup_source)
+        self.assertIn("Previous algorithm bridge restored", algorithm_setup_source)
+        self.assertIn("Configuration was not changed", algorithm_setup_source)
+        self.assertIn("[yes/no]", algorithm_setup_source)
+        self.assertNotIn("git clone", algorithm_setup_source)
+        self.assertNotIn("git fetch", algorithm_setup_source)
+        algorithm_setup_module = (ROOT / "neurobridge" / "algorithm_setup.py").read_text(encoding="utf-8")
+        self.assertIn("Algorithm bridge smoke test: OK", algorithm_setup_module)
 
         python_setup = ROOT / "linux" / "setup-kylin-python.sh"
         self.assertTrue(os.access(python_setup, os.X_OK))

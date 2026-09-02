@@ -80,6 +80,7 @@ done
 runtime_dir="$root_dir/.runtime"
 if ! transport=$(PYTHONPATH=$root_dir "$python_path" - "$config_path" "$root_dir" "$runtime_dir" <<'PY'
 from pathlib import Path
+import os
 import sys
 
 from neurobridge.config import load
@@ -96,6 +97,21 @@ for label, configured in (
         resolved.relative_to(runtime_root)
     except ValueError as error:
         raise SystemExit(f"{label} must remain under {runtime_root}: {resolved}") from error
+if config.data_source.type == "serial":
+    if not config.algorithm.enabled:
+        raise SystemExit(
+            "Serial capture requires the local algorithm gate. Run linux/setup-kylin-algorithm.sh first."
+        )
+    if len(config.algorithm.command) != 1:
+        raise SystemExit("Galaxy Kylin project mode requires one local algorithm bridge executable.")
+    bridge = Path(config.algorithm.command[0]).resolve()
+    algorithm_root = (runtime_root / "algorithm").resolve()
+    try:
+        bridge.relative_to(algorithm_root)
+    except ValueError as error:
+        raise SystemExit(f"algorithm.command must remain under {algorithm_root}: {bridge}") from error
+    if bridge.is_symlink() or not bridge.is_file() or not os.access(bridge, os.X_OK):
+        raise SystemExit(f"algorithm.command is not an executable regular file: {bridge}")
 print(config.data_source.type)
 PY
 ); then

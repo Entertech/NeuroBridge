@@ -14,6 +14,7 @@ neurobridge = "neurobridge.__main__:main"
 neurobridge-dhcp-config = "neurobridge.dhcp:main"
 neurobridge-network-config = "neurobridge.network_config:main"
 neurobridge-serial-config = "neurobridge.serial_setup:main"
+neurobridge-algorithm-config = "neurobridge.algorithm_setup:main"
 
 [tool.setuptools.packages.find]
 include = ["neurobridge*"]

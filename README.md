@@ -8,7 +8,7 @@ NeuroBridge 是将回车科技头环数据接入本机浏览器或兼容第三�
 
 仓库现已包含可部署的 Python 网关：`neurobridge/`。它通过策略模式提供两种可切换的访问拓扑：当前默认 `local_browser` 让同一台网关主机上的浏览器通过 `127.0.0.1` 使用 WebSocket；兼容策略 `wired_b_side` 保留独立 B 端主机的专用网线访问。两种策略复用相同的消息契约、600 ms 批量数据、订阅、录播和持久化逻辑。
 
-设备侧也使用独立策略：`data_source.type = "serial"` 选择当前 USB 派生 TTY 方案，`"bluetooth"` 切回 Flowtime BLE，一次只运行一种；`"usb"` 仅为原生 HID/Bulk/Interrupt 预留，协议未确认时会拒绝启动并提示改用串口。串口策略会稳定排序并逐个探测 `/dev/serial/by-id/`、`ttyACM*`、`ttyUSB*`，收到首个固定握手后立即 ACK、停止遍历并进入 `connected`；本地算法准备成功后才进入 `validating` 并发送 `0xE1`，收到任意非空响应后进入 `validated`，只有此时才读取和转发实时数据。算法失败或 `0xE1` 无响应进入 `validation_failed` 并记录原因，关闭串口后为 `disconnected`；从未找到目标设备则回到 `not_connected`。`0xE0` 同样以任意非空响应为成功。16 位大端序号用于输出累计和区间丢包率，日志不记录控制响应原文或完整脑波帧。完整 28 字节设备帧只写入受保护的内部录制目录，不进入现有采集包、诊断包或北向消息。
+设备侧也使用独立策略：`data_source.type = "serial"` 选择当前 USB 派生 TTY 方案，`"bluetooth"` 切回 Flowtime BLE，一次只运行一种；`"usb"` 仅为原生 HID/Bulk/Interrupt 预留，协议未确认时会拒绝启动并提示改用串口。串口策略会稳定排序并逐个探测 `/dev/serial/by-id/`、`ttyACM*`、`ttyUSB*`，收到首个固定握手后立即 ACK、停止遍历并进入 `connected`；银河麒麟一键流程会在目标 x86_64 主机使用锁定源码将 C++ 算法 bridge 构建到项目 `.runtime/algorithm/`，进程自检成功后才启用配置。本地算法准备成功后才进入 `validating` 并发送 `0xE1`，收到任意非空响应后进入 `validated`，只有此时才读取和转发实时数据。算法失败或 `0xE1` 无响应进入 `validation_failed` 并记录原因，关闭串口后为 `disconnected`；从未找到目标设备则回到 `not_connected`。`0xE0` 同样以任意非空响应为成功。16 位大端序号用于输出累计和区间丢包率，日志不记录控制响应原文或完整脑波帧。完整 28 字节设备帧只写入受保护的内部录制目录，不进入现有采集包、诊断包或北向消息。
 
 已具备运行环境和 `/etc/neurobridge/gateway.toml` 的银河麒麟 x86_64 设备，推荐一键启用串口并重启服务：
 
@@ -49,7 +49,7 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。`FF31` 原始 EEG 与 `FF51` 原始心率均会持久化，`FF51` 用于北向 `hr.raw`；算法输入保留原始字节序和完整窗口。首次 Ubuntu 安装会以锁定版本自动构建并安装行 JSON C++ bridge 到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`，因此部署配置不需要填写算法命令；`algorithm.enabled` 默认开启，也是唯一启停项。macOS 仅完成源码构建及合成输入烟雾测试；SDK 输入分组、真实 Flowtime 数据输出和 Ubuntu x86_64 构建尚未验证，现场仍须根据状态、日志和真实数据验证算法结果。
+Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。`FF31` 原始 EEG 与 `FF51` 原始心率均会持久化，`FF51` 用于北向 `hr.raw`；算法输入保留原始字节序和完整窗口。Ubuntu 首次安装会将锁定的行 JSON C++ bridge 安装到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`；银河麒麟一键流程则在当前 N100/N150 本机构建到项目 `.runtime/algorithm/`，进程自检通过后才自动启用。macOS 仅完成源码构建及合成输入烟雾测试；三种环境的自检都不代表真实数据 POC，SDK 输入分组、串口原始投影、输出指标和性能仍须在最终麒麟主机根据状态、日志和真实数据验证。
 
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
@@ -60,7 +60,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 - `neurobridge/`：跨平台网关核心，不依赖 macOS、Windows 或 Linux 的启动方式。
 - `web/`：由网关托管、无构建步骤的静态网页；`capture/` 是通过网关 WebSocket 查看耳机原始数据的页面，`b-client-test/` 是完整的 B 端协议联调页。
 - `mac/`：仅 macOS POC 的启动器、蓝牙验证、原生算法 bridge 与本机配置模板。
-- `linux/`：Ubuntu 部署脚本、systemd 单元与日志轮转配置。
+- `linux/`：银河麒麟项目一键流程、Ubuntu 兼容部署脚本、systemd 单元与日志轮转配置。
 - `windows/`：Windows 平台接入说明；当前没有经过验证的 Windows 服务启动器或部署脚本。
 
 网页不再放入平台目录。两个页面都由当前网关的回环 HTTP 服务托管并连接同一个北向 WebSocket，不直接访问 USB 串口，也不控制 systemd 进程。
