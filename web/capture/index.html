@@ -14,7 +14,7 @@
         <h1>耳机数据<br />实时查看</h1>
         <p class="intro">
           本页只连接正在运行的 NeuroBridge 网关，不直接访问 USB 串口。点击“开始接收”后，
-          网关通过 WebSocket 转发 EEG、心率和设备状态；页面打印原始 HEX，并解析序列号和六路 EEG 原始值。
+          网关通过 WebSocket 转发 EEG、心率和设备状态；页面按设备帧合并打印序列号、六路 EEG 原始值和心率。
         </p>
       </header>
 
@@ -74,11 +74,14 @@
         <p class="control-note">
           USB 串口状态依次为：未连接 → 连接中 → 已连接（找到固定握手）→ 校验中（回写握手 ACK 并等待 01；完整重复握手会重新 ACK）→ 校验成功（算法就绪且无响应 E1 已写入）。整个窗口未返回独立 01、算法未就绪或 E1 写入失败会进入校验失败；只有校验成功后网关才接收和转发实时数据。
         </p>
+        <p class="control-note">
+          “窗口”表示网关聚合数据的本地时间范围，默认时长 600ms，不是设备序列号。页面丢包率 = 累计缺失 EEG 包数 ÷ 从首包到最高序列号的累计应收包数；支持 65535 → 0 回绕，重复包不增加已收包数，统计窗口内的乱序补包会减少缺失数。
+        </p>
       </section>
 
       <section class="logs" aria-labelledby="rawTitle">
         <div class="logs-title">
-          <div><h2 id="rawTitle">耳机原始数据</h2><span>网关转发 · 每个字节空格分隔 · 每个数据点用 | 分隔 · 最多保留 800 行</span></div>
+          <div><h2 id="rawTitle">耳机原始数据</h2><span>每行一帧：SEQ + EEG1～EEG6 + HR · 每个字节空格分隔 · 最多保留 800 行</span></div>
           <div class="format-switch" role="group" aria-label="数据显示格式">
             <button id="hexFormatButton" class="format-button active" type="button" aria-pressed="true">16 进制</button>
             <button id="decimalFormatButton" class="format-button" type="button" aria-pressed="false">10 进制</button>
@@ -88,7 +91,7 @@
       </section>
 
       <section class="logs" aria-labelledby="decodedTitle">
-        <div class="logs-title"><h2 id="decodedTitle">数据解析</h2><span>EEG 序列号、六路 24 位无符号原始值、心率原始值</span></div>
+        <div class="logs-title"><h2 id="decodedTitle">数据解析</h2><span>同一行对应同一设备帧；缺失的 EEG 或 HR 会明确标记</span></div>
         <pre id="decodedData" aria-live="polite">等待网关数据……</pre>
       </section>
 

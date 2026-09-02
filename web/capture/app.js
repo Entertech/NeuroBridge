@@ -4,6 +4,9 @@ const PROTOCOL_VERSION = window.NEUROBRIDGE_VERSION.protocolVersion;
 const SUBPROTOCOL = "neurobridge.v1";
 const MAX_DATA_LINES = 800;
 const MAX_PROTOCOL_LINES = 300;
+const SEQUENCE_MODULUS = 0x10000;
+const SEQUENCE_HALF_RANGE = 0x8000;
+const RECENT_SEQUENCE_WINDOW = 4096;
 
 const elements = {
   endpoint: document.querySelector("#endpoint"),
@@ -66,7 +69,23 @@ if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
 }
 
 function createStats() {
-  return { events: 0, eegPackets: 0, eegBytes: 0, hrPackets: 0, hrBytes: 0, lost: 0, receivedUnique: 0, lastSequence: null };
+  return {
+    events: 0,
+    eegPackets: 0,
+    eegBytes: 0,
+    hrPackets: 0,
+    hrBytes: 0,
+    lost: 0,
+    receivedUnique: 0,
+    lastSequence: null,
+    baseExtendedSequence: null,
+    highestExtendedSequence: null,
+    recentSequenceOrder: [],
+    recentSequences: new Set(),
+    duplicates: 0,
+    outOfOrder: 0,
+    late: 0,
+  };
 }
 
 function isConnected() {
@@ -146,86 +165,195 @@ function unsigned24(bytes, offset) {
   return (bytes[offset] * 0x10000) + (bytes[offset + 1] * 0x100) + bytes[offset + 2];
 }
 
-function observeSequence(sequence) {
-  if (stats.lastSequence === null) {
-    stats.receivedUnique += 1;
-    stats.lastSequence = sequence;
-  } else {
-    const distance = (sequence - stats.lastSequence + 0x10000) % 0x10000;
-    if (distance === 0) {
-      appendDataRecord({ type: "note", text: `EEG 重复序列号=${sequence}，不计入丢包率` });
-    } else if (distance <= 0x8000) {
-      stats.receivedUnique += 1;
-      if (distance > 1) {
-        stats.lost += distance - 1;
-        appendDataRecord({ type: "note", text: `EEG 序列跳变 ${stats.lastSequence} → ${sequence}，推算丢失 ${distance - 1} 包` });
-      }
-      stats.lastSequence = sequence;
-    } else {
-      appendDataRecord({ type: "note", text: `EEG 乱序或回退 ${stats.lastSequence} → ${sequence}，不计入丢包率` });
-    }
+function rememberExtendedSequence(extended) {
+  stats.recentSequences.add(extended);
+  stats.recentSequenceOrder.push(extended);
+  while (stats.recentSequenceOrder.length > RECENT_SEQUENCE_WINDOW) {
+    stats.recentSequences.delete(stats.recentSequenceOrder.shift());
   }
 }
 
-function parseEegPacket(packet, windowStartMs, windowEndMs) {
+function updateEstimatedLoss() {
+  if (stats.baseExtendedSequence === null || stats.highestExtendedSequence === null) {
+    stats.lost = 0;
+    return;
+  }
+  const expected = stats.highestExtendedSequence - stats.baseExtendedSequence + 1;
+  stats.lost = Math.max(0, expected - stats.receivedUnique);
+}
+
+function observeSequence(sequence) {
+  if (stats.highestExtendedSequence === null) {
+    stats.baseExtendedSequence = sequence;
+    stats.highestExtendedSequence = sequence;
+    stats.receivedUnique = 1;
+    stats.lastSequence = sequence;
+    rememberExtendedSequence(sequence);
+    updateEstimatedLoss();
+    return;
+  }
+
+  const cycle = stats.highestExtendedSequence - (stats.highestExtendedSequence % SEQUENCE_MODULUS);
+  let extended = cycle + sequence;
+  const delta = extended - stats.highestExtendedSequence;
+  if (delta < -SEQUENCE_HALF_RANGE) extended += SEQUENCE_MODULUS;
+  else if (delta > SEQUENCE_HALF_RANGE) extended -= SEQUENCE_MODULUS;
+
+  const previousHighest = stats.highestExtendedSequence;
+  if (extended > previousHighest) {
+    const gap = extended - previousHighest - 1;
+    stats.highestExtendedSequence = extended;
+    stats.lastSequence = sequence;
+    stats.receivedUnique += 1;
+    rememberExtendedSequence(extended);
+    if (gap > 0) {
+      appendDataRecord({ type: "note", text: `EEG 序列跳变 ${(previousHighest % SEQUENCE_MODULUS)} → ${sequence}，暂缺 ${gap} 包` });
+    }
+  } else if (stats.recentSequences.has(extended)) {
+    stats.duplicates += 1;
+    appendDataRecord({ type: "note", text: `EEG 重复序列号=${sequence}，不增加已收包数` });
+  } else if (extended >= Math.max(stats.baseExtendedSequence, previousHighest - RECENT_SEQUENCE_WINDOW + 1)) {
+    stats.outOfOrder += 1;
+    stats.receivedUnique += 1;
+    rememberExtendedSequence(extended);
+    appendDataRecord({ type: "note", text: `EEG 乱序补到序列号=${sequence}，将重新计算累计丢包` });
+  } else {
+    stats.late += 1;
+    appendDataRecord({ type: "note", text: `EEG 过晚序列号=${sequence}，超出 ${RECENT_SEQUENCE_WINDOW} 包统计窗口` });
+  }
+  updateEstimatedLoss();
+}
+
+function localTimestampLabel(value) {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp)) return String(value);
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const clock = [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
+  return `${clock}.${String(date.getMilliseconds()).padStart(3, "0")}`;
+}
+
+function dataWindowLabel(startMs, endMs) {
+  const durationMs = Number(endMs) - Number(startMs);
+  const duration = Number.isFinite(durationMs) ? `${durationMs}ms` : "时长未知";
+  return `窗口[${localTimestampLabel(startMs)}–${localTimestampLabel(endMs)} · ${duration}]`;
+}
+
+function parseEegPacket(packet, windowStartMs, windowEndMs, packetIndex) {
   if (packet.length !== 20) {
     appendDataRecord({ type: "note", text: `EEG 包长异常：收到 ${packet.length} 字节，期望 20 字节` });
-    return;
+    return null;
   }
   const sequence = (packet[0] << 8) | packet[1];
   const values = Array.from({ length: 6 }, (_, index) => unsigned24(packet, 2 + (index * 3)));
   observeSequence(sequence);
-  appendDataRecord({ type: "eeg", bytes: packet, sequence, values, windowStartMs, windowEndMs });
+  return { type: "eeg", bytes: packet, sequence, values, windowStartMs, windowEndMs, packetIndex };
 }
 
-function printRawStream(name, raw) {
-  if (!raw || raw.encoding !== "base64" || typeof raw.bytesBase64 !== "string") return;
+function decodeRawPackets(name, raw, expectedPacketBytes) {
+  if (!raw) return null;
+  if (raw.encoding !== "base64" || typeof raw.bytesBase64 !== "string") {
+    appendDataRecord({ type: "note", text: `${name} 原始数据格式异常：期望 base64` });
+    return null;
+  }
   try {
     const bytes = bytesFromBase64(raw.bytesBase64);
     const packetBytes = Number(raw.packetBytes);
     const packetCount = Number(raw.packetCount);
-    if (name === "EEG") {
-      stats.eegPackets += packetCount;
-      stats.eegBytes += bytes.length;
-      if (packetBytes > 0) {
-        for (let offset = 0; offset + packetBytes <= bytes.length; offset += packetBytes) {
-          parseEegPacket(bytes.slice(offset, offset + packetBytes), raw.windowStartMs, raw.windowEndMs);
-        }
-        if (bytes.length % packetBytes) appendDataRecord({ type: "note", text: `EEG 窗口存在 ${bytes.length % packetBytes} 个无法组成完整包的尾部字节` });
-      }
-    } else {
-      stats.hrPackets += packetCount;
-      stats.hrBytes += bytes.length;
-      for (const value of bytes) {
-        appendDataRecord({ type: "hr", bytes: Uint8Array.of(value), value, windowStartMs: raw.windowStartMs, windowEndMs: raw.windowEndMs });
-      }
+    if (!Number.isInteger(packetBytes) || packetBytes <= 0) {
+      appendDataRecord({ type: "note", text: `${name} packetBytes 异常：${raw.packetBytes}` });
+      return null;
     }
+    if (packetBytes !== expectedPacketBytes) {
+      appendDataRecord({ type: "note", text: `${name} 单包长度异常：收到 ${packetBytes} 字节，期望 ${expectedPacketBytes} 字节` });
+    }
+    const packets = [];
+    for (let offset = 0; offset + packetBytes <= bytes.length; offset += packetBytes) {
+      packets.push(bytes.slice(offset, offset + packetBytes));
+    }
+    const trailingBytes = bytes.length % packetBytes;
+    if (trailingBytes) appendDataRecord({ type: "note", text: `${name} 窗口存在 ${trailingBytes} 个无法组成完整包的尾部字节` });
+    if (Number.isInteger(packetCount) && packetCount !== packets.length) {
+      appendDataRecord({ type: "note", text: `${name} 包数不一致：声明 ${packetCount} 包，实际解析 ${packets.length} 包` });
+    }
+    return { packets, bytes, packetCount, windowStartMs: raw.windowStartMs, windowEndMs: raw.windowEndMs };
   } catch (error) {
     appendDataRecord({ type: "note", text: `${name} Base64 解码失败：${error.message}` });
+    return null;
+  }
+}
+
+function printRawPayload(payload) {
+  const eeg = decodeRawPackets("EEG", payload.eegRaw, 20);
+  const hr = decodeRawPackets("HR", payload.hrRaw, 1);
+  if (eeg) {
+    stats.eegPackets += Number.isInteger(eeg.packetCount) ? eeg.packetCount : eeg.packets.length;
+    stats.eegBytes += eeg.bytes.length;
+  }
+  if (hr) {
+    stats.hrPackets += Number.isInteger(hr.packetCount) ? hr.packetCount : hr.packets.length;
+    stats.hrBytes += hr.bytes.length;
+  }
+  if (!eeg && !hr) return;
+
+  const eegCount = eeg?.packets.length ?? 0;
+  const hrCount = hr?.packets.length ?? 0;
+  if (eeg && hr && eegCount !== hrCount) {
+    appendDataRecord({ type: "note", text: `同一窗口 EEG/HR 包数不一致：EEG=${eegCount}，HR=${hrCount}；未配对数据仍会单独显示` });
+  }
+
+  const recordCount = Math.max(eegCount, hrCount);
+  for (let index = 0; index < recordCount; index += 1) {
+    const packetIndex = index + 1;
+    const eegPacket = eeg?.packets[index];
+    const hrPacket = hr?.packets[index];
+    const eegRecord = eegPacket ? parseEegPacket(eegPacket, eeg.windowStartMs, eeg.windowEndMs, packetIndex) : null;
+    if (eegRecord && hrPacket) {
+      appendDataRecord({ ...eegRecord, type: "frame", hrBytes: hrPacket, hrValue: hrPacket[0] });
+    } else if (eegRecord) {
+      appendDataRecord(eegRecord);
+    } else if (hrPacket) {
+      appendDataRecord({
+        type: "hr",
+        bytes: hrPacket,
+        value: hrPacket[0],
+        windowStartMs: hr.windowStartMs,
+        windowEndMs: hr.windowEndMs,
+        packetIndex,
+      });
+    }
   }
 }
 
 function rawRecordText(record) {
   if (record.type === "note") return `提示 | ${record.text}`;
-  const window = `窗口[${record.windowStartMs}-${record.windowEndMs}]`;
-  if (record.type === "hr") return `${window} | HR [${formatBytes(record.bytes)}]`;
+  const window = dataWindowLabel(record.windowStartMs, record.windowEndMs);
+  const packet = `数据帧#${record.packetIndex ?? "?"}`;
+  if (record.type === "hr") return `${window} | ${packet} | EEG [缺失] | HR [${formatBytes(record.bytes)}]`;
   const points = [
     `SEQ [${formatBytes(record.bytes.slice(0, 2))}]`,
     ...Array.from({ length: 6 }, (_, index) => `EEG${index + 1} [${formatBytes(record.bytes.slice(2 + (index * 3), 5 + (index * 3)))}]`),
   ];
-  return `${window} | ${points.join(" | ")}`;
+  points.push(record.type === "frame" ? `HR [${formatBytes(record.hrBytes)}]` : "HR [缺失]");
+  return `${window} | ${packet} | ${points.join(" | ")}`;
 }
 
 function decodedRecordText(record) {
   if (record.type === "note") return record.text;
   if (record.type === "hr") {
-    return displayFormat === "hex" ? `HR=0x${record.value.toString(16).padStart(2, "0").toUpperCase()}` : `HR=${record.value}`;
+    return displayFormat === "hex"
+      ? `数据帧#${record.packetIndex ?? "?"} | EEG=缺失 | HR=0x${record.value.toString(16).padStart(2, "0").toUpperCase()}`
+      : `数据帧#${record.packetIndex ?? "?"} | EEG=缺失 | HR=${record.value}`;
   }
   if (displayFormat === "hex") {
     const values = record.values.map((value, index) => `EEG${index + 1}=0x${value.toString(16).padStart(6, "0").toUpperCase()}`);
-    return `SEQ=0x${record.sequence.toString(16).padStart(4, "0").toUpperCase()} | ${values.join(" | ")}`;
+    const hr = record.type === "frame" ? `0x${record.hrValue.toString(16).padStart(2, "0").toUpperCase()}` : "缺失";
+    return `数据帧#${record.packetIndex ?? "?"} | SEQ=0x${record.sequence.toString(16).padStart(4, "0").toUpperCase()} | ${values.join(" | ")} | HR=${hr}`;
   }
-  return `SEQ=${record.sequence} | ${record.values.map((value, index) => `EEG${index + 1}=${value}`).join(" | ")}`;
+  const hr = record.type === "frame" ? record.hrValue : "缺失";
+  return `数据帧#${record.packetIndex ?? "?"} | SEQ=${record.sequence} | ${record.values.map((value, index) => `EEG${index + 1}=${value}`).join(" | ")} | HR=${hr}`;
 }
 
 function renderData() {
@@ -298,8 +426,7 @@ function handleMessage(message) {
   if (data.event === "data" || data.event === "status") {
     stats.events += 1;
     const payload = data.payload || {};
-    printRawStream("EEG", payload.eegRaw);
-    printRawStream("HR", payload.hrRaw);
+    printRawPayload(payload);
     renderData();
     updateMetrics();
   }
@@ -389,6 +516,9 @@ function exportDiagnosticLog() {
     `latestSequence=${stats.lastSequence ?? "none"}`,
     `estimatedLostPackets=${stats.lost}`,
     `receivedUniquePackets=${stats.receivedUnique}`,
+    `duplicatePackets=${stats.duplicates}`,
+    `outOfOrderPackets=${stats.outOfOrder}`,
+    `latePackets=${stats.late}`,
     "rawPayloadExported=false",
     "",
     "[SEQUENCE_AND_PARSE_NOTES]",

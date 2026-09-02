@@ -72,7 +72,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 | Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 首期部署入口；安装为 systemd 服务。 |
 | macOS 真实头环 POC | [`mac/start-poc.command`](mac/start-poc.command) | 一键启动本机采集、算法 bridge 和控制台；详见 [`mac/README.md`](mac/README.md)。 |
 | Windows 网关 | [`windows/README.md`](windows/README.md) | 尚未完成设备、算法和后台服务验证，不能作为交付部署入口。 |
-| 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；可订阅/停止页面数据并打印 EEG、HR 原始值。 |
+| 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；可订阅/停止页面数据，将同一设备帧的序列号、六路 EEG 与 HR 合并成一行，并显示 600ms 窗口和序列号丢包统计。 |
 | 本机可视化/兼容 B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 默认由网关在回环地址提供；兼容模式仍可作为独立 B 端联调页。 |
 
 默认本机场景启动网关后访问 `http://127.0.0.1:8080/` 使用完整联调台，访问 `http://127.0.0.1:8080/capture/` 查看耳机原始数据。两个页面都使用网关动态注入的 `ws://127.0.0.1:8765/neurobridge/v1/ws`。`capture` 的开始/停止按钮只订阅或取消当前网页的数据推送，设备连接、串口、算法、录制和服务生命周期仍由后台网关负责。
