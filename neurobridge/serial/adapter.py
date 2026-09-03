@@ -324,7 +324,7 @@ def _open_serial(path: str, config: SerialConfig) -> Any:
 
 
 class SerialAdapter:
-    """Discover the first handshake device and expose BLE-compatible raw packets."""
+    """Discover the first validated device and expose BLE-compatible raw packets."""
 
     def __init__(
         self,
@@ -386,6 +386,7 @@ class SerialAdapter:
             attempt += 1
             phase = "discover"
             target_selected = False
+            existing_stream = b""
             try:
                 self._reset_stats()
                 await self.status("connectionState", "connecting")
@@ -438,7 +439,7 @@ class SerialAdapter:
                         self.config.reconnect_delay_seconds,
                     )
                     raise ConnectionError("No USB-derived serial candidates were found")
-                phase = "handshake_ack_probe"
+                phase = "candidate_probe"
                 opened_candidate_count = 0
                 rejected_candidate_count = 0
                 probe_failures: list[tuple[str, Exception]] = []
@@ -447,6 +448,7 @@ class SerialAdapter:
                         return
                     client = None
                     try:
+                        phase = "candidate_open"
                         client = await asyncio.to_thread(self.serial_factory, path, self.config)
                         opened_candidate_count += 1
                         LOG.info(
@@ -457,6 +459,31 @@ class SerialAdapter:
                             _safe_log_text(path),
                         )
                         identity = candidate_identities[path]
+                        phase = "existing_stream_observation"
+                        observed_stream = await self._observe_existing_stream(client, path)
+                        if observed_stream:
+                            self._client, self._target = client, path
+                            target_selected = True
+                            existing_stream = observed_stream
+                            self._capture_started = True
+                            LOG.info(
+                                "Serial target selected: path=%s resolvedPath=%s vid=%s pid=%s usbSerial=%s "
+                                "usbParent=%s interface=%s driver=%s physicalPath=%s selectionMode=%s matchBasis=%s",
+                                _safe_log_text(path),
+                                _safe_log_text(identity["resolvedPath"]),
+                                identity["vid"],
+                                identity["pid"],
+                                identity["usbSerial"],
+                                _safe_log_text(identity["usbParent"]),
+                                identity["interface"],
+                                identity["driver"],
+                                _safe_log_text(identity["physicalPath"]),
+                                "existing_valid_frame",
+                                "valid_28_byte_frame",
+                            )
+                            await self.status("connectionState", "validated")
+                            break
+                        phase = "handshake_ack_probe"
                         LOG.info(
                             "Serial active handshake ACK probe started: attempt=%s candidateIndex=%s "
                             "candidateCount=%s path=%s ackBytes=%s expectedResponse=single_byte_0x01",
@@ -485,7 +512,7 @@ class SerialAdapter:
                                 "active_ack_probe",
                                 "standalone_0x01",
                             )
-                            await self.status("connectionState", "connected")
+                            await self.status("connectionState", "validated")
                             break
                         rejected_candidate_count += 1
                     except Exception as exc:
@@ -520,7 +547,6 @@ class SerialAdapter:
                         ) from probe_error
                     raise TimeoutError("No serial candidate passed the active handshake ACK probe")
 
-                await self.status("connectionState", "validating")
                 phase = "algorithm_initialize"
                 LOG.info(
                     "Serial local algorithm preparation started: attempt=%s target=%s startCommandSent=false",
@@ -529,14 +555,25 @@ class SerialAdapter:
                 )
                 algorithm_ready = await self.device_ready()
                 if not algorithm_ready:
-                    await self.status("connectionState", "validation_failed")
                     LOG.error(
-                        "Serial validation failed before start command: attempt=%s target=%s "
+                        "Serial algorithm preparation failed after device validation: attempt=%s target=%s "
                         "reason=local_algorithm_not_ready startCommandSent=false",
                         attempt,
                         _safe_log_text(self._target),
                     )
                     raise ConnectionError("Local algorithm is not ready; serial start command was not sent")
+                if existing_stream:
+                    LOG.info(
+                        "Serial existing capture adopted: attempt=%s target=%s commandSent=false "
+                        "observedValidFrame=true connectionState=validated",
+                        attempt,
+                        _safe_log_text(self._target),
+                    )
+                    phase = "streaming"
+                    await self._stream(existing_stream)
+                    if not self._stopping:
+                        raise ConnectionError("Serial stream ended")
+                    continue
                 phase = "start_command_write"
                 LOG.info(
                     "Serial capture enable started: attempt=%s target=%s algorithmReady=true "
@@ -547,43 +584,22 @@ class SerialAdapter:
                 try:
                     await self._send_command(START_COMMAND, "start")
                 except Exception:
-                    await self.status("connectionState", "validation_failed")
                     LOG.exception(
-                        "Serial capture enable failed: attempt=%s target=%s command=E1 "
+                        "Serial capture enable failed after device validation: attempt=%s target=%s command=E1 "
                         "reason=control_write_error responseExpected=false",
                         attempt,
                         _safe_log_text(self._target),
                     )
                     raise
                 self._capture_started = True
-                phase = "start_frame_validation"
-                try:
-                    initial_stream = await self._await_first_valid_frame()
-                except Exception as exc:
-                    await self.status("connectionState", "validation_failed")
-                    log_start_failure = (
-                        LOG.error
-                        if isinstance(exc, (ConnectionError, TimeoutError, OSError))
-                        else LOG.exception
-                    )
-                    log_start_failure(
-                        "Serial capture start validation failed: attempt=%s target=%s "
-                        "reason=no_valid_frame_after_E1 timeoutSeconds=%.3f",
-                        attempt,
-                        _safe_log_text(self._target),
-                        self.config.data_timeout_seconds,
-                    )
-                    raise
-                await self.status("connectionState", "validated")
                 LOG.info(
                     "Serial capture enabled: attempt=%s target=%s command=E1 "
-                    "responseExpected=false connectionState=validated "
-                    "validationMode=first_valid_frame_after_E1",
+                    "responseExpected=false connectionState=validated deviceValidationMode=ack_01",
                     attempt,
                     _safe_log_text(self._target),
                 )
                 phase = "streaming"
-                await self._stream(initial_stream)
+                await self._stream(b"")
                 if not self._stopping:
                     raise ConnectionError("Serial stream ended")
             except asyncio.CancelledError:
@@ -622,15 +638,12 @@ class SerialAdapter:
                 )
                 await asyncio.sleep(self.config.reconnect_delay_seconds)
 
-    async def _await_first_valid_frame(self) -> bytes:
-        """Confirm E1 actually started EEG frames before exposing validated state."""
+    async def _observe_existing_stream(self, client: Any, path: str) -> bytes:
+        """Return buffered bytes when a candidate is already sending valid frames."""
 
-        if self._client is None:
-            raise ConnectionError("Cannot validate serial capture start without a client")
-        client = self._client
         buffer = bytearray()
         started = time.monotonic()
-        deadline = started + self.config.data_timeout_seconds
+        deadline = started + self.config.handshake_timeout_ms / 1000
         previous_timeout = getattr(client, "timeout", None)
         try:
             while not self._stopping and time.monotonic() < deadline:
@@ -646,9 +659,9 @@ class SerialAdapter:
                     del buffer[: len(buffer) - self.config.max_buffer_bytes]
                 if _valid_frame_offset(buffer) is not None:
                     LOG.info(
-                        "Serial capture start confirmed: target=%s durationMs=%s "
-                        "bufferedBytes=%s validFrameBytes=%s payloadLogged=false",
-                        _safe_log_text(self._target),
+                        "Serial existing capture detected: path=%s durationMs=%s bufferedBytes=%s "
+                        "validFrameBytes=%s nextState=validated payloadLogged=false",
+                        _safe_log_text(path),
                         int((time.monotonic() - started) * 1000),
                         len(buffer),
                         FRAME_BYTES,
@@ -656,10 +669,14 @@ class SerialAdapter:
                     return bytes(buffer)
         finally:
             client.timeout = previous_timeout
-        raise TimeoutError(
-            f"No valid serial data frame after E1 for "
-            f"{self.config.data_timeout_seconds:.3f} seconds"
+        LOG.info(
+            "Serial existing capture not detected: path=%s durationMs=%s bufferedBytes=%s "
+            "nextAction=active_ack_probe payloadLogged=false",
+            _safe_log_text(path),
+            int((time.monotonic() - started) * 1000),
+            len(buffer),
         )
+        return b""
 
     async def _send_handshake_ack(self, client: Any | None = None) -> bytes:
         client = client or self._client

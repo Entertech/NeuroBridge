@@ -287,7 +287,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("lastErrorType=PermissionError", reasons[0])
         self.assertIn("Permission denied", reasons[0])
         rendered = "\n".join(logs.output)
-        self.assertIn("phase=handshake_ack_probe", rendered)
+        self.assertIn("phase=candidate_open", rendered)
         self.assertNotIn("passed the active handshake ACK probe", rendered)
 
     async def test_non_01_handshake_ack_response_is_rejected_without_logging_payload(self) -> None:
@@ -482,7 +482,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             states.append((name, value))
 
         adapter = SerialAdapter(
-            SerialConfig(command_response_timeout_ms=30),
+            SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=30),
             packet,
             status,
             ready,
@@ -496,8 +496,6 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             states,
             [
                 ("connectionState", "connecting"),
-                ("connectionState", "connected"),
-                ("connectionState", "validating"),
                 ("connectionState", "validated"),
                 ("connectionState", "disconnected"),
             ],
@@ -505,8 +503,12 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(states[-1], ("connectionState", "disconnected"))
         self.assertTrue(client.closed)
 
-    async def test_process_restart_repeats_active_ack_e1_and_first_frame_validation(self) -> None:
-        config = SerialConfig(command_response_timeout_ms=30, data_timeout_seconds=0.1)
+    async def test_process_restart_repeats_active_ack_and_e1(self) -> None:
+        config = SerialConfig(
+            handshake_timeout_ms=10,
+            command_response_timeout_ms=30,
+            data_timeout_seconds=0.1,
+        )
         for sequence in (7, 8):
             client = AckAndStartDrivenSerial(frame(sequence, 4, 63))
             adapter: SerialAdapter
@@ -526,6 +528,38 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             await adapter.run()
             self.assertEqual(client.writes, [HANDSHAKE, START_COMMAND, b"\xE0"])
 
+    async def test_existing_valid_frame_is_validated_without_ack_or_e1(self) -> None:
+        client = FakeSerial([frame(21, 6, 65)])
+        states: list[tuple[str, object]] = []
+        adapter: SerialAdapter
+
+        async def receive_and_stop(event: DevicePacket) -> None:
+            if event.channel == "ff31":
+                await adapter.stop()
+
+        async def status(name: str, value: object) -> None:
+            states.append((name, value))
+
+        adapter = SerialAdapter(
+            SerialConfig(handshake_timeout_ms=30),
+            receive_and_stop,
+            status,
+            ready,
+            candidate_provider=lambda _config: ["/dev/ttyUSB0"],
+            serial_factory=lambda _path, _config: client,
+        )
+        await adapter.run()
+
+        self.assertEqual(client.writes, [b"\xE0"])
+        self.assertEqual(
+            states,
+            [
+                ("connectionState", "connecting"),
+                ("connectionState", "validated"),
+                ("connectionState", "disconnected"),
+            ],
+        )
+
     async def test_candidate_without_active_ack_01_never_receives_e1(self) -> None:
         client = SlowEmptySerial([])
         adapter: SerialAdapter
@@ -534,7 +568,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             await adapter.stop()
 
         adapter = SerialAdapter(
-            SerialConfig(command_response_timeout_ms=30),
+            SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=30),
             noop,
             noop,
             ready,
@@ -554,7 +588,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
                 await adapter.stop()
 
         adapter = SerialAdapter(
-            SerialConfig(command_response_timeout_ms=30),
+            SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=30),
             receive_and_stop,
             noop,
             ready,
@@ -574,7 +608,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         await adapter.run()
         self.assertEqual(client.writes, [HANDSHAKE, START_COMMAND, b"\xE0"])
 
-    async def test_e1_requires_first_valid_frame_before_validated(self) -> None:
+    async def test_ack_01_validates_before_e1_produces_a_frame(self) -> None:
         client = AckAndStartDrivenSerial(None)
         states: list[tuple[str, object]] = []
         adapter: SerialAdapter
@@ -586,7 +620,11 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             await adapter.stop()
 
         adapter = SerialAdapter(
-            SerialConfig(command_response_timeout_ms=30, data_timeout_seconds=0.03),
+            SerialConfig(
+                handshake_timeout_ms=10,
+                command_response_timeout_ms=30,
+                data_timeout_seconds=0.03,
+            ),
             noop,
             status,
             ready,
@@ -596,11 +634,11 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         await adapter.run()
         self.assertEqual(client.writes, [HANDSHAKE, START_COMMAND, b"\xE0"])
-        self.assertIn(("connectionState", "validation_failed"), states)
-        self.assertNotIn(("connectionState", "validated"), states)
+        self.assertIn(("connectionState", "validated"), states)
+        self.assertNotIn(("connectionState", "validation_failed"), states)
 
     async def test_algorithm_not_ready_after_handshake_validation_blocks_e1(self) -> None:
-        client = FakeSerial([b"\x01"])
+        client = AckAndStartDrivenSerial(None)
         states: list[tuple[str, object]] = []
         errors: list[str] = []
         adapter: SerialAdapter
@@ -616,7 +654,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             await adapter.stop()
 
         adapter = SerialAdapter(
-            SerialConfig(command_response_timeout_ms=30),
+            SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=30),
             noop,
             status,
             not_ready,
@@ -632,9 +670,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             states,
             [
                 ("connectionState", "connecting"),
-                ("connectionState", "connected"),
-                ("connectionState", "validating"),
-                ("connectionState", "validation_failed"),
+                ("connectionState", "validated"),
                 ("connectionState", "disconnected"),
             ],
         )
@@ -657,7 +693,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             await adapter.stop()
 
         adapter = SerialAdapter(
-            SerialConfig(command_response_timeout_ms=30),
+            SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=30),
             packet,
             status,
             ready,
@@ -680,8 +716,8 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("none returned standalone 0x01", "\n".join(logs.output))
 
-    async def test_partial_repeated_handshake_times_out_and_never_sends_e1(self) -> None:
-        client = FakeSerial([HANDSHAKE, b"\xAA"])
+    async def test_non_frame_existing_bytes_then_ack_timeout_never_sends_e1(self) -> None:
+        client = SlowEmptySerial([HANDSHAKE, b"\xAA"])
         states: list[tuple[str, object]] = []
         packets: list[DevicePacket] = []
         adapter: SerialAdapter
@@ -693,7 +729,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             await adapter.stop()
 
         adapter = SerialAdapter(
-            SerialConfig(command_response_timeout_ms=30),
+            SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=30),
             packets.append,
             status,
             ready,
@@ -704,10 +740,9 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
             await adapter.run()
 
-        self.assertEqual(client.writes, [HANDSHAKE, HANDSHAKE])
+        self.assertEqual(client.writes, [HANDSHAKE])
         self.assertEqual(packets, [])
         self.assertIn(("connectionState", "validation_failed"), states)
         rendered = "\n".join(logs.output)
-        self.assertIn("partialHandshakeBytes=1", rendered)
         self.assertIn("none returned standalone 0x01", rendered)
         self.assertNotIn("connectionState=validated", rendered)

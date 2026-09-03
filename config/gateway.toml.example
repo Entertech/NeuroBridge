@@ -48,6 +48,8 @@ type = "serial"
 device = "auto"
 candidate_types = ["ttyACM", "ttyUSB"]
 baud_rate = 115200
+# Observe each newly opened candidate for an already-running valid 28-byte EEG
+# stream before sending the active handshake ACK.
 handshake_timeout_ms = 1000
 # Wait this long for a standalone 0x01 after the 7-byte handshake ACK. Complete
 # periodic handshakes inside this window are re-ACKed and do not end the wait.
