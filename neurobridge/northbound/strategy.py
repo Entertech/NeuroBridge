@@ -74,16 +74,25 @@ class LocalBrowserAccessStrategy(AccessStrategy):
 class WiredBSideAccessStrategy(AccessStrategy):
     mode = "wired_b_side"
 
+    _RFC1918_NETWORKS = tuple(
+        ipaddress.ip_network(cidr)
+        for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+    )
+
+    @classmethod
+    def _is_rfc1918_ipv4(cls, address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+        return address.version == 4 and any(address in network for network in cls._RFC1918_NETWORKS)
+
     def validate(self, config: GatewayConfig) -> None:
         address = ipaddress.ip_address(config.server.host)
-        if address.is_loopback or not address.is_private:
-            raise ValueError("wired_b_side requires server.host to be a non-loopback private IP address")
+        if not self._is_rfc1918_ipv4(address):
+            raise ValueError("wired_b_side requires server.host to be an RFC1918 IPv4 address")
         if config.local_ui.enabled:
             raise ValueError("wired_b_side requires local_ui.enabled = false")
         if config.download.enabled:
             download_address = ipaddress.ip_address(config.download.host)
-            if download_address.is_loopback or not download_address.is_private:
-                raise ValueError("wired_b_side requires download.host to be a non-loopback private IP address")
+            if not self._is_rfc1918_ipv4(download_address):
+                raise ValueError("wired_b_side requires download.host to be an RFC1918 IPv4 address")
 
     def websocket_origins(self, config: GatewayConfig) -> None:
         # Preserve compatibility with non-browser clients and the published

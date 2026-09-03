@@ -825,6 +825,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("newGroups=", script)
         self.assertIn("accountGroupMembershipChanged=", script)
         self.assertIn("sessionGroupState=", script)
+        self.assertIn("no serial group membership was changed", script)
+        self.assertNotIn("for tty_group in dialout uucp", script)
         self.assertIn("Project mode --config must stay under", script)
         help_result = subprocess.run(
             ["bash", str(script_path), "--help"],
@@ -998,9 +1000,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('rawPayloadExported=false', javascript)
         self.assertIn('key === "bytesBase64"', javascript)
         self.assertIn("URL.createObjectURL", javascript)
-        self.assertIn("等待设备返回校验结果 01", javascript)
-        self.assertIn("完整周期握手会重新 ACK", javascript)
-        self.assertIn("E1 本身没有响应", javascript)
+        self.assertIn("已有合法数据流或 ACK 返回独立 01", javascript)
+        self.assertIn("算法初始化和 E1 发生在设备验证之后", javascript)
+        self.assertIn("已有数据流时不会发送 E1", javascript)
+        self.assertNotIn("请从日志区分 ACK 未返回 01、算法未就绪或 E1 写入失败", javascript)
         self.assertIn("无响应 E1 已写入", html)
         self.assertIn("完整重复握手会重新 ACK", html)
         self.assertNotIn("navigator.serial", javascript)

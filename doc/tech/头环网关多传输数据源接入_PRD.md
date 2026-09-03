@@ -448,6 +448,7 @@ lossRatePercent = lostPackets / expectedPackets × 100%
 - 报文 `protocolVersion` 保持版本台账中的当前值；
 - `getStatus`、`getLatest`、`subscribe` 和 `unsubscribe` 的行为保持不变；
 - 实时与录播继续分别使用 `mode="live"` 和 `mode="replay"`；
+- 串口 `not_connected`、`validated`、`validation_failed` 等状态只供网关内部控制与日志使用；北向 `getStatus` 和状态事件固定映射为 v0.2 三态：`validated → connected`、`connecting → connecting`，未找到设备、验证失败或断开均为 `disconnected`；
 - 不向 B 端增加 `transport`、`deviceId` 或 `gatewayId`；
 - 本机前端和兼容 B 端不需要知道或适配设备侧传输方式；
 - 如果后续确需向 B 端暴露传输类型或新增错误字段，必须按北向协议发布门禁另行立项。

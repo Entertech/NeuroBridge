@@ -63,9 +63,10 @@ max_buffer_bytes = 65536
 # jointly confirmed with the device team because DTR/RTS can reset hardware.
 dtr = false
 rts = false
-# The headset does not initiate this handshake. Every connection attempt sends
-# the fixed 7-byte ACK, requires standalone 0x01, then sends E1 and requires a
-# valid 28-byte EEG frame before the device becomes validated.
+# A valid stream already present, or a standalone 0x01 after the active 7-byte
+# ACK, validates the device immediately. Existing streams skip ACK and E1. On
+# the ACK path, algorithm initialization and write-only E1 happen only after
+# validation; algorithm/E1 failure is not classified as validation_failed.
 
 [ble]
 # Ignored while data_source.type = "serial". Enable only for BLE regression.

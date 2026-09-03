@@ -223,6 +223,15 @@ def load(path: str | Path) -> GatewayConfig:
     # dormant strategy sections for a controlled restart-based switch without
     # loading their drivers or being blocked by parameters that are not active.
     recording_directory = Path(recording.get("directory", "./recordings"))
+    ble_config = BleConfig(False, None, "0000ff10-1212-abcd-1523-785feabcd123", 5, 3)
+    if data_source_type == "bluetooth":
+        ble_config = BleConfig(
+            bool(ble.get("enabled", False)),
+            ble.get("device_name") or None,
+            str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(),
+            int(ble.get("scan_timeout_seconds", 5)),
+            int(ble.get("reconnect_delay_seconds", 3)),
+        )
     serial_config = SerialConfig()
     if data_source_type == "serial":
         serial_device = str(serial.get("device", "auto"))
@@ -274,7 +283,7 @@ def load(path: str | Path) -> GatewayConfig:
         )
     config = GatewayConfig(
         server=ServerConfig(host, port, endpoint),
-        ble=BleConfig(bool(ble.get("enabled", False)), ble.get("device_name") or None, str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(), int(ble.get("scan_timeout_seconds", 5)), int(ble.get("reconnect_delay_seconds", 3))),
+        ble=ble_config,
         recording=RecordingConfig(recording_directory, recording.get("subject_id") or None, recording.get("replay_recording_id") or None, replay_speed),
         # Ubuntu installation places the locked native bridge at this fixed path.
         # ``enabled`` is therefore the only setting an operator needs to change

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import sys
+import tempfile
 import time
 from types import SimpleNamespace
 import unittest
@@ -17,6 +18,7 @@ from neurobridge.serial.adapter import (
     START_COMMAND,
     SequenceLossTracker,
     SerialAdapter,
+    discover_serial_candidates,
     _open_serial,
     _serial_discovery_inventory,
     _serial_candidate_order_key,
@@ -100,6 +102,25 @@ async def noop(*_args) -> None:
 
 async def ready() -> bool:
     return True
+
+
+class SerialDiscoveryTests(unittest.TestCase):
+    def test_fixed_path_rejects_non_usb_tty_character_devices(self) -> None:
+        for path in ("/dev/null", "/dev/tty"):
+            with self.subTest(path=path):
+                self.assertEqual(discover_serial_candidates(SerialConfig(device=path)), [])
+
+    def test_fixed_path_disappearing_before_discovery_returns_no_candidate(self) -> None:
+        self.assertEqual(
+            discover_serial_candidates(SerialConfig(device="/dev/ttyUSB999999")),
+            [],
+        )
+
+    def test_fixed_path_rejects_regular_file_named_like_usb_tty(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "ttyUSB0"
+            path.write_bytes(b"")
+            self.assertEqual(discover_serial_candidates(SerialConfig(device=str(path))), [])
 
 
 class SequenceLossTrackerTests(unittest.TestCase):

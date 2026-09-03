@@ -219,18 +219,8 @@ if (( ${#tty_candidates[@]} )); then
     fi
   done
 else
-  echo "WARNING: no ttyACM/ttyUSB device exists; serial permissions cannot be verified yet." >&2
-  echo "Inspect the currently connected device: sudo $root_dir/linux/diagnose-kylin-usb-serial.sh" >&2
-  for tty_group in dialout uucp; do
-    if [[ $permission_user != root ]] && getent group "$tty_group" >/dev/null 2>&1; then
-      contains_value "$tty_group" "${groups_required[@]}" || groups_required+=("$tty_group")
-      if ! id -nG "$permission_user" | tr ' ' '\n' | grep -Fxq -- "$tty_group"; then
-        usermod -aG "$tty_group" "$permission_user"
-        contains_value "$tty_group" "${groups_newly_added[@]}" \
-          || groups_newly_added+=("$tty_group")
-      fi
-    fi
-  done
+  echo "WARNING: no ttyACM/ttyUSB device exists; no serial group membership was changed." >&2
+  echo "Connect and detect the actual device before granting permissions: sudo $root_dir/linux/diagnose-kylin-usb-serial.sh" >&2
 fi
 
 PYTHONPATH=$root_dir "$python_path" -m neurobridge.serial_setup --config "$config_path" --check-only

@@ -13,7 +13,7 @@ from neurobridge.config import AlgorithmConfig, BleConfig, DataSourceConfig, Gat
 from neurobridge.device.packet import DevicePacket
 from neurobridge.algorithm.runner import AlgorithmRunner
 from neurobridge.ble.flowtime import FF51, REQUIRED_NOTIFICATION_CHARACTERISTICS, FlowtimeAdapter, wear_state_from_packet
-from neurobridge.business.gateway import ClientSession, Gateway, REPLAY_NOT_AVAILABLE_REASON
+from neurobridge.business.gateway import ClientSession, Gateway, REPLAY_NOT_AVAILABLE_REASON, Subscription
 from neurobridge.ble.packets import DataWindow, EEG_PACKET_BYTES, HR_PACKET_BYTES, RawPacket, WindowAssembler
 from neurobridge.business.recording import RecordingStore
 
@@ -193,6 +193,82 @@ class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_serial_internal_states_are_mapped_to_locked_northbound_states(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway_config = config(Path(directory))
+            gateway_config = GatewayConfig(
+                gateway_config.server,
+                gateway_config.ble,
+                gateway_config.recording,
+                gateway_config.algorithm,
+                data_source=DataSourceConfig("serial"),
+            )
+            gateway = Gateway(gateway_config)
+
+            expected = {
+                "not_connected": "disconnected",
+                "connecting": "connecting",
+                "validation_failed": "disconnected",
+                "validated": "connected",
+            }
+            sent: list[dict] = []
+
+            async def send(item: dict) -> None:
+                sent.append(item)
+
+            session = ClientSession()
+            for index, (internal, northbound) in enumerate(expected.items()):
+                await gateway.update_status("connectionState", internal)
+                self.assertEqual(gateway.status["connectionState"], internal)
+                await gateway.handle(
+                    session,
+                    json.dumps(
+                        {
+                            "protocolVersion": "1.0",
+                            "messageType": "request",
+                            "requestId": f"status-{index}",
+                            "action": "getStatus",
+                            "params": {},
+                        }
+                    ),
+                    send,
+                )
+                self.assertEqual(sent[-1]["data"]["result"]["connectionState"], northbound)
+            await gateway.close_session(session)
+            await gateway.stop()
+
+    async def test_serial_status_events_use_locked_northbound_connection_states(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway_config = config(Path(directory))
+            gateway_config = GatewayConfig(
+                gateway_config.server,
+                gateway_config.ble,
+                gateway_config.recording,
+                gateway_config.algorithm,
+                data_source=DataSourceConfig("serial"),
+            )
+            gateway = Gateway(gateway_config)
+            sent: list[dict] = []
+
+            async def send(item: dict) -> None:
+                sent.append(item)
+
+            session = ClientSession()
+            session.subscriptions["sub-status"] = Subscription(
+                "sub-status", frozenset({"status"}), False, send
+            )
+            gateway.sessions.add(session)
+            for internal, northbound in (
+                ("connecting", "connecting"),
+                ("validation_failed", "disconnected"),
+                ("validated", "connected"),
+            ):
+                await gateway.update_status("connectionState", internal)
+                event = sent[-1]
+                self.assertEqual(event["data"]["payload"]["status"]["connectionState"], northbound)
+            await gateway.close_session(session)
+            await gateway.stop()
+
     async def test_capture_summary_contains_counts_and_timing_without_raw_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             gateway = Gateway(config(Path(directory)))

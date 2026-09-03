@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from glob import glob
 import logging
 from pathlib import Path
+import re
 import time
 from typing import Any, Awaitable, Callable, Iterable
 
@@ -182,20 +183,18 @@ def discover_serial_candidates(config: SerialConfig) -> list[str]:
     """Return stable, de-duplicated USB TTY candidates in deterministic order."""
 
     if config.device != "auto":
-        return [config.device] if Path(config.device).exists() else []
+        return [config.device] if _resolved_usb_tty(config.device, config.candidate_types) else []
     paths = sorted(glob("/dev/serial/by-id/*"))
     for candidate_type in config.candidate_types:
         paths.extend(sorted(glob(f"/dev/{candidate_type}*")))
     candidates: list[str] = []
     resolved_seen: set[str] = set()
     for value in paths:
-        path = Path(value)
-        try:
-            resolved = str(path.resolve(strict=True))
-        except OSError:
+        resolved = _resolved_usb_tty(value, config.candidate_types)
+        if resolved is None:
             continue
-        if Path(resolved).name.startswith(tuple(config.candidate_types)) and resolved not in resolved_seen:
-            candidates.append(str(path))
+        if resolved not in resolved_seen:
+            candidates.append(value)
             resolved_seen.add(resolved)
     # Prefer persistent by-id aliases. Within each group, use the USB parent,
     # physical sysfs path, and interface number so multi-interface devices keep
@@ -204,6 +203,23 @@ def discover_serial_candidates(config: SerialConfig) -> list[str]:
         candidates,
         key=lambda candidate: _serial_candidate_order_key(candidate, serial_candidate_metadata(candidate)),
     )
+
+
+def _resolved_usb_tty(path: str, candidate_types: tuple[str, ...]) -> str | None:
+    """Resolve a configured node only when it is a USB-derived ttyACM/ttyUSB device."""
+
+    try:
+        resolved = Path(path).resolve(strict=True)
+    except OSError:
+        return None
+    allowed_names = "|".join(re.escape(candidate_type) for candidate_type in candidate_types)
+    if re.fullmatch(rf"(?:{allowed_names})[0-9]+", resolved.name) is None:
+        return None
+    if not resolved.is_char_device():
+        return None
+    if serial_candidate_metadata(path)["usbParent"] is None:
+        return None
+    return str(resolved)
 
 
 def _serial_candidate_order_key(candidate: str, metadata: dict[str, str | None]) -> tuple[int, str, int, str, str]:

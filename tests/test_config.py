@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
@@ -81,6 +82,19 @@ class DeviceStrategyConfigurationTests(unittest.TestCase):
             self.assertEqual(config.data_source.type, "bluetooth")
             self.assertEqual(config.serial.baud_rate, 115200)
 
+    def test_unselected_ble_parameters_are_not_parsed_or_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            path.write_text(
+                '[data_source]\ntype = "serial"\n'
+                '[ble]\nscan_timeout_seconds = "bad"\nreconnect_delay_seconds = "bad"\n',
+                encoding="utf-8",
+            )
+            config = load(path)
+            self.assertEqual(config.data_source.type, "serial")
+            self.assertEqual(config.ble.scan_timeout_seconds, 5)
+            self.assertEqual(config.ble.reconnect_delay_seconds, 3)
+
     def test_native_usb_is_a_reserved_strategy_value(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gateway.toml"
@@ -148,6 +162,47 @@ class AccessStrategyConfigurationTests(unittest.TestCase):
             self.assertEqual(config.access.mode, "wired_b_side")
             self.assertFalse(config.local_ui.enabled)
             self.assertIsNone(access_strategy(config.access.mode).websocket_origins(config))
+
+    def test_wired_strategy_rejects_unspecified_and_link_local_bindings(self) -> None:
+        for host in ("0.0.0.0", "169.254.10.20"):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "gateway.toml"
+                path.write_text(
+                    '[access]\nmode = "wired_b_side"\n'
+                    '[local_ui]\nenabled = false\n'
+                    f'[server]\nhost = "{host}"\n',
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "RFC1918"):
+                    load(path)
+
+    def test_wired_strategy_explicitly_rejects_all_non_rfc1918_address_classes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            path.write_text(
+                '[access]\nmode = "wired_b_side"\n'
+                '[local_ui]\nenabled = false\n'
+                '[server]\nhost = "192.168.88.10"\n',
+                encoding="utf-8",
+            )
+            config = load(path)
+            strategy = access_strategy(config.access.mode)
+            for host in ("0.0.0.0", "169.254.10.20", "224.0.0.1", "240.0.0.1", "fd00::1"):
+                with self.subTest(host=host), self.assertRaisesRegex(ValueError, "RFC1918"):
+                    strategy.validate(replace(config, server=replace(config.server, host=host)))
+
+    def test_wired_strategy_rejects_non_rfc1918_download_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            path.write_text(
+                '[access]\nmode = "wired_b_side"\n'
+                '[local_ui]\nenabled = false\n'
+                '[server]\nhost = "192.168.88.10"\n'
+                '[download]\nenabled = true\nhost = "169.254.10.20"\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "download.host.*RFC1918"):
+                load(path)
 
     def test_legacy_private_address_configuration_infers_wired_strategy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

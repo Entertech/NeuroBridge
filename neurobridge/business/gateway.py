@@ -454,7 +454,25 @@ class Gateway:
         return data
 
     def status_result(self) -> dict:
-        return {"gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": self.mode(), **self.status, "availableStreams": sorted(self.available_streams()), "serverTimeMs": now_ms()}
+        return {"gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": self.mode(), **self._northbound_status(), "availableStreams": sorted(self.available_streams()), "serverTimeMs": now_ms()}
+
+    def _northbound_status(self) -> dict[str, Any]:
+        """Project transport-specific state onto the locked v0.2 status schema."""
+
+        status = {
+            name: self.status[name]
+            for name in ("connectionState", "wearState", "batteryPercent", "signalQuality", "algorithmState")
+        }
+        status["connectionState"] = {
+            "validated": "connected",
+            "connected": "connected",
+            "connecting": "connecting",
+            "validating": "connecting",
+            "not_connected": "disconnected",
+            "validation_failed": "disconnected",
+            "disconnected": "disconnected",
+        }.get(str(status["connectionState"]), "disconnected")
+        return status
 
     def available_streams(self) -> set[str]:
         available = {"status"}
@@ -476,7 +494,7 @@ class Gateway:
         for session in tuple(self.sessions):
             for subscription in tuple(session.subscriptions.values()):
                 if "status" in subscription.streams:
-                    payload = {"status": {name: self.status[name] for name in ("connectionState", "wearState", "batteryPercent", "signalQuality", "algorithmState")}}
+                    payload = {"status": self._northbound_status()}
                     await subscription.send(envelope(200, self.event_data("status", subscription.id, now_ms(), self.mode(), True, payload)))
 
     def error(self, request_id: str | None, error: ProtocolError) -> dict:
