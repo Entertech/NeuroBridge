@@ -17,6 +17,7 @@ const elements = {
   stop: document.querySelector("#stopButton"),
   clear: document.querySelector("#clearButton"),
   export: document.querySelector("#exportButton"),
+  exportRaw: document.querySelector("#exportRawButton"),
   gatewayState: document.querySelector("#gatewayState"),
   gatewayMessage: document.querySelector("#gatewayMessage"),
   mode: document.querySelector("#modeValue"),
@@ -39,6 +40,7 @@ const elements = {
 let socket = null;
 let subscriptionId = null;
 let dataRecords = [];
+let rawRecords = [];
 let protocolLines = [];
 let stats = createStats();
 let displayFormat = "hex";
@@ -100,6 +102,19 @@ function timeLabel() {
   return new Date().toLocaleTimeString("zh-CN", { hour12: false });
 }
 
+function timestampLabel(value) {
+  const timestamp = Number(value);
+  let date = Number.isFinite(timestamp) ? new Date(timestamp) : new Date();
+  if (Number.isNaN(date.getTime())) date = new Date();
+  const calendar = [date.getFullYear(), date.getMonth() + 1, date.getDate()]
+    .map((part, index) => String(part).padStart(index === 0 ? 4 : 2, "0"))
+    .join("-");
+  const clock = [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
+  return `${calendar} ${clock}.${String(date.getMilliseconds()).padStart(3, "0")}`;
+}
+
 function setState(state, label, message) {
   elements.gatewayState.dataset.state = state;
   elements.gatewayState.textContent = label;
@@ -113,6 +128,7 @@ function refreshControls() {
   elements.status.disabled = !connected;
   elements.start.disabled = !connected || Boolean(subscriptionId);
   elements.stop.disabled = !connected || !subscriptionId;
+  elements.exportRaw.disabled = rawRecords.length === 0;
   elements.subscriptionState.textContent = subscriptionId ? `接收中 · ${subscriptionId}` : "未订阅";
 }
 
@@ -124,8 +140,14 @@ function appendLine(lines, target, line, maximum) {
 }
 
 function appendDataRecord(record) {
-  dataRecords.push({ ...record, time: timeLabel() });
+  const timestampMs = Number.isFinite(Number(record.timestampMs)) ? Number(record.timestampMs) : Date.now();
+  dataRecords.push({ ...record, timestampMs });
   if (dataRecords.length > MAX_DATA_LINES) dataRecords.splice(0, dataRecords.length - MAX_DATA_LINES);
+}
+
+function appendRawRecord(bytes, timestampMs) {
+  rawRecords.push({ bytes: Uint8Array.from(bytes), timestampMs: Number.isFinite(Number(timestampMs)) ? Number(timestampMs) : Date.now() });
+  if (rawRecords.length > MAX_DATA_LINES) rawRecords.splice(0, rawRecords.length - MAX_DATA_LINES);
 }
 
 function appendProtocol(direction, value) {
@@ -224,23 +246,6 @@ function observeSequence(sequence) {
   updateEstimatedLoss();
 }
 
-function localTimestampLabel(value) {
-  const timestamp = Number(value);
-  if (!Number.isFinite(timestamp)) return String(value);
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return String(value);
-  const clock = [date.getHours(), date.getMinutes(), date.getSeconds()]
-    .map((part) => String(part).padStart(2, "0"))
-    .join(":");
-  return `${clock}.${String(date.getMilliseconds()).padStart(3, "0")}`;
-}
-
-function dataWindowLabel(startMs, endMs) {
-  const durationMs = Number(endMs) - Number(startMs);
-  const duration = Number.isFinite(durationMs) ? `${durationMs}ms` : "时长未知";
-  return `窗口[${localTimestampLabel(startMs)}–${localTimestampLabel(endMs)} · ${duration}]`;
-}
-
 function parseEegPacket(packet, windowStartMs, windowEndMs, packetIndex) {
   if (packet.length !== 20) {
     appendDataRecord({ type: "note", text: `EEG 包长异常：收到 ${packet.length} 字节，期望 20 字节` });
@@ -249,7 +254,7 @@ function parseEegPacket(packet, windowStartMs, windowEndMs, packetIndex) {
   const sequence = (packet[0] << 8) | packet[1];
   const values = Array.from({ length: 6 }, (_, index) => unsigned24(packet, 2 + (index * 3)));
   observeSequence(sequence);
-  return { type: "eeg", bytes: packet, sequence, values, windowStartMs, windowEndMs, packetIndex };
+  return { type: "eeg", bytes: packet, sequence, values, windowStartMs, windowEndMs, packetIndex, timestampMs: windowEndMs };
 }
 
 function decodeRawPackets(name, raw, expectedPacketBytes) {
@@ -274,11 +279,12 @@ function decodeRawPackets(name, raw, expectedPacketBytes) {
       packets.push(bytes.slice(offset, offset + packetBytes));
     }
     const trailingBytes = bytes.length % packetBytes;
+    const trailing = trailingBytes ? bytes.slice(bytes.length - trailingBytes) : null;
     if (trailingBytes) appendDataRecord({ type: "note", text: `${name} 窗口存在 ${trailingBytes} 个无法组成完整包的尾部字节` });
     if (Number.isInteger(packetCount) && packetCount !== packets.length) {
       appendDataRecord({ type: "note", text: `${name} 包数不一致：声明 ${packetCount} 包，实际解析 ${packets.length} 包` });
     }
-    return { packets, bytes, packetCount, windowStartMs: raw.windowStartMs, windowEndMs: raw.windowEndMs };
+    return { packets, trailing, bytes, packetCount, windowStartMs: raw.windowStartMs, windowEndMs: raw.windowEndMs };
   } catch (error) {
     appendDataRecord({ type: "note", text: `${name} Base64 解码失败：${error.message}` });
     return null;
@@ -309,6 +315,8 @@ function printRawPayload(payload) {
     const packetIndex = index + 1;
     const eegPacket = eeg?.packets[index];
     const hrPacket = hr?.packets[index];
+    if (eegPacket) appendRawRecord(eegPacket, eeg.windowEndMs);
+    if (hrPacket) appendRawRecord(hrPacket, hr.windowEndMs);
     const eegRecord = eegPacket ? parseEegPacket(eegPacket, eeg.windowStartMs, eeg.windowEndMs, packetIndex) : null;
     if (eegRecord && hrPacket) {
       appendDataRecord({ ...eegRecord, type: "frame", hrBytes: hrPacket, hrValue: hrPacket[0] });
@@ -321,49 +329,40 @@ function printRawPayload(payload) {
         value: hrPacket[0],
         windowStartMs: hr.windowStartMs,
         windowEndMs: hr.windowEndMs,
+        timestampMs: hr.windowEndMs,
         packetIndex,
       });
     }
   }
+  if (eeg?.trailing) appendRawRecord(eeg.trailing, eeg.windowEndMs);
+  if (hr?.trailing) appendRawRecord(hr.trailing, hr.windowEndMs);
 }
 
 function rawRecordText(record) {
-  if (record.type === "note") return `提示 | ${record.text}`;
-  const window = dataWindowLabel(record.windowStartMs, record.windowEndMs);
-  const packet = `数据帧#${record.packetIndex ?? "?"}`;
-  if (record.type === "hr") return `${window} | ${packet} | EEG [缺失] | HR [${formatBytes(record.bytes)}]`;
-  const points = [
-    `SEQ [${formatBytes(record.bytes.slice(0, 2))}]`,
-    ...Array.from({ length: 6 }, (_, index) => `EEG${index + 1} [${formatBytes(record.bytes.slice(2 + (index * 3), 5 + (index * 3)))}]`),
-  ];
-  points.push(record.type === "frame" ? `HR [${formatBytes(record.hrBytes)}]` : "HR [缺失]");
-  return `${window} | ${packet} | ${points.join(" | ")}`;
+  return `${timestampLabel(record.timestampMs)}  ${formatBytes(record.bytes)}`;
 }
 
 function decodedRecordText(record) {
-  if (record.type === "note") return record.text;
+  const timestamp = timestampLabel(record.timestampMs);
+  if (record.type === "note") return `${timestamp}  ${record.text}`;
   if (record.type === "hr") {
     return displayFormat === "hex"
-      ? `数据帧#${record.packetIndex ?? "?"} | EEG=缺失 | HR=0x${record.value.toString(16).padStart(2, "0").toUpperCase()}`
-      : `数据帧#${record.packetIndex ?? "?"} | EEG=缺失 | HR=${record.value}`;
+      ? `${timestamp}  数据帧#${record.packetIndex ?? "?"} | EEG=缺失 | HR=0x${record.value.toString(16).padStart(2, "0").toUpperCase()}`
+      : `${timestamp}  数据帧#${record.packetIndex ?? "?"} | EEG=缺失 | HR=${record.value}`;
   }
   if (displayFormat === "hex") {
     const values = record.values.map((value, index) => `EEG${index + 1}=0x${value.toString(16).padStart(6, "0").toUpperCase()}`);
     const hr = record.type === "frame" ? `0x${record.hrValue.toString(16).padStart(2, "0").toUpperCase()}` : "缺失";
-    return `数据帧#${record.packetIndex ?? "?"} | SEQ=0x${record.sequence.toString(16).padStart(4, "0").toUpperCase()} | ${values.join(" | ")} | HR=${hr}`;
+    return `${timestamp}  数据帧#${record.packetIndex ?? "?"} | SEQ=0x${record.sequence.toString(16).padStart(4, "0").toUpperCase()} | ${values.join(" | ")} | HR=${hr}`;
   }
   const hr = record.type === "frame" ? record.hrValue : "缺失";
-  return `数据帧#${record.packetIndex ?? "?"} | SEQ=${record.sequence} | ${record.values.map((value, index) => `EEG${index + 1}=${value}`).join(" | ")} | HR=${hr}`;
+  return `${timestamp}  数据帧#${record.packetIndex ?? "?"} | SEQ=${record.sequence} | ${record.values.map((value, index) => `EEG${index + 1}=${value}`).join(" | ")} | HR=${hr}`;
 }
 
 function renderData() {
-  if (!dataRecords.length) {
-    elements.rawData.textContent = "等待网关数据……";
-    elements.decodedData.textContent = "等待网关数据……";
-    return;
-  }
-  elements.rawData.textContent = dataRecords.map((record) => `${record.time}  ${rawRecordText(record)}`).join("\n");
-  elements.decodedData.textContent = dataRecords.map((record) => `${record.time}  ${decodedRecordText(record)}`).join("\n");
+  elements.rawData.textContent = rawRecords.length ? rawRecords.map(rawRecordText).join("\n") : "等待网关数据……";
+  elements.decodedData.textContent = dataRecords.length ? dataRecords.map(decodedRecordText).join("\n") : "等待网关数据……";
+  elements.exportRaw.disabled = rawRecords.length === 0;
   elements.rawData.scrollTop = elements.rawData.scrollHeight;
   elements.decodedData.scrollTop = elements.decodedData.scrollHeight;
 }
@@ -485,12 +484,33 @@ function connect() {
 
 function clearDisplay() {
   dataRecords = [];
+  rawRecords = [];
   protocolLines = [];
   stats = createStats();
   elements.rawData.textContent = "等待网关数据……";
   elements.decodedData.textContent = "等待网关数据……";
   elements.protocolLog.textContent = isConnected() ? "显示已清空，网关仍保持连接。" : "等待连接网关……";
   updateMetrics();
+  refreshControls();
+}
+
+function exportRawData() {
+  if (!rawRecords.length) {
+    elements.gatewayMessage.textContent = "暂无可导出的原始数据。请先开始接收并等待耳机数据到达。";
+    return;
+  }
+  const generatedAt = new Date();
+  const blob = new Blob([`${rawRecords.map(rawRecordText).join("\n")}\n`], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `neurobridge-raw-data-${generatedAt.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}.txt`;
+  const filename = link.download;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  elements.gatewayMessage.textContent = `原始数据已导出：${filename}；共 ${rawRecords.length} 行，格式为毫秒时间戳加原始字节。`;
 }
 
 function exportDiagnosticLog() {
@@ -522,7 +542,7 @@ function exportDiagnosticLog() {
     "rawPayloadExported=false",
     "",
     "[SEQUENCE_AND_PARSE_NOTES]",
-    ...(notes.length ? notes.map((record) => `${record.time}  ${record.text}`) : ["none"]),
+    ...(notes.length ? notes.map((record) => `${timestampLabel(record.timestampMs)}  ${record.text}`) : ["none"]),
     "",
     "[REDACTED_WEBSOCKET_PROTOCOL_LOG]",
     ...(protocolLines.length ? protocolLines : ["none"]),
@@ -548,6 +568,7 @@ elements.start.addEventListener("click", () => sendRequest("subscribe", { stream
 elements.stop.addEventListener("click", () => subscriptionId && sendRequest("unsubscribe", { subscriptionId }));
 elements.clear.addEventListener("click", clearDisplay);
 elements.export.addEventListener("click", exportDiagnosticLog);
+elements.exportRaw.addEventListener("click", exportRawData);
 elements.hexFormat.addEventListener("click", () => setDisplayFormat("hex"));
 elements.decimalFormat.addEventListener("click", () => setDisplayFormat("decimal"));
 

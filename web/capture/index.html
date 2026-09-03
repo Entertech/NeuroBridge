@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
     <title>NeuroBridge · 耳机数据查看</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260903a" />
   </head>
   <body>
     <main>
@@ -14,7 +14,7 @@
         <h1>耳机数据<br />实时查看</h1>
         <p class="intro">
           本页只连接正在运行的 NeuroBridge 网关，不直接访问 USB 串口。点击“开始接收”后，
-          网关通过 WebSocket 转发 EEG、心率和设备状态；页面按设备帧合并打印序列号、六路 EEG 原始值和心率。
+          网关通过 WebSocket 转发 EEG、心率和设备状态；页面分别保留原始字节，并在独立区域展示解析结果。
         </p>
       </header>
 
@@ -79,21 +79,26 @@
         </p>
       </section>
 
-      <section class="logs" aria-labelledby="rawTitle">
-        <div class="logs-title">
-          <div><h2 id="rawTitle">耳机原始数据</h2><span>每行一帧：SEQ + EEG1～EEG6 + HR · 每个字节空格分隔 · 最多保留 800 行</span></div>
-          <div class="format-switch" role="group" aria-label="数据显示格式">
-            <button id="hexFormatButton" class="format-button active" type="button" aria-pressed="true">16 进制</button>
-            <button id="decimalFormatButton" class="format-button" type="button" aria-pressed="false">10 进制</button>
+      <div class="data-workspace">
+        <section class="logs data-panel raw-panel" aria-labelledby="rawTitle">
+          <div class="logs-title">
+            <div><h2 id="rawTitle">耳机原始数据</h2><span>每行仅包含毫秒时间戳和网关收到的原始字节，未解析、未改写</span></div>
+            <div class="raw-tools">
+              <div class="format-switch" role="group" aria-label="数据显示格式">
+                <button id="hexFormatButton" class="format-button active" type="button" aria-pressed="true">16 进制</button>
+                <button id="decimalFormatButton" class="format-button" type="button" aria-pressed="false">10 进制</button>
+              </div>
+              <button id="exportRawButton" class="secondary compact-button" type="button" disabled>导出原始数据</button>
+            </div>
           </div>
-        </div>
-        <pre id="rawData" aria-live="polite">等待网关数据……</pre>
-      </section>
+          <pre id="rawData" aria-live="polite">等待网关数据……</pre>
+        </section>
 
-      <section class="logs" aria-labelledby="decodedTitle">
-        <div class="logs-title"><h2 id="decodedTitle">数据解析</h2><span>同一行对应同一设备帧；缺失的 EEG 或 HR 会明确标记</span></div>
-        <pre id="decodedData" aria-live="polite">等待网关数据……</pre>
-      </section>
+        <section class="logs data-panel decoded-panel" aria-labelledby="decodedTitle">
+          <div class="logs-title"><div><h2 id="decodedTitle">数据解析</h2><span>与原始数据使用相同时间戳，字段值随上方控件切换 16/10 进制</span></div></div>
+          <pre id="decodedData" aria-live="polite">等待网关数据……</pre>
+        </section>
+      </div>
 
       <section class="logs" aria-labelledby="protocolTitle">
         <div class="logs-title"><h2 id="protocolTitle">WebSocket 协议日志</h2><span>请求、响应和事件 · 最多保留 300 行</span></div>
@@ -102,11 +107,11 @@
 
       <section class="card privacy-note">
         <strong>运行边界</strong>
-        <p>页面资源和 WebSocket 都由本机网关提供，只访问配置好的网关地址；不直接访问串口，不上传数据，不使用 CDN、遥测或浏览器持久化存储。导出的诊断日志会隐藏完整 EEG/心率原始数据及 Base64 内容，只保留状态、计数和异常信息。</p>
+        <p>页面资源和 WebSocket 都由本机网关提供，只访问配置好的网关地址；不直接访问串口，不上传数据，不使用 CDN、遥测或浏览器持久化存储。原始数据导出只包含时间戳和页面实际收到的字节；诊断日志仍会隐藏完整 EEG/心率原始数据及 Base64，只保留状态、计数和异常信息。</p>
       </section>
     </main>
     <script src="../version.js"></script>
     <script src="../runtime-config.js"></script>
-    <script src="./app.js"></script>
+    <script src="./app.js?v=20260903a"></script>
   </body>
 </html>
