@@ -45,7 +45,6 @@ class SerialConfig:
     max_buffer_bytes: int = 65536
     dtr: bool = False
     rts: bool = False
-    identity_state_file: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -244,12 +243,6 @@ def load(path: str | Path) -> GatewayConfig:
         max_buffer_bytes = int(serial.get("max_buffer_bytes", 65536))
         dtr = serial.get("dtr", False)
         rts = serial.get("rts", False)
-        identity_state_file_value = serial.get("identity_state_file")
-        identity_state_file = (
-            Path(identity_state_file_value)
-            if identity_state_file_value
-            else recording_directory.parent / "serial-device-identity.json"
-        )
         if not isinstance(dtr, bool) or not isinstance(rts, bool):
             raise ValueError("serial.dtr and serial.rts must be boolean")
         if baud_rate != 115200:
@@ -278,7 +271,6 @@ def load(path: str | Path) -> GatewayConfig:
             max_buffer_bytes=max_buffer_bytes,
             dtr=dtr,
             rts=rts,
-            identity_state_file=identity_state_file,
         )
     config = GatewayConfig(
         server=ServerConfig(host, port, endpoint),

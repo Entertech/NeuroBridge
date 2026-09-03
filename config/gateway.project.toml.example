@@ -31,10 +31,9 @@ stats_interval_seconds = 10
 max_buffer_bytes = 65536
 dtr = false
 rts = false
-# After the first validated power-on handshake, the gateway stores the strict
-# USB identity in .runtime/serial-device-identity.json. On service restart, a
-# matching device already sending valid frames is adopted without E1; only a
-# silent matching device receives E1. Unknown identities never receive E1.
+# The headset does not initiate this handshake. The gateway actively sends the
+# fixed 7-byte ACK to each candidate, requires a standalone 0x01, then sends E1
+# and waits for the first valid 28-byte EEG frame before reporting validated.
 
 [recording]
 directory = ".runtime/recordings"

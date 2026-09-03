@@ -66,7 +66,6 @@ class DeviceStrategyConfigurationTests(unittest.TestCase):
             self.assertEqual(config.serial.baud_rate, 115200)
             self.assertEqual(config.serial.handshake_timeout_ms, 1000)
             self.assertEqual(config.serial.command_response_timeout_ms, 1000)
-            self.assertEqual(config.serial.identity_state_file, Path("serial-device-identity.json"))
             self.assertFalse(config.serial.dtr)
             self.assertFalse(config.serial.rts)
 
