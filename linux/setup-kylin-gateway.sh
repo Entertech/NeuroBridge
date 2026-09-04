@@ -19,6 +19,7 @@ Galaxy Kylin project assistant. It provides a numeric menu for:
   6. Build, verify, and enable the local algorithm
   7. Export complete diagnostics
   8. Show recent logs
+  9. Manage boot autostart
 
 Run it as the normal desktop user, not with sudo. The assistant requests sudo
 only for the exact steps that need system permissions. Git is always run as
@@ -237,6 +238,13 @@ setup_algorithm() {
 }
 
 start_gateway() {
+  if command -v systemctl >/dev/null 2>&1 \
+    && systemctl is-active --quiet neurobridge.service 2>/dev/null; then
+    log_message "NeuroBridge 已由 systemd 后台运行，无需重复启动。"
+    log_message "浏览器：http://127.0.0.1:8080/"
+    show_menu_action 9 "./linux/setup-kylin-autostart.sh status"
+    return 0
+  fi
   log_message "启动后用本机浏览器打开：http://127.0.0.1:8080/"
   log_message "按 Ctrl+C 停止网关并返回菜单。"
   run_step "启动 NeuroBridge" "$root_dir/linux/start-kylin-gateway.sh"
@@ -324,6 +332,34 @@ show_recent_logs() {
   tail -n 200 -- "$latest"
 }
 
+manage_autostart() {
+  local autostart_choice
+  cat <<'EOF'
+
+开机自启管理
+  1. 启用开机自启并立即转为后台运行
+  2. 查看开机自启状态
+  3. 停止并禁用开机自启
+  0. 返回主菜单
+EOF
+  printf '请输入选项 [0-3]: '
+  IFS= read -r autostart_choice || return 0
+  log_message "autostartSelected=$autostart_choice"
+  case $autostart_choice in
+    1) run_step "启用并启动 systemd 网关" "$root_dir/linux/setup-kylin-autostart.sh" enable ;;
+    2) run_step "查看 systemd 网关状态" "$root_dir/linux/setup-kylin-autostart.sh" status ;;
+    3)
+      if ask_yes_no "是否停止网关并禁用开机自启？"; then
+        run_step "停止并禁用 systemd 网关" "$root_dir/linux/setup-kylin-autostart.sh" disable
+      else
+        log_message "已取消禁用开机自启。"
+      fi
+      ;;
+    0) return 0 ;;
+    *) log_message "无效选项，请输入 0 到 3。"; return 1 ;;
+  esac
+}
+
 prepare_and_start() {
   local serial_result
   ensure_runtime_writable || return 1
@@ -382,6 +418,7 @@ NeuroBridge 银河麒麟一键助手
   6. 修复/重新构建本地算法
   7. 导出完整诊断包
   8. 查看最近日志
+  9. 开机自启管理
   0. 退出
 EOF
 }
@@ -391,7 +428,7 @@ init_log || true
 
 while true; do
   show_menu
-  printf '请输入选项 [0-8]: '
+  printf '请输入选项 [0-9]: '
   IFS= read -r choice || {
     log_message "输入结束，助手退出。"
     exit 0
@@ -439,10 +476,11 @@ while true; do
       log_message "诊断包位于 .runtime/diagnostics/，可直接传给开发人员。"
       ;;
     8) show_recent_logs || true ;;
+    9) manage_autostart || true ;;
     0)
       log_message "助手已退出。"
       exit 0
       ;;
-    *) printf '无效选项，请输入 0 到 8。\n' ;;
+    *) printf '无效选项，请输入 0 到 9。\n' ;;
   esac
 done

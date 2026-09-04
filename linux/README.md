@@ -6,7 +6,7 @@
 bash linux/neurobridge-kylin-bootstrap.sh
 ```
 
-`linux/neurobridge-kylin-bootstrap.sh` 是完整项目的日常启动入口，启动时绝不运行 `git fetch` 或 `git pull`。通常只需输入 `1`，助手会跳过已完成步骤并直接启动；已配置好时可输入 `2`。菜单 `3` 仅用于网络可用时主动更新，不会被普通启动自动选择。无法拉取的旧设备由开发机运行 `./tools/build-kylin-offline-update.sh`，只传输生成的 `neurobridge-kylin-offline-update.run`，目标机执行一次后会自动打开菜单。保持耳机 USB 已连接即可，正常检测不要求拔插。完整现场流程见[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
+`linux/neurobridge-kylin-bootstrap.sh` 是完整项目的日常启动入口，启动时绝不运行 `git fetch` 或 `git pull`。通常只需输入 `1`，助手会跳过已完成步骤并直接启动；已配置好时可输入 `2`。首次前台联调通过后，菜单 `9` 可安装、查看或停用 `neurobridge.service` 开机自启，服务仍以当前桌面用户运行项目内配置、算法和数据。菜单 `3` 仅用于网络可用时主动更新，不会被普通启动自动选择。无法拉取的旧设备由开发机运行 `./tools/build-kylin-offline-update.sh`，只传输生成的 `neurobridge-kylin-offline-update.run`，目标机执行一次后会自动打开菜单。保持耳机 USB 已连接即可，正常检测不要求拔插。完整现场流程见[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
 
 本目录同时保存 Ubuntu x86_64 部署及银河麒麟项目运行脚本：
 
@@ -20,6 +20,7 @@ bash linux/neurobridge-kylin-bootstrap.sh
 - `neurobridge-kylin-bootstrap.sh`：完整项目的无网络日常启动入口；只处理必要权限并打开数字菜单，不更新源码。
 - `../tools/build-kylin-offline-update.sh`：开发机生成单个 `.run` 离线更新文件；内嵌已提交分支的 Git bundle 和 SHA-256，目标机只从本地 bundle 快进，不访问远端。
 - `setup-kylin-gateway.sh`：银河麒麟 V10 项目一键上手、权限恢复、更新、配置、启动与诊断菜单；以普通用户运行，只在必要步骤调用 `sudo`，Git 更新永远不使用 `sudo`。
+- `setup-kylin-autostart.sh`：为当前银河麒麟项目安装、查看或停用 `neurobridge.service`；systemd 在开机时以当前桌面用户运行项目启动器，异常退出后 3 秒重试，不把网关进程提升为 root。
 - `setup-kylin-python.sh`：银河麒麟 V10 项目 Python 环境一键初始化；系统仅有 Python 3.8 时自动准备经 SHA-256 锁定的项目内 Python 3.11，再选择离线 `wheelhouse` 或当前网络，所有运行时、缓存、临时文件和日志保存在项目内。
 - `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口一键识别；默认直接检查已连接设备，无需拔插，并保存 USB/TTY/驱动快照；仅在显式 `--plug-cycle` 时监控拔插过程和超时；旧版 `lsusb` 不支持 `-nn` 时自动回退。
 - `setup-kylin-serial.sh`：银河麒麟 x86_64 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务；项目启动脚本会处理账号已入组但当前会话权限尚未刷新的情况。

@@ -264,7 +264,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("6. 修复/重新构建本地算法", menu_result.stdout)
         self.assertIn("7. 导出完整诊断包", menu_result.stdout)
         self.assertIn("8. 查看最近日志", menu_result.stdout)
-        self.assertIn("请输入选项 [0-8]", menu_result.stdout)
+        self.assertIn("9. 开机自启管理", menu_result.stdout)
+        self.assertIn("请输入选项 [0-9]", menu_result.stdout)
 
         self.assertIn('[[ ${EUID:-$(id -u)} -ne 0 ]]', script)
         self.assertIn("Run without sudo", script)
@@ -305,6 +306,49 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("返回菜单后输入", script)
         self.assertIn('config.get("data_source", {}).get("type") == "serial"', script)
         self.assertIn("--check-only", script)
+        self.assertIn('systemctl is-active --quiet neurobridge.service', script)
+        self.assertIn('"$root_dir/linux/setup-kylin-autostart.sh" enable', script)
+        self.assertIn('"$root_dir/linux/setup-kylin-autostart.sh" status', script)
+        self.assertIn('"$root_dir/linux/setup-kylin-autostart.sh" disable', script)
+
+    def test_kylin_autostart_runs_project_gateway_as_desktop_user(self) -> None:
+        script_path = ROOT / "linux" / "setup-kylin-autostart.sh"
+        script = script_path.read_text(encoding="utf-8")
+        self.assertTrue(os.access(script_path, os.X_OK))
+        syntax = subprocess.run(
+            ["bash", "-n", str(script_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        help_result = subprocess.run(
+            ["bash", str(script_path), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("enable|status|disable", help_result.stdout)
+        self.assertIn("never runs the gateway as root", help_result.stdout)
+        self.assertIn("# Managed by NeuroBridge Galaxy Kylin project autostart", script)
+        self.assertIn("User=$service_user", script)
+        self.assertIn("Group=$service_group", script)
+        self.assertIn("WorkingDirectory=$quoted_root", script)
+        self.assertIn("ExecStart=$quoted_start", script)
+        self.assertIn("Restart=on-failure", script)
+        self.assertIn("RestartSec=3", script)
+        self.assertIn("Environment=PYTHONDONTWRITEBYTECODE=1", script)
+        self.assertIn('sudo systemctl enable "$unit_name"', script)
+        self.assertIn('sudo systemctl start "$unit_name"', script)
+        self.assertIn('serviceAlreadyActive=true', script)
+        self.assertIn('sudo systemctl disable --now "$unit_name"', script)
+        self.assertIn("refusing to stop it", script)
+        self.assertIn("is already disabled", script)
+        self.assertIn('systemd-analyze verify "$unit_tmp"', script)
+        self.assertIn("refusing to overwrite it", script)
+        self.assertNotIn("ProtectHome=", script)
+        self.assertNotIn("sudo \"$start_script\"", script)
 
     def test_kylin_usb_serial_diagnosis_prompts_times_out_and_preserves_logs(self) -> None:
         script_path = ROOT / "linux" / "diagnose-kylin-usb-serial.sh"

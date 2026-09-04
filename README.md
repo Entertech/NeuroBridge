@@ -69,6 +69,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 | 场景 | 入口 | 当前状态 |
 | --- | --- | --- |
+| 银河麒麟 V10 x86_64 网关 | [`linux/neurobridge-kylin-bootstrap.sh`](linux/neurobridge-kylin-bootstrap.sh) | 菜单 `1` 完成项目内配置与前台验证；菜单 `9` 安装、查看或停用以当前桌面用户运行的 systemd 开机自启服务。 |
 | Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 首期部署入口；安装为 systemd 服务。 |
 | macOS 真实头环 POC | [`mac/start-poc.command`](mac/start-poc.command) | 一键启动本机采集、算法 bridge 和控制台；详见 [`mac/README.md`](mac/README.md)。 |
 | Windows 网关 | [`windows/README.md`](windows/README.md) | 尚未完成设备、算法和后台服务验证，不能作为交付部署入口。 |
