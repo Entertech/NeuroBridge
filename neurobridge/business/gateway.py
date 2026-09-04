@@ -111,14 +111,34 @@ class Gateway:
 
     @property
     def replay_available(self) -> bool:
-        return self.replay_recording_id is not None
+        # The confirmed Kylin earphone transport is live USB serial only.
+        # Historical replay remains available to the legacy Bluetooth strategy,
+        # but must never be selected as a fallback for serial data.
+        return self.config.data_source.type != "serial" and self.replay_recording_id is not None
 
     @property
     def replay_recording_id(self) -> str | None:
+        if self.config.data_source.type == "serial":
+            return None
         return self._active_replay_recording_id or self.store.replay_recording_id(self.config.recording.replay_recording_id)
 
     def mode(self) -> str:
+        # ``mode`` is constrained by the released northbound contract to
+        # ``live``/``replay``.  Serial has no replay mode, so an offline serial
+        # gateway stays in its configured live mode and reports disconnected
+        # separately through connectionState.
+        if self.config.data_source.type == "serial":
+            return "live"
         return "live" if self.live else "replay"
+
+    def _offline_data_error(self) -> ProtocolError:
+        if self.config.data_source.type == "serial":
+            if self.status["connectionState"] == "validation_failed":
+                message = "Serial device validation failed: the opened candidate did not return standalone 0x01 after ACK."
+            else:
+                message = "Serial data source is not connected; live data is unavailable and replay is not supported."
+            return ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, message, True)
+        return ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "No replay data is available.", True)
 
     async def start(self) -> None:
         # The local algorithm is session scoped and must be initialized only after
@@ -562,7 +582,7 @@ class Gateway:
         streams = params.get("streams", ["eeg", "hr"])
         self.validate_streams(streams, allowed={"eeg", "hr"})
         if not self.live and not self.replay_available:
-            raise ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "No replay data is available.", True)
+            raise self._offline_data_error()
         unavailable = set(streams) - self.available_streams()
         if unavailable:
             raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
@@ -615,7 +635,7 @@ class Gateway:
         if duplicate_streams:
             raise ProtocolError(429, "RATE_LIMITED", "A stream is already subscribed on this connection.", True, {"streams": sorted(duplicate_streams)})
         if not self.live and not self.replay_available:
-            raise ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "No replay data is available.", True)
+            raise self._offline_data_error()
         unavailable = set(streams) - self.available_streams()
         if unavailable:
             raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
@@ -641,6 +661,8 @@ class Gateway:
 
     def _start_replay_if_needed(self) -> None:
         """Start one replay clock for the gateway after the first B-side data request."""
+        if self.config.data_source.type == "serial":
+            return
         if not self.sessions or self.live or (self._replay_task and not self._replay_task.done()):
             return
         recording_id = self.store.replay_recording_id(self.config.recording.replay_recording_id)

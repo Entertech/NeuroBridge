@@ -40,7 +40,7 @@ git pull --ff-only
 
 需要远程运维时，Ubuntu 环境准备会安装但不启用 OpenSSH；部署后执行 `sudo ./linux/setup-ssh-operations.sh` 即可交互式完成运维账号密码、私有监听地址和来源网段配置。一键配置会把当前源码同步为运维账号自己的固定项目目录 `~/NeuroBridge`。SSH 场景中的源码更新只能使用 `neurobridge-ops update`：该命令固定切换至 `master`、快进拉取批准的上游版本并部署重启，运维人员不应直接运行 Git。还可使用 `status`、`logs --follow`、`audit` 和 `restart`。`audit` 不记录密码或业务原始数据。由于该账号维护的代码随后会以 root 安装，必须把它作为网关管理员凭据管理。完整命令和回滚步骤见 [Ubuntu 网关部署与运行教程](linux/README.md#41-启用-ssh-运维入口可选) 与 [SSH 运维和录播联调指南](doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md)。
 
-部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。首次安装会自动给唯一且未在使用的物理以太网口设置默认的封闭直连地址 `192.168.88.10/24`；无网口、多网口、已有 IPv4/IPv6 地址或默认路由、或 Netplan 冲突时会安全停止，需指定 `[network].interface` 或断开原网络后重试。专用链路地址仅接受 RFC1918 IPv4 网段。该默认值不替代双方现场确认：静态 IP、网段、端口、Flowtime 扫描匹配条件、录播目录和回放倍率均可在 `/etc/neurobridge/gateway.toml` 覆盖；`replay_recording_id` 可留空，网关离线时会自动选择目录中最新的非空历史会话。示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
+部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。首次安装会自动给唯一且未在使用的物理以太网口设置默认的封闭直连地址 `192.168.88.10/24`；无网口、多网口、已有 IPv4/IPv6 地址或默认路由、或 Netplan 冲突时会安全停止，需指定 `[network].interface` 或断开原网络后重试。专用链路地址仅接受 RFC1918 IPv4 网段。该默认值不替代双方现场确认：静态 IP、网段、端口、Flowtime 扫描匹配条件、录播目录和回放倍率均可在 `/etc/neurobridge/gateway.toml` 覆盖；`replay_recording_id` 仅适用于明确支持录播的兼容数据源，当前银河麒麟耳机 `data_source.type="serial"` 必须留空且不会自动回放。示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
 
 ```bash
 python3 -m venv .venv
@@ -83,7 +83,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 - 目标硬件：N100/N150 x86 小主机，8 GB 内存、256 GB SSD、可稳定枚举目标耳机 TTY 的 USB 端口。
 - 目标系统：N100/N150 x86_64 主机上的银河麒麟 V10；其他系统结果不替代正式验收。
 - 当前链路：`耳机 → USB 派生串口 → 网关后台 → 本机回环 WebSocket → 同机浏览器`。不需要 B 端专用网线、静态地址或 DHCP。
-- 运行方式：实时和录播均为交付范围；耳机串口不可用时，首次 `subscribe` 或 `getLatest` 按既有规则启动录播。耳机恢复后停止录播并回到实时。
+- 运行方式：当前银河麒麟耳机 USB 串口仅支持实时采集；串口未验证或断开时，`subscribe` 与 `getLatest` 不会启动录播，而是返回 `409 STREAM_NOT_AVAILABLE_REASON`。录播仅保留给明确支持该模式的历史兼容数据源。
 - 运维与交付：网关注册为 systemd 开机自启服务；运行日志持久化并每日轮转。本机策略下网页、WebSocket 和下载服务只监听 `127.0.0.1`。只有切换兼容有线策略时，才配置专网静态地址或独立 DHCP 单元。
 - 演示范围：本次为单人；北向协议仅保留录播关联所需的 `subjectId`。
 - 当前耳机通信规范定义固定 28 字节串口帧：3 字节包头、1 字节长度、2 字节大端序列号、18 字节 EEG、1 字节心率和 3 字节包尾。算法兼容层从中投影 20 字节 EEG 与 1 字节 HR 原始输入。
@@ -119,7 +119,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 ## 实现边界
 
 - 网关处理耳机 USB 串口协议、数据解析、重连、时间戳、缓存、算法调用和北向适配。
-- 实时采集时，网关分别保存设备原始数据与算法结果，并保留可关联的录制会话和时间戳；录播直接读取已保存数据，按原始时间间隔发送。
+- 实时采集时，网关分别保存设备原始数据与算法结果，并保留可关联的录制会话和时间戳；当前串口数据源不读取这些录制数据做回放。
 - 默认由同机浏览器展示；兼容模式下第三方 B 端主机处理展示与保存，其后续服务端上传不属于网关边界。
 - 当前银河麒麟交付只使用本机回环 HTTP/WS；旧专网兼容代码不属于本次验收。
 

@@ -220,6 +220,9 @@ def load(path: str | Path) -> GatewayConfig:
     data_source_type = str(data_source["type"])
     if data_source_type not in {"bluetooth", "serial", "usb"}:
         raise ValueError("data_source.type must be bluetooth, serial, or usb")
+    replay_recording_id = recording.get("replay_recording_id") or None
+    if data_source_type == "serial" and replay_recording_id:
+        raise ValueError("recording.replay_recording_id is not supported when data_source.type is serial")
 
     # Parse and validate only the selected strategy. This lets an operator keep
     # dormant strategy sections for a controlled restart-based switch without
@@ -286,7 +289,7 @@ def load(path: str | Path) -> GatewayConfig:
     config = GatewayConfig(
         server=ServerConfig(host, port, endpoint),
         ble=ble_config,
-        recording=RecordingConfig(recording_directory, recording.get("subject_id") or None, recording.get("replay_recording_id") or None, replay_speed),
+        recording=RecordingConfig(recording_directory, recording.get("subject_id") or None, replay_recording_id, replay_speed),
         # Ubuntu installation places the locked native bridge at this fixed path.
         # ``enabled`` is therefore the only setting an operator needs to change
         # after the bridge's real-data POC has been approved.  An explicit command

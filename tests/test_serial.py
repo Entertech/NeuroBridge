@@ -535,6 +535,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             states,
             [
                 ("connectionState", "connecting"),
+                ("connectionState", "validating"),
                 ("connectionState", "validated"),
                 ("connectionState", "disconnected"),
             ],
@@ -709,6 +710,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             states,
             [
                 ("connectionState", "connecting"),
+                ("connectionState", "validating"),
                 ("connectionState", "validated"),
                 ("connectionState", "disconnected"),
             ],
@@ -749,8 +751,8 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             states,
             [
                 ("connectionState", "connecting"),
+                ("connectionState", "validating"),
                 ("connectionState", "validation_failed"),
-                ("connectionState", "not_connected"),
             ],
         )
         self.assertIn("none returned standalone 0x01", "\n".join(logs.output))

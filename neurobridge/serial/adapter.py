@@ -402,6 +402,7 @@ class SerialAdapter:
             attempt += 1
             phase = "discover"
             target_selected = False
+            validation_failed = False
             existing_stream = b""
             existing_stream_received_at_ms: int | None = None
             try:
@@ -501,6 +502,7 @@ class SerialAdapter:
                             await self.status("connectionState", "validated")
                             break
                         phase = "handshake_ack_probe"
+                        await self.status("connectionState", "validating")
                         LOG.info(
                             "Serial active handshake ACK probe started: attempt=%s candidateIndex=%s "
                             "candidateCount=%s path=%s ackBytes=%s expectedResponse=single_byte_0x01",
@@ -549,7 +551,7 @@ class SerialAdapter:
                             await self._close_client(client)
                 if self._client is None:
                     if rejected_candidate_count:
-                        await self.status("connectionState", "validation_failed")
+                        validation_failed = True
                         raise TimeoutError(
                             "Serial candidates opened but none returned standalone 0x01 after active ACK"
                         )
@@ -644,7 +646,9 @@ class SerialAdapter:
                 self._capture_started = False
                 await self.status(
                     "connectionState",
-                    "disconnected" if target_selected else "not_connected",
+                    "disconnected"
+                    if target_selected
+                    else ("validation_failed" if validation_failed else "not_connected"),
                 )
             if not self._stopping:
                 LOG.info(

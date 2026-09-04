@@ -87,11 +87,15 @@ Gateway
 ```text
 not_connected
   → connecting
-  → validated
+  → validated（观察到已有合法流）
   → disconnected
 
-候选全部未通过 ACK 校验时：
-connecting → validation_failed → not_connected
+候选静默、需要主动 ACK 时：
+connecting → validating
+  ├─ 收到独立 01 → validated
+  └─ ACK 超时且没有其他候选通过 → validation_failed
+
+`validation_failed` 在本轮结束后保持不变；下一轮重试开始才进入 `connecting`。没有找到或无法打开任何候选才使用 `not_connected`，已经完成验证的串口后来关闭才使用 `disconnected`。
 ```
 
 每个候选打开后先被动观察：
@@ -157,7 +161,7 @@ ff51         = frame[24:25]  # 1 字节 HR
 
 每行包含 `sessionId`、`transport`、`channel`、`receivedAtMs`、`byteLength`、`encoding` 和 `bytesBase64`。内部文件继承录制目录最小权限，不进入普通网页下载、诊断包、Git 或既有对外采集包。
 
-算法结果继续写入会话事件。录播按原始时间读取已保存原始数据和算法结果，不重新调用算法。
+算法结果继续写入会话事件。当前耳机 USB 串口策略不读取这些会话做录播；`subscribe`/`getLatest` 在串口未验证或断开时直接返回 `409 STREAM_NOT_AVAILABLE_REASON`。录播读取逻辑仅保留给明确支持录播的历史兼容数据源。
 
 ## 10. 北向和本机页面
 
@@ -199,4 +203,4 @@ ff51         = frame[24:25]  # 1 字节 HR
 - 北向三态映射、Origin/Host 拒绝和本机页面资源；
 - systemd、一键助手重复执行和诊断脱敏。
 
-自动化通过只表示源码支持。上线前仍需在最终银河麒麟镜像和真实耳机上完成 USB 枚举、电气行为、握手、持续数据、算法结果、拔插恢复、服务重启、录播和长稳验收。
+自动化通过只表示源码支持。上线前仍需在最终银河麒麟镜像和真实耳机上完成 USB 枚举、电气行为、握手、持续实时数据、算法结果、拔插恢复、服务重启、串口离线拒绝录播和长稳验收。

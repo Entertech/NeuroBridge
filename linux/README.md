@@ -255,7 +255,7 @@ sudoedit /etc/neurobridge/gateway.toml
 | `[ble] enabled` | 无头环/冒烟验证时保持 `false`；完成该 Ubuntu 主机的真实头环 POC 后才改为 `true`，同时确认扫描匹配字段。 |
 | `[recording] directory` | 保持默认的 `/var/lib/neurobridge/recordings`，除非已按权限和容量要求另行配置。 |
 | `[recording] subject_id` | 填写演示或采集使用的受试者标识；无值可留空。 |
-| `[recording] replay_recording_id` | 可选：填写一个存在且非空的录制会话 ID 以固定回放目标；留空、填写已删除 ID 或空会话时，离线录播自动选择该目录中最新的非空历史会话。 |
+| `[recording] replay_recording_id` | 仅兼容支持录播的非串口策略可选填写；银河麒麟耳机 `data_source.type="serial"` 必须留空，串口离线不会回放历史会话。 |
 | `[download]` | 本机模式绑定 `127.0.0.1`；旧有线模式绑定批准的私网地址。 |
 | `[algorithm] enabled` | 默认 `true`。安装器已提供 bridge，无需填写路径；需要仅采集原始数据或维护时才改为 `false`。 |
 
@@ -288,7 +288,7 @@ sudo ss -lntp
 
 默认在同机浏览器访问 `http://127.0.0.1:8080/`，页面自动连接回环 WebSocket 并提供 `neurobridge.v1` 子协议。连接后先调用 `getStatus`，再调用 `getLatest` 或 `subscribe`；断线重连后重新订阅。旧有线策略才从独立 B 端连接批准的私网地址。
 
-首次无头环冒烟验证可保持 `[ble].enabled = false`，此时 `getStatus` 应显示未连接；只要 `[recording].directory` 下存在非空历史会话，离线 `getLatest` 或 `subscribe` 就会自动选择最新会话并产生 `mode="replay"` 数据。若填写有效的 `replay_recording_id`，则该会话优先。实时采集验收还应覆盖头环连接、数据到达、断线重连和服务重启后的恢复。
+兼容 BLE 策略的无头环冒烟验证可保持 `[ble].enabled = false`，此时 `getStatus` 应显示未连接并按兼容策略验证录播；当前银河麒麟耳机 `data_source.type="serial"` 不适用该回放流程，离线 `getLatest` 或 `subscribe` 必须返回 `409 STREAM_NOT_AVAILABLE_REASON`。实时采集验收还应覆盖耳机串口连接、数据到达、断线重连和服务重启后的恢复。
 
 如果 `[download].enabled = true`，本机浏览器访问 `http://127.0.0.1:<下载端口><下载路径>`；旧有线策略才从专网 B 端访问私网地址。该接口没有 TLS 或应用层认证。
 
@@ -350,7 +350,7 @@ git pull --ff-only
 | B 端无法建立 WebSocket | 确认网线、两端 IP/掩码、专用网卡防火墙、端口和 `path`；握手必须提供 `neurobridge.v1` 子协议。连接恢复后先 `getStatus`，再重新订阅。 |
 | `neurobridge-dhcp.service` 显示未运行 | 在 `static` 模式下这是预期行为：其 `ExecCondition` 会跳过 DHCP 服务。只有配置为 `dhcp` 并填写完整 DHCP 参数后才应运行。 |
 | 未收到实时数据 | 先从启动日志确认 `transport=serial` 或 `bluetooth`。串口检查候选/握手、ACK 后的 `01`、无响应 `0xE1` 是否写入、有效帧超时和累计/区间丢包；BLE 检查 `[ble].enabled`、控制器、名称/UUID。不要仅凭服务进程存活或串口有字节判断头环已连接。 |
-| 离线时没有录播数据 | 检查 `[recording].directory` 是否指向存放历史会话的目录，并确认其中至少有一个非空会话；网关会自动选择最新会话。若填写了 `replay_recording_id`，该会话无效时会回退到自动选择。 |
+| 兼容录播策略离线时没有录播数据 | 检查 `[recording].directory` 是否指向存放历史会话的目录，并确认其中至少有一个非空会话；该排障项不适用于当前银河麒麟耳机串口策略，串口离线应检查设备枚举、权限、占用和验证日志。 |
 | 下载接口不可用 | 确认 `[download].enabled = true`、监听 IP/端口与防火墙配置一致；只有已结束的录制会话能导出。 |
 
 如果 `update-ubuntu.sh` 在编译 bridge 时失败，先不要反复修改依赖或安装额外库。运行下面命令并将生成的压缩包上传给开发人员；包内只有 CMake/build 日志、系统与工具版本、当前源码 revision 和最近的服务日志，不包含 `gateway.toml`、录播或原始 BLE 数据：

@@ -85,6 +85,17 @@ class DeviceStrategyConfigurationTests(unittest.TestCase):
             self.assertFalse(config.serial.dtr)
             self.assertFalse(config.serial.rts)
 
+    def test_serial_configuration_rejects_replay_recording_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            path.write_text(
+                '[data_source]\ntype = "serial"\n'
+                '[recording]\nreplay_recording_id = "rec-history"\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "replay_recording_id.*serial"):
+                load(path)
+
     def test_unselected_serial_parameters_are_not_parsed_or_validated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gateway.toml"

@@ -51,13 +51,15 @@ let dataMode = null;
 const DEVICE_STATE_LABELS = {
   connecting: "连接中",
   connected: "已连接",
+  validation_failed: "校验失败",
   disconnected: "已断开",
 };
 
 const DEVICE_STATE_MESSAGES = {
   connecting: "网关正在发现、打开并验证设备候选。",
   connected: "已有合法数据流或 ACK 返回独立 01，设备已验证。算法初始化和 E1 发生在设备验证之后；已有数据流时不会发送 E1。算法未就绪或 E1 写入失败会在网关日志中报告，但不属于设备验证失败。",
-  disconnected: "当前没有可用的实时设备路径；可能尚未发现设备、设备验证未通过或连接已断开。数据模式为 replay 时，页面仍会显示历史录播数据。",
+  validation_failed: "串口候选已打开并发送 ACK，但等待窗口内没有收到独立 01，耳机校验失败。网关会继续重试该串口。",
+  disconnected: "当前没有可用的实时设备路径；可能尚未发现设备、设备验证未通过或连接已断开。银河麒麟耳机串口场景不支持录播，需等待实时串口恢复。",
 };
 
 const DATA_MODE_LABELS = {
@@ -71,6 +73,8 @@ function renderSourceState() {
     elements.deviceState.textContent = "—";
   } else if (deviceConnectionState === "disconnected" && dataMode === "replay") {
     elements.deviceState.textContent = "实时耳机未连接 · 当前数据为录播";
+  } else if (deviceConnectionState === "disconnected" && dataMode === "live") {
+    elements.deviceState.textContent = "实时耳机未就绪 · 可能未发现、校验失败或已断开";
   } else {
     elements.deviceState.textContent = `${DEVICE_STATE_LABELS[deviceConnectionState] || deviceConnectionState} · ${deviceConnectionState}`;
   }
@@ -81,7 +85,7 @@ function renderSourceState() {
   } else if (dataMode === "replay") {
     elements.sourceNotice.textContent = "当前数据来源：历史录播，不是当前耳机实时流。实时耳机未连接时，网关会按配置自动读取已保存数据并继续发送。";
   } else {
-    elements.sourceNotice.textContent = "正在等待网关报告数据来源。耳机连接状态只表示当前实时串口路径，录播数据可能在耳机未连接时继续发送。";
+    elements.sourceNotice.textContent = "正在等待网关报告数据来源。耳机串口未验证时不会发送历史录播数据，需等待实时串口恢复。";
   }
 }
 
@@ -427,6 +431,10 @@ function updateStatus(data) {
 function handleMessage(message) {
   appendProtocol("←", message);
   if (message.code !== 200) {
+    if (String(message.message || "").startsWith("Serial device validation failed:")) {
+      deviceConnectionState = "validation_failed";
+      renderSourceState();
+    }
     setState("error", "请求失败", `${message.message || "网关返回错误"}（code=${message.code ?? "未知"}）`);
     return;
   }
@@ -478,7 +486,7 @@ function connect() {
     return;
   }
   socket.addEventListener("open", () => {
-    setState("ok", "已连接", "网关已连接。正在自动查询状态；点击“开始接收”后打印耳机数据。");
+    setState("ok", "网关已连接", "网页已连接网关。正在自动查询耳机状态；只有耳机完成串口校验后才会收到实时数据。");
     refreshControls();
     sendRequest("getStatus", {});
   });
@@ -496,7 +504,7 @@ function connect() {
     appendProtocol("SYSTEM", `WebSocket 已断开 code=${event.code}${event.reason ? ` reason=${event.reason}` : ""}`);
     socket = null;
     subscriptionId = null;
-    setState("idle", "已断开", "网页与网关的连接已断开；网关进程和 USB 串口不会因此停止。");
+    setState("idle", "网关已断开", "网页与网关的连接已断开；网关进程和 USB 串口不会因此停止。");
     refreshControls();
   });
 }

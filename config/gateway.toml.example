@@ -83,9 +83,9 @@ reconnect_delay_seconds = 3
 [recording]
 directory = "/var/lib/neurobridge/recordings"
 subject_id = ""
-# Optional pinned recording ID for offline replay. When empty, missing, or no
-# longer valid, the gateway automatically selects the newest non-empty saved
-# session below recording.directory.
+# Optional pinned recording ID for offline replay in compatible non-serial
+# strategies. It must remain empty for the Kylin earphone USB serial strategy;
+# serial rejects a configured replay target and never falls back to recordings.
 replay_recording_id = ""
 replay_speed = 1.0
 

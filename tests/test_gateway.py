@@ -13,13 +13,13 @@ from neurobridge.config import AlgorithmConfig, BleConfig, DataSourceConfig, Gat
 from neurobridge.device.packet import DevicePacket
 from neurobridge.algorithm.runner import AlgorithmRunner
 from neurobridge.ble.flowtime import FF51, REQUIRED_NOTIFICATION_CHARACTERISTICS, FlowtimeAdapter, wear_state_from_packet
-from neurobridge.business.gateway import ClientSession, Gateway, REPLAY_NOT_AVAILABLE_REASON, Subscription
+from neurobridge.business.gateway import ClientSession, Gateway, ProtocolError, REPLAY_NOT_AVAILABLE_REASON, STREAM_NOT_AVAILABLE_REASON, Subscription
 from neurobridge.ble.packets import DataWindow, EEG_PACKET_BYTES, HR_PACKET_BYTES, RawPacket, WindowAssembler
 from neurobridge.business.recording import RecordingStore
 
 
-def config(root: Path, replay_id: str | None = None, replay_speed: float = 1000) -> GatewayConfig:
-    return GatewayConfig(ServerConfig("127.0.0.1", 8765, "/neurobridge/v1/ws"), BleConfig(False, "Flowtime Headband", "0000ff10-1212-abcd-1523-785feabcd123", 5, 3), RecordingConfig(root, "SUBJECT-001", replay_id, replay_speed), AlgorithmConfig(False, ()))
+def config(root: Path, replay_id: str | None = None, replay_speed: float = 1000, data_source_type: str = "bluetooth") -> GatewayConfig:
+    return GatewayConfig(ServerConfig("127.0.0.1", 8765, "/neurobridge/v1/ws"), BleConfig(False, "Flowtime Headband", "0000ff10-1212-abcd-1523-785feabcd123", 5, 3), RecordingConfig(root, "SUBJECT-001", replay_id, replay_speed), AlgorithmConfig(False, ()), data_source=DataSourceConfig(data_source_type))
 
 
 class PacketTests(unittest.TestCase):
@@ -215,6 +215,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             expected = {
                 "not_connected": "disconnected",
                 "connecting": "connecting",
+                "validating": "connecting",
                 "validation_failed": "disconnected",
                 "validated": "connected",
             }
@@ -609,6 +610,33 @@ class RecordingTests(unittest.TestCase):
 
 
 class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
+    async def test_serial_source_never_exposes_or_uses_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway = Gateway(config(root, replay_id="rec-replay", data_source_type="serial"))
+            gateway.store.recording_id = "rec-replay"
+            gateway.store.save_algorithm(timestamp_ms=1_000, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            gateway.store.stop()
+
+            self.assertFalse(gateway.replay_available)
+            self.assertIsNone(gateway.replay_recording_id)
+            self.assertEqual(gateway.status_result()["mode"], "live")
+            await gateway.update_status("connectionState", "validation_failed")
+            with self.assertRaises(ProtocolError) as latest_error:
+                gateway.get_latest(ClientSession(), {"streams": ["eeg"]})
+            self.assertEqual(latest_error.exception.code, 409)
+            self.assertEqual(latest_error.exception.reason, STREAM_NOT_AVAILABLE_REASON)
+            self.assertIn("did not return standalone 0x01 after ACK", latest_error.exception.message)
+
+            async def send(_: dict) -> None:
+                pass
+
+            with self.assertRaises(ProtocolError) as subscribe_error:
+                await gateway.subscribe(ClientSession(), {"streams": ["eeg"]}, send)
+            self.assertEqual(subscribe_error.exception.code, 409)
+            self.assertEqual(subscribe_error.exception.reason, STREAM_NOT_AVAILABLE_REASON)
+            self.assertIn("did not return standalone 0x01 after ACK", subscribe_error.exception.message)
+
     async def test_get_latest_automatically_uses_newest_recording_when_no_id_is_configured(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
