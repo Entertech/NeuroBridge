@@ -11,10 +11,10 @@
     <main>
       <header class="hero">
         <p class="eyebrow">NEUROBRIDGE / GATEWAY DATA VIEWER</p>
-        <h1>耳机数据<br />实时查看</h1>
+        <h1>耳机数据<br />实时 / 录播查看</h1>
         <p class="intro">
           本页只连接正在运行的 NeuroBridge 网关，不直接访问 USB 串口。点击“开始接收”后，
-          网关通过 WebSocket 转发 EEG、心率和设备状态；页面分别保留原始字节，并在独立区域展示解析结果。
+          网关通过 WebSocket 转发 EEG、心率和设备状态；页面分别保留原始字节，并在独立区域展示解析结果。耳机实时路径不可用时，网关可能按配置发送历史录播。
         </p>
       </header>
 
@@ -71,6 +71,9 @@
           <div><span>页面推算丢包</span><strong id="lostPackets">0</strong></div>
           <div><span>页面推算丢包率</span><strong id="lossRate">0.000000%</strong></div>
         </div>
+        <p id="sourceNotice" class="source-notice" data-mode="unknown">
+          正在等待网关报告数据来源。耳机连接状态只表示当前实时串口路径，录播数据可能在耳机未连接时继续发送。
+        </p>
         <p class="control-note">
           网关打开候选串口后先观察已有数据：发现合法 28 字节帧时立即校验成功并接管现有流，不发送 ACK 或 E1；候选静默时才发送固定 ACK，收到完整重复握手时重新发送 ACK，收到独立 01 后立即校验成功。算法在设备校验成功后初始化，只有算法就绪后才无响应写入 E1 使能采集；算法或 E1 失败不属于设备校验失败。
         </p>
@@ -82,7 +85,7 @@
       <div class="data-workspace">
         <section class="logs data-panel raw-panel" aria-labelledby="rawTitle">
           <div class="logs-title">
-            <div><h2 id="rawTitle">耳机原始数据</h2><span>每行仅包含毫秒时间戳和网关收到的原始字节，未解析、未改写</span></div>
+            <div><h2 id="rawTitle">耳机原始数据</h2><span>每行仅包含毫秒时间戳和网关实时收到或从历史录播读取的原始字节，未解析、未改写</span></div>
             <div class="raw-tools">
               <div class="format-switch" role="group" aria-label="数据显示格式">
                 <button id="hexFormatButton" class="format-button active" type="button" aria-pressed="true">16 进制</button>

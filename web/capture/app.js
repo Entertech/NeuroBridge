@@ -22,6 +22,7 @@ const elements = {
   gatewayMessage: document.querySelector("#gatewayMessage"),
   mode: document.querySelector("#modeValue"),
   deviceState: document.querySelector("#deviceState"),
+  sourceNotice: document.querySelector("#sourceNotice"),
   algorithmState: document.querySelector("#algorithmState"),
   subscriptionState: document.querySelector("#subscriptionState"),
   eventCount: document.querySelector("#eventCount"),
@@ -45,6 +46,7 @@ let protocolLines = [];
 let stats = createStats();
 let displayFormat = "hex";
 let deviceConnectionState = null;
+let dataMode = null;
 
 const DEVICE_STATE_LABELS = {
   connecting: "连接中",
@@ -55,8 +57,33 @@ const DEVICE_STATE_LABELS = {
 const DEVICE_STATE_MESSAGES = {
   connecting: "网关正在发现、打开并验证设备候选。",
   connected: "已有合法数据流或 ACK 返回独立 01，设备已验证。算法初始化和 E1 发生在设备验证之后；已有数据流时不会发送 E1。算法未就绪或 E1 写入失败会在网关日志中报告，但不属于设备验证失败。",
-  disconnected: "当前没有可用的实时设备路径；可能尚未发现设备、设备验证未通过或连接已断开，请查看网关日志定位内部阶段。",
+  disconnected: "当前没有可用的实时设备路径；可能尚未发现设备、设备验证未通过或连接已断开。数据模式为 replay 时，页面仍会显示历史录播数据。",
 };
+
+const DATA_MODE_LABELS = {
+  live: "实时 · live",
+  replay: "历史录播 · replay",
+};
+
+function renderSourceState() {
+  elements.mode.textContent = dataMode === null ? "—" : (DATA_MODE_LABELS[dataMode] || dataMode);
+  if (deviceConnectionState === null) {
+    elements.deviceState.textContent = "—";
+  } else if (deviceConnectionState === "disconnected" && dataMode === "replay") {
+    elements.deviceState.textContent = "实时耳机未连接 · 当前数据为录播";
+  } else {
+    elements.deviceState.textContent = `${DEVICE_STATE_LABELS[deviceConnectionState] || deviceConnectionState} · ${deviceConnectionState}`;
+  }
+
+  elements.sourceNotice.dataset.mode = dataMode || "unknown";
+  if (dataMode === "live") {
+    elements.sourceNotice.textContent = "当前数据来源：实时耳机。耳机连接状态与正在显示的数据来自同一条 USB 串口实时链路。";
+  } else if (dataMode === "replay") {
+    elements.sourceNotice.textContent = "当前数据来源：历史录播，不是当前耳机实时流。实时耳机未连接时，网关会按配置自动读取已保存数据并继续发送。";
+  } else {
+    elements.sourceNotice.textContent = "正在等待网关报告数据来源。耳机连接状态只表示当前实时串口路径，录播数据可能在耳机未连接时继续发送。";
+  }
+}
 
 if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
   elements.endpoint.value = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
@@ -382,18 +409,18 @@ function updateMetrics() {
 function updateStatus(data) {
   const result = data?.result && typeof data.result === "object" ? data.result : data;
   if (!result || typeof result !== "object") return;
-  if (result.mode !== undefined) elements.mode.textContent = result.mode;
+  if (result.mode !== undefined) dataMode = String(result.mode);
   const status = result.status || result.payload?.status || result;
   if (status.connectionState !== undefined) {
     const nextState = String(status.connectionState);
     const changed = nextState !== deviceConnectionState;
     deviceConnectionState = nextState;
-    elements.deviceState.textContent = `${DEVICE_STATE_LABELS[nextState] || nextState} · ${nextState}`;
     if (changed) {
       appendDataRecord({ type: "note", text: `设备状态：${DEVICE_STATE_LABELS[nextState] || nextState}（${nextState}）` });
       if (DEVICE_STATE_MESSAGES[nextState]) elements.gatewayMessage.textContent = DEVICE_STATE_MESSAGES[nextState];
     }
   }
+  renderSourceState();
   if (status.algorithmState !== undefined) elements.algorithmState.textContent = String(status.algorithmState);
 }
 
@@ -515,6 +542,7 @@ function exportDiagnosticLog() {
     `gatewayState=${elements.gatewayState.textContent}`,
     `gatewayMessage=${elements.gatewayMessage.textContent}`,
     `mode=${elements.mode.textContent}`,
+    `dataMode=${dataMode ?? "unknown"}`,
     `deviceConnectionState=${deviceConnectionState ?? "unknown"}`,
     `deviceConnectionStateLabel=${elements.deviceState.textContent}`,
     `algorithmState=${elements.algorithmState.textContent}`,
@@ -566,6 +594,7 @@ elements.decimalFormat.addEventListener("click", () => setDisplayFormat("decimal
 
 refreshControls();
 updateMetrics();
+renderSourceState();
 if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
   connect();
 }

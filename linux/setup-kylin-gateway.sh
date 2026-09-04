@@ -4,6 +4,7 @@ set -u -o pipefail
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 runtime_dir="$root_dir/.runtime"
+autostart_preference_path="$runtime_dir/config/kylin-autostart.conf"
 setup_log=
 
 usage() {
@@ -11,8 +12,8 @@ usage() {
 Usage: ./linux/setup-kylin-gateway.sh
 
 Galaxy Kylin project assistant. It provides a numeric menu for:
-  1. Prepare everything needed and start (recommended, safe to repeat)
-  2. Start the already configured gateway
+  1. Prepare everything needed and start with boot autostart (recommended)
+  2. Start the already configured gateway using its saved autostart preference
   3. Update source from the network (optional)
   4. Check the currently connected USB/serial device
   5. Regenerate the project serial configuration
@@ -245,9 +246,22 @@ start_gateway() {
     show_menu_action 9 "./linux/setup-kylin-autostart.sh status"
     return 0
   fi
-  log_message "启动后用本机浏览器打开：http://127.0.0.1:8080/"
-  log_message "按 Ctrl+C 停止网关并返回菜单。"
-  run_step "启动 NeuroBridge" "$root_dir/linux/start-kylin-gateway.sh"
+  if [[ -f $autostart_preference_path && ! -L $autostart_preference_path ]] \
+    && grep -Fqx 'enabled=false' "$autostart_preference_path"; then
+    log_message "已显式配置为非自启，本次以前台方式启动；可在菜单 9 中重新启用默认自启。"
+    log_message "启动后用本机浏览器打开：http://127.0.0.1:8080/"
+    log_message "按 Ctrl+C 停止网关并返回菜单。"
+    run_step "以前台方式启动 NeuroBridge" "$root_dir/linux/start-kylin-gateway.sh"
+    return $?
+  fi
+  if [[ -e $autostart_preference_path \
+    && ( ! -f $autostart_preference_path || -L $autostart_preference_path ) ]]; then
+    log_message "自启偏好文件不是安全的普通文件，拒绝自动安装 systemd 服务：$autostart_preference_path"
+    return 1
+  fi
+  log_message "默认使用 systemd 开机自启；如需非自启，请在菜单 9 中选择停止并禁用。"
+  run_step "安装/更新并启动 systemd 网关" "$root_dir/linux/setup-kylin-autostart.sh" enable
+  return $?
 }
 
 export_diagnostics() {
@@ -337,9 +351,9 @@ manage_autostart() {
   cat <<'EOF'
 
 开机自启管理
-  1. 启用开机自启并立即转为后台运行
+  1. 启用默认开机自启并立即转为后台运行
   2. 查看开机自启状态
-  3. 停止并禁用开机自启
+  3. 停止并显式配置为非自启
   0. 返回主菜单
 EOF
   printf '请输入选项 [0-3]: '
@@ -349,10 +363,10 @@ EOF
     1) run_step "启用并启动 systemd 网关" "$root_dir/linux/setup-kylin-autostart.sh" enable ;;
     2) run_step "查看 systemd 网关状态" "$root_dir/linux/setup-kylin-autostart.sh" status ;;
     3)
-      if ask_yes_no "是否停止网关并禁用开机自启？"; then
+      if ask_yes_no "是否停止网关并显式配置为非自启？"; then
         run_step "停止并禁用 systemd 网关" "$root_dir/linux/setup-kylin-autostart.sh" disable
       else
-        log_message "已取消禁用开机自启。"
+        log_message "已取消非自启配置。"
       fi
       ;;
     0) return 0 ;;
@@ -410,15 +424,15 @@ show_menu() {
   cat <<'EOF'
 
 NeuroBridge 银河麒麟一键助手
-  1. 一键准备并启动（推荐，可重复执行）
-  2. 直接启动网关（已经配置好时）
+  1. 一键准备并启动（默认开机自启，推荐）
+  2. 直接启动网关（遵循已保存的自启配置）
   3. 联网更新代码（可选，离线不要选）
   4. 检查当前 USB/串口（无需拔插）
   5. 重新生成 USB 串口配置
   6. 修复/重新构建本地算法
   7. 导出完整诊断包
   8. 查看最近日志
-  9. 开机自启管理
+  9. 配置自启/非自启
   0. 退出
 EOF
 }

@@ -9,6 +9,7 @@ root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 runtime_dir="$root_dir/.runtime"
 start_script="$root_dir/linux/start-kylin-gateway.sh"
 config_path="$runtime_dir/config/gateway.toml"
+preference_path="$runtime_dir/config/kylin-autostart.conf"
 action=${1:-}
 
 fail() {
@@ -28,7 +29,9 @@ Usage: ./linux/setup-kylin-autostart.sh enable|status|disable
 
 Run as the normal desktop user. The script requests sudo only for systemd
 changes. The gateway, algorithm, configuration, recordings, and logs remain in
-this project checkout; the service never runs the gateway as root.
+this project checkout; the service never runs the gateway as root. Autostart is
+the project default. The disable action records an explicit persistent opt-out;
+the enable action clears that opt-out.
 EOF
 }
 
@@ -40,12 +43,38 @@ systemd_quote() {
   printf '"%s"' "$value"
 }
 
+autostart_preference() {
+  if [[ ! -e $preference_path ]]; then
+    printf 'enabled (default)'
+  elif [[ -f $preference_path && ! -L $preference_path ]] \
+    && grep -Fqx 'enabled=false' "$preference_path"; then
+    printf 'disabled (explicit)'
+  elif [[ -f $preference_path && ! -L $preference_path ]] \
+    && grep -Fqx 'enabled=true' "$preference_path"; then
+    printf 'enabled (explicit)'
+  else
+    printf 'invalid'
+  fi
+}
+
+write_autostart_preference() {
+  local enabled=$1 preference_tmp
+  [[ ! -e $preference_path || ( -f $preference_path && ! -L $preference_path ) ]] || fail \
+    "Autostart preference is not a safe regular file: $preference_path"
+  install -d -m 0750 "$runtime_dir" "$runtime_dir/config" "$runtime_dir/tmp"
+  preference_tmp=$(mktemp "$runtime_dir/tmp/kylin-autostart.XXXXXX")
+  printf 'enabled=%s\n' "$enabled" >"$preference_tmp"
+  chmod 0600 "$preference_tmp"
+  mv -f -- "$preference_tmp" "$preference_path"
+}
+
 show_status() {
-  local enabled_state active_state
+  local enabled_state active_state preference_state
   enabled_state=$(systemctl is-enabled "$unit_name" 2>/dev/null || true)
   active_state=$(systemctl is-active "$unit_name" 2>/dev/null || true)
-  printf 'service=%s\nenabled=%s\nactive=%s\n' \
-    "$unit_name" "${enabled_state:-not-installed}" "${active_state:-inactive}"
+  preference_state=$(autostart_preference)
+  printf 'service=%s\nconfiguredAutostart=%s\nenabled=%s\nactive=%s\n' \
+    "$unit_name" "$preference_state" "${enabled_state:-not-installed}" "${active_state:-inactive}"
   systemctl status "$unit_name" --no-pager -l 2>&1 || true
 }
 
@@ -86,7 +115,8 @@ if [[ $action == disable ]]; then
     if systemctl cat "$unit_name" >/dev/null 2>&1; then
       fail "$unit_name exists outside $unit_path and is not managed by this project; refusing to stop it."
     fi
-    printf 'NeuroBridge boot startup is already disabled; no managed unit is installed.\n'
+    write_autostart_preference false
+    printf 'NeuroBridge boot startup is explicitly disabled; no managed unit is installed.\n'
     show_status
     exit 0
   fi
@@ -94,7 +124,8 @@ if [[ $action == disable ]]; then
     "$unit_path exists but is not managed by the Kylin project installer; refusing to stop it."
   sudo systemctl disable --now "$unit_name" || fail \
     "Could not stop and disable $unit_name. Inspect it with: sudo systemctl status $unit_name"
-  printf 'NeuroBridge boot startup disabled.\n'
+  write_autostart_preference false
+  printf 'NeuroBridge boot startup disabled and saved as the explicit project preference.\n'
   show_status
   exit 0
 fi
@@ -209,6 +240,7 @@ elif ! sudo systemctl start "$unit_name"; then
   printf 'Logs: sudo journalctl -u %s -n 300 --no-pager -o short-iso-precise\n' "$unit_name" >&2
   exit 1
 fi
+write_autostart_preference true
 
 printf 'NeuroBridge boot startup configured.\n'
 printf 'project=%s\nrunAs=%s:%s\nunit=%s\n' \

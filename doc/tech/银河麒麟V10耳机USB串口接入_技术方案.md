@@ -180,8 +180,8 @@ ff51         = frame[24:25]  # 1 字节 HR
 3. 检查 USB/TTY、权限、占用和 pyserial 打开能力。
 4. 从锁定源码构建 C++ 算法 bridge。
 5. 运行无人体数据进程自检，成功后原子更新项目配置。
-6. 验证本机端口空闲并启动前台实例。
-7. 现场确认后安装以当前桌面用户运行的 systemd 服务。
+6. 验证本机端口空闲，默认安装或复用以当前桌面用户运行的 systemd 服务并立即启动。
+7. 操作员显式配置为非自启时持久记录该偏好，后续日常启动改用前台实例；重新启用后恢复 systemd 默认自启。
 
 `serial_configuration_ready()` 必须读取 `[data_source].type="serial"` 和 `[access].mode="local_browser"`，保证重复执行时跳过已完成配置，不反复覆盖文件。
 

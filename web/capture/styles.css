@@ -37,9 +37,14 @@ button:disabled { cursor: not-allowed; filter: none; opacity: .4; }
 .metrics div { min-width: 0; border-radius: 11px; padding: 13px 14px; background: rgba(4, 17, 21, .72); }
 .metrics span { display: block; color: var(--muted); font-size: .72rem; }
 .metrics strong { display: block; margin-top: 6px; color: #e9f8f4; font: .8rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.source-notice { margin: 16px 0 0; border: 1px solid #315359; border-radius: 11px; padding: 12px 14px; background: rgba(3, 13, 17, .56); color: #c8dfda; line-height: 1.55; }
+.source-notice[data-mode="live"] { border-color: rgba(97, 217, 162, .55); color: #baf0d5; }
+.source-notice[data-mode="replay"] { border-color: rgba(242, 190, 99, .62); background: rgba(242, 190, 99, .08); color: #f5d99f; }
 .logs { margin-top: 28px; }
-.data-workspace { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; margin-top: 28px; }
+.data-workspace { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 430px), 1fr)); gap: 28px; margin-top: 28px; }
 .data-workspace .logs { min-width: 0; margin-top: 0; border: 1px solid var(--line); border-radius: 18px; padding: 20px; background: rgba(10, 30, 35, .64); box-shadow: 0 16px 44px rgba(0, 0, 0, .18); }
+.data-panel { display: flex; min-height: 390px; flex-direction: column; }
+.data-panel pre { flex: 1; }
 .logs-title { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
 .logs-title h2 { font-size: 1rem; }
 .logs-title span { color: var(--muted); font-size: .76rem; }
@@ -55,12 +60,6 @@ button.compact-button { min-height: 42px; white-space: nowrap; }
 .privacy-note { color: #b8cfca; line-height: 1.65; }
 .privacy-note strong { color: #eff8f6; }
 .privacy-note p { margin: 8px 0 0; }
-@media (min-width: 1180px) {
-  .data-workspace { grid-template-columns: minmax(0, 1.55fr) minmax(360px, .75fr); align-items: stretch; }
-  .data-panel { display: flex; min-height: 490px; flex-direction: column; }
-  .data-panel pre { flex: 1; max-height: none; }
-  .decoded-panel .logs-title { min-height: 78px; align-items: flex-start; }
-}
 @media (max-width: 760px) {
   .protocol-grid, .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .endpoint-row { grid-template-columns: 1fr; }

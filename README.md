@@ -10,7 +10,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 串口策略稳定排序并逐个探测 `/dev/serial/by-id/`、`ttyACM*`、`ttyUSB*`。每个候选打开后先观察已有合法 28 字节帧；有则立即 `validated` 并接管，不发送 ACK 或 `0xE1`。静默候选才发送固定 ACK，收到独立 `0x01` 时立即 `validated`；本地算法就绪后无响应发送 `0xE1`。`0xE0` 只停止出数。算法或 `0xE1` 失败发生在设备验证之后，不得记为 `validation_failed`。完整 28 字节帧及串口读取边界时间只写入受保护的内部录制目录。
 
-银河麒麟 x86_64 项目的日常入口不会自动访问 Git。耳机 USB 已连接时运行入口并输入 `1`；已有完整配置时也可输入 `2` 直接启动：
+银河麒麟 x86_64 项目的日常入口不会自动访问 Git。耳机 USB 已连接时运行入口并输入 `1`；已有完整配置时也可输入 `2` 直接启动。两项默认都会安装或复用以当前桌面用户运行的 `neurobridge.service`，立即启动并设为开机自启；只有在菜单 `9` 中显式配置为非自启后，日常入口才以前台方式运行：
 
 ```bash
 bash linux/neurobridge-kylin-bootstrap.sh
@@ -69,11 +69,11 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 | 场景 | 入口 | 当前状态 |
 | --- | --- | --- |
-| 银河麒麟 V10 x86_64 网关 | [`linux/neurobridge-kylin-bootstrap.sh`](linux/neurobridge-kylin-bootstrap.sh) | 菜单 `1` 完成项目内配置与前台验证；菜单 `9` 安装、查看或停用以当前桌面用户运行的 systemd 开机自启服务。 |
+| 银河麒麟 V10 x86_64 网关 | [`linux/neurobridge-kylin-bootstrap.sh`](linux/neurobridge-kylin-bootstrap.sh) | 菜单 `1` 完成项目内配置并默认安装/启动 systemd 开机自启服务；菜单 `9` 可查看状态或显式配置为非自启。 |
 | Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 首期部署入口；安装为 systemd 服务。 |
 | macOS 历史 POC | [`mac/start-poc.command`](mac/start-poc.command) | 保留代码，不属于当前银河麒麟耳机 USB 串口交付或验收。 |
 | Windows 网关 | [`windows/README.md`](windows/README.md) | 尚未完成设备、算法和后台服务验证，不能作为交付部署入口。 |
-| 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；可订阅/停止页面数据，将同一设备帧的序列号、六路 EEG 与 HR 合并成一行，并显示 600ms 窗口和序列号丢包统计。 |
+| 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；明确区分实时耳机连接与 `live`/`replay` 数据来源，两块数据区按页面可用宽度自动并排或换行。 |
 | 本机可视化/兼容 B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 默认由网关在回环地址提供；兼容模式仍可作为独立 B 端联调页。 |
 
 默认本机场景启动网关后访问 `http://127.0.0.1:8080/` 使用完整联调台，访问 `http://127.0.0.1:8080/capture/` 查看耳机原始数据。两个页面都使用网关动态注入的 `ws://127.0.0.1:8765/neurobridge/v1/ws`。`capture` 的开始/停止按钮只订阅或取消当前网页的数据推送，设备连接、串口、算法、录制和服务生命周期仍由后台网关负责。
