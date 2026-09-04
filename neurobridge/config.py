@@ -215,7 +215,9 @@ def load(path: str | Path) -> GatewayConfig:
             raise ValueError("network DHCP range must be IPv4, inside subnet, and exclude server.host")
         if not dhcp_lease_time[:-1].isdigit() or dhcp_lease_time[-1:] not in {"m", "h", "d"} or int(dhcp_lease_time[:-1]) <= 0:
             raise ValueError("network.dhcp_lease_time must use a positive m, h, or d duration")
-    data_source_type = str(data_source.get("type", "bluetooth"))
+    if "type" not in data_source:
+        raise ValueError("data_source.type must be explicitly configured as bluetooth, serial, or usb")
+    data_source_type = str(data_source["type"])
     if data_source_type not in {"bluetooth", "serial", "usb"}:
         raise ValueError("data_source.type must be bluetooth, serial, or usb")
 

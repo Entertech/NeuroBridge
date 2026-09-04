@@ -46,6 +46,8 @@ class LocalBrowserAccessStrategy(AccessStrategy):
             raise ValueError("local_browser requires local_ui.host = 127.0.0.1")
         if config.local_ui.port == config.server.port:
             raise ValueError("local_ui.port must differ from server.port")
+        if config.download.enabled and config.download.port == config.server.port:
+            raise ValueError("server.port must differ from download.port when downloads are enabled")
         if config.download.enabled and config.local_ui.port == config.download.port:
             raise ValueError("local_ui.port must differ from download.port when downloads are enabled")
         if config.network.mode != "static":
@@ -93,6 +95,8 @@ class WiredBSideAccessStrategy(AccessStrategy):
             download_address = ipaddress.ip_address(config.download.host)
             if not self._is_rfc1918_ipv4(download_address):
                 raise ValueError("wired_b_side requires download.host to be an RFC1918 IPv4 address")
+            if config.download.host == config.server.host and config.download.port == config.server.port:
+                raise ValueError("server and download listeners must not use the same host and port")
 
     def websocket_origins(self, config: GatewayConfig) -> None:
         # Preserve compatibility with non-browser clients and the published

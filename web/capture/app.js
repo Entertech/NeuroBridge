@@ -566,3 +566,6 @@ elements.decimalFormat.addEventListener("click", () => setDisplayFormat("decimal
 
 refreshControls();
 updateMetrics();
+if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
+  connect();
+}

@@ -49,6 +49,7 @@ class DhcpConfigurationTests(unittest.TestCase):
             config_path = Path(directory) / "gateway.toml"
             config_path.write_text(
                 "\n".join((
+                    "[data_source]", 'type = "bluetooth"', "",
                     "[access]", 'mode = "wired_b_side"', "",
                     "[local_ui]", "enabled = false", "",
                     "[server]", 'host = "192.168.88.10"', "",

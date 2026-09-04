@@ -473,6 +473,31 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('[[ $# -eq 0 ]]', install_script)
         self.assertIn("systemctl enable neurobridge.service", install_script)
 
+    def test_ubuntu_installer_grants_only_the_current_serial_device_groups(self) -> None:
+        install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
+        self.assertIn("for tty_device in /dev/ttyACM* /dev/ttyUSB*", install_script)
+        self.assertIn("stat -Lc '%G'", install_script)
+        self.assertIn('[[ $tty_group == root ]]', install_script)
+        self.assertIn('usermod -aG "$tty_group" neurobridge', install_script)
+        self.assertIn("no current ttyACM/ttyUSB device group was granted", install_script)
+        self.assertNotIn("chmod 666", install_script)
+        self.assertNotIn("for tty_group in dialout uucp", install_script)
+
+    def test_local_browser_pages_connect_and_query_status_automatically(self) -> None:
+        auto_connect = (
+            'if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {\n'
+            "  connect();\n"
+            "}"
+        )
+        for relative_path in ("web/b-client-test/app.js", "web/capture/app.js"):
+            with self.subTest(path=relative_path):
+                script = (ROOT / relative_path).read_text(encoding="utf-8")
+                open_handler = script.split('socket.addEventListener("open", () => {', 1)[1].split(
+                    'socket.addEventListener("message",', 1
+                )[0]
+                self.assertIn('sendRequest("getStatus", {});', open_handler)
+                self.assertIn(auto_connect, script)
+
     def test_one_command_update_uses_only_the_existing_checkout(self) -> None:
         script = (ROOT / "linux" / "update-ubuntu.sh").read_text(encoding="utf-8")
         self.assertIn('exec sudo --preserve-env=PATH bash "$0"', script)

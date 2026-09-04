@@ -142,6 +142,20 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         if len(request) != 3:
             await _send_error(writer, 400, "Invalid request")
             return
+        host_headers = []
+        for line in lines[1:]:
+            if not line:
+                continue
+            if ":" not in line:
+                await _send_error(writer, 400, "Invalid request header")
+                return
+            name, value = line.split(":", 1)
+            if name.lower() == "host":
+                host_headers.append(value.strip())
+        expected_host = f"{gateway.config.download.host}:{gateway.config.download.port}"
+        if host_headers != [expected_host]:
+            await _send_error(writer, 421, "Misdirected Request")
+            return
         method, target, _version = request
         if method not in {"GET", "HEAD"}:
             await _send_error(writer, 405, "Method not allowed")

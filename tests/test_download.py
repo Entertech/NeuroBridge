@@ -28,9 +28,20 @@ def unused_port() -> int:
         return int(probe.getsockname()[1])
 
 
-async def http_get(port: int, target: str, method: str = "GET") -> tuple[int, dict[str, str], bytes]:
+async def http_get(
+    port: int,
+    target: str,
+    method: str = "GET",
+    *,
+    host: str | None = None,
+    include_host: bool = True,
+) -> tuple[int, dict[str, str], bytes]:
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
-    writer.write(f"{method} {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".encode("ascii"))
+    request_headers = [f"{method} {target} HTTP/1.1"]
+    if include_host:
+        request_headers.append(f"Host: {host or f'127.0.0.1:{port}'}")
+    request_headers.append("Connection: close")
+    writer.write(("\r\n".join(request_headers) + "\r\n\r\n").encode("ascii"))
     await writer.drain()
     raw = await reader.read()
     writer.close()
@@ -118,3 +129,9 @@ class DownloadServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(active, [entry["recordingId"] for entry in json.loads(body)["recordings"]])
         status, _headers, _body = await http_get(self.port, f"/downloads/recordings/{active}.zip")
         self.assertEqual(status, 409)
+
+    async def test_rejects_missing_or_unapproved_host(self) -> None:
+        status, _headers, _body = await http_get(self.port, "/downloads", host="attacker.example")
+        self.assertEqual(status, 421)
+        status, _headers, _body = await http_get(self.port, "/downloads", include_host=False)
+        self.assertEqual(status, 421)

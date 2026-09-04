@@ -39,6 +39,9 @@ mode = "static"
 # serial. Native usb remains blocked until its VID/PID/interface/endpoints and
 # transfer contract are confirmed. Use bluetooth only for an approved BLE
 # regression deployment. Changing this value requires a service restart.
+# On Ubuntu, install-ubuntu.sh grants the service account the group of each
+# currently enumerated ttyACM/ttyUSB node. If no serial device is connected
+# during installation, connect it and rerun the installer before starting.
 [data_source]
 type = "serial"
 
