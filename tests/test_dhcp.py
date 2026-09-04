@@ -5,9 +5,11 @@ import tempfile
 import unittest
 
 from neurobridge.config import (
+    AccessConfig,
     AlgorithmConfig,
     BleConfig,
     GatewayConfig,
+    LocalUiConfig,
     NetworkConfig,
     RecordingConfig,
     ServerConfig,
@@ -23,6 +25,8 @@ def gateway_config(mode: str = "dhcp") -> GatewayConfig:
         RecordingConfig(Path("/var/lib/neurobridge/recordings"), None, None, 1),
         AlgorithmConfig(False, ()),
         network=NetworkConfig(mode, "enp1s0", "192.168.88.0/24", "192.168.88.20", "192.168.88.200", "12h"),
+        access=AccessConfig("wired_b_side"),
+        local_ui=LocalUiConfig(False),
     )
 
 
@@ -45,6 +49,9 @@ class DhcpConfigurationTests(unittest.TestCase):
             config_path = Path(directory) / "gateway.toml"
             config_path.write_text(
                 "\n".join((
+                    "[data_source]", 'type = "bluetooth"', "",
+                    "[access]", 'mode = "wired_b_side"', "",
+                    "[local_ui]", "enabled = false", "",
                     "[server]", 'host = "192.168.88.10"', "",
                     "[network]", 'mode = "dhcp"', 'interface = "enp1s0"',
                     'subnet_cidr = "192.168.88.0/24"',

@@ -6,15 +6,17 @@
 
 ## 当前实现结论
 
-NeuroBridge 已实现 AffectiveCloud C++ SDK 的进程边界：网关在 `algorithm.enabled=true` 时启动配置的行 JSON bridge 进程，每个完整 BLE 窗口将原始 `FF31` 和 `FF51` 字节以 Base64 交给 bridge。bridge 可调用 SDK 的双通道 `appendEEG` 和 `appendHR` 并返回既有嵌套 `algorithm` 对象；原始 EEG、心率和每类算法指标以独立事件文件按会话保存；指标记录使用各自的输入接收时间和计算完成时间，录播只读取已保存事件，不重新调用算法。
+NeuroBridge 已实现 AffectiveCloud C++ SDK 的进程边界：网关在 `algorithm.enabled=true` 时启动配置的行 JSON bridge 进程，每个完整窗口将原始 EEG 和心率字节以 Base64 交给 bridge。BLE 来源直接使用 `FF31`/`FF51`；当前 USB 串口来源从 28 字节帧原样提取偏移 4～23 的 20 字节 EEG 和偏移 24 的 1 字节心率，复用同一算法合同。bridge 可调用 SDK 的双通道 `appendEEG` 和 `appendHR` 并返回既有嵌套 `algorithm` 对象；原始 EEG、心率和每类算法指标以独立事件文件按会话保存；录播只读取已保存事件，不重新调用算法。
 
-**这不是算法 POC 或现场验收通过的声明。** 当前公开 SDK 的 `Affective.h` 注释默认双通道 EEG 每 0.6 秒为 50 个包、HR 为 3 个包；设备通信规范定义 `FF31=20` 字节、`FF51=1` 字节，且未定义 `FF52`。网关仅持久化这两类原始字节，并将完整的 `FF31`/`FF51` 窗口交给 bridge。部署模板默认 `algorithm.enabled=true`；真实数据的包数、采样率、字节序、输入分组及输出时序仍须验证，不得以 SDK 的零值或单个窗口作为有效算法结论。
+**这不是算法 POC 或现场验收通过的声明。** 当前公开 SDK 的 `Affective.h` 注释默认双通道 EEG 每 0.6 秒为 50 个包、HR 为 3 个包；真实数据的包数、采样率、字节序、输入分组及输出时序仍须验证。项目内麒麟模板保持 `algorithm.enabled=false`；只有目标机本地构建且进程自检成功后，一键脚本才会自动启用。进程自检不包含人体数据，只证明 bridge 在当前系统可启动并符合进程合同；不得以其零值、单个窗口或成功退出码作为算法有效结论。
 
 ## 固定来源
 
-SDK 的仓库、提交和版本锁定在仓库根目录的 [sdk.lock](../../sdk.lock)。Ubuntu 24.04 所需的 AffectiveCloud C++ package 与 NumCpp 锁定源码已随仓库保存在 [`third_party/`](../../third_party/)，因此完成 NeuroBridge 源码 checkout 后，bridge 构建不需要再访问 GitHub 或下载 SDK。macOS POC 仍可使用 [build-algorithm-bridge.command](../../mac/build-algorithm-bridge.command) 构建合成输入烟雾测试。不要把构建产物、录制人体数据或 SDK 缓存提交到本仓库。
+SDK 的仓库、提交和版本锁定在仓库根目录的 [sdk.lock](../../sdk.lock)。Ubuntu 24.04 和银河麒麟 V10 x86_64 所需的 AffectiveCloud C++ package 与 NumCpp 锁定源码已随仓库保存在 [`third_party/`](../../third_party/)，因此 bridge 构建不需要再访问 GitHub 或下载 SDK。macOS POC 仍可使用 [build-algorithm-bridge.command](../../mac/build-algorithm-bridge.command) 构建合成输入烟雾测试。不要把构建产物、录制人体数据或 SDK 缓存提交到本仓库。
 
 Ubuntu 24.04 安装器以 `neurobridge` 服务账户调用 [`linux/build-algorithm-bridge.sh`](../../linux/build-algorithm-bridge.sh)，从当前 checkout 的 `third_party/` 构建，并以 root 所有、只读的形式安装到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`。网关未配置 `algorithm.command` 时自动使用该固定路径。目标机可匿名使用 Git 获取 NeuroBridge 源码；源码到位后的安装、bridge 构建和运行不执行 `git` 或网络下载。SDK 构建与固定路径安装不代表算法 POC 或现场验收通过；启用前仍须在 Ubuntu x86_64 记录 Ubuntu 版本、`cmake --version`、`c++ --version`、Eigen3 版本、NumCpp 版本、SDK commit 和 bridge SHA-256。C++ SDK 要求 C++17、Eigen3、NumCpp。
+
+银河麒麟 V10 x86_64 使用 [`linux/setup-kylin-algorithm.sh`](../../linux/setup-kylin-algorithm.sh)，在目标机上调用同一构建脚本，将成品安装到项目 `.runtime/algorithm/neurobridge_affective_bridge`。脚本验证 CMake 3.22+、C++17 编译器、Eigen3、NumCpp 和 SDK 锁定源码；缺少系统构建依赖时先询问 `yes/no`，未获授权或安装失败则不更改配置。新 bridge 先在独立尝试目录构建，然后执行无人体数据进程自检；只有自检成功才原子替换产物、备份 `.runtime/config/gateway.toml` 并写入 `algorithm.enabled=true` 及项目内命令路径。失败尝试、日志、配置备份和最终产物均保存在 `.runtime/` 且不提交 Git。
 
 ## bridge 合同
 
@@ -46,15 +48,15 @@ bridge 保留每个窗口内的原始字节顺序，不补零、截断、重排�
 
 ## POC 门槛
 
-1. 在目标 Ubuntu x86_64 上用实际头环采集连续原始 `FF31`、`FF51`，确认 20、1 字节长度以及每 600 ms 的实际包数。
+1. 在最终目标 Linux x86_64 环境（正式环境为 N100/N150 + 银河麒麟 V10）上用实际头环采集连续原始 EEG/心率投影，确认 20、1 字节长度以及每 600 ms 的实际包数。
 2. 使用同一录制数据运行 [`tools/run-algorithm-poc.py`](../../tools/run-algorithm-poc.py)，验证 bridge 获得的 `FF31`/`FF51` 输入字节序、包数、完整性、启动和响应时序；报告不得包含原始字节或算法数值。
 3. 抽样比对 bridge 输出与 SDK 官方演示/参考实现；记录算法字段、单位、范围、延迟和无效条件。
 4. 启用 `algorithm.enabled` 后，分别验证实时、录播、设备断线重连、bridge 异常与恢复；录播不得重新计算算法。
 5. 通过上述项后，确认固定 bridge 路径可用并更新此文档的 POC 结论为“POC 已验证”；现场演练通过后才可标为“现场验收通过”。
 
-## Ubuntu x86_64 受控执行流程
+## 目标 Linux x86_64 受控执行流程
 
-以下操作只能在目标 Ubuntu x86_64、已获得受试者授权的受控环境执行。全程不打印、复制或提交 JSONL 中的 Base64 原始数据；报告只保存包数、异常计数、bridge 摘要和输出字段名。
+以下操作只能在目标 Linux x86_64、已获得受试者授权的受控环境执行。全程不打印、复制或提交 JSONL 中的 Base64 原始数据；报告只保存包数、异常计数、bridge 摘要和输出字段名。麒麟环境先在项目根目录执行 `./linux/setup-kylin-algorithm.sh`；看到 `Algorithm bridge smoke test: OK`、`algorithmEnabled=true` 和 `Algorithm setup complete` 只表示可继续真实数据 POC。Ubuntu 兼容基线则继续按下述固定服务路径流程执行。
 
 1. 先以 `algorithm.enabled=false` 完成一次真实头环采集，并停止网关使会话成为已结束录制。记录 `recordingId`，但不要导出或传输原始 JSONL。
 2. 从当前 checkout 运行安装器，以服务账户使用仓库内锁定源码构建 bridge 并安装至固定服务路径。该步骤不执行 `apt-get`、`git` 或网络下载；Ubuntu 基础镜像须已具备 Python 运行环境、CMake、C++17 编译器和 Eigen3：

@@ -3,55 +3,118 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NeuroBridge · 头环采集 POC</title>
-    <link rel="stylesheet" href="/capture/styles.css" />
+    <meta name="color-scheme" content="dark" />
+    <title>NeuroBridge · 耳机数据查看</title>
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main>
-      <p class="eyebrow">NEUROBRIDGE / MACOS POC</p>
-      <h1>头环采集控制台</h1>
-      <p class="intro">页面打开后将立即在本机扫描已配置头环。连接成功后，网关会订阅设备通知、启动采集，并把完整窗口交给本地算法输入 bridge。</p>
+      <header class="hero">
+        <p class="eyebrow">NEUROBRIDGE / GATEWAY DATA VIEWER</p>
+        <h1>耳机数据<br />实时查看</h1>
+        <p class="intro">
+          本页只连接正在运行的 NeuroBridge 网关，不直接访问 USB 串口。点击“开始接收”后，
+          网关通过 WebSocket 转发 EEG、心率和设备状态；页面分别保留原始字节，并在独立区域展示解析结果。银河麒麟耳机 USB 串口路径不可用时不会切换为历史录播。
+        </p>
+      </header>
 
-      <section class="card status-card" aria-live="polite">
-        <div class="status-heading">
-          <div>
-            <p class="label">连接状态</p>
-            <p id="connectionState" class="state">正在准备扫描…</p>
-          </div>
-          <span id="indicator" class="indicator" aria-label="连接状态指示灯"></span>
+      <section class="card overview" aria-labelledby="overviewTitle">
+        <div class="section-heading">
+          <div><p class="label">数据链路</p><h2 id="overviewTitle">耳机 → USB 串口 → 网关服务 → 当前网页</h2></div>
+          <span class="service-badge">网关托管</span>
         </div>
-        <dl>
-          <div><dt>算法 bridge</dt><dd id="algorithmState">—</dd></div>
-          <div><dt>录制会话</dt><dd id="recordingId">等待连接</dd></div>
-          <div><dt>WebSocket</dt><dd id="websocketUrl">—</dd></div>
-          <div class="connection-error"><dt>采集初始化</dt><dd id="connectionError">等待扫描</dd></div>
+        <dl class="protocol-grid">
+          <div><dt>网页入口</dt><dd>127.0.0.1:8080/capture/</dd></div>
+          <div><dt>数据通道</dt><dd>WebSocket · neurobridge.v1</dd></div>
+          <div><dt>原始数据</dt><dd>eeg.raw · hr.raw</dd></div>
+          <div><dt>开始接收</dt><dd>subscribe</dd></div>
+          <div><dt>停止接收</dt><dd>unsubscribe</dd></div>
+          <div><dt>串口占用</dt><dd>始终由网关独占</dd></div>
         </dl>
       </section>
 
-      <section class="actions" aria-label="采集操作">
-        <button id="startButton" type="button">重新开始扫描</button>
-        <button id="stopButton" class="secondary" type="button">停止采集</button>
-        <a id="saveButton" class="secondary" href="#" aria-disabled="true">一键保存 ZIP</a>
-        <a class="b-client-link" href="/b-client/" target="_blank" rel="noopener">打开 B 端订阅页</a>
+      <section class="card" aria-labelledby="connectTitle">
+        <div class="section-heading">
+          <div><p class="label">连接</p><h2 id="connectTitle">连接当前网关服务</h2></div>
+          <span id="gatewayState" class="state-badge" data-state="idle">未连接</span>
+        </div>
+        <label class="endpoint-row" for="endpoint">
+          <span>WebSocket 地址</span>
+          <input id="endpoint" type="url" value="ws://127.0.0.1:8765/neurobridge/v1/ws" spellcheck="false" />
+        </label>
+        <div class="actions">
+          <button id="connectButton" type="button">连接网关</button>
+          <button id="disconnectButton" class="secondary" type="button" disabled>断开网页</button>
+          <button id="statusButton" class="secondary" type="button" disabled>查询状态</button>
+          <button id="startButton" type="button" disabled>开始接收</button>
+          <button id="stopButton" class="danger" type="button" disabled>停止接收</button>
+          <button id="clearButton" class="secondary" type="button">清空显示</button>
+          <button id="exportButton" class="secondary" type="button">导出诊断日志</button>
+        </div>
+        <p id="gatewayMessage" class="message" role="status">正在等待连接网关。</p>
+        <p class="control-note">
+          “开始/停止”只控制当前网页是否订阅数据，不会停止网关进程、USB 串口或设备连接。关闭网页后，网关仍正常运行。
+        </p>
       </section>
 
-      <section class="card note">
-        <p>本页仅绑定本机回环地址。“一键保存 ZIP”会导出当前或最近一次采集会话的原始 EEG、原始心率、独立算法指标文件和清单；下载文件含敏感生理数据，请仅在已授权的受控设备上保存。</p>
+      <section class="card" aria-labelledby="statusTitle">
+        <div class="section-heading"><div><p class="label">状态</p><h2 id="statusTitle">网关与数据统计</h2></div></div>
+        <div class="metrics">
+          <div><span>数据模式</span><strong id="modeValue">—</strong></div>
+          <div><span>耳机连接</span><strong id="deviceState">—</strong></div>
+          <div><span>本地算法</span><strong id="algorithmState">—</strong></div>
+          <div><span>订阅状态</span><strong id="subscriptionState">未订阅</strong></div>
+          <div><span>数据事件</span><strong id="eventCount">0</strong></div>
+          <div><span>EEG 包 / 字节</span><strong id="eegCount">0 / 0</strong></div>
+          <div><span>HR 包 / 字节</span><strong id="hrCount">0 / 0</strong></div>
+          <div><span>最新序列号</span><strong id="sequenceValue">—</strong></div>
+          <div><span>页面推算丢包</span><strong id="lostPackets">0</strong></div>
+          <div><span>页面推算丢包率</span><strong id="lossRate">0.000000%</strong></div>
+        </div>
+        <p id="sourceNotice" class="source-notice" data-mode="unknown">
+          正在等待网关报告数据来源。耳机串口未验证时不会发送历史录播数据，需等待实时串口恢复。
+        </p>
+        <p class="control-note">
+          网关打开候选串口后先观察已有数据：发现合法 28 字节帧时立即校验成功并接管现有流，不发送 ACK 或 E1；候选静默时才发送固定 ACK，收到完整重复握手时重新发送 ACK，收到独立 01 后立即校验成功。算法在设备校验成功后初始化，只有算法就绪后才无响应写入 E1 使能采集；算法或 E1 失败不属于设备校验失败。
+        </p>
+        <p class="control-note">
+          “窗口”表示网关聚合数据的本地时间范围，默认时长 600ms，不是设备序列号。页面丢包率 = 累计缺失 EEG 包数 ÷ 从首包到最高序列号的累计应收包数；支持 65535 → 0 回绕，重复包不增加已收包数，统计窗口内的乱序补包会减少缺失数。
+        </p>
       </section>
-      <p id="message" class="message" role="status"></p>
-      <section class="logs" aria-label="蓝牙接收数据日志">
-        <div class="logs-title"><h2>蓝牙接收数据</h2><span>每 600 ms：流、包数、长度与前 8 字节预览</span></div>
-        <pre id="dataLogs" aria-live="polite">等待头环数据…</pre>
+
+      <div class="data-workspace">
+        <section class="logs data-panel raw-panel" aria-labelledby="rawTitle">
+          <div class="logs-title">
+            <div><h2 id="rawTitle">耳机原始数据</h2><span>每行仅包含毫秒时间戳和网关实时收到的原始字节，未解析、未改写</span></div>
+            <div class="raw-tools">
+              <div class="format-switch" role="group" aria-label="数据显示格式">
+                <button id="hexFormatButton" class="format-button active" type="button" aria-pressed="true">16 进制</button>
+                <button id="decimalFormatButton" class="format-button" type="button" aria-pressed="false">10 进制</button>
+              </div>
+              <button id="exportRawButton" class="secondary compact-button" type="button" disabled>导出原始数据</button>
+            </div>
+          </div>
+          <pre id="rawData" aria-live="polite">等待网关数据……</pre>
+        </section>
+
+        <section class="logs data-panel decoded-panel" aria-labelledby="decodedTitle">
+          <div class="logs-title"><div><h2 id="decodedTitle">数据解析</h2><span>与原始数据使用相同时间戳，字段值随上方控件切换 16/10 进制</span></div></div>
+          <pre id="decodedData" aria-live="polite">等待网关数据……</pre>
+        </section>
+      </div>
+
+      <section class="logs" aria-labelledby="protocolTitle">
+        <div class="logs-title"><h2 id="protocolTitle">WebSocket 协议日志</h2><span>请求、响应和事件 · 最多保留 300 行</span></div>
+        <pre id="protocolLog" aria-live="polite">等待连接网关……</pre>
       </section>
-      <section class="logs" aria-label="算法输出日志">
-        <div class="logs-title"><h2>算法输出</h2><span>显示算法 bridge 返回值</span></div>
-        <pre id="algorithmLogs" aria-live="polite">等待算法 bridge 输出…</pre>
-      </section>
-      <section class="logs" aria-label="连接与运行日志">
-        <div class="logs-title"><h2>连接与运行日志</h2><span>扫描、连接、订阅和异常</span></div>
-        <pre id="systemLogs" aria-live="polite">等待本地服务日志…</pre>
+
+      <section class="card privacy-note">
+        <strong>运行边界</strong>
+        <p>页面资源和 WebSocket 都由本机网关提供，只访问配置好的网关地址；不直接访问串口，不上传数据，不使用 CDN、遥测或浏览器持久化存储。原始数据导出只包含时间戳和页面实际收到的字节；诊断日志仍会隐藏完整 EEG/心率原始数据及 Base64，只保留状态、计数和异常信息。</p>
       </section>
     </main>
-    <script src="/capture/app.js"></script>
+    <script src="../version.js"></script>
+    <script src="../runtime-config.js"></script>
+    <script src="./app.js"></script>
   </body>
 </html>

@@ -9,16 +9,17 @@ import tempfile
 import unittest
 import zipfile
 
-from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, RecordingConfig, ServerConfig
+from neurobridge.config import AlgorithmConfig, BleConfig, DataSourceConfig, GatewayConfig, RecordingConfig, ServerConfig
+from neurobridge.device.packet import DevicePacket
 from neurobridge.algorithm.runner import AlgorithmRunner
 from neurobridge.ble.flowtime import FF51, REQUIRED_NOTIFICATION_CHARACTERISTICS, FlowtimeAdapter, wear_state_from_packet
-from neurobridge.business.gateway import ClientSession, Gateway, REPLAY_NOT_AVAILABLE_REASON
+from neurobridge.business.gateway import ClientSession, Gateway, ProtocolError, REPLAY_NOT_AVAILABLE_REASON, STREAM_NOT_AVAILABLE_REASON, Subscription
 from neurobridge.ble.packets import DataWindow, EEG_PACKET_BYTES, HR_PACKET_BYTES, RawPacket, WindowAssembler
 from neurobridge.business.recording import RecordingStore
 
 
-def config(root: Path, replay_id: str | None = None, replay_speed: float = 1000) -> GatewayConfig:
-    return GatewayConfig(ServerConfig("127.0.0.1", 8765, "/neurobridge/v1/ws"), BleConfig(False, "Flowtime Headband", "0000ff10-1212-abcd-1523-785feabcd123", 5, 3), RecordingConfig(root, "SUBJECT-001", replay_id, replay_speed), AlgorithmConfig(False, ()))
+def config(root: Path, replay_id: str | None = None, replay_speed: float = 1000, data_source_type: str = "bluetooth") -> GatewayConfig:
+    return GatewayConfig(ServerConfig("127.0.0.1", 8765, "/neurobridge/v1/ws"), BleConfig(False, "Flowtime Headband", "0000ff10-1212-abcd-1523-785feabcd123", 5, 3), RecordingConfig(root, "SUBJECT-001", replay_id, replay_speed), AlgorithmConfig(False, ()), data_source=DataSourceConfig(data_source_type))
 
 
 class PacketTests(unittest.TestCase):
@@ -50,7 +51,7 @@ class FlowtimeSelectionTests(unittest.TestCase):
         class Device:
             def __init__(self, name: str, uuids: list[str], rssi: int) -> None:
                 self.name, self.metadata, self.rssi = name, {"uuids": uuids}, rssi
-        async def ignored_packet(_: str, __: bytes) -> None: pass
+        async def ignored_packet(_: DevicePacket) -> None: pass
         async def ignored_status(_: str, __: object) -> None: pass
         async def ignored_ready() -> None: pass
         adapter = FlowtimeAdapter(config(Path("/tmp")).ble, ignored_packet, ignored_status, ignored_ready)
@@ -68,10 +69,10 @@ class FlowtimeSelectionTests(unittest.TestCase):
 
 class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
     async def test_ff51_notification_is_subscribed_and_forwarded_as_raw_hr(self) -> None:
-        received: list[tuple[str, bytes]] = []
+        received: list[DevicePacket] = []
 
-        async def packet(characteristic: str, value: bytes) -> None:
-            received.append((characteristic, value))
+        async def packet(event: DevicePacket) -> None:
+            received.append(event)
 
         async def ignored_status(_: str, __: object) -> None:
             pass
@@ -99,7 +100,7 @@ class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(client.handlers), set(REQUIRED_NOTIFICATION_CHARACTERISTICS))
         client.handlers[FF51](0, bytearray(b"r" * HR_PACKET_BYTES))  # type: ignore[operator]
         await asyncio.sleep(0)
-        self.assertEqual(received, [("ff51", b"r" * HR_PACKET_BYTES)])
+        self.assertEqual([(item.transport, item.channel, item.value) for item in received], [("bluetooth", "ff51", b"r" * HR_PACKET_BYTES)])
 
 
 class AlgorithmRunnerTests(unittest.IsolatedAsyncioTestCase):
@@ -168,18 +169,142 @@ class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
             fake = FakeAlgorithm()
             gateway.algorithm = fake
             await gateway.start()
+            broadcasts: list[dict[str, object]] = []
+
+            async def capture_status() -> None:
+                broadcasts.append(dict(gateway.status))
+
+            gateway.broadcast_status = capture_status  # type: ignore[method-assign]
             self.assertEqual(fake.initializations, 0)
-            await gateway.on_device_ready()
+            self.assertTrue(await gateway.on_device_ready())
             self.assertEqual(fake.initializations, 1)
             self.assertEqual(gateway.status["algorithmState"], "ready")
+            self.assertEqual(broadcasts[-1]["algorithmState"], "ready")
+
+    async def test_algorithm_not_ready_is_logged_and_returns_false(self) -> None:
+        class FakeAlgorithm:
+            available = False
+            error = "bridge process unavailable"
+            async def initialize(self) -> None:
+                pass
+            async def stop(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = Gateway(config(Path(directory)))
+            gateway.algorithm = FakeAlgorithm()
+            with self.assertLogs("neurobridge.business.gateway", level="ERROR") as logs:
+                self.assertFalse(await gateway.on_device_ready())
+            self.assertEqual(gateway.status["algorithmState"], "error")
+            self.assertIn("bridge process unavailable", "\n".join(logs.output))
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_serial_internal_states_are_mapped_to_locked_northbound_states(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway_config = config(Path(directory))
+            gateway_config = GatewayConfig(
+                gateway_config.server,
+                gateway_config.ble,
+                gateway_config.recording,
+                gateway_config.algorithm,
+                data_source=DataSourceConfig("serial"),
+            )
+            gateway = Gateway(gateway_config)
+
+            expected = {
+                "not_connected": "disconnected",
+                "connecting": "connecting",
+                "validating": "connecting",
+                "validation_failed": "disconnected",
+                "validated": "connected",
+            }
+            sent: list[dict] = []
+
+            async def send(item: dict) -> None:
+                sent.append(item)
+
+            session = ClientSession()
+            for index, (internal, northbound) in enumerate(expected.items()):
+                await gateway.update_status("connectionState", internal)
+                self.assertEqual(gateway.status["connectionState"], internal)
+                await gateway.handle(
+                    session,
+                    json.dumps(
+                        {
+                            "protocolVersion": "1.0",
+                            "messageType": "request",
+                            "requestId": f"status-{index}",
+                            "action": "getStatus",
+                            "params": {},
+                        }
+                    ),
+                    send,
+                )
+                self.assertEqual(sent[-1]["data"]["result"]["connectionState"], northbound)
+            await gateway.close_session(session)
+            await gateway.stop()
+
+    async def test_serial_status_events_use_locked_northbound_connection_states(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway_config = config(Path(directory))
+            gateway_config = GatewayConfig(
+                gateway_config.server,
+                gateway_config.ble,
+                gateway_config.recording,
+                gateway_config.algorithm,
+                data_source=DataSourceConfig("serial"),
+            )
+            gateway = Gateway(gateway_config)
+            sent: list[dict] = []
+
+            async def send(item: dict) -> None:
+                sent.append(item)
+
+            session = ClientSession()
+            session.subscriptions["sub-status"] = Subscription(
+                "sub-status", frozenset({"status"}), False, send
+            )
+            gateway.sessions.add(session)
+            for internal, northbound in (
+                ("connecting", "connecting"),
+                ("validation_failed", "disconnected"),
+                ("validated", "connected"),
+            ):
+                await gateway.update_status("connectionState", internal)
+                event = sent[-1]
+                self.assertEqual(event["data"]["payload"]["status"]["connectionState"], northbound)
+            await gateway.close_session(session)
+            await gateway.stop()
+
+    async def test_capture_summary_contains_counts_and_timing_without_raw_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = Gateway(config(Path(directory)))
+            gateway._capture_stats.update(
+                eegPackets=12,
+                eegBytes=240,
+                hrPackets=3,
+                hrBytes=3,
+                invalidPacketLengths=1,
+                windows=2,
+                invalidWindows=1,
+                firstPacketAtMs=1000,
+                lastDataAtMs=1800,
+            )
+            with self.assertLogs("neurobridge.business.gateway", level="INFO") as logs:
+                gateway._log_capture_summary("test")
+            message = "\n".join(logs.output)
+            self.assertIn("eegPackets=12", message)
+            self.assertIn("eegBytes=240", message)
+            self.assertIn("invalidPacketLengths=1", message)
+            self.assertIn("durationMs=800", message)
+            self.assertNotIn("bytesBase64", message)
+
     async def test_connection_error_is_retained_until_a_successful_connection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             gateway = Gateway(config(Path(directory)))
-            await gateway.update_connection_error("headband not found")
-            self.assertEqual(gateway.connection_error, "headband not found")
+            await gateway.update_connection_error("headband not found\ninjected line")
+            self.assertEqual(gateway.connection_error, "headband not found injected line")
 
             await gateway.update_status("connectionState", "connected")
             self.assertIsNone(gateway.connection_error)
@@ -200,6 +325,54 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             for stream, value in (("eeg", b"e" * EEG_PACKET_BYTES), ("hr", b"r" * HR_PACKET_BYTES)):
                 row = json.loads((raw_dir / f"{stream}.jsonl").read_text(encoding="utf-8"))
                 self.assertEqual(base64.b64decode(row["bytesBase64"]), value)
+
+    async def test_serial_full_frame_and_transport_metadata_are_internal_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway_config = config(root)
+            gateway_config = GatewayConfig(
+                gateway_config.server,
+                gateway_config.ble,
+                gateway_config.recording,
+                gateway_config.algorithm,
+                data_source=DataSourceConfig("serial"),
+            )
+            gateway = Gateway(gateway_config)
+            await gateway.update_status("connectionState", "validated")
+            recording_id = str(gateway.store.recording_id)
+            raw_frame = b"f" * 28
+            await gateway.receive_device_packet(DevicePacket("serial", "serial.frame", raw_frame, 1234))
+            await gateway.receive_device_packet(DevicePacket("serial", "ff31", b"e" * EEG_PACKET_BYTES, 1234))
+            await gateway.update_status("connectionState", "disconnected")
+
+            rows = [json.loads(line) for line in (root / "internal-device" / recording_id / "packets.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(rows[0]["transport"], "serial")
+            self.assertEqual(rows[0]["channel"], "serial.frame")
+            self.assertEqual(base64.b64decode(rows[0]["bytesBase64"]), raw_frame)
+            self.assertFalse((root / "sessions" / recording_id / "internal-device").exists())
+
+    async def test_serial_packets_are_blocked_until_validation_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway_config = config(Path(directory))
+            gateway_config = GatewayConfig(
+                gateway_config.server,
+                gateway_config.ble,
+                gateway_config.recording,
+                gateway_config.algorithm,
+                data_source=DataSourceConfig("serial"),
+            )
+            gateway = Gateway(gateway_config)
+            self.assertEqual(gateway.status["connectionState"], "not_connected")
+            await gateway.update_status("connectionState", "connected")
+            self.assertFalse(gateway.live)
+            with self.assertLogs("neurobridge.business.gateway", level="WARNING") as logs:
+                await gateway.receive_device_packet(DevicePacket("serial", "ff31", b"e" * EEG_PACKET_BYTES, 1234))
+            self.assertIn("blocked before validation success", "\n".join(logs.output))
+            self.assertIsNone(gateway.store.recording_id)
+
+            await gateway.update_status("connectionState", "validated")
+            self.assertTrue(gateway.live)
+            self.assertIsNotNone(gateway.store.recording_id)
 
     async def test_window_observer_receives_algorithm_output(self) -> None:
         class Algorithm:
@@ -437,6 +610,33 @@ class RecordingTests(unittest.TestCase):
 
 
 class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
+    async def test_serial_source_never_exposes_or_uses_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway = Gateway(config(root, replay_id="rec-replay", data_source_type="serial"))
+            gateway.store.recording_id = "rec-replay"
+            gateway.store.save_algorithm(timestamp_ms=1_000, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            gateway.store.stop()
+
+            self.assertFalse(gateway.replay_available)
+            self.assertIsNone(gateway.replay_recording_id)
+            self.assertEqual(gateway.status_result()["mode"], "live")
+            await gateway.update_status("connectionState", "validation_failed")
+            with self.assertRaises(ProtocolError) as latest_error:
+                gateway.get_latest(ClientSession(), {"streams": ["eeg"]})
+            self.assertEqual(latest_error.exception.code, 409)
+            self.assertEqual(latest_error.exception.reason, STREAM_NOT_AVAILABLE_REASON)
+            self.assertIn("did not return standalone 0x01 after ACK", latest_error.exception.message)
+
+            async def send(_: dict) -> None:
+                pass
+
+            with self.assertRaises(ProtocolError) as subscribe_error:
+                await gateway.subscribe(ClientSession(), {"streams": ["eeg"]}, send)
+            self.assertEqual(subscribe_error.exception.code, 409)
+            self.assertEqual(subscribe_error.exception.reason, STREAM_NOT_AVAILABLE_REASON)
+            self.assertIn("did not return standalone 0x01 after ACK", subscribe_error.exception.message)
+
     async def test_get_latest_automatically_uses_newest_recording_when_no_id_is_configured(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

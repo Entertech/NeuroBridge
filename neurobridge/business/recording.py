@@ -47,6 +47,10 @@ class RecordingStore:
         (root / "algorithm").mkdir(exist_ok=True)
         (root / "sessions").mkdir(exist_ok=True)
         (root / "exports").mkdir(exist_ok=True)
+        # Internal device-boundary records are deliberately outside sessions:
+        # they are not part of the locked capture-package export or replay
+        # contract, but remain correlated by recording/session ID.
+        (root / "internal-device").mkdir(mode=0o700, exist_ok=True)
         self.recording_id: str | None = None
         self.last_recording_id: str | None = None
         self._sequence: dict[str, int] = {}
@@ -107,6 +111,27 @@ class RecordingStore:
                 "invalidReasons": [] if valid else [f"{stream.upper()}_PACKET_LENGTH_INVALID"],
             },
         )
+
+    def save_device_packet(self, *, transport: str, channel: str, received_at_ms: int, value: bytes) -> None:
+        """Persist adapter-boundary bytes without changing the public archive."""
+
+        if not self.recording_id:
+            return
+        directory = self.root / "internal-device" / self.recording_id
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = directory / "packets.jsonl"
+        path.touch(mode=0o600, exist_ok=True)
+        row = {
+            "sessionId": self.recording_id,
+            "transport": transport,
+            "channel": channel,
+            "receivedAtMs": received_at_ms,
+            "byteLength": len(value),
+            "encoding": "base64",
+            "bytesBase64": base64.b64encode(value).decode("ascii"),
+        }
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(row, separators=(",", ":"), ensure_ascii=False) + "\n")
 
     def save_algorithm_events(self, *, algorithm: dict, computed_at_ms: int, eeg_source: dict | None, hr_source: dict | None, valid: bool, invalid_reasons: list[str]) -> None:
         if not self.recording_id:

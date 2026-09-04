@@ -1,3 +1,8 @@
 # Runtime packages.  Keep Bleak aligned with Enter-Biomodule-BLE-PC-SDK 1.1.6.
 bleak==0.19.0
+# Linux transitive dependencies are pinned so the Kylin wheelhouse is fully
+# reproducible and does not resolve different packages during installation.
+async-timeout==4.0.3
+dbus-fast==1.95.2; platform_system == "Linux"
+pyserial==3.5
 websockets==12.0

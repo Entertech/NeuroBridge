@@ -114,7 +114,7 @@ def build_release_manifest(documents: list[ExternalDocument], mode: str) -> dict
 
 def collect_web_client_files() -> list[Path]:
     """Return the self-contained B-side test page files that can be opened from disk."""
-    required = ("index.html", "app.js", "styles.css", "version.js", "README.md")
+    required = ("index.html", "app.js", "runtime-config.js", "styles.css", "version.js", "README.md")
     missing = [name for name in required if not (WEB_CLIENT_DIRECTORY / name).is_file()]
     if missing:
         raise FileNotFoundError(f"B-side test page is incomplete: {', '.join(missing)}")

@@ -1,0 +1,60 @@
+# Project-local Galaxy Kylin configuration. Generated runtime files stay under
+# .runtime/, which is ignored by Git. Run NeuroBridge from the project root so
+# relative recording and logging paths resolve inside this checkout.
+[server]
+host = "127.0.0.1"
+port = 8765
+path = "/neurobridge/v1/ws"
+
+[access]
+mode = "local_browser"
+
+[local_ui]
+enabled = true
+host = "127.0.0.1"
+port = 8080
+
+[data_source]
+type = "serial"
+
+[serial]
+device = "auto"
+candidate_types = ["ttyACM", "ttyUSB"]
+baud_rate = 115200
+handshake_timeout_ms = 1000
+# Wait this long for a standalone 0x01 after the 7-byte handshake ACK. Complete
+# periodic handshakes inside this window are re-ACKed and do not end the wait.
+command_response_timeout_ms = 1000
+data_timeout_seconds = 5
+reconnect_delay_seconds = 3
+stats_interval_seconds = 10
+max_buffer_bytes = 65536
+dtr = false
+rts = false
+# A valid stream already present, or a standalone 0x01 after the active 7-byte
+# ACK, validates the device immediately. Existing streams skip ACK and E1. On
+# the ACK path, algorithm initialization and write-only E1 happen only after
+# validation; algorithm/E1 failure is not classified as validation_failed.
+
+[recording]
+directory = ".runtime/recordings"
+subject_id = ""
+replay_recording_id = ""
+replay_speed = 1.0
+
+[download]
+enabled = true
+host = "127.0.0.1"
+port = 8766
+path = "/downloads"
+
+[logging]
+directory = ".runtime/logs"
+filename = "neurobridge.log"
+level = "INFO"
+
+[algorithm]
+# Keep this false in source. On Galaxy Kylin V10 x86_64, run
+# ./linux/setup-kylin-algorithm.sh; it enables this only after a target-local
+# build and a process-contract smoke test. Real-data algorithm POC is separate.
+enabled = false
