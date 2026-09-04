@@ -168,6 +168,28 @@ repair_project_permissions() {
   log_message "项目权限修复完成。以后不要执行 sudo git pull、sudo git checkout 或 sudo git add。"
 }
 
+ensure_runtime_writable() {
+  local current_uid current_gid
+  init_log && return 0
+  validate_project_root
+  current_uid=$(id -u)
+  current_gid=$(id -g)
+  [[ ! -L $runtime_dir ]] || fail ".runtime must be a real project directory, not a symlink."
+  [[ ! -e $runtime_dir || -d $runtime_dir ]] || fail ".runtime must be a directory: $runtime_dir"
+  log_message "项目运行目录不可写；日常启动不需要修复 Git，只需修复 .runtime。"
+  if ! ask_yes_no "是否修复项目运行目录权限？"; then
+    log_message "已取消运行目录权限修复，本次不启动网关。"
+    return 1
+  fi
+  run_step "修复项目运行目录权限" \
+    sudo install -d -o "$current_uid" -g "$current_gid" -m 0750 \
+      "$runtime_dir" "$runtime_dir/logs" || return 1
+  run_step "修复已有运行文件所有权" \
+    sudo chown -R --no-dereference "$current_uid:$current_gid" "$runtime_dir" || return 1
+  init_log || fail "运行目录权限修复后仍无法创建日志：$runtime_dir/logs"
+  log_message "项目运行目录权限修复完成；Git 工作区未修改。"
+}
+
 check_git_lock() {
   if [[ -e $root_dir/.git/index.lock ]]; then
     log_message "发现 .git/index.lock；助手不会自动删除它。"
@@ -304,7 +326,8 @@ show_recent_logs() {
 
 prepare_and_start() {
   local serial_result
-  repair_project_permissions || return 1
+  ensure_runtime_writable || return 1
+  log_message "日常启动只使用已有代码，不检查或修改 Git 写权限；需要更新代码时选择菜单 3。"
   if python_environment_ready; then
     log_message "Python 环境已就绪，跳过重复安装。"
   else

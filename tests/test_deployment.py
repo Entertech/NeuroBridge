@@ -52,8 +52,11 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('[[ -n $project_dir && $project_dir != / ]]', script)
         self.assertIn('[[ -f $project_dir/pyproject.toml ]]', script)
         self.assertIn('[[ -d $project_dir/.git && ! -L $project_dir/.git ]]', script)
-        self.assertIn('sudo chown -R --no-dereference "$current_uid:$current_gid" "$project_dir"', script)
-        self.assertIn('find "$project_dir" -xdev ! -uid "$current_uid"', script)
+        self.assertNotIn('sudo chown -R --no-dereference "$current_uid:$current_gid" "$project_dir"', script)
+        self.assertNotIn('find "$project_dir" -xdev ! -uid "$current_uid"', script)
+        self.assertIn('sudo chown -R --no-dereference "$current_uid:$current_gid" "$runtime_dir"', script)
+        self.assertIn("Daily startup does not inspect or change Git ownership", script)
+        self.assertIn("gitPermissionChecked=false", script)
         self.assertIn("sourceUpdateAttempted=false", script)
         self.assertIn("启动入口不会自动执行 Git", script)
         self.assertNotIn('git -C "$project_dir" fetch', script)
@@ -178,7 +181,7 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(runtime_sentinel.read_text(encoding="utf-8"), "preserve-field-data")
             self.assertTrue((target / ".runtime" / "offline-update" / "current.txt").is_file())
 
-    def test_kylin_bootstrap_repairs_unwritable_git_metadata_before_opening_menu(self) -> None:
+    def test_kylin_bootstrap_ignores_git_write_permissions_during_daily_startup(self) -> None:
         source = (ROOT / "linux" / "neurobridge-kylin-bootstrap.sh").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temporary_directory:
             project = Path(temporary_directory) / "NeuroBridge"
@@ -193,32 +196,25 @@ class DeploymentTests(unittest.TestCase):
             assistant.write_text("#!/usr/bin/env bash\nprintf 'permission-menu-opened\\n'\n", encoding="utf-8")
             index = git_dir / "index"
             index.write_bytes(b"test-index")
-            git_dir.chmod(0o555)
             index.chmod(0o444)
 
             bin_dir = Path(temporary_directory) / "bin"
             bin_dir.mkdir()
-            sudo_log = Path(temporary_directory) / "sudo.log"
+            sudo_called = Path(temporary_directory) / "sudo-called"
             fake_sudo = bin_dir / "sudo"
             fake_sudo.write_text(
                 "#!/usr/bin/env bash\n"
-                "printf '%s\\n' \"$*\" >>\"$FAKE_SUDO_LOG\"\n"
-                "if [[ $1 == chown ]]; then\n"
-                "  /bin/chmod -R u+rwX \"$FAKE_PROJECT\"\n"
-                "  exit 0\n"
-                "fi\n"
-                "exec \"$@\"\n",
+                "touch \"$SUDO_CALLED\"\n"
+                "exit 99\n",
                 encoding="utf-8",
             )
             fake_sudo.chmod(0o755)
 
             environment = os.environ.copy()
             environment["PATH"] = f"{bin_dir}:{environment['PATH']}"
-            environment["FAKE_SUDO_LOG"] = str(sudo_log)
-            environment["FAKE_PROJECT"] = str(project)
+            environment["SUDO_CALLED"] = str(sudo_called)
             result = subprocess.run(
                 ["bash", str(bootstrap)],
-                input="yes\n",
                 capture_output=True,
                 text=True,
                 check=False,
@@ -226,14 +222,9 @@ class DeploymentTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr + "\n" + result.stdout)
-            self.assertIn("检测到项目权限异常", result.stdout)
-            self.assertIn("项目权限修复完成", result.stdout)
             self.assertIn("permission-menu-opened", result.stdout)
-            sudo_commands = sudo_log.read_text(encoding="utf-8")
-            self.assertIn("chown -R --no-dereference", sudo_commands)
-            self.assertIn(str(project), sudo_commands)
-            self.assertTrue(os.access(git_dir, os.W_OK))
-            self.assertTrue(os.access(index, os.W_OK))
+            self.assertIn("gitPermissionChecked=false", result.stdout)
+            self.assertFalse(sudo_called.exists())
 
     def test_kylin_gateway_assistant_guides_setup_and_repairs_git_permissions_safely(self) -> None:
         script_path = ROOT / "linux" / "setup-kylin-gateway.sh"
@@ -289,6 +280,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('find "$root_dir" -xdev ! -uid "$current_uid"', script)
         self.assertIn('[[ ! -e $root_dir/.git/index || -w $root_dir/.git/index ]]', script)
         self.assertIn("助手不会自动删除它", script)
+        prepare_source = script.split("prepare_and_start() {", 1)[1].split("\n}\n\nshow_menu()", 1)[0]
+        self.assertNotIn("repair_project_permissions", prepare_source)
+        self.assertIn("ensure_runtime_writable", prepare_source)
+        self.assertIn("日常启动只使用已有代码，不检查或修改 Git 写权限", prepare_source)
 
         self.assertIn('git -C "$root_dir" pull --ff-only', script)
         self.assertNotIn('sudo git -C "$root_dir" pull', script)
@@ -409,6 +404,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("project-cmake-version", script)
         self.assertIn("eigen-version", script)
         self.assertIn("sdk-lock-sha256", script)
+        self.assertIn('git --no-optional-locks -C "$root_dir" status --short --branch', script)
+        self.assertNotIn('capture source-status git -C "$root_dir"', script)
         self.assertIn("Output must stay under the ignored project directory", script)
         self.assertNotIn("cat /etc/neurobridge/gateway.toml", script)
         self.assertNotIn("printenv", script)
@@ -828,6 +825,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("no serial group membership was changed", script)
         self.assertNotIn("for tty_group in dialout uucp", script)
         self.assertIn("Project mode --config must stay under", script)
+        self.assertIn("export PYTHONDONTWRITEBYTECODE=1", script)
         help_result = subprocess.run(
             ["bash", str(script_path), "--help"],
             capture_output=True,

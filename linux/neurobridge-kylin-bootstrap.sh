@@ -22,7 +22,8 @@ usage() {
 Usage: bash neurobridge-kylin-bootstrap.sh
 
 Run this file from linux/ in a complete NeuroBridge checkout as the normal
-desktop user. It validates permissions and opens the numeric gateway menu.
+desktop user. It verifies the project runtime directory and opens the numeric
+gateway menu. Daily startup does not inspect or change Git ownership.
 
 Startup never runs git fetch or git pull. To update an old/offline computer,
 generate neurobridge-kylin-offline-update.run on a development computer,
@@ -67,37 +68,30 @@ fi
 
 current_uid=$(id -u)
 current_gid=$(id -g)
-permission_problem=false
-[[ -w $project_dir/.git ]] || permission_problem=true
-[[ ! -e $project_dir/.git/index || -w $project_dir/.git/index ]] || permission_problem=true
-foreign_path=$(find "$project_dir" -xdev ! -uid "$current_uid" -print -quit 2>/dev/null || true)
-[[ -z $foreign_path ]] || permission_problem=true
-
-if [[ $permission_problem == true ]]; then
-  printf '检测到项目权限异常：%s\n' "${foreign_path:-$project_dir/.git}"
-  printf '只会修复已验证项目：%s\n' "$project_dir"
-  ask_yes_no "是否修复项目权限？" || fail "已取消；项目未修改。"
-  sudo chown -R --no-dereference "$current_uid:$current_gid" "$project_dir" \
-    || fail "项目所有权修复失败。"
-  sudo find "$project_dir/.git" -type d -exec chmod u+rwx {} + \
-    || fail "Git 目录权限修复失败。"
-  sudo find "$project_dir/.git" -type f -exec chmod u+rw {} + \
-    || fail "Git 文件权限修复失败。"
-  [[ -w $project_dir/.git ]] || fail "修复后 .git 仍不可写。"
-  [[ ! -e $project_dir/.git/index || -w $project_dir/.git/index ]] || fail \
-    "修复后 .git/index 仍不可写。"
-  foreign_path=$(find "$project_dir" -xdev ! -uid "$current_uid" -print -quit 2>/dev/null || true)
-  [[ -z $foreign_path ]] || fail "仍有文件不属于当前用户：$foreign_path"
-  printf '项目权限修复完成。以后不要执行 sudo git pull。\n'
+runtime_dir="$project_dir/.runtime"
+[[ ! -L $runtime_dir ]] || fail ".runtime 不能是符号链接。"
+[[ ! -L $runtime_dir/logs ]] || fail ".runtime/logs 不能是符号链接。"
+runtime_probe=
+if mkdir -p -- "$runtime_dir/logs" 2>/dev/null \
+  && [[ -d $runtime_dir/logs && ! -L $runtime_dir/logs ]]; then
+  runtime_probe=$(mktemp "$runtime_dir/logs/.bootstrap-write.XXXXXX" 2>/dev/null || true)
 fi
-
-[[ ! -L $project_dir/.runtime ]] || fail ".runtime 不能是符号链接。"
-mkdir -p -- "$project_dir/.runtime/logs" || fail "无法创建项目日志目录。"
+if [[ -z $runtime_probe ]]; then
+  printf '项目运行目录不可写；日常启动不需要修复 Git。\n'
+  ask_yes_no "是否只修复 .runtime 运行目录权限？" || fail "已取消；项目未修改。"
+  sudo install -d -o "$current_uid" -g "$current_gid" -m 0750 \
+    "$runtime_dir" "$runtime_dir/logs" || fail "运行目录创建失败。"
+  sudo chown -R --no-dereference "$current_uid:$current_gid" "$runtime_dir" \
+    || fail "运行目录权限修复失败。"
+else
+  rm -f -- "$runtime_probe"
+fi
 bootstrap_log="$project_dir/.runtime/logs/kylin-bootstrap-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
 touch "$bootstrap_log" || fail "无法创建引导日志。"
 chmod 0600 "$bootstrap_log" 2>/dev/null || true
 exec > >(tee -a "$bootstrap_log") 2>&1
 printf 'project=%s\nlog=%s\nsourceUpdateAttempted=false\n' "$project_dir" "$bootstrap_log"
+printf 'gitPermissionChecked=false\n'
 
 if [[ ! -f $assistant ]]; then
   fail "当前项目缺少 linux/setup-kylin-gateway.sh；启动入口不会自动执行 Git。请把开发机生成的 neurobridge-kylin-offline-update.run 传到项目根目录，执行 bash neurobridge-kylin-offline-update.run，更新完成后会自动打开菜单。"

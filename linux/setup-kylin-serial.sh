@@ -4,6 +4,10 @@
 # the current checkout. --system-install preserves the formal systemd layout.
 set -euo pipefail
 
+# This script runs with sudo but imports the project package. Never let the
+# root process leave __pycache__ files in the source checkout.
+export PYTHONDONTWRITEBYTECODE=1
+
 fail() {
   echo "ERROR: $*" >&2
   exit 1

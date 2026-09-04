@@ -251,8 +251,10 @@ else
   warn "No project .venv/venv or installed /opt NeuroBridge Python runtime is available"
 fi
 if command -v git >/dev/null 2>&1 && [[ -d $root_dir/.git ]]; then
-  capture source-revision git -C "$root_dir" rev-parse HEAD
-  capture source-status git -C "$root_dir" status --short --branch
+  # The collector runs with sudo. Disable optional Git locks so `status`
+  # cannot refresh and replace .git/index with a root-owned file.
+  capture source-revision git --no-optional-locks -C "$root_dir" rev-parse HEAD
+  capture source-status git --no-optional-locks -C "$root_dir" status --short --branch
 else
   warn "Collector checkout has no readable Git metadata"
 fi
