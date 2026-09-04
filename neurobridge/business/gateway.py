@@ -155,7 +155,7 @@ class Gateway:
         try:
             await self.algorithm.initialize()
         except Exception as exc:
-            self.status["algorithmState"] = "error"
+            await self.update_status("algorithmState", "error")
             LOG.exception(
                 "Local algorithm preparation failed: transport=%s algorithmState=error "
                 "errorType=%s reason=%s",
@@ -164,8 +164,9 @@ class Gateway:
                 safe_log_text(exc),
             )
             return False
-        self.status["algorithmState"] = "ready" if self.algorithm.available else ("error" if self.algorithm.error else "unavailable")
-        if self.status["algorithmState"] == "ready":
+        algorithm_state = "ready" if self.algorithm.available else ("error" if self.algorithm.error else "unavailable")
+        await self.update_status("algorithmState", algorithm_state)
+        if algorithm_state == "ready":
             LOG.info("Local algorithm preparation succeeded: transport=%s algorithmState=ready", self.config.data_source.type)
             return True
         reason = self.algorithm.error or (
@@ -176,7 +177,7 @@ class Gateway:
         LOG.error(
             "Local algorithm preparation failed: transport=%s algorithmState=%s reason=%s",
             self.config.data_source.type,
-            self.status["algorithmState"],
+            algorithm_state,
             safe_log_text(reason),
         )
         return False
@@ -193,7 +194,7 @@ class Gateway:
             self._reset_capture_stats()
             recording_id = self.store.start(now_ms())
             LOG.info(
-                "Headband data path ready; recording started: transport=%s connectionState=%s recordingId=%s",
+                "Device data path ready; recording started: transport=%s connectionState=%s recordingId=%s",
                 self.config.data_source.type,
                 value,
                 recording_id,
@@ -208,7 +209,7 @@ class Gateway:
             self._log_capture_summary("disconnected")
             self._capture_final_summary_logged = True
             self.store.stop()
-            LOG.info("Headband disconnected; algorithm and recording stopped")
+            LOG.info("Device disconnected; algorithm and recording stopped")
         if previous != value:
             if name == "connectionState":
                 LOG.info(
@@ -229,7 +230,7 @@ class Gateway:
         """
         safe_error = safe_log_text(error)
         self.connection_error = safe_error
-        LOG.warning("Headband connection attempt failed: transport=%s reason=%s", self.config.data_source.type, safe_error)
+        LOG.warning("Device connection attempt failed: transport=%s reason=%s", self.config.data_source.type, safe_error)
 
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
         """Compatibility entry point for tests and older in-process callers."""

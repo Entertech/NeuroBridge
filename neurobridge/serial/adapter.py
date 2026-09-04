@@ -403,6 +403,7 @@ class SerialAdapter:
             phase = "discover"
             target_selected = False
             existing_stream = b""
+            existing_stream_received_at_ms: int | None = None
             try:
                 self._reset_stats()
                 await self.status("connectionState", "connecting")
@@ -477,10 +478,10 @@ class SerialAdapter:
                         identity = candidate_identities[path]
                         phase = "existing_stream_observation"
                         observed_stream = await self._observe_existing_stream(client, path)
-                        if observed_stream:
+                        if observed_stream is not None:
                             self._client, self._target = client, path
                             target_selected = True
-                            existing_stream = observed_stream
+                            existing_stream, existing_stream_received_at_ms = observed_stream
                             self._capture_started = True
                             LOG.info(
                                 "Serial target selected: path=%s resolvedPath=%s vid=%s pid=%s usbSerial=%s "
@@ -586,7 +587,7 @@ class SerialAdapter:
                         _safe_log_text(self._target),
                     )
                     phase = "streaming"
-                    await self._stream(existing_stream)
+                    await self._stream(existing_stream, existing_stream_received_at_ms)
                     if not self._stopping:
                         raise ConnectionError("Serial stream ended")
                     continue
@@ -654,8 +655,8 @@ class SerialAdapter:
                 )
                 await asyncio.sleep(self.config.reconnect_delay_seconds)
 
-    async def _observe_existing_stream(self, client: Any, path: str) -> bytes:
-        """Return buffered bytes when a candidate is already sending valid frames."""
+    async def _observe_existing_stream(self, client: Any, path: str) -> tuple[bytes, int] | None:
+        """Return bytes and their read-boundary time for an existing valid stream."""
 
         buffer = bytearray()
         started = time.monotonic()
@@ -670,6 +671,7 @@ class SerialAdapter:
                 if not chunk:
                     await asyncio.sleep(min(0.01, max(0.0, remaining)))
                     continue
+                received_at_ms = wall_clock_ms()
                 buffer.extend(chunk)
                 if len(buffer) > self.config.max_buffer_bytes:
                     del buffer[: len(buffer) - self.config.max_buffer_bytes]
@@ -682,7 +684,7 @@ class SerialAdapter:
                         len(buffer),
                         FRAME_BYTES,
                     )
-                    return bytes(buffer)
+                    return bytes(buffer), received_at_ms
         finally:
             client.timeout = previous_timeout
         LOG.info(
@@ -692,7 +694,7 @@ class SerialAdapter:
             int((time.monotonic() - started) * 1000),
             len(buffer),
         )
-        return b""
+        return None
 
     async def _send_handshake_ack(self, client: Any | None = None) -> bytes:
         client = client or self._client
@@ -881,12 +883,13 @@ class SerialAdapter:
             except Exception:
                 LOG.exception("Serial stop command failed: reason=%s", reason)
 
-    async def _stream(self, initial: bytes) -> None:
+    async def _stream(self, initial: bytes, initial_received_at_ms: int | None = None) -> None:
         buffer = bytearray(initial)
+        buffer_received_at_ms = initial_received_at_ms
         last_frame_at = time.monotonic()
         self._stats["readBytes"] = int(self._stats["readBytes"]) + len(initial)
         while not self._stopping:
-            parsed = await self._consume_frames(buffer)
+            parsed = await self._consume_frames(buffer, buffer_received_at_ms)
             if parsed:
                 last_frame_at = time.monotonic()
             now = time.monotonic()
@@ -915,6 +918,7 @@ class SerialAdapter:
             async with self._io_lock:
                 chunk = bytes(await asyncio.to_thread(client.read, 4096))
             if chunk:
+                buffer_received_at_ms = wall_clock_ms()
                 self._stats["readBytes"] = int(self._stats["readBytes"]) + len(chunk)
                 buffer.extend(chunk)
                 if len(buffer) > self.config.max_buffer_bytes:
@@ -929,7 +933,7 @@ class SerialAdapter:
                         self.config.max_buffer_bytes,
                     )
 
-    async def _consume_frames(self, buffer: bytearray) -> int:
+    async def _consume_frames(self, buffer: bytearray, received_at_ms: int | None = None) -> int:
         parsed = 0
         while True:
             offset = buffer.find(FRAME_HEADER)
@@ -992,12 +996,12 @@ class SerialAdapter:
                     observation.snapshot.lost_packets,
                     observation.snapshot.loss_rate_percent,
                 )
-            received_at_ms = wall_clock_ms()
+            frame_received_at_ms = received_at_ms if received_at_ms is not None else wall_clock_ms()
             # Preserve the confirmed 28-byte transport frame independently of
             # the compatibility projections consumed by the existing algorithm.
-            await self.packet(DevicePacket("serial", "serial.frame", frame, received_at_ms))
-            await self.packet(DevicePacket("serial", "ff31", frame[EEG_START:EEG_END], received_at_ms))
-            await self.packet(DevicePacket("serial", "ff51", frame[HR_OFFSET:HR_OFFSET + 1], received_at_ms))
+            await self.packet(DevicePacket("serial", "serial.frame", frame, frame_received_at_ms))
+            await self.packet(DevicePacket("serial", "ff31", frame[EEG_START:EEG_END], frame_received_at_ms))
+            await self.packet(DevicePacket("serial", "ff51", frame[HR_OFFSET:HR_OFFSET + 1], frame_received_at_ms))
 
     def _record_stream_handshakes(self, discarded_region: bytes | bytearray, buffered_bytes: int) -> None:
         """Count fixed handshakes only outside confirmed data frames."""

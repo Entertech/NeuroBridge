@@ -284,7 +284,7 @@ config = tomllib.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 raise SystemExit(
     0
     if config.get("data_source", {}).get("type") == "serial"
-    and config.get("topology", {}).get("mode") == "local_browser"
+    and config.get("access", {}).get("mode") == "local_browser"
     else 1
 )
 PY

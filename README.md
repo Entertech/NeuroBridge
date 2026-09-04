@@ -1,14 +1,14 @@
 # NeuroBridge
 
-NeuroBridge 是将回车科技头环数据接入本机浏览器或兼容第三方 B 端主机的跨平台 PC 网关。网关核心负责设备采集、数据与算法处理、北向协议适配、录播和运行维护。当前正式目标为 N100/N150 x86_64 主机上的银河麒麟 V10；Ubuntu x86_64 保留为兼容与回归基线，macOS 用于真实设备 POC，Windows 尚未完成网关运行验证。
+NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。当前交付目标是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机。网关核心负责串口采集、数据与算法处理、北向协议适配、录播和运行维护。
 
-当前对接方案详见：[头环蓝牙网关对接方案 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%AF%B9%E6%8E%A5%E6%96%B9%E6%A1%88_v0.1.md)。设备侧 BLE、USB 串口与后续原生 USB 的设计、实现状态和验收门禁见[多传输数据源接入技术方案](doc/tech/%E5%A4%B4%E7%8E%AF%E7%BD%91%E5%85%B3%E5%A4%9A%E4%BC%A0%E8%BE%93%E6%95%B0%E6%8D%AE%E6%BA%90%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)。
+当前需求与实现基线见[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于本次实现或验收范围。
 
 ## 可运行网关与部署
 
-仓库现已包含可部署的 Python 网关：`neurobridge/`。它通过策略模式提供两种可切换的访问拓扑：当前默认 `local_browser` 让同一台网关主机上的浏览器通过 `127.0.0.1` 使用 WebSocket；兼容策略 `wired_b_side` 保留独立 B 端主机的专用网线访问。两种策略复用相同的消息契约、600 ms 批量数据、订阅、录播和持久化逻辑。
+仓库现已包含可部署的 Python 网关：`neurobridge/`。银河麒麟目标机固定使用 `data_source.type="serial"` 和 `access.mode="local_browser"`，由同机浏览器通过 `127.0.0.1` 使用 WebSocket。仓库保留的其他策略属于历史兼容代码，不是本次交付能力。
 
-设备侧也使用独立策略：`data_source.type = "serial"` 选择当前 USB 派生 TTY 方案，`"bluetooth"` 切回 Flowtime BLE，一次只运行一种；`"usb"` 仅为原生 HID/Bulk/Interrupt 预留，协议未确认时会拒绝启动并提示改用串口。串口策略稳定排序并逐个探测 `/dev/serial/by-id/`、`ttyACM*`、`ttyUSB*`。每个候选打开后先短暂观察：若已经存在合法 28 字节脑电帧，说明设备正在采集，候选立即进入 `validated`，网关接管现有数据流且不发送 ACK 或 `0xE1`；若没有合法帧，网关主动发送固定 7 字节 ACK，候选返回独立单字节 `0x01` 时立即进入 `validated` 并停止遍历。本地算法就绪后才无响应发送 `0xE1` 使能采集，`0xE1` 不是验证指令，其后的首帧也不参与设备验证；无数据按正常数据超时处理。`0xE0` 仅停止脑电数据，不表示断开。只有“既无已有合法流、主动 ACK 后也未收到独立 `0x01`”属于 `validation_failed`；算法未就绪或 `0xE1` 写失败发生在设备已验证之后，连接随后关闭并重试。该行为目前为源码与自动化测试支持，仍需目标麒麟机现场验证。银河麒麟一键流程使用项目内锁定的 CMake 3.31.6、目标系统 Eigen 3.3.7 与仓库源码，将 C++ 算法 bridge 构建到 `.runtime/algorithm/`，进程自检成功后才启用配置。16 位大端序号用于输出累计和区间丢包率，日志不记录控制响应原文或完整脑波帧。完整 28 字节设备帧只写入受保护的内部录制目录，不进入现有采集包、诊断包或北向消息。
+串口策略稳定排序并逐个探测 `/dev/serial/by-id/`、`ttyACM*`、`ttyUSB*`。每个候选打开后先观察已有合法 28 字节帧；有则立即 `validated` 并接管，不发送 ACK 或 `0xE1`。静默候选才发送固定 ACK，收到独立 `0x01` 时立即 `validated`；本地算法就绪后无响应发送 `0xE1`。`0xE0` 只停止出数。算法或 `0xE1` 失败发生在设备验证之后，不得记为 `validation_failed`。完整 28 字节帧及串口读取边界时间只写入受保护的内部录制目录。
 
 银河麒麟 x86_64 项目的日常入口不会自动访问 Git。耳机 USB 已连接时运行入口并输入 `1`；已有完整配置时也可输入 `2` 直接启动：
 
@@ -49,7 +49,7 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。`FF31` 原始 EEG 与 `FF51` 原始心率均会持久化，`FF51` 用于北向 `hr.raw`；算法输入保留原始字节序和完整窗口。Ubuntu 首次安装会将锁定的行 JSON C++ bridge 安装到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`；银河麒麟一键流程则在当前 N100/N150 本机构建到项目 `.runtime/algorithm/`，进程自检通过后才自动启用。macOS 仅完成源码构建及合成输入烟雾测试；三种环境的自检都不代表真实数据 POC，SDK 输入分组、串口原始投影、输出指标和性能仍须在最终麒麟主机根据状态、日志和真实数据验证。
+历史 Flowtime BLE 兼容层仍保留 Bleak 扫描、通知和启停实现，但不属于当前银河麒麟耳机 USB 串口需求。银河麒麟一键流程在当前 N100/N150 本机构建 C++ 算法 bridge 到项目 `.runtime/algorithm/`，进程自检通过后才自动启用；自检不代表真实耳机数据 POC，SDK 输入分组、串口原始投影、输出指标和性能仍须在最终麒麟主机验证。
 
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
@@ -71,7 +71,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 | --- | --- | --- |
 | 银河麒麟 V10 x86_64 网关 | [`linux/neurobridge-kylin-bootstrap.sh`](linux/neurobridge-kylin-bootstrap.sh) | 菜单 `1` 完成项目内配置与前台验证；菜单 `9` 安装、查看或停用以当前桌面用户运行的 systemd 开机自启服务。 |
 | Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 首期部署入口；安装为 systemd 服务。 |
-| macOS 真实头环 POC | [`mac/start-poc.command`](mac/start-poc.command) | 一键启动本机采集、算法 bridge 和控制台；详见 [`mac/README.md`](mac/README.md)。 |
+| macOS 历史 POC | [`mac/start-poc.command`](mac/start-poc.command) | 保留代码，不属于当前银河麒麟耳机 USB 串口交付或验收。 |
 | Windows 网关 | [`windows/README.md`](windows/README.md) | 尚未完成设备、算法和后台服务验证，不能作为交付部署入口。 |
 | 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；可订阅/停止页面数据，将同一设备帧的序列号、六路 EEG 与 HR 合并成一行，并显示 600ms 窗口和序列号丢包统计。 |
 | 本机可视化/兼容 B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 默认由网关在回环地址提供；兼容模式仍可作为独立 B 端联调页。 |
@@ -80,16 +80,15 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 ## 首期交付结论
 
-- 目标硬件：N100/N150 x86 小主机，8 GB 内存、256 GB SSD、可稳定枚举目标耳机 TTY 的 USB 端口；蓝牙控制器仅用于保留的 BLE 回归策略。
-- 目标系统：N100/N150 x86_64 主机上的银河麒麟 V10；Ubuntu LTS 仅保留为兼容和回归基线。
-- 当前默认链路：`头环 → USB/串口（源码已支持，目标机 POC/现场验收待完成）→ 网关后台 → 本机回环 WebSocket → 同机浏览器`。不需要 B 端专用网线、静态地址或 DHCP。
-- 兼容链路：配置切换为 `wired_b_side` 后，继续支持 `网关 → 专用有线以太网 → 独立 B 端主机`，消息契约不变。
-- 运行方式：实时模式和录播模式均为交付范围；头环未连接时，B 端首次 `subscribe` 或 `getLatest` 会启动网关级录播流程，并以 `mode="replay"` 标记数据来源。录播优先使用部署配置明确指定且有效的会话；否则自动遍历录播目录，选择最新的非空历史会话。后续订阅加入该流程的当前进度。最后一个 B 端 WebSocket 连接断开时，网关停止录播并重置进度；仍有连接时，文件播放到末尾会从首条重新循环。头环重连时自动停止录播并回到实时。网关应开机自启，现场无需操作。
+- 目标硬件：N100/N150 x86 小主机，8 GB 内存、256 GB SSD、可稳定枚举目标耳机 TTY 的 USB 端口。
+- 目标系统：N100/N150 x86_64 主机上的银河麒麟 V10；其他系统结果不替代正式验收。
+- 当前链路：`耳机 → USB 派生串口 → 网关后台 → 本机回环 WebSocket → 同机浏览器`。不需要 B 端专用网线、静态地址或 DHCP。
+- 运行方式：实时和录播均为交付范围；耳机串口不可用时，首次 `subscribe` 或 `getLatest` 按既有规则启动录播。耳机恢复后停止录播并回到实时。
 - 运维与交付：网关注册为 systemd 开机自启服务；运行日志持久化并每日轮转。本机策略下网页、WebSocket 和下载服务只监听 `127.0.0.1`。只有切换兼容有线策略时，才配置专网静态地址或独立 DHCP 单元。
 - 演示范围：本次为单人；北向协议仅保留录播关联所需的 `subjectId`。
-- 当前设备通信规范定义：EEG `FF31` 为 20 字节大端数据包（2 字节序号与 6 个 24 位采样），心率 `FF51` 为 1 字节，佩戴/接触状态 `FF32` 为 2 字节；北向仍最多按 600 ms 分组，但实际包数由网关运行时记录，不写死。
+- 当前耳机通信规范定义固定 28 字节串口帧：3 字节包头、1 字节长度、2 字节大端序列号、18 字节 EEG、1 字节心率和 3 字节包尾。算法兼容层从中投影 20 字节 EEG 与 1 字节 HR 原始输入。
 
-当前默认实时链路使用 USB 串口，不依赖蓝牙。只有显式切换到 `bluetooth` 回归策略时，才需要 BlueZ 和经验证的蓝牙控制器。
+当前银河麒麟部署固定使用 USB 串口，不依赖蓝牙；BLE 兼容代码不进入本次部署或验收。
 
 ## 北向协议要点
 
@@ -104,7 +103,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 | `unsubscribe` | 停止连续数据 | 确认响应 |
 | `getStatus` | 查询连接、信号、电量和当前模式 | 状态响应 |
 
-网关所有输出统一为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 固定为 `1.0`，`code=200` 成功，非 `200` 时 `message` 为错误原因。连续数据事件的 `data` 中包含 `gatewayBootId`、`mode`（`live`/`replay`）、`subjectId`、`timestampMs`、`valid` 与 `payload`。v0.1 为单头环、单网关实例，不传 `deviceId` 或 `gatewayId`。原始波形和节律数据使用批量 JSON 或二进制帧，避免单采样点逐条 JSON 发送。
+网关所有输出统一为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 固定为 `1.0`，`code=200` 成功，非 `200` 时 `message` 为错误原因。连续数据事件的 `data` 中包含 `gatewayBootId`、`mode`（`live`/`replay`）、`subjectId`、`timestampMs`、`valid` 与 `payload`。当前为单耳机、单网关实例，不传 `deviceId` 或 `gatewayId`。原始波形和节律数据使用批量 JSON 或二进制帧，避免单采样点逐条 JSON 发送。
 
 北向消息名称、字段和 WebSocket 传输以版本台账登记的当前对外协议为准；设备采样率、每 600 ms 实际样本数等未确认值继续配置化或由运行日志实测，不在 README 中假定。
 
@@ -112,17 +111,17 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 | SDK | 结论 | 依据与处理方式 |
 | --- | --- | --- |
-| [Enter-Biomodule-BLE-PC-SDK](https://github.com/Entertech/Enter-Biomodule-BLE-PC-SDK) | **适配，作为 BLE 接入层的首选 POC** | Python SDK 基于 Bleak 0.19，声明支持 macOS、Linux 和 Windows；可承担 Flowtime 的扫描、连接、通知、启动采集与断线回调。BLE UUID 与数据契约以 [头环蓝牙通信协议](https://entertech.feishu.cn/docs/doccnlmMLpxwY25gJQyiFQmBeRd?from=from_copylink) 为准，不能以 SDK 的旧解包示例推断。Linux 上仍须实机验证。 |
+| [Enter-Biomodule-BLE-PC-SDK](https://github.com/Entertech/Enter-Biomodule-BLE-PC-SDK) | **仅保留历史兼容** | 不属于当前银河麒麟耳机 USB 串口实现或验收范围。 |
 | [AffectiveCloud-Algorithm-SDK](https://github.com/Entertech/AffectiveCloud-Algorithm-SDK) | **适配 x86 Linux 网关的算法层，目标麒麟仍须真实数据 POC** | C++ SDK 提供双通道 `appendEEG`、单通道 `appendSCEEG`、`appendHR` 及注意力、放松度、脑波等报表；它要求 C++17、Eigen3、NumCpp。仓库部署流程已能构建 bridge，但银河麒麟目标机仍须用真实串口原始字节验证构建、输入分组、性能和结果。 |
 
 算法 SDK 还带有 Python 实现，但其依赖固定在 TensorFlow 1.8、Keras 2.2、NumPy 1.16 等较旧版本。首期网关优先选 C++ 实现；不要在未完成独立环境验证的情况下将该 Python 环境直接用于生产镜像。
 
 ## 实现边界
 
-- 网关按已选策略处理头环串口或 BLE 协议、数据解析、重连、时间戳、缓存、算法调用和北向适配。
+- 网关处理耳机 USB 串口协议、数据解析、重连、时间戳、缓存、算法调用和北向适配。
 - 实时采集时，网关分别保存设备原始数据与算法结果，并保留可关联的录制会话和时间戳；录播直接读取已保存数据，按原始时间间隔发送。
 - 默认由同机浏览器展示；兼容模式下第三方 B 端主机处理展示与保存，其后续服务端上传不属于网关边界。
-- 默认只使用本机回环 HTTP/WS；只有切换 `wired_b_side` 时才使用双方批准的专用有线网络参数。
+- 当前银河麒麟交付只使用本机回环 HTTP/WS；旧专网兼容代码不属于本次验收。
 
 ## 上线前 POC 与验收
 
@@ -133,7 +132,9 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 ## 文档
 
-- [头环蓝牙网关对接方案 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%AF%B9%E6%8E%A5%E6%96%B9%E6%A1%88_v0.1.md)：架构、边界、待决项和验收要求。
+- [银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)：当前内部需求基线。
+- [银河麒麟 V10 耳机 USB 串口接入技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)：当前内部实现基线。
+- [头环蓝牙网关对接方案 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%AF%B9%E6%8E%A5%E6%96%B9%E6%A1%88_v0.1.md)：历史方案，不属于当前银河麒麟耳机 USB 串口需求。
 
 ### 对外文档
 

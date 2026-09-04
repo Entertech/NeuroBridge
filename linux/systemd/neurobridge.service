@@ -1,5 +1,5 @@
 [Unit]
-Description=NeuroBridge headband gateway
+Description=NeuroBridge earphone USB serial gateway
 After=network-online.target
 Wants=network-online.target
 

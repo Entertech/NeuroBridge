@@ -230,6 +230,8 @@ class DeploymentTests(unittest.TestCase):
         script_path = ROOT / "linux" / "setup-kylin-gateway.sh"
         script = script_path.read_text(encoding="utf-8")
         self.assertTrue(os.access(script_path, os.X_OK))
+        self.assertIn('config.get("access", {}).get("mode") == "local_browser"', script)
+        self.assertNotIn('config.get("topology", {}).get("mode")', script)
 
         syntax = subprocess.run(
             ["bash", "-n", str(script_path)],
@@ -1072,8 +1074,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("算法初始化和 E1 发生在设备验证之后", javascript)
         self.assertIn("已有数据流时不会发送 E1", javascript)
         self.assertNotIn("请从日志区分 ACK 未返回 01、算法未就绪或 E1 写入失败", javascript)
-        self.assertIn("无响应 E1 已写入", html)
-        self.assertIn("完整重复握手会重新 ACK", html)
+        self.assertIn("算法就绪后才无响应写入 E1", html)
+        self.assertIn("完整重复握手时重新发送 ACK", html)
         self.assertNotIn("navigator.serial", javascript)
         self.assertNotIn("requestPort", javascript)
         for forbidden in ("fetch(", "XMLHttpRequest", "EventSource", "https://"):

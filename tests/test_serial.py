@@ -148,7 +148,7 @@ class SequenceLossTrackerTests(unittest.TestCase):
 
 class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
-    def stable_identity(usb_serial: str = "HEADBAND-001") -> dict[str, str | None]:
+    def stable_identity(usb_serial: str = "EARPHONE-001") -> dict[str, str | None]:
         return {
             "resolvedPath": "/dev/ttyUSB0",
             "vid": "1234",
@@ -462,6 +462,24 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("neurobridge.serial.adapter", level="INFO") as summaries:
             adapter._log_stats("test")
         self.assertIn("streamHandshakeFrames=2", "\n".join(summaries.output))
+
+    async def test_existing_stream_preserves_serial_read_boundary_timestamp(self) -> None:
+        packets: list[DevicePacket] = []
+        existing_frame = frame(10, 2, 61)
+
+        async def packet(event: DevicePacket) -> None:
+            packets.append(event)
+
+        adapter = SerialAdapter(SerialConfig(), packet, noop, noop)
+
+        with patch("neurobridge.serial.adapter.wall_clock_ms", return_value=123456789):
+            observed = await adapter._observe_existing_stream(FakeSerial([existing_frame]), "/dev/ttyUSB0")
+
+        self.assertEqual(observed, (existing_frame, 123456789))
+        assert observed is not None
+        buffered, received_at_ms = observed
+        await adapter._consume_frames(bytearray(buffered), received_at_ms)
+        self.assertEqual([packet.received_at_ms for packet in packets], [123456789] * 3)
 
     async def test_handshake_pattern_inside_valid_frame_is_not_counted(self) -> None:
         adapter = SerialAdapter(SerialConfig(), noop, noop, noop)

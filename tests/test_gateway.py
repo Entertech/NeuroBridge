@@ -169,10 +169,17 @@ class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
             fake = FakeAlgorithm()
             gateway.algorithm = fake
             await gateway.start()
+            broadcasts: list[dict[str, object]] = []
+
+            async def capture_status() -> None:
+                broadcasts.append(dict(gateway.status))
+
+            gateway.broadcast_status = capture_status  # type: ignore[method-assign]
             self.assertEqual(fake.initializations, 0)
             self.assertTrue(await gateway.on_device_ready())
             self.assertEqual(fake.initializations, 1)
             self.assertEqual(gateway.status["algorithmState"], "ready")
+            self.assertEqual(broadcasts[-1]["algorithmState"], "ready")
 
     async def test_algorithm_not_ready_is_logged_and_returns_false(self) -> None:
         class FakeAlgorithm:
