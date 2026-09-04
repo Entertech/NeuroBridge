@@ -970,8 +970,9 @@ class DeploymentTests(unittest.TestCase):
         capture_root = ROOT / "web" / "capture"
         html = (capture_root / "index.html").read_text(encoding="utf-8")
         javascript = (capture_root / "app.js").read_text(encoding="utf-8")
-        self.assertIn('href="./styles.css?v=20260903a"', html)
-        self.assertIn('src="./app.js?v=20260903a"', html)
+        self.assertIn('href="./styles.css"', html)
+        self.assertIn('src="./app.js"', html)
+        self.assertNotIn("?v=", html)
         self.assertIn('src="../runtime-config.js"', html)
         self.assertIn("不直接访问 USB 串口", html)
         self.assertIn('new WebSocket(endpoint, SUBPROTOCOL)', javascript)
