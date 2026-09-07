@@ -13,8 +13,8 @@
         <p class="eyebrow">NEUROBRIDGE / GATEWAY DATA VIEWER</p>
         <h1>耳机数据<br />实时查看</h1>
         <p class="intro">
-          本页只连接正在运行的 NeuroBridge 网关，不直接访问 USB 串口。点击“开始接收”后，
-          网关通过 WebSocket 转发 EEG、心率和设备状态；页面分别保留原始字节，并在独立区域展示解析结果。银河麒麟耳机 USB 串口路径不可用时不会切换为历史录播。
+          本页只连接正在运行的 NeuroBridge 网关，不直接访问 USB 串口。网页连接后，网关会通过 WebSocket 实时转发设备状态；点击“开始接收”后再转发 EEG 和心率数据。
+          页面分别保留原始字节，并在独立区域展示解析结果。银河麒麟耳机 USB 串口路径不可用时不会切换为历史录播。
         </p>
       </header>
 
@@ -53,7 +53,7 @@
         </div>
         <p id="gatewayMessage" class="message" role="status">正在等待连接网关。</p>
         <p class="control-note">
-          “开始/停止”只控制当前网页是否订阅数据，不会停止网关进程、USB 串口或设备连接。关闭网页后，网关仍正常运行。
+          网页连接网关后会立即订阅耳机状态并持续实时更新。“开始/停止”只控制当前网页的 EEG/心率数据订阅，不会停止状态更新、网关进程、USB 串口或设备连接。关闭网页后，网关仍正常运行。
         </p>
       </section>
 

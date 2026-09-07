@@ -39,7 +39,8 @@ const elements = {
 };
 
 let socket = null;
-let subscriptionId = null;
+let statusSubscriptionId = null;
+let dataSubscriptionId = null;
 let dataRecords = [];
 let rawRecords = [];
 let protocolLines = [];
@@ -149,10 +150,12 @@ function refreshControls() {
   elements.connect.disabled = connected || socket?.readyState === WebSocket.CONNECTING;
   elements.disconnect.disabled = !connected;
   elements.status.disabled = !connected;
-  elements.start.disabled = !connected || Boolean(subscriptionId);
-  elements.stop.disabled = !connected || !subscriptionId;
+  elements.start.disabled = !connected || Boolean(dataSubscriptionId);
+  elements.stop.disabled = !connected || !dataSubscriptionId;
   elements.exportRaw.disabled = rawRecords.length === 0;
-  elements.subscriptionState.textContent = subscriptionId ? `接收中 · ${subscriptionId}` : "未订阅";
+  elements.subscriptionState.textContent = dataSubscriptionId
+    ? `数据接收中 · ${dataSubscriptionId}`
+    : (statusSubscriptionId ? "状态实时更新 · 数据未订阅" : "未订阅");
 }
 
 function appendLine(lines, target, line, maximum) {
@@ -441,16 +444,26 @@ function handleMessage(message) {
   const data = message.data || {};
   updateStatus(data);
   if (data.action === "subscribe" && data.result?.subscriptionId) {
-    subscriptionId = data.result.subscriptionId;
-    setState("ok", "接收中", "订阅成功，正在等待网关转发耳机数据。即使数据暂未到达，网关服务仍保持运行。");
-    refreshControls();
-    // The device may have become ready after the page's initial getStatus but
-    // before this subscription existed, so its status event was not delivered
-    // to this page. Refresh the snapshot now that status events are subscribed.
-    sendRequest("getStatus", {});
+    const streams = Array.isArray(data.result.streams) ? data.result.streams : [];
+    if (streams.length === 1 && streams[0] === "status") {
+      statusSubscriptionId = data.result.subscriptionId;
+      setState("ok", "网关已连接", "耳机状态已开启实时更新；开始接收按钮只控制 EEG/心率数据。");
+      refreshControls();
+      sendRequest("getStatus", {});
+    } else {
+      dataSubscriptionId = data.result.subscriptionId;
+      setState("ok", "接收中", "数据订阅成功，正在等待网关转发耳机数据；耳机状态会独立实时更新。");
+      refreshControls();
+    }
   } else if (data.action === "unsubscribe") {
-    subscriptionId = null;
-    setState("ok", "已连接", "已停止向当前网页推送数据；网关后台和耳机连接未停止。再次点击“开始接收”即可恢复。");
+    const removedSubscriptionId = data.result?.subscriptionId;
+    if (removedSubscriptionId === dataSubscriptionId) {
+      dataSubscriptionId = null;
+      setState("ok", "网关已连接", "已停止 EEG/心率数据推送；耳机状态仍在实时更新。再次点击“开始接收”即可恢复数据。");
+    } else if (removedSubscriptionId === statusSubscriptionId) {
+      statusSubscriptionId = null;
+      setState("warn", "状态订阅已停止", "耳机状态不再实时更新，请重新连接网页。");
+    }
     refreshControls();
   }
   if (data.event === "data" || data.event === "status") {
@@ -490,9 +503,9 @@ function connect() {
     return;
   }
   socket.addEventListener("open", () => {
-    setState("ok", "网关已连接", "网页已连接网关。正在自动查询耳机状态；只有耳机完成串口校验后才会收到实时数据。");
+    setState("ok", "网关已连接", "网页已连接网关，正在开启耳机状态实时更新。");
     refreshControls();
-    sendRequest("getStatus", {});
+    sendRequest("subscribe", { streams: ["status"], includeInvalid: true });
   });
   socket.addEventListener("message", (event) => {
     try {
@@ -507,7 +520,8 @@ function connect() {
   socket.addEventListener("close", (event) => {
     appendProtocol("SYSTEM", `WebSocket 已断开 code=${event.code}${event.reason ? ` reason=${event.reason}` : ""}`);
     socket = null;
-    subscriptionId = null;
+    statusSubscriptionId = null;
+    dataSubscriptionId = null;
     setState("idle", "网关已断开", "网页与网关的连接已断开；网关进程和 USB 串口不会因此停止。");
     refreshControls();
   });
@@ -558,6 +572,8 @@ function exportDiagnosticLog() {
     `deviceConnectionState=${deviceConnectionState ?? "unknown"}`,
     `deviceConnectionStateLabel=${elements.deviceState.textContent}`,
     `algorithmState=${elements.algorithmState.textContent}`,
+    `statusSubscriptionId=${statusSubscriptionId ?? "none"}`,
+    `dataSubscriptionId=${dataSubscriptionId ?? "none"}`,
     `subscriptionState=${elements.subscriptionState.textContent}`,
     `displayFormat=${displayFormat}`,
     `dataEvents=${stats.events}`,
@@ -596,8 +612,8 @@ function exportDiagnosticLog() {
 elements.connect.addEventListener("click", connect);
 elements.disconnect.addEventListener("click", () => socket?.close(1000, "capture page disconnect"));
 elements.status.addEventListener("click", () => sendRequest("getStatus", {}));
-elements.start.addEventListener("click", () => sendRequest("subscribe", { streams: ["eeg.raw", "hr.raw", "status"], includeInvalid: true }));
-elements.stop.addEventListener("click", () => subscriptionId && sendRequest("unsubscribe", { subscriptionId }));
+elements.start.addEventListener("click", () => sendRequest("subscribe", { streams: ["eeg.raw", "hr.raw"], includeInvalid: true }));
+elements.stop.addEventListener("click", () => dataSubscriptionId && sendRequest("unsubscribe", { subscriptionId: dataSubscriptionId }));
 elements.clear.addEventListener("click", clearDisplay);
 elements.export.addEventListener("click", exportDiagnosticLog);
 elements.exportRaw.addEventListener("click", exportRawData);

@@ -556,7 +556,14 @@ class DeploymentTests(unittest.TestCase):
                 open_handler = script.split('socket.addEventListener("open", () => {', 1)[1].split(
                     'socket.addEventListener("message",', 1
                 )[0]
-                self.assertIn('sendRequest("getStatus", {});', open_handler)
+                if relative_path == "web/capture/app.js":
+                    self.assertIn('sendRequest("subscribe", { streams: ["status"]', open_handler)
+                    status_subscription_handler = script.split('streams.length === 1 && streams[0] === "status"', 1)[1].split(
+                        "} else {", 1
+                    )[0]
+                    self.assertIn('sendRequest("getStatus", {});', status_subscription_handler)
+                else:
+                    self.assertIn('sendRequest("getStatus", {});', open_handler)
                 self.assertIn(auto_connect, script)
 
     def test_one_command_update_uses_only_the_existing_checkout(self) -> None:
@@ -1103,8 +1110,10 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("?v=", html)
         self.assertIn('src="../runtime-config.js"', html)
         self.assertIn("不直接访问 USB 串口", html)
+        self.assertIn("网页连接后，网关会通过 WebSocket 实时转发设备状态", html)
         self.assertIn('new WebSocket(endpoint, SUBPROTOCOL)', javascript)
-        self.assertIn('["eeg.raw", "hr.raw", "status"]', javascript)
+        self.assertIn('streams: ["status"]', javascript)
+        self.assertIn('streams: ["eeg.raw", "hr.raw"]', javascript)
         self.assertIn('sendRequest("unsubscribe"', javascript)
         self.assertIn("bytesFromBase64", javascript)
         self.assertIn("parseEegPacket", javascript)
@@ -1137,9 +1146,11 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("Serial device validation failed:", javascript)
         self.assertIn("实时耳机未就绪 · 可能未发现、校验失败或已断开", javascript)
         self.assertIn('"网关已连接"', javascript)
-        subscribe_success = javascript.index('data.action === "subscribe"')
-        unsubscribe_success = javascript.index('data.action === "unsubscribe"')
-        self.assertIn('sendRequest("getStatus", {})', javascript[subscribe_success:unsubscribe_success])
+        self.assertIn("statusSubscriptionId", javascript)
+        self.assertIn("dataSubscriptionId", javascript)
+        self.assertIn("耳机状态已开启实时更新", javascript)
+        self.assertIn("耳机状态仍在实时更新", javascript)
+        self.assertIn("网页连接网关后会立即订阅耳机状态并持续实时更新", html)
         styles = (capture_root / "styles.css").read_text(encoding="utf-8")
         self.assertIn("grid-template-columns: minmax(0, 1fr)", styles)
         self.assertNotIn("repeat(auto-fit", styles)

@@ -561,7 +561,11 @@ class Gateway:
             elif action == "subscribe":
                 self.validate_params(params, {"streams", "includeInvalid"})
                 result = await self.subscribe(session, params, send, start_replay=False)
-                start_replay_after_response = not self.live and self.replay_available
+                start_replay_after_response = (
+                    any(stream != "status" for stream in result["streams"])
+                    and not self.live
+                    and self.replay_available
+                )
             elif action == "unsubscribe":
                 self.validate_params(params, {"subscriptionId"})
                 result = await self.unsubscribe(session, params)
@@ -625,6 +629,7 @@ class Gateway:
 
     async def subscribe(self, session: ClientSession, params: dict, send: Any, *, start_replay: bool = True) -> dict:
         streams = self.validate_streams(params.get("streams"))
+        data_streams = set(streams) - {"status"}
         include_invalid = params.get("includeInvalid", False)
         if not isinstance(include_invalid, bool):
             raise ProtocolError(400, "INVALID_REQUEST", "params.includeInvalid must be boolean.")
@@ -634,7 +639,7 @@ class Gateway:
         duplicate_streams = set(streams) & already_subscribed
         if duplicate_streams:
             raise ProtocolError(429, "RATE_LIMITED", "A stream is already subscribed on this connection.", True, {"streams": sorted(duplicate_streams)})
-        if not self.live and not self.replay_available:
+        if data_streams and not self.live and not self.replay_available:
             raise self._offline_data_error()
         unavailable = set(streams) - self.available_streams()
         if unavailable:
@@ -644,7 +649,7 @@ class Gateway:
         session.subscriptions[subscription.id] = subscription
         subscription.replay_delivery_task = asyncio.create_task(self._deliver_replay(session, subscription))
         LOG.info("Subscription created: subscriptionId=%s streams=%s includeInvalid=%s mode=%s", subscription.id, ",".join(streams), include_invalid, self.mode())
-        if start_replay and not self.live:
+        if start_replay and data_streams and not self.live:
             self._start_replay_if_needed()
         return {"subscriptionId": subscription.id, "streams": streams, "mode": self.mode(), "intervalMs": 600}
 

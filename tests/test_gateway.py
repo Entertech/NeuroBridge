@@ -277,6 +277,65 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             await gateway.close_session(session)
             await gateway.stop()
 
+    async def test_status_only_subscription_receives_serial_state_changes_while_offline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway_config = config(Path(directory))
+            gateway_config = GatewayConfig(
+                gateway_config.server,
+                gateway_config.ble,
+                gateway_config.recording,
+                gateway_config.algorithm,
+                data_source=DataSourceConfig("serial"),
+            )
+            gateway = Gateway(gateway_config)
+            sent: list[dict] = []
+
+            async def send(item: dict) -> None:
+                sent.append(item)
+
+            session = ClientSession()
+            await gateway.handle(
+                session,
+                '{"protocolVersion":"1.0","messageType":"request","requestId":"status-sub","action":"subscribe","params":{"streams":["status"]}}',
+                send,
+            )
+            self.assertEqual(sent[0]["code"], 200)
+            self.assertEqual(sent[0]["data"]["result"]["streams"], ["status"])
+            subscription_id = sent[0]["data"]["result"]["subscriptionId"]
+
+            await gateway.update_status("connectionState", "connecting")
+            await gateway.update_status("connectionState", "validated")
+
+            status_events = [item["data"] for item in sent if item["data"].get("event") == "status"]
+            self.assertEqual([item["subscriptionId"] for item in status_events], [subscription_id, subscription_id])
+            self.assertEqual(
+                [item["payload"]["status"]["connectionState"] for item in status_events],
+                ["connecting", "connected"],
+            )
+            await gateway.close_session(session)
+            await gateway.stop()
+
+    async def test_status_only_subscription_does_not_start_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gateway = Gateway(config(root, replay_speed=1_000))
+            gateway.store.start(1_000)
+            gateway.store.save_algorithm(timestamp_ms=1_100, valid=True, invalid_reasons=[], algorithm={"attention": 1})
+            gateway.store.stop()
+            session = ClientSession()
+
+            async def send(_: dict) -> None:
+                pass
+
+            await gateway.handle(
+                session,
+                '{"protocolVersion":"1.0","messageType":"request","requestId":"status-sub","action":"subscribe","params":{"streams":["status"]}}',
+                send,
+            )
+            self.assertIsNone(gateway._replay_task)
+            await gateway.close_session(session)
+            await gateway.stop()
+
     async def test_capture_summary_contains_counts_and_timing_without_raw_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             gateway = Gateway(config(Path(directory)))
