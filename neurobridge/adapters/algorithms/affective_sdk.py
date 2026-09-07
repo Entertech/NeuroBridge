@@ -6,7 +6,6 @@ import base64
 import time
 
 from ...algorithm.runner import AlgorithmRunner
-from ...ble.packets import DataWindow, RawPacket
 from ...config import AlgorithmConfig
 from ...domain.algorithm import AlgorithmInput, AlgorithmResult, AlgorithmSession, AlgorithmState
 
@@ -31,12 +30,14 @@ class AffectiveSdkAlgorithmEngine:
             return AlgorithmResult(value.batch_id, self.algorithm_version, started, int(time.time() * 1000), {}, False, ("ALGORITHM_INPUT_INVALID",))
         start_ms = int(value.payload.get("windowStartMs", started))
         end_ms = int(value.payload.get("windowEndMs", started))
-        window = DataWindow(start_ms, end_ms)
-        if eeg:
-            window.eeg.append(RawPacket("ff31", end_ms, eeg))
-        if hr:
-            window.hr.append(RawPacket("ff51", end_ms, hr))
-        metrics, reasons = await self._runner.evaluate(window)
+        metrics, reasons = await self._runner.evaluate_raw(
+            eeg,
+            hr,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            eeg_packet_count=int(value.payload.get("eegPacketCount", 0)),
+            hr_packet_count=int(value.payload.get("hrPacketCount", 0)),
+        )
         return AlgorithmResult(
             value.batch_id,
             self.algorithm_version,

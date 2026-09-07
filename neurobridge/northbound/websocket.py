@@ -23,7 +23,7 @@ async def require_subprotocol(_path: str, request_headers):
     return None
 
 
-async def create_server(gateway: Gateway):
+async def create_server(gateway: Gateway, controller=None):
     import websockets
 
     strategy = access_strategy(gateway.config.access.mode)
@@ -47,7 +47,10 @@ async def create_server(gateway: Gateway):
                     await websocket.close(code=1003, reason="Text JSON required")
                     break
                 LOG.debug("WebSocket text frame received: peer=%s bytes=%s", peer, len(message.encode("utf-8")))
-                await gateway.handle(session, message, send)
+                if controller is None:
+                    await gateway.handle(session, message, send)
+                else:
+                    await controller.handle(session, message, send)
         finally:
             await gateway.close_session(session)
             close_reason = websocket.close_reason or ""
@@ -76,8 +79,8 @@ async def create_server(gateway: Gateway):
     )
 
 
-async def serve(gateway: Gateway) -> None:
-    server = await create_server(gateway)
+async def serve(gateway: Gateway, controller=None) -> None:
+    server = await create_server(gateway, controller)
     try:
         LOG.info("Listening on ws://%s:%s%s", gateway.config.server.host, gateway.config.server.port, gateway.config.server.path)
         await asyncio.Future()

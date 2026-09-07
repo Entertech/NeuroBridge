@@ -95,6 +95,8 @@ class WindowAndSnapshotTests(unittest.TestCase):
         import base64
 
         self.assertEqual(base64.b64decode(mapped.payload["eegRawBase64"]), frame(0x1234)[4:24])
+        self.assertEqual(mapped.payload["eegPacketCount"], 1)
+        self.assertEqual(mapped.payload["hrPacketCount"], 1)
 
     def test_snapshot_replace_is_one_batch_transaction(self) -> None:
         store = InMemoryLatestSnapshotStore()

@@ -26,7 +26,12 @@ class SerialSessionControl:
         async with self._lock:
             if self._current_session_id() != connection_session_id:
                 return ControlResult("staleSession", connection_session_id, False, False, "STALE_SESSION")
-            if self._existing_stream() or connection_session_id in self._started_sessions:
+            if self._existing_stream():
+                # Adopt the already-running stream so normal session shutdown can
+                # still send exactly one E0 while continuing to skip E1.
+                self._started_sessions.add(connection_session_id)
+                return ControlResult("alreadyStreaming", connection_session_id, False)
+            if connection_session_id in self._started_sessions:
                 return ControlResult("alreadyStreaming", connection_session_id, False)
             try:
                 await self._write(b"\xE1")

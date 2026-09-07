@@ -24,10 +24,13 @@ class AlgorithmInputMapper:
             ordered = [frame_by_id[ref] for ref in batch.frame_refs if ref in frame_by_id]
             payload["eegRawBase64"] = base64.b64encode(b"".join(frame.raw_bytes[4:24] for frame in ordered)).decode("ascii")
             payload["hrRawBase64"] = base64.b64encode(b"".join(frame.raw_bytes[24:25] for frame in ordered)).decode("ascii")
+            payload["eegPacketCount"] = len(ordered)
+            payload["hrPacketCount"] = len(ordered)
         else:
             for signal_type in ("eeg", "hr"):
                 chunks = [signal.samples for signal in batch.signals if signal.signal_type == signal_type and isinstance(signal.samples, bytes)]
                 payload[f"{signal_type}RawBase64"] = base64.b64encode(b"".join(chunks)).decode("ascii")
+                payload[f"{signal_type}PacketCount"] = len(chunks)
         return AlgorithmInput(batch.batch_id, payload, self.MAPPING_VERSION)
 
 
@@ -60,10 +63,10 @@ class WindowResultAggregator:
             result = await asyncio.wait_for(asyncio.shield(task), self.timeout_ms / 1000)
             self._open.pop(batch.batch_id, None)
         except TimeoutError:
-            self._open.pop(batch.batch_id, None)
             result = self._invalid(batch.batch_id, "ALGORITHM_TIMEOUT")
 
             def completed(late_task: asyncio.Task[AlgorithmResult]) -> None:
+                self._open.pop(batch.batch_id, None)
                 self.late_result_count += 1
                 if on_late_result is not None and not late_task.cancelled() and late_task.exception() is None:
                     asyncio.create_task(on_late_result(late_task.result()))

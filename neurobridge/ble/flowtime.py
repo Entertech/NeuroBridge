@@ -90,7 +90,9 @@ class FlowtimeAdapter:
                 LOG.info("Flowtime notifications ready; initializing capture: attempt=%s", attempt)
                 # Do not start device capture until the algorithm has a clean session.
                 # This makes every post-FF21 packet eligible for automatic append.
-                await self.device_ready()
+                ready = await self.device_ready()
+                if ready is False:
+                    raise ConnectionError("Local algorithm is not ready; BLE capture command was not sent")
                 phase = "start_capture"
                 await self._client.write_gatt_char(FF21, b"\x05", response=True)
                 LOG.info("Flowtime start command acknowledged: attempt=%s command=0x05", attempt)

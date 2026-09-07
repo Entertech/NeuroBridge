@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -163,6 +164,10 @@ class Gateway:
             segment_max_bytes=self.config.storage.segment_max_bytes,
             warning_threshold_bytes=self.config.storage.warning_threshold_bytes,
             critical_threshold_bytes=self.config.storage.critical_threshold_bytes,
+            recovery_margin_bytes=self.config.storage.recovery_margin_bytes,
+            recovery_checks=self.config.storage.recovery_checks,
+            fsync_interval_records=self.config.storage.fsync_interval_records,
+            session_retention_days=self.config.storage.session_retention_days,
             auto_cleanup_enabled=self.config.storage.auto_cleanup_enabled,
         )
         LOG.info(
@@ -505,7 +510,7 @@ class Gateway:
         if now - last_summary >= 10_000:
             self._capture_stats["lastSummaryAtMs"] = now
             self._log_capture_summary("periodic")
-        if algorithm_payload:
+        if algorithm_payload and self.config.data_source.type == "bluetooth":
             self.store.save_algorithm_events(
                 algorithm=algorithm_payload,
                 computed_at_ms=now_ms(),
@@ -617,6 +622,113 @@ class Gateway:
         # remains isolated behind its single latest-value slot.
         await asyncio.sleep(0)
 
+    async def publish_window_result(self, result: WindowResult) -> None:
+        """Wire-compatible publication boundary for the new application service."""
+
+        if self.config.data_source.type == "serial" and result.mode != "live":
+            raise ValueError("Serial headset results must always use live mode")
+        algorithm_payload = dict(result.algorithm_result.metrics) or None
+        if result.valid and algorithm_payload:
+            self.latest_algorithm = algorithm_payload
+            self.latest_algorithm_timestamp = result.batch.window_end_ms
+        raw: dict[str, object] = {}
+        signals_by_type: dict[str, list[ParsedSignal]] = {"eeg": [], "hr": []}
+        for signal in result.batch.signals:
+            if signal.signal_type not in {"eeg", "hr"} or not isinstance(signal.samples, bytes):
+                continue
+            signals_by_type[signal.signal_type].append(signal)
+        source_refs: dict[str, dict[str, int] | None] = {"eeg": None, "hr": None}
+        for signal_type, signals in signals_by_type.items():
+            if not signals:
+                continue
+            samples = [signal.samples for signal in signals]
+            combined = b"".join(samples)
+            raw[f"{signal_type}Raw"] = {
+                "encoding": "base64",
+                "sampleFormat": signals[0].sample_format,
+                "packetBytes": len(samples[0]),
+                "packetCount": len(samples),
+                "byteLength": len(combined),
+                "windowStartMs": result.batch.window_start_ms,
+                "windowEndMs": result.batch.window_end_ms,
+                "bytesBase64": base64.b64encode(combined).decode("ascii"),
+            }
+            source_refs[signal_type] = {
+                "receivedAtMsStart": signals[0].received_at_ms,
+                "receivedAtMsEnd": signals[-1].received_at_ms,
+                "packetCount": len(signals),
+                "windowStartMs": result.batch.window_start_ms,
+                "windowEndMs": result.batch.window_end_ms,
+            }
+            if self.config.data_source.type == "bluetooth":
+                for signal in signals:
+                    self.store.save_raw_packet(
+                        stream=signal_type,
+                        received_at_ms=signal.received_at_ms,
+                        window_start_ms=result.batch.window_start_ms,
+                        window_end_ms=result.batch.window_end_ms,
+                        value=signal.samples,
+                    )
+            self._capture_stats[f"{signal_type}Packets"] = int(
+                self._capture_stats[f"{signal_type}Packets"] or 0
+            ) + len(signals)
+            self._capture_stats[f"{signal_type}Bytes"] = int(
+                self._capture_stats[f"{signal_type}Bytes"] or 0
+            ) + len(combined)
+            if self._capture_stats["firstPacketAtMs"] is None:
+                self._capture_stats["firstPacketAtMs"] = signals[0].received_at_ms
+            self._capture_stats["lastDataAtMs"] = signals[-1].received_at_ms
+        result_reasons = list(
+            dict.fromkeys((*result.batch.invalid_reasons, *result.algorithm_result.invalid_reasons))
+        )
+        # An unavailable/failed algorithm must not make correctly parsed raw
+        # signals disappear for subscribers that did not request invalid data.
+        event_valid = result.batch.valid and (result.algorithm_result.valid if algorithm_payload else True)
+        event_reasons = result_reasons if algorithm_payload else list(result.batch.invalid_reasons)
+        self.status["persistenceGuaranteed"] = result.persistence_guaranteed
+        if self.recording_repository is not None:
+            self.status["storageState"] = self.recording_repository.storage_status().state.value
+        if algorithm_payload:
+            self.store.save_algorithm_events(
+                algorithm=algorithm_payload,
+                computed_at_ms=result.completed_at_ms,
+                eeg_source=source_refs["eeg"],
+                hr_source=source_refs["hr"],
+                valid=event_valid,
+                invalid_reasons=result_reasons,
+            )
+        self._capture_stats["windows"] = int(self._capture_stats["windows"] or 0) + 1
+        if not event_valid:
+            self._capture_stats["invalidWindows"] = int(self._capture_stats["invalidWindows"] or 0) + 1
+        if self.window_observer:
+            try:
+                await self.window_observer(result.batch, algorithm_payload, event_reasons, event_valid)
+            except Exception:
+                LOG.exception("Capture window observer failed")
+        for session in tuple(self.sessions):
+            for subscription in tuple(session.subscriptions.values()):
+                payload = self.filtered_payload(raw, algorithm_payload, subscription.streams)
+                if not payload or (not event_valid and not subscription.include_invalid):
+                    continue
+                if not event_valid:
+                    payload["invalidReasons"] = event_reasons
+                self._queue_live_message(
+                    session,
+                    subscription,
+                    envelope(
+                        200,
+                        self.event_data(
+                            "data",
+                            subscription.id,
+                            result.batch.window_end_ms,
+                            result.mode,
+                            event_valid,
+                            payload,
+                        ),
+                    ),
+                )
+        await asyncio.sleep(0)
+
     def filtered_payload(self, raw: dict, algorithm_payload: dict | None, streams: frozenset[str]) -> dict:
         payload: dict = {}
         if "eeg.raw" in streams and "eegRaw" in raw:
@@ -664,7 +776,7 @@ class Gateway:
         available = {"status"}
         if self.live or self.replay_available:
             available.update({"eeg.raw", "hr.raw"})
-        if self.algorithm.available:
+        if self.algorithm.available or self.status.get("algorithmState") == "ready":
             available.update({"eeg", "hr"})
         recording_id = self.replay_recording_id
         if not self.live and recording_id:

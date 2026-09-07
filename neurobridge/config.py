@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 import tomllib
 
+from .configuration.migration import migrate
+
 DEFAULT_ALGORITHM_COMMAND = ("/usr/local/lib/neurobridge/neurobridge_affective_bridge",)
 
 
@@ -30,6 +32,8 @@ class DataSourceConfig:
     """Select exactly one device-side transport strategy."""
 
     type: str = "bluetooth"
+    window_interval_ms: int = 600
+    stale_after_ms: int = 1800
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,10 @@ class StorageConfig:
     segment_duration_seconds: int = 600
     segment_max_bytes: int = 256 * 1024**2
     writer_queue_size: int = 1024
+    recovery_margin_bytes: int = 1 * 1024**3
+    recovery_checks: int = 3
+    fsync_interval_records: int = 64
+    session_retention_days: int = 30
     auto_cleanup_enabled: bool = False
 
 
@@ -134,9 +142,21 @@ class GatewayConfig:
     profile: str | None = None
 
 
-def load(path: str | Path) -> GatewayConfig:
-    with Path(path).open("rb") as file:
-        raw = tomllib.load(file)
+def load(
+    path: str | Path,
+    *,
+    defaults_path: str | Path | None = None,
+    system_path: str | Path | None = None,
+) -> GatewayConfig:
+    """Load defaults -> system configuration -> explicit override."""
+
+    raw: dict[str, object] = {}
+    for candidate in (defaults_path, system_path, path):
+        if candidate is None:
+            continue
+        with Path(candidate).open("rb") as file:
+            raw = _merge_config(raw, tomllib.load(file))
+    raw = migrate(raw)
     section_fields = {
         "server": {"host", "port", "path"},
         "ble": {"enabled", "device_name", "model_nbr_uuid", "scan_timeout_seconds", "reconnect_delay_seconds"},
@@ -147,9 +167,9 @@ def load(path: str | Path) -> GatewayConfig:
         "network": {"mode", "interface", "subnet_cidr", "dhcp_range_start", "dhcp_range_end", "dhcp_lease_time"},
         "access": {"mode"},
         "local_ui": {"enabled", "host", "port", "directory"},
-        "data_source": {"type"},
+        "data_source": {"type", "window_interval_ms", "stale_after_ms"},
         "serial": {"device", "candidate_types", "baud_rate", "handshake_timeout_ms", "command_response_timeout_ms", "data_timeout_seconds", "reconnect_delay_seconds", "stats_interval_seconds", "max_buffer_bytes", "dtr", "rts"},
-        "storage": {"warning_threshold_bytes", "critical_threshold_bytes", "segment_duration_seconds", "segment_max_bytes", "writer_queue_size", "auto_cleanup_enabled"},
+        "storage": {"warning_threshold_bytes", "critical_threshold_bytes", "segment_duration_seconds", "segment_max_bytes", "writer_queue_size", "recovery_margin_bytes", "recovery_checks", "fsync_interval_records", "session_retention_days", "auto_cleanup_enabled"},
     }
     unknown_top_level = set(raw) - {"config_schema_version", "profile", *section_fields}
     if unknown_top_level:
@@ -273,6 +293,12 @@ def load(path: str | Path) -> GatewayConfig:
     data_source_type = str(data_source["type"])
     if data_source_type not in {"bluetooth", "serial", "usb"}:
         raise ValueError("data_source.type must be bluetooth, serial, or usb")
+    window_interval_ms = data_source.get("window_interval_ms", 600)
+    stale_after_ms = data_source.get("stale_after_ms", 1800)
+    if not isinstance(window_interval_ms, int) or isinstance(window_interval_ms, bool) or window_interval_ms <= 0:
+        raise ValueError("data_source.window_interval_ms must be a positive integer")
+    if not isinstance(stale_after_ms, int) or isinstance(stale_after_ms, bool) or stale_after_ms <= window_interval_ms:
+        raise ValueError("data_source.stale_after_ms must be an integer greater than window_interval_ms")
     replay_recording_id = recording.get("replay_recording_id") or None
     if data_source_type == "serial" and replay_recording_id:
         raise ValueError("recording.replay_recording_id is not supported when data_source.type is serial")
@@ -293,14 +319,19 @@ def load(path: str | Path) -> GatewayConfig:
     serial_config = SerialConfig()
     if data_source_type == "serial":
         serial_device = str(serial.get("device", "auto"))
-        if serial_device != "auto" and not Path(serial_device).is_absolute():
-            raise ValueError("serial.device must be auto or an absolute device path")
+        windows_com = re.fullmatch(r"(?:\\\\\.\\)?COM[1-9][0-9]*", serial_device, re.IGNORECASE)
+        if serial_device != "auto" and not Path(serial_device).is_absolute() and not (profile == "windows_headset_local" and windows_com):
+            raise ValueError("serial.device must be auto, an absolute device path, or a COM port for the Windows profile")
         candidate_types_value = serial.get("candidate_types", ["ttyACM", "ttyUSB"])
         if not isinstance(candidate_types_value, list) or not candidate_types_value:
             raise ValueError("serial.candidate_types must be a non-empty array")
         candidate_types = tuple(str(value) for value in candidate_types_value)
-        if any(value not in {"ttyACM", "ttyUSB"} for value in candidate_types):
-            raise ValueError("serial.candidate_types only supports ttyACM and ttyUSB")
+        allowed_candidate_types = {"COM"} if profile == "windows_headset_local" else {"ttyACM", "ttyUSB"}
+        if any(value not in allowed_candidate_types for value in candidate_types):
+            raise ValueError(
+                "serial.candidate_types only supports COM for the Windows profile "
+                "or ttyACM/ttyUSB for POSIX profiles"
+            )
         baud_rate = int(serial.get("baud_rate", 115200))
         handshake_timeout_ms = int(serial.get("handshake_timeout_ms", 1000))
         command_response_timeout_ms = int(serial.get("command_response_timeout_ms", 1000))
@@ -348,6 +379,10 @@ def load(path: str | Path) -> GatewayConfig:
         "segment_duration_seconds": storage.get("segment_duration_seconds", 600),
         "segment_max_bytes": storage.get("segment_max_bytes", 256 * 1024**2),
         "writer_queue_size": storage.get("writer_queue_size", 1024),
+        "recovery_margin_bytes": storage.get("recovery_margin_bytes", 1 * 1024**3),
+        "recovery_checks": storage.get("recovery_checks", 3),
+        "fsync_interval_records": storage.get("fsync_interval_records", 64),
+        "session_retention_days": storage.get("session_retention_days", 30),
     }
     if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in storage_values.values()):
         raise ValueError("storage size, duration, and queue settings must be positive integers")
@@ -379,7 +414,7 @@ def load(path: str | Path) -> GatewayConfig:
             local_ui_port,
             local_ui_directory,
         ),
-        data_source=DataSourceConfig(data_source_type),
+        data_source=DataSourceConfig(data_source_type, window_interval_ms, stale_after_ms),
         serial=serial_config,
         storage=StorageConfig(**storage_values, auto_cleanup_enabled=auto_cleanup_enabled),
         config_schema_version=config_schema_version,
@@ -389,3 +424,14 @@ def load(path: str | Path) -> GatewayConfig:
 
     access_strategy(config.access.mode).validate(config)
     return config
+
+
+def _merge_config(base: dict[str, object], override: dict[str, object]) -> dict[str, object]:
+    result = dict(base)
+    for key, value in override.items():
+        current = result.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            result[key] = _merge_config(current, value)
+        else:
+            result[key] = value
+    return result

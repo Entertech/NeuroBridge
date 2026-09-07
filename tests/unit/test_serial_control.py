@@ -35,6 +35,7 @@ class SerialSessionControlTests(unittest.TestCase):
 
             control = SerialSessionControl(lambda: "conn-1", lambda: True, write)
             self.assertEqual((await control.start_stream("conn-1")).outcome, "alreadyStreaming")
-            self.assertEqual(writes, [])
+            self.assertEqual((await control.stop_stream("conn-1")).outcome, "stopped")
+            self.assertEqual(writes, [b"\xE0"])
 
         asyncio.run(scenario())

@@ -45,6 +45,12 @@ class SignalWindowAssembler:
     def flush(self) -> ParsedSignalBatch | None:
         return self._finish()
 
+    @property
+    def window_end_ms(self) -> int | None:
+        if self._window_start_ms is None:
+            return None
+        return self._window_start_ms + self.interval_ms
+
     def reset(self) -> None:
         self._signals.clear()
         self._window_start_ms = None

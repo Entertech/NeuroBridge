@@ -7,7 +7,6 @@ import logging
 import time
 
 from ..config import AlgorithmConfig
-from ..ble.packets import DataWindow
 
 LOG = logging.getLogger(__name__)
 
@@ -69,14 +68,37 @@ class AlgorithmRunner:
             LOG.info("Algorithm bridge stopped: returncode=%s", self.process.returncode)
         self.process = None
 
-    async def evaluate(self, window: DataWindow) -> tuple[dict | None, list[str]]:
-        if not window.eeg and not window.hr:
+    async def evaluate(self, window: object) -> tuple[dict | None, list[str]]:
+        eeg_packets = getattr(window, "eeg")
+        hr_packets = getattr(window, "hr")
+        return await self.evaluate_raw(
+            b"".join(item.value for item in eeg_packets),
+            b"".join(item.value for item in hr_packets),
+            start_ms=getattr(window, "start_ms"),
+            end_ms=getattr(window, "end_ms"),
+            eeg_packet_count=len(eeg_packets),
+            hr_packet_count=len(hr_packets),
+        )
+
+    async def evaluate_raw(
+        self,
+        eeg: bytes,
+        hr: bytes,
+        *,
+        start_ms: int,
+        end_ms: int,
+        eeg_packet_count: int = 0,
+        hr_packet_count: int = 0,
+    ) -> tuple[dict | None, list[str]]:
+        """Evaluate transport-neutral bytes without requiring legacy BLE models."""
+
+        if not eeg and not hr:
             return None, []
         if not self.available or not self.process or not self.process.stdin or not self.process.stdout:
             return None, ["ALGORITHM_NOT_READY"]
         started_at = time.monotonic()
         try:
-            request = {"timestampMs": window.end_ms, "eegRawBase64": base64.b64encode(b"".join(x.value for x in window.eeg)).decode(), "hrRawBase64": base64.b64encode(b"".join(x.value for x in window.hr)).decode()}
+            request = {"timestampMs": end_ms, "windowStartMs": start_ms, "eegRawBase64": base64.b64encode(eeg).decode(), "hrRawBase64": base64.b64encode(hr).decode()}
             self.process.stdin.write((json.dumps(request) + "\n").encode())
             await self.process.stdin.drain()
             response = await asyncio.wait_for(
@@ -92,17 +114,17 @@ class AlgorithmRunner:
             if not isinstance(result.get("algorithm"), dict):
                 LOG.warning(
                     "Algorithm bridge output invalid: timestampMs=%s eegPackets=%s hrPackets=%s responseFields=%s",
-                    window.end_ms,
-                    len(window.eeg),
-                    len(window.hr),
+                    end_ms,
+                    eeg_packet_count,
+                    hr_packet_count,
                     ",".join(sorted(str(key) for key in result)) if isinstance(result, dict) else "not-an-object",
                 )
                 return None, ["ALGORITHM_OUTPUT_INVALID"]
             LOG.debug(
                 "Algorithm window evaluated: timestampMs=%s eegPackets=%s hrPackets=%s durationMs=%s outputFields=%s",
-                window.end_ms,
-                len(window.eeg),
-                len(window.hr),
+                end_ms,
+                eeg_packet_count,
+                hr_packet_count,
                 int((time.monotonic() - started_at) * 1000),
                 ",".join(sorted(str(key) for key in result["algorithm"])),
             )
@@ -111,9 +133,9 @@ class AlgorithmRunner:
             self.error = str(exc)
             LOG.warning(
                 "Algorithm bridge evaluation failed: timestampMs=%s eegPackets=%s hrPackets=%s durationMs=%s errorType=%s reason=%s",
-                window.end_ms,
-                len(window.eeg),
-                len(window.hr),
+                end_ms,
+                eeg_packet_count,
+                hr_packet_count,
                 int((time.monotonic() - started_at) * 1000),
                 type(exc).__name__,
                 _safe_log_text(exc),

@@ -11,3 +11,16 @@ class CollectingNorthboundSink:
 
     async def publish(self, event: ApplicationEvent) -> None:
         self.events.append(event)
+
+
+class GatewayNorthboundSink:
+    """Publish application events through the legacy wire-compatible gateway."""
+
+    def __init__(self, gateway: object) -> None:
+        self.gateway = gateway
+
+    async def publish(self, event: ApplicationEvent) -> None:
+        if event.kind != "window" or event.result is None:
+            return
+        publish = getattr(self.gateway, "publish_window_result")
+        await publish(event.result)

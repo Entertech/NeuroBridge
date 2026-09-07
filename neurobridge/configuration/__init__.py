@@ -1,4 +1,3 @@
-from .loader import load
-from .model import GatewayConfig
+from .migration import CURRENT_SCHEMA_VERSION, migrate, migrate_file
 
-__all__ = ["GatewayConfig", "load"]
+__all__ = ["CURRENT_SCHEMA_VERSION", "migrate", "migrate_file"]

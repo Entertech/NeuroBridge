@@ -354,6 +354,9 @@ class SerialAdapter:
         serial_factory: Callable[[str, SerialConfig], Any] = _open_serial,
         identity_provider: Callable[[str], dict[str, str | None]] = serial_candidate_metadata,
         raw_chunk: Callable[[bytes, int], Awaitable[None]] | None = None,
+        external_control: bool = False,
+        external_start: Callable[[bool], Awaitable[bool]] | None = None,
+        external_stop: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.config = config
         self.packet = packet
@@ -364,6 +367,9 @@ class SerialAdapter:
         self.serial_factory = serial_factory
         self.identity_provider = identity_provider
         self.raw_chunk = raw_chunk
+        self.external_control = external_control
+        self.external_start = external_start
+        self.external_stop = external_stop
         self._client: Any | None = None
         self._target: str | None = None
         self._stopping = False
@@ -583,6 +589,10 @@ class SerialAdapter:
                         _safe_log_text(self._target),
                     )
                     raise ConnectionError("Local algorithm is not ready; serial start command was not sent")
+                if self.external_control:
+                    if self.external_start is None or not await self.external_start(bool(existing_stream)):
+                        raise ConnectionError("Session-bound DeviceControl did not enable the serial stream")
+                    self._capture_started = True
                 if existing_stream:
                     LOG.info(
                         "Serial existing capture adopted: attempt=%s target=%s commandSent=false "
@@ -602,17 +612,18 @@ class SerialAdapter:
                     attempt,
                     _safe_log_text(self._target),
                 )
-                try:
-                    await self._send_command(START_COMMAND, "start")
-                except Exception:
-                    LOG.exception(
-                        "Serial capture enable failed after device validation: attempt=%s target=%s command=E1 "
-                        "reason=control_write_error responseExpected=false",
-                        attempt,
-                        _safe_log_text(self._target),
-                    )
-                    raise
-                self._capture_started = True
+                if not self.external_control:
+                    try:
+                        await self._send_command(START_COMMAND, "start")
+                    except Exception:
+                        LOG.exception(
+                            "Serial capture enable failed after device validation: attempt=%s target=%s command=E1 "
+                            "reason=control_write_error responseExpected=false",
+                            attempt,
+                            _safe_log_text(self._target),
+                        )
+                        raise
+                    self._capture_started = True
                 LOG.info(
                     "Serial capture enabled: attempt=%s target=%s command=E1 "
                     "responseExpected=false connectionState=validated deviceValidationMode=ack_01",
@@ -640,7 +651,11 @@ class SerialAdapter:
             finally:
                 if self._client is not None:
                     if self._capture_started:
-                        await self._send_stop_best_effort("adapter_cleanup")
+                        if self.external_control and self.external_stop is not None:
+                            await self.external_stop()
+                            self._capture_started = False
+                        else:
+                            await self._send_stop_best_effort("adapter_cleanup")
                     self._log_stats("disconnect")
                     await self._close_client(self._client)
                 self._client = None
@@ -872,6 +887,16 @@ class SerialAdapter:
             len(command),
             int((time.monotonic() - started) * 1000),
         )
+
+    async def control_write(self, command: bytes) -> None:
+        """Write only a confirmed stream-control command for DeviceControl."""
+
+        names = {START_COMMAND: "start", STOP_COMMAND: "stop"}
+        try:
+            name = names[bytes(command)]
+        except KeyError as error:
+            raise ValueError("Unsupported external serial control command") from error
+        await self._send_command(bytes(command), name)
 
     async def _send_stop_best_effort(self, reason: str) -> None:
         async with self._stop_lock:
@@ -1123,6 +1148,10 @@ class SerialAdapter:
         self._stopping = True
         LOG.info("Stopping serial adapter: target=%s captureStarted=%s", _safe_log_text(self._target), self._capture_started)
         if self._client is not None and self._capture_started:
-            await self._send_stop_best_effort("service_stop")
+            if self.external_control and self.external_stop is not None:
+                await self.external_stop()
+                self._capture_started = False
+            else:
+                await self._send_stop_best_effort("service_stop")
         if self._client is not None:
             await self._close_client(self._client)

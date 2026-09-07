@@ -93,7 +93,13 @@ class DataStateMachine:
         counters = dict(self.snapshot.counters)
         key = "produced_windows" if valid else "invalid_windows"
         counters[key] = counters.get(key, 0) + 1
-        return self.transition(target, last_produced_at_ms=timestamp_ms, counters=counters)
+        return self.transition(
+            target,
+            last_produced_at_ms=timestamp_ms,
+            recent_error=None,
+            error_stage=None,
+            counters=counters,
+        )
 
 
 class StorageHealthTracker:
@@ -152,4 +158,9 @@ class StorageHealthTracker:
             state=self.state,
             available_bytes=available_bytes,
             persistence_guaranteed=self.state == StorageState.OK,
+            details={
+                "healthyChecks": self._healthy_checks,
+                "recoveryChecksRequired": self.recovery_checks,
+                "writeSucceededSinceDegraded": self._write_succeeded_since_degraded,
+            },
         )

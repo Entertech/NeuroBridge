@@ -7,6 +7,7 @@ import base64
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import logging
 import os
 from pathlib import Path
 import queue
@@ -17,7 +18,11 @@ from typing import Any
 import uuid
 
 from ...domain.status import StorageState
+from ...application.status import StorageHealthTracker
 from ...ports.recording import PersistenceReceipt, PersistenceRecord, StorageStatus
+
+
+LOG = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,10 +51,16 @@ class SegmentedRecordingRepository:
         segment_max_bytes: int = 256 * 1024**2,
         warning_threshold_bytes: int = 5 * 1024**3,
         critical_threshold_bytes: int = 1 * 1024**3,
+        recovery_margin_bytes: int = 1 * 1024**3,
+        recovery_checks: int = 3,
+        fsync_interval_records: int = 64,
+        session_retention_days: int = 30,
         auto_cleanup_enabled: bool = False,
     ) -> None:
         if queue_size <= 0 or segment_duration_seconds <= 0 or segment_max_bytes <= 0:
             raise ValueError("Recording limits must be positive")
+        if recovery_margin_bytes <= 0 or recovery_checks <= 0 or fsync_interval_records <= 0 or session_retention_days <= 0:
+            raise ValueError("Storage recovery, fsync, and retention settings must be positive")
         if critical_threshold_bytes >= warning_threshold_bytes:
             raise ValueError("critical threshold must be below warning threshold")
         self.root = Path(root)
@@ -61,6 +72,10 @@ class SegmentedRecordingRepository:
         self.segment_max_bytes = segment_max_bytes
         self.warning_threshold_bytes = warning_threshold_bytes
         self.critical_threshold_bytes = critical_threshold_bytes
+        self.recovery_margin_bytes = recovery_margin_bytes
+        self.recovery_checks = recovery_checks
+        self.fsync_interval_records = fsync_interval_records
+        self.session_retention_days = session_retention_days
         self.auto_cleanup_enabled = auto_cleanup_enabled
         self._queue: queue.Queue[PersistenceRecord | None] = queue.Queue(maxsize=queue_size)
         self._segments: dict[tuple[str, str], _Segment] = {}
@@ -70,7 +85,14 @@ class SegmentedRecordingRepository:
         self._affected_from_ms: int | None = None
         self._last_success_at_ms: int | None = None
         self._gap_count = 0
+        self._last_failure_reason: str | None = None
         self._stopped = False
+        self._health = StorageHealthTracker(
+            warning_threshold_bytes,
+            critical_threshold_bytes,
+            recovery_margin_bytes,
+            recovery_checks,
+        )
         self.recover_partials()
         self._refresh_capacity()
         self._worker = Thread(target=self._writer, name="neurobridge-recording", daemon=True)
@@ -82,7 +104,7 @@ class SegmentedRecordingRepository:
         try:
             self._queue.put_nowait(record)
         except queue.Full:
-            return self._record_gap(record.captured_at_ms, "writer_queue_full")
+            return self._record_gap(record.captured_at_ms, "writer_queue_full", StorageState.ERROR)
         return PersistenceReceipt(True, True)
 
     async def close_session(self, recording_session_id: str) -> None:
@@ -98,6 +120,12 @@ class SegmentedRecordingRepository:
                 self._affected_from_ms,
                 self._last_success_at_ms,
                 self._gap_count,
+                {
+                    "queueDepth": self._queue.qsize(),
+                    "queueCapacity": self._queue.maxsize,
+                    "lastFailureReason": self._last_failure_reason,
+                    **self._health.status(self._available_bytes).details,
+                },
             )
 
     async def close(self) -> None:
@@ -117,9 +145,16 @@ class SegmentedRecordingRepository:
                 if record is None:
                     return
                 self._write(record)
-            except Exception:
+            except Exception as error:
                 if record is not None:
                     self._record_gap(record.captured_at_ms, "write_error", StorageState.ERROR)
+                    LOG.exception(
+                        "Recording write failed: recordingSessionId=%s recordType=%s capturedAtMs=%s errorType=%s",
+                        record.recording_session_id,
+                        record.record_type,
+                        record.captured_at_ms,
+                        type(error).__name__,
+                    )
             finally:
                 self._queue.task_done()
 
@@ -141,8 +176,11 @@ class SegmentedRecordingRepository:
             segment.bytes_written += len(encoded)
             segment.first_at_ms = segment.first_at_ms if segment.first_at_ms is not None else record.captured_at_ms
             segment.last_at_ms = record.captured_at_ms
+            if segment.count % self.fsync_interval_records == 0:
+                segment.file.flush()
+                os.fsync(segment.file.fileno())
             self._last_success_at_ms = int(time.time() * 1000)
-            self._refresh_capacity_locked()
+            self._refresh_capacity_locked(write_succeeded=True)
             should_cleanup = self.auto_cleanup_enabled and self._state in {StorageState.FULL, StorageState.WARNING}
         if should_cleanup:
             self.cleanup_completed_sessions()
@@ -221,7 +259,8 @@ class SegmentedRecordingRepository:
                 destination = self.quarantine / f"{path.parents[1].name}-{path.parent.name}-{path.name}"
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(path, destination)
-                self._state = StorageState.ERROR
+                self._last_failure_reason = "partial_recovery_failed"
+                self._state = self._health.observe(self._available_bytes or 0, write_succeeded=False)
 
     def cleanup_completed_sessions(self) -> tuple[str, ...]:
         """Delete eligible completed sessions oldest-first when explicitly enabled."""
@@ -245,10 +284,13 @@ class SegmentedRecordingRepository:
                 continue
             candidates.append((manifest["endedAtMs"], session))
         removed: list[str] = []
-        recovery_target = self.warning_threshold_bytes + 1024**3
+        recovery_target = self.warning_threshold_bytes + self.recovery_margin_bytes
+        retention_cutoff_ms = int(time.time() * 1000) - self.session_retention_days * 24 * 60 * 60 * 1000
         for _ended_at, session in sorted(candidates):
             if shutil.disk_usage(self.root).free >= recovery_target:
                 break
+            if _ended_at > retention_cutoff_ms:
+                continue
             tombstone = self.root / f".cleanup-{session.name}-{uuid.uuid4().hex}"
             os.replace(session, tombstone)
             shutil.rmtree(tombstone)
@@ -268,23 +310,24 @@ class SegmentedRecordingRepository:
             self._gap_count += 1
             if self._affected_from_ms is None:
                 self._affected_from_ms = timestamp_ms
+            self._last_failure_reason = reason
             if state is not None:
-                self._state = state
+                available = self._available_bytes if self._available_bytes is not None else 0
+                self._state = self._health.observe(available, write_succeeded=False)
         return PersistenceReceipt(False, False, reason)
 
     def _refresh_capacity(self) -> None:
         with self._lock:
             self._refresh_capacity_locked()
 
-    def _refresh_capacity_locked(self) -> None:
+    def _refresh_capacity_locked(self, *, write_succeeded: bool | None = None) -> None:
         available = shutil.disk_usage(self.root).free
         self._available_bytes = available
-        if available <= self.critical_threshold_bytes:
-            self._state = StorageState.FULL
-        elif available <= self.warning_threshold_bytes:
-            self._state = StorageState.WARNING
-        elif self._state != StorageState.ERROR:
-            self._state = StorageState.OK
+        previous = self._state
+        self._state = self._health.observe(available, write_succeeded=write_succeeded)
+        if previous != StorageState.OK and self._state == StorageState.OK:
+            self._affected_from_ms = None
+            self._last_failure_reason = None
 
     @staticmethod
     def _category(record_type: str) -> str:

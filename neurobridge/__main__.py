@@ -103,7 +103,7 @@ async def run(config_path: str) -> None:
     await gateway.start()
     try:
         async with asyncio.TaskGroup() as group:
-            group.create_task(serve(gateway))
+            group.create_task(serve(gateway, container.northbound_controller))
             group.create_task(adapter.run())
             if strategy.serves_local_ui(config):
                 group.create_task(serve_local_ui(config))
