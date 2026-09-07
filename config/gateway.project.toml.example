@@ -1,6 +1,9 @@
 # Project-local Galaxy Kylin configuration. Generated runtime files stay under
 # .runtime/, which is ignored by Git. Run NeuroBridge from the project root so
 # relative recording and logging paths resolve inside this checkout.
+config_schema_version = 1
+profile = "kylin_headset_local"
+
 [server]
 host = "127.0.0.1"
 port = 8765
@@ -58,3 +61,12 @@ level = "INFO"
 # ./linux/setup-kylin-algorithm.sh; it enables this only after a target-local
 # build and a process-contract smoke test. Real-data algorithm POC is separate.
 enabled = false
+request_timeout_ms = 2000
+
+[storage]
+warning_threshold_bytes = 5368709120
+critical_threshold_bytes = 1073741824
+segment_duration_seconds = 600
+segment_max_bytes = 268435456
+writer_queue_size = 1024
+auto_cleanup_enabled = false

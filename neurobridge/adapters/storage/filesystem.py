@@ -1,0 +1,313 @@
+"""Bounded, crash-recoverable JSONL recording repository."""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+from dataclasses import dataclass
+from hashlib import sha256
+import json
+import os
+from pathlib import Path
+import queue
+import shutil
+from threading import Lock, Thread
+import time
+from typing import Any
+import uuid
+
+from ...domain.status import StorageState
+from ...ports.recording import PersistenceReceipt, PersistenceRecord, StorageStatus
+
+
+@dataclass
+class _Segment:
+    session_id: str
+    category: str
+    sequence: int
+    path: Path
+    file: Any
+    opened_at_ms: int
+    first_at_ms: int | None = None
+    last_at_ms: int | None = None
+    count: int = 0
+    bytes_written: int = 0
+
+
+class SegmentedRecordingRepository:
+    """Keep disk latency outside acquisition and never use an unbounded queue."""
+
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        queue_size: int = 1024,
+        segment_duration_seconds: int = 600,
+        segment_max_bytes: int = 256 * 1024**2,
+        warning_threshold_bytes: int = 5 * 1024**3,
+        critical_threshold_bytes: int = 1 * 1024**3,
+        auto_cleanup_enabled: bool = False,
+    ) -> None:
+        if queue_size <= 0 or segment_duration_seconds <= 0 or segment_max_bytes <= 0:
+            raise ValueError("Recording limits must be positive")
+        if critical_threshold_bytes >= warning_threshold_bytes:
+            raise ValueError("critical threshold must be below warning threshold")
+        self.root = Path(root)
+        self.sessions_root = self.root / "sessions"
+        self.quarantine = self.root / "quarantine"
+        self.sessions_root.mkdir(parents=True, exist_ok=True)
+        self.quarantine.mkdir(parents=True, exist_ok=True)
+        self.segment_duration_ms = segment_duration_seconds * 1000
+        self.segment_max_bytes = segment_max_bytes
+        self.warning_threshold_bytes = warning_threshold_bytes
+        self.critical_threshold_bytes = critical_threshold_bytes
+        self.auto_cleanup_enabled = auto_cleanup_enabled
+        self._queue: queue.Queue[PersistenceRecord | None] = queue.Queue(maxsize=queue_size)
+        self._segments: dict[tuple[str, str], _Segment] = {}
+        self._lock = Lock()
+        self._state = StorageState.OK
+        self._available_bytes: int | None = None
+        self._affected_from_ms: int | None = None
+        self._last_success_at_ms: int | None = None
+        self._gap_count = 0
+        self._stopped = False
+        self.recover_partials()
+        self._refresh_capacity()
+        self._worker = Thread(target=self._writer, name="neurobridge-recording", daemon=True)
+        self._worker.start()
+
+    def try_append(self, record: PersistenceRecord) -> PersistenceReceipt:
+        if self._stopped:
+            return self._record_gap(record.captured_at_ms, "repository_stopped")
+        try:
+            self._queue.put_nowait(record)
+        except queue.Full:
+            return self._record_gap(record.captured_at_ms, "writer_queue_full")
+        return PersistenceReceipt(True, True)
+
+    async def close_session(self, recording_session_id: str) -> None:
+        await asyncio.to_thread(self._queue.join)
+        await asyncio.to_thread(self._close_session_sync, recording_session_id)
+
+    def storage_status(self) -> StorageStatus:
+        with self._lock:
+            return StorageStatus(
+                self._state,
+                self._available_bytes,
+                self._state == StorageState.OK,
+                self._affected_from_ms,
+                self._last_success_at_ms,
+                self._gap_count,
+            )
+
+    async def close(self) -> None:
+        await asyncio.to_thread(self._queue.join)
+        self._stopped = True
+        self._queue.put(None)
+        await asyncio.to_thread(self._worker.join)
+        with self._lock:
+            for segment in tuple(self._segments.values()):
+                self._finalize_segment(segment)
+            self._segments.clear()
+
+    def _writer(self) -> None:
+        while True:
+            record = self._queue.get()
+            try:
+                if record is None:
+                    return
+                self._write(record)
+            except Exception:
+                if record is not None:
+                    self._record_gap(record.captured_at_ms, "write_error", StorageState.ERROR)
+            finally:
+                self._queue.task_done()
+
+    def _write(self, record: PersistenceRecord) -> None:
+        category = self._category(record.record_type)
+        encoded = (json.dumps(self._json_value(record), ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        with self._lock:
+            segment = self._segments.get((record.recording_session_id, category))
+            if segment is None:
+                segment = self._open_segment(record.recording_session_id, category)
+                self._segments[(record.recording_session_id, category)] = segment
+            elapsed = record.captured_at_ms - segment.opened_at_ms
+            if segment.count and (elapsed >= self.segment_duration_ms or segment.bytes_written + len(encoded) > self.segment_max_bytes):
+                self._finalize_segment(segment)
+                segment = self._open_segment(record.recording_session_id, category, segment.sequence + 1)
+                self._segments[(record.recording_session_id, category)] = segment
+            segment.file.write(encoded)
+            segment.count += 1
+            segment.bytes_written += len(encoded)
+            segment.first_at_ms = segment.first_at_ms if segment.first_at_ms is not None else record.captured_at_ms
+            segment.last_at_ms = record.captured_at_ms
+            self._last_success_at_ms = int(time.time() * 1000)
+            self._refresh_capacity_locked()
+            should_cleanup = self.auto_cleanup_enabled and self._state in {StorageState.FULL, StorageState.WARNING}
+        if should_cleanup:
+            self.cleanup_completed_sessions()
+
+    def _open_segment(self, session_id: str, category: str, sequence: int | None = None) -> _Segment:
+        directory = self.sessions_root / session_id / category
+        directory.mkdir(parents=True, exist_ok=True)
+        if sequence is None:
+            existing = [int(path.name.split(".", 1)[0]) for path in directory.glob("[0-9][0-9][0-9][0-9][0-9][0-9].jsonl*")]
+            sequence = max(existing, default=0) + 1
+        path = directory / f"{sequence:06d}.jsonl.partial"
+        return _Segment(session_id, category, sequence, path, path.open("ab"), int(time.time() * 1000))
+
+    def _finalize_segment(self, segment: _Segment, *, recovered: bool = False) -> None:
+        segment.file.flush()
+        os.fsync(segment.file.fileno())
+        segment.file.close()
+        final = segment.path.with_suffix("")
+        os.replace(segment.path, final)
+        digest = sha256(final.read_bytes()).hexdigest()
+        entry = {
+            "path": str(final.relative_to(self.sessions_root / segment.session_id)),
+            "category": segment.category,
+            "sequence": segment.sequence,
+            "recordCount": segment.count,
+            "firstCapturedAtMs": segment.first_at_ms,
+            "lastCapturedAtMs": segment.last_at_ms,
+            "byteLength": final.stat().st_size,
+            "sha256": digest,
+            "status": "recovered" if recovered else "closed",
+        }
+        self._update_manifest(segment.session_id, entry)
+
+    def _update_manifest(self, session_id: str, entry: dict[str, object] | None, *, ended: bool = False) -> None:
+        directory = self.sessions_root / session_id
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "manifest.json"
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            manifest = {"schemaVersion": 1, "recordingSessionId": session_id, "segments": [], "startedAtMs": int(time.time() * 1000)}
+        if entry is not None:
+            manifest["segments"] = [item for item in manifest.get("segments", []) if item.get("path") != entry.get("path")]
+            manifest["segments"].append(entry)
+        if ended:
+            manifest["endedAtMs"] = int(time.time() * 1000)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        with temporary.open("rb") as source:
+            os.fsync(source.fileno())
+        os.replace(temporary, path)
+
+    def _close_session_sync(self, session_id: str) -> None:
+        with self._lock:
+            keys = [key for key in self._segments if key[0] == session_id]
+            for key in keys:
+                segment = self._segments.pop(key)
+                self._finalize_segment(segment)
+            self._update_manifest(session_id, None, ended=True)
+
+    def recover_partials(self) -> None:
+        for path in self.sessions_root.glob("*/**/*.jsonl.partial"):
+            try:
+                data = path.read_bytes()
+                complete = data[: data.rfind(b"\n") + 1] if b"\n" in data else b""
+                rows = [json.loads(line) for line in complete.splitlines() if line]
+                if not rows:
+                    raise ValueError("partial segment has no complete record")
+                path.write_bytes(complete)
+                session_id = path.parents[1].name
+                category = path.parent.name
+                sequence = int(path.name.split(".", 1)[0])
+                segment = _Segment(session_id, category, sequence, path, path.open("ab"), rows[0]["capturedAtMs"], rows[0]["capturedAtMs"], rows[-1]["capturedAtMs"], len(rows), len(complete))
+                self._finalize_segment(segment, recovered=True)
+            except Exception:
+                destination = self.quarantine / f"{path.parents[1].name}-{path.parent.name}-{path.name}"
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(path, destination)
+                self._state = StorageState.ERROR
+
+    def cleanup_completed_sessions(self) -> tuple[str, ...]:
+        """Delete eligible completed sessions oldest-first when explicitly enabled."""
+
+        if not self.auto_cleanup_enabled:
+            return ()
+        with self._lock:
+            active_sessions = {session_id for session_id, _category in self._segments}
+        candidates: list[tuple[int, Path]] = []
+        for session in self.sessions_root.iterdir():
+            if not session.is_dir() or session.name in active_sessions:
+                continue
+            manifest_path = session / "manifest.json"
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(manifest.get("endedAtMs"), int) or manifest.get("retain") is True:
+                continue
+            if (session / ".in-use").exists() or (session / ".exporting").exists():
+                continue
+            candidates.append((manifest["endedAtMs"], session))
+        removed: list[str] = []
+        recovery_target = self.warning_threshold_bytes + 1024**3
+        for _ended_at, session in sorted(candidates):
+            if shutil.disk_usage(self.root).free >= recovery_target:
+                break
+            tombstone = self.root / f".cleanup-{session.name}-{uuid.uuid4().hex}"
+            os.replace(session, tombstone)
+            shutil.rmtree(tombstone)
+            removed.append(session.name)
+            self._append_cleanup_audit(session.name, "deleted")
+        self._refresh_capacity()
+        return tuple(removed)
+
+    def _append_cleanup_audit(self, session_id: str, outcome: str) -> None:
+        path = self.root / "cleanup-audit.jsonl"
+        row = {"timestampMs": int(time.time() * 1000), "recordingSessionId": session_id, "outcome": outcome}
+        with path.open("a", encoding="utf-8") as audit:
+            audit.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+    def _record_gap(self, timestamp_ms: int, reason: str, state: StorageState | None = None) -> PersistenceReceipt:
+        with self._lock:
+            self._gap_count += 1
+            if self._affected_from_ms is None:
+                self._affected_from_ms = timestamp_ms
+            if state is not None:
+                self._state = state
+        return PersistenceReceipt(False, False, reason)
+
+    def _refresh_capacity(self) -> None:
+        with self._lock:
+            self._refresh_capacity_locked()
+
+    def _refresh_capacity_locked(self) -> None:
+        available = shutil.disk_usage(self.root).free
+        self._available_bytes = available
+        if available <= self.critical_threshold_bytes:
+            self._state = StorageState.FULL
+        elif available <= self.warning_threshold_bytes:
+            self._state = StorageState.WARNING
+        elif self._state != StorageState.ERROR:
+            self._state = StorageState.OK
+
+    @staticmethod
+    def _category(record_type: str) -> str:
+        prefix = record_type.split(".", 1)[0]
+        return prefix if prefix in {"raw", "parsed", "algorithm"} else "parsed"
+
+    @classmethod
+    def _json_value(cls, record: PersistenceRecord) -> dict[str, object]:
+        return {
+            "schemaVersion": record.schema_version,
+            "recordingSessionId": record.recording_session_id,
+            "recordType": record.record_type,
+            "capturedAtMs": record.captured_at_ms,
+            "correlationId": record.correlation_id,
+            "payload": cls._encode(record.payload),
+        }
+
+    @classmethod
+    def _encode(cls, value: object) -> object:
+        if isinstance(value, bytes):
+            return {"encoding": "base64", "bytesBase64": base64.b64encode(value).decode("ascii")}
+        if isinstance(value, dict):
+            return {str(key): cls._encode(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [cls._encode(item) for item in value]
+        return value

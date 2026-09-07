@@ -59,6 +59,17 @@ class AlgorithmConfigurationTests(unittest.TestCase):
 
 
 class DeviceStrategyConfigurationTests(unittest.TestCase):
+    def test_unknown_configuration_fields_are_rejected_before_io(self) -> None:
+        for contents, message in (
+            ('future = true\n[data_source]\ntype = "serial"\n', "Unknown top-level"),
+            ('[data_source]\ntype = "serial"\n[serial]\nfuture = true\n', "Unknown serial"),
+        ):
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "gateway.toml"
+                path.write_text(contents, encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, message):
+                    load(path)
+
     def test_data_source_type_must_be_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gateway.toml"

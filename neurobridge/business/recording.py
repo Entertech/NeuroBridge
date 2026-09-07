@@ -344,6 +344,11 @@ class RecordingStore:
 
     def _write_manifest(self, recording_id: str, documentation_pdf: Path | None = None) -> dict:
         session = self._session_dir(recording_id)
+        manifest_path = session / "manifest.json"
+        try:
+            existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing_manifest = {}
         files = []
         for path in sorted(session.rglob("*.jsonl")):
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -366,6 +371,12 @@ class RecordingStore:
             "startedAtMs": self._session_started_at_ms.get(recording_id),
             "files": files,
         }
+        # The segmented recording adapter owns this crash-recovery metadata.
+        # Preserve it when the compatibility export manifest is refreshed.
+        if isinstance(existing_manifest.get("segments"), list):
+            manifest["segments"] = existing_manifest["segments"]
+        if isinstance(existing_manifest.get("endedAtMs"), int):
+            manifest["endedAtMs"] = existing_manifest["endedAtMs"]
         if documentation_pdf is not None:
             manifest["documentation"] = {
                 "path": documentation_pdf.name,
@@ -373,7 +384,7 @@ class RecordingStore:
                 "version": CAPTURE_PACKAGE_DOCUMENT_VERSION,
                 "sha256": sha256(documentation_pdf.read_bytes()).hexdigest(),
             }
-        (session / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return manifest
 
     def _export_documentation_pdf(self) -> Path:

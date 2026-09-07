@@ -11,8 +11,7 @@ import sys
 import time
 
 from .config import load
-from .business.gateway import Gateway
-from .device.strategy import create_device_adapter
+from .bootstrap import build_container
 from .download import serve_downloads
 from .logging_setup import configure_logging
 from .northbound.local_ui import serve_local_ui
@@ -38,6 +37,7 @@ def _file_sha256(path: str) -> str:
 async def run(config_path: str) -> None:
     started_at = time.monotonic()
     config = load(config_path)
+    container = build_container(config)
     strategy = access_strategy(config.access.mode)
     configure_logging(config.logging)
     LOG.info(
@@ -52,11 +52,13 @@ async def run(config_path: str) -> None:
         _file_sha256(config_path),
     )
     LOG.info(
-        "Runtime configuration: transport=%s accessMode=%s accessSummary=%s bleEnabled=%s scanTimeoutSeconds=%s reconnectDelaySeconds=%s "
+        "Runtime configuration: profile=%s transport=%s deviceProtocol=%s accessMode=%s accessSummary=%s bleEnabled=%s scanTimeoutSeconds=%s reconnectDelaySeconds=%s "
         "server=%s:%s%s networkMode=%s networkInterface=%s subnet=%s downloadEnabled=%s "
         "downloadEndpoint=%s:%s%s recordingDirectory=%s replaySpeed=%s algorithmEnabled=%s "
         "algorithmCommand=%s loggingLevel=%s logFile=%s",
+        container.profile.profile_id,
         config.data_source.type,
+        container.profile.device_protocol,
         config.access.mode,
         strategy.summary(config),
         config.ble.enabled,
@@ -96,8 +98,8 @@ async def run(config_path: str) -> None:
             config.serial.dtr,
             config.serial.rts,
         )
-    gateway = Gateway(config)
-    adapter = create_device_adapter(config, gateway)
+    gateway = container.gateway
+    adapter = container.device_adapter
     await gateway.start()
     try:
         async with asyncio.TaskGroup() as group:

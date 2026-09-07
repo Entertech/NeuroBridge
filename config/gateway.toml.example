@@ -1,4 +1,7 @@
 # Copy to /etc/neurobridge/gateway.toml; do not put recordings in git.
+config_schema_version = 1
+profile = "kylin_headset_local"
+
 [server]
 host = "127.0.0.1"
 port = 8765
@@ -109,3 +112,12 @@ level = "INFO"
 # be entered here. The default is enabled; use false only for a deliberate
 # raw-data-only POC or maintenance window.
 enabled = true
+request_timeout_ms = 2000
+
+[storage]
+warning_threshold_bytes = 5368709120
+critical_threshold_bytes = 1073741824
+segment_duration_seconds = 600
+segment_max_bytes = 268435456
+writer_queue_size = 1024
+auto_cleanup_enabled = false

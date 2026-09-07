@@ -11,9 +11,15 @@ import uuid
 from typing import Any, Awaitable, Callable
 
 from ..algorithm.runner import AlgorithmRunner
+from ..adapters.storage import SegmentedRecordingRepository
+from ..application.snapshots import InMemoryLatestSnapshotStore
 from ..config import GatewayConfig
 from ..device.packet import DevicePacket
 from ..ble.packets import DataWindow, WindowAssembler
+from ..domain.algorithm import AlgorithmResult
+from ..domain.result import WindowResult
+from ..domain.signal import ParsedSignal, ParsedSignalBatch
+from ..ports.recording import PersistenceRecord
 from ..versioning import NORTHBOUND_PROTOCOL_VERSION
 from .recording import RecordingStore
 
@@ -25,6 +31,7 @@ STREAMS = frozenset({"eeg", "hr", "eeg.raw", "hr.raw", "status"})
 REPLAY_NOT_AVAILABLE_REASON = "REPLAY_NOT_AVAILA设备"
 STREAM_NOT_AVAILABLE_REASON = "STREAM_NOT_AVAILA设备"
 REPLAY_DELIVERY_QUEUE_SIZE = 16
+LIVE_DELIVERY_QUEUE_SIZE = 1
 # A recording containing one event has no source timestamp gap to pace a
 # restart. Yield briefly at the cycle boundary so it cannot become a busy loop.
 REPLAY_CYCLE_MIN_PAUSE_SECONDS = 0.001
@@ -55,6 +62,8 @@ class Subscription:
     send: Any
     replay_outbox: asyncio.Queue[dict] = field(default_factory=lambda: asyncio.Queue(maxsize=REPLAY_DELIVERY_QUEUE_SIZE))
     replay_delivery_task: asyncio.Task | None = None
+    live_outbox: asyncio.Queue[dict] = field(default_factory=lambda: asyncio.Queue(maxsize=LIVE_DELIVERY_QUEUE_SIZE))
+    live_delivery_task: asyncio.Task | None = None
 
 
 @dataclass(eq=False)
@@ -68,6 +77,7 @@ class Gateway:
         self.boot_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:4]}"
         self.assembler = WindowAssembler()
         self.store = RecordingStore(config.recording.directory)
+        self.recording_repository: SegmentedRecordingRepository | None = None
         self.algorithm = AlgorithmRunner(config.algorithm)
         initial_connection_state = "not_connected" if config.data_source.type == "serial" else "disconnected"
         self.status: dict[str, Any] = {"connectionState": initial_connection_state, "wearState": "unknown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
@@ -79,6 +89,7 @@ class Gateway:
         self.sessions: set[Any] = set()
         self.latest_algorithm: dict | None = None
         self.latest_algorithm_timestamp: int | None = None
+        self.latest_snapshot = InMemoryLatestSnapshotStore()
         self.window_observer: Callable[[DataWindow, dict | None, list[str], bool], Awaitable[None]] | None = None
         self._window_flush_task: asyncio.Task | None = None
         self._window_flush_deadline_ms: int | None = None
@@ -99,6 +110,7 @@ class Gateway:
             "lastSummaryAtMs": 0,
         }
         self._capture_final_summary_logged = False
+        self.snapshot_overwrite_count = 0
 
     @property
     def live(self) -> bool:
@@ -144,6 +156,15 @@ class Gateway:
         # The local algorithm is session scoped and must be initialized only after
         # a Flowtime connection has subscribed all notifications and started capture.
         self.status["algorithmState"] = "unavailable"
+        self.recording_repository = SegmentedRecordingRepository(
+            self.config.recording.directory,
+            queue_size=self.config.storage.writer_queue_size,
+            segment_duration_seconds=self.config.storage.segment_duration_seconds,
+            segment_max_bytes=self.config.storage.segment_max_bytes,
+            warning_threshold_bytes=self.config.storage.warning_threshold_bytes,
+            critical_threshold_bytes=self.config.storage.critical_threshold_bytes,
+            auto_cleanup_enabled=self.config.storage.auto_cleanup_enabled,
+        )
         LOG.info(
             "Gateway started: bootId=%s transport=%s recordingDirectory=%s networkMode=%s algorithmEnabled=%s",
             self.boot_id,
@@ -162,7 +183,13 @@ class Gateway:
         ):
             self._log_capture_summary("gateway_stop")
             self._capture_final_summary_logged = True
+        recording_id = self.store.recording_id
         self.store.stop()
+        if self.recording_repository is not None:
+            if recording_id:
+                await self.recording_repository.close_session(recording_id)
+            await self.recording_repository.close()
+            self.recording_repository = None
         LOG.info("Gateway stopped: bootId=%s", self.boot_id)
 
     async def on_device_ready(self) -> bool:
@@ -228,7 +255,10 @@ class Gateway:
             self.status["algorithmState"] = "unavailable"
             self._log_capture_summary("disconnected")
             self._capture_final_summary_logged = True
+            recording_id = self.store.recording_id
             self.store.stop()
+            if recording_id and self.recording_repository is not None:
+                await self.recording_repository.close_session(recording_id)
             LOG.info("Device disconnected; algorithm and recording stopped")
         if previous != value:
             if name == "connectionState":
@@ -278,6 +308,32 @@ class Gateway:
             received_at_ms=received_at_ms,
             value=value,
         )
+        if (
+            self.recording_repository is not None
+            and self.store.recording_id
+            and (characteristic == "serial.frame" or packet.transport == "bluetooth")
+        ):
+            receipt = self.recording_repository.try_append(
+                PersistenceRecord(
+                    1,
+                    self.store.recording_id,
+                    "raw.device_frame",
+                    received_at_ms,
+                    f"raw-{uuid.uuid4().hex}",
+                    {
+                        "transport": packet.transport,
+                        "channel": characteristic,
+                        "rawBytes": value,
+                    },
+                )
+            )
+            if not receipt.persistence_guaranteed:
+                self.status["storageState"] = self.recording_repository.storage_status().state.value
+                LOG.error(
+                    "Raw device frame was not accepted by persistence: recordingId=%s reason=%s",
+                    self.store.recording_id,
+                    receipt.reason,
+                )
         raw_stream = {"ff31": "eeg", "ff51": "hr"}.get(characteristic)
         if raw_stream is None:
             if characteristic not in {"ff32", "serial.frame"}:
@@ -406,6 +462,28 @@ class Gateway:
         if self.algorithm.available:
             reasons.extend(algorithm_reasons)
         valid = not reasons
+        batch_id = f"batch-{uuid.uuid4().hex}"
+        persistence_guaranteed = True
+        if self.recording_repository is not None and self.store.recording_id:
+            parsed_receipt = self.recording_repository.try_append(
+                PersistenceRecord(
+                    1,
+                    self.store.recording_id,
+                    "parsed.signal_batch",
+                    window.end_ms,
+                    batch_id,
+                    {
+                        "batchId": batch_id,
+                        "windowStartMs": window.start_ms,
+                        "windowEndMs": window.end_ms,
+                        "eegPacketCount": len(window.eeg),
+                        "hrPacketCount": len(window.hr),
+                        "valid": valid,
+                        "invalidReasons": reasons,
+                    },
+                )
+            )
+            persistence_guaranteed = parsed_receipt.persistence_guaranteed
         if not valid:
             self._capture_stats["invalidWindows"] = int(self._capture_stats["invalidWindows"] or 0) + 1
         LOG.debug(
@@ -438,6 +516,86 @@ class Gateway:
             )
             if valid:
                 self.latest_algorithm, self.latest_algorithm_timestamp = algorithm_payload, window.end_ms
+        if self.recording_repository is not None and self.store.recording_id:
+            algorithm_receipt = self.recording_repository.try_append(
+                PersistenceRecord(
+                    1,
+                    self.store.recording_id,
+                    "algorithm.result",
+                    now_ms(),
+                    batch_id,
+                    {
+                        "batchId": batch_id,
+                        "metrics": algorithm_payload or {},
+                        "valid": valid,
+                        "invalidReasons": reasons,
+                    },
+                )
+            )
+            persistence_guaranteed = persistence_guaranteed and algorithm_receipt.persistence_guaranteed
+            storage_status = self.recording_repository.storage_status()
+            self.status["storageState"] = storage_status.state.value
+            self.status["persistenceGuaranteed"] = persistence_guaranteed
+            if not persistence_guaranteed:
+                LOG.error(
+                    "Window persistence is not guaranteed: recordingId=%s batchId=%s storageState=%s",
+                    self.store.recording_id,
+                    batch_id,
+                    storage_status.state.value,
+                )
+        recording_session_id = self.store.recording_id or "unrecorded"
+        snapshot_signals: list[ParsedSignal] = []
+        for signal_type, packets, expected_bytes in (
+            ("eeg", window.eeg, 20),
+            ("hr", window.hr, 1),
+        ):
+            if not packets:
+                continue
+            signal_reasons = tuple(
+                dict.fromkeys(
+                    f"{signal_type.upper()}_PACKET_LENGTH_INVALID"
+                    for packet in packets
+                    if len(packet.value) != expected_bytes
+                )
+            )
+            snapshot_signals.append(
+                ParsedSignal(
+                    signal_type,
+                    b"".join(packet.value for packet in packets),
+                    "bytes",
+                    None,
+                    {"packet_bytes": expected_bytes, "packet_count": len(packets)},
+                    (),
+                    window.end_ms,
+                    not signal_reasons,
+                    signal_reasons,
+                )
+            )
+        snapshot_batch = ParsedSignalBatch(
+            batch_id,
+            "headset_rev181" if self.config.data_source.type == "serial" else "headband_ble",
+            "legacy-connection-session",
+            recording_session_id,
+            window.start_ms,
+            window.end_ms,
+            tuple(snapshot_signals),
+            (),
+            valid,
+            tuple(reasons),
+        )
+        completed_at_ms = now_ms()
+        snapshot_algorithm = AlgorithmResult(
+            batch_id,
+            None,
+            completed_at_ms,
+            completed_at_ms,
+            algorithm_payload or {},
+            valid,
+            tuple(reasons),
+        )
+        self.latest_snapshot.replace(
+            WindowResult(snapshot_batch, snapshot_algorithm, "live", completed_at_ms, persistence_guaranteed)
+        )
         if self.window_observer:
             try:
                 await self.window_observer(window, algorithm_payload, reasons, valid)
@@ -450,7 +608,14 @@ class Gateway:
                     continue
                 if not valid:
                     payload["invalidReasons"] = reasons
-                await subscription.send(envelope(200, self.event_data("data", subscription.id, window.end_ms, "live", valid, payload)))
+                self._queue_live_message(
+                    session,
+                    subscription,
+                    envelope(200, self.event_data("data", subscription.id, window.end_ms, "live", valid, payload)),
+                )
+        # Let ready send tasks run without awaiting client I/O. A slow client
+        # remains isolated behind its single latest-value slot.
+        await asyncio.sleep(0)
 
     def filtered_payload(self, raw: dict, algorithm_payload: dict | None, streams: frozenset[str]) -> dict:
         payload: dict = {}
@@ -516,7 +681,12 @@ class Gateway:
             for subscription in tuple(session.subscriptions.values()):
                 if "status" in subscription.streams:
                     payload = {"status": self._northbound_status()}
-                    await subscription.send(envelope(200, self.event_data("status", subscription.id, now_ms(), self.mode(), True, payload)))
+                    self._queue_live_message(
+                        session,
+                        subscription,
+                        envelope(200, self.event_data("status", subscription.id, now_ms(), self.mode(), True, payload)),
+                    )
+        await asyncio.sleep(0)
 
     def error(self, request_id: str | None, error: ProtocolError) -> dict:
         data = {"reason": error.reason, "retryable": error.retryable, "details": error.details}
@@ -591,13 +761,21 @@ class Gateway:
         if unavailable:
             raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
         algorithm, timestamp = self.latest_algorithm, self.latest_algorithm_timestamp
+        latest_valid = algorithm is not None and timestamp is not None
+        if self.live:
+            snapshot = self.latest_snapshot.get(frozenset(streams)).result
+            if snapshot is not None:
+                algorithm = dict(snapshot.algorithm_result.metrics) or None
+                timestamp = snapshot.batch.window_end_ms
+                latest_valid = snapshot.valid and algorithm is not None
         if not self.live and self.replay_available:
             if start_replay:
                 self._start_replay_if_needed()
             algorithm, timestamp = self.latest_replay_algorithm()
+            latest_valid = algorithm is not None and timestamp is not None
         if not algorithm or timestamp is None:
             return {"mode": self.mode(), "timestampMs": now_ms(), "valid": False, "payload": {}}
-        return {"mode": self.mode(), "timestampMs": timestamp, "valid": True, "payload": self.filtered_payload({}, algorithm, frozenset(streams))}
+        return {"mode": self.mode(), "timestampMs": timestamp, "valid": latest_valid, "payload": self.filtered_payload({}, algorithm, frozenset(streams))}
 
     def validate_streams(self, streams: object, allowed: set[str] | None = None, require: bool = True) -> list[str]:
         if not isinstance(streams, list) or (require and not streams) or any(not isinstance(item, str) for item in streams):
@@ -648,6 +826,7 @@ class Gateway:
         self.sessions.add(session)
         session.subscriptions[subscription.id] = subscription
         subscription.replay_delivery_task = asyncio.create_task(self._deliver_replay(session, subscription))
+        subscription.live_delivery_task = asyncio.create_task(self._deliver_live(session, subscription))
         LOG.info("Subscription created: subscriptionId=%s streams=%s includeInvalid=%s mode=%s", subscription.id, ",".join(streams), include_invalid, self.mode())
         if start_replay and data_streams and not self.live:
             self._start_replay_if_needed()
@@ -709,6 +888,42 @@ class Gateway:
             if subscription.replay_delivery_task:
                 subscription.replay_delivery_task.cancel()
 
+    def _queue_live_message(self, session: ClientSession, subscription: Subscription, message: dict) -> None:
+        if session.subscriptions.get(subscription.id) is not subscription:
+            return
+        if subscription.live_delivery_task is None or subscription.live_delivery_task.done():
+            subscription.live_delivery_task = asyncio.create_task(self._deliver_live(session, subscription))
+        if subscription.live_outbox.full():
+            try:
+                subscription.live_outbox.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            else:
+                subscription.live_outbox.task_done()
+                self.snapshot_overwrite_count += 1
+                LOG.warning(
+                    "Live subscriber latest value overwritten: subscriptionId=%s snapshotOverwriteCount=%s",
+                    subscription.id,
+                    self.snapshot_overwrite_count,
+                )
+        subscription.live_outbox.put_nowait(message)
+
+    async def _deliver_live(self, session: ClientSession, subscription: Subscription) -> None:
+        try:
+            while True:
+                message = await subscription.live_outbox.get()
+                try:
+                    await subscription.send(message)
+                finally:
+                    subscription.live_outbox.task_done()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOG.warning("Live subscriber delivery failed; dropping subscriptionId=%s", subscription.id, exc_info=True)
+        finally:
+            if session.subscriptions.get(subscription.id) is subscription:
+                session.subscriptions.pop(subscription.id, None)
+
     async def _deliver_replay(self, session: ClientSession, subscription: Subscription) -> None:
         try:
             while True:
@@ -725,11 +940,11 @@ class Gateway:
     async def _remove_subscription(self, session: ClientSession, subscription: Subscription) -> None:
         if session.subscriptions.get(subscription.id) is subscription:
             session.subscriptions.pop(subscription.id, None)
-        task = subscription.replay_delivery_task
-        if task and not task.done() and task is not asyncio.current_task():
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+        for task in (subscription.replay_delivery_task, subscription.live_delivery_task):
+            if task and not task.done() and task is not asyncio.current_task():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
 
     async def _replay(self) -> None:
         recording_id = self._active_replay_recording_id

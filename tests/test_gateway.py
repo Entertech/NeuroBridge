@@ -473,6 +473,36 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event["data"]["payload"]["eegRaw"]["packetBytes"], EEG_PACKET_BYTES)
             await gateway.close_session(session)
 
+    async def test_slow_live_subscriber_keeps_only_the_latest_pending_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            gateway = Gateway(config(Path(directory)))
+            await gateway.update_status("connectionState", "connected")
+            started = asyncio.Event()
+            release = asyncio.Event()
+            received: list[int] = []
+
+            async def send(item: dict) -> None:
+                if item["data"].get("event") != "data":
+                    return
+                received.append(item["data"]["timestampMs"])
+                started.set()
+                await release.wait()
+
+            session = ClientSession()
+            await gateway.subscribe(session, {"streams": ["eeg.raw"]}, send)
+            for end_ms in (600, 1200, 1800):
+                window = DataWindow(end_ms - 600, end_ms)
+                window.append(RawPacket("ff31", end_ms, b"x" * EEG_PACKET_BYTES))
+                await gateway.publish_window(window)
+                if end_ms == 600:
+                    await asyncio.wait_for(started.wait(), 0.1)
+            self.assertEqual(gateway.snapshot_overwrite_count, 1)
+            release.set()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            self.assertEqual(received, [600, 1800])
+            await gateway.close_session(session)
+
     def test_algorithm_streams_preserve_the_nested_contract_shape(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             gateway = Gateway(config(Path(directory)))

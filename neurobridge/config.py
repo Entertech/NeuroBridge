@@ -59,6 +59,17 @@ class RecordingConfig:
 class AlgorithmConfig:
     enabled: bool
     command: tuple[str, ...]
+    request_timeout_ms: int = 2000
+
+
+@dataclass(frozen=True)
+class StorageConfig:
+    warning_threshold_bytes: int = 5 * 1024**3
+    critical_threshold_bytes: int = 1 * 1024**3
+    segment_duration_seconds: int = 600
+    segment_max_bytes: int = 256 * 1024**2
+    writer_queue_size: int = 1024
+    auto_cleanup_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -118,12 +129,39 @@ class GatewayConfig:
     local_ui: LocalUiConfig = field(default_factory=LocalUiConfig)
     data_source: DataSourceConfig = field(default_factory=DataSourceConfig)
     serial: SerialConfig = field(default_factory=SerialConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
+    config_schema_version: int = 1
+    profile: str | None = None
 
 
 def load(path: str | Path) -> GatewayConfig:
     with Path(path).open("rb") as file:
         raw = tomllib.load(file)
-    server, ble, recording, algorithm, download, logging, network, access, local_ui, data_source, serial = (
+    section_fields = {
+        "server": {"host", "port", "path"},
+        "ble": {"enabled", "device_name", "model_nbr_uuid", "scan_timeout_seconds", "reconnect_delay_seconds"},
+        "recording": {"directory", "subject_id", "replay_recording_id", "replay_speed"},
+        "algorithm": {"enabled", "command", "request_timeout_ms"},
+        "download": {"enabled", "host", "port", "path"},
+        "logging": {"directory", "filename", "level"},
+        "network": {"mode", "interface", "subnet_cidr", "dhcp_range_start", "dhcp_range_end", "dhcp_lease_time"},
+        "access": {"mode"},
+        "local_ui": {"enabled", "host", "port", "directory"},
+        "data_source": {"type"},
+        "serial": {"device", "candidate_types", "baud_rate", "handshake_timeout_ms", "command_response_timeout_ms", "data_timeout_seconds", "reconnect_delay_seconds", "stats_interval_seconds", "max_buffer_bytes", "dtr", "rts"},
+        "storage": {"warning_threshold_bytes", "critical_threshold_bytes", "segment_duration_seconds", "segment_max_bytes", "writer_queue_size", "auto_cleanup_enabled"},
+    }
+    unknown_top_level = set(raw) - {"config_schema_version", "profile", *section_fields}
+    if unknown_top_level:
+        raise ValueError(f"Unknown top-level configuration fields: {', '.join(sorted(unknown_top_level))}")
+    for section, allowed_fields in section_fields.items():
+        values = raw.get(section, {})
+        if not isinstance(values, dict):
+            raise ValueError(f"{section} must be a TOML table")
+        unknown = set(values) - allowed_fields
+        if unknown:
+            raise ValueError(f"Unknown {section} configuration fields: {', '.join(sorted(unknown))}")
+    server, ble, recording, algorithm, download, logging, network, access, local_ui, data_source, serial, storage = (
         raw.get(name, {})
         for name in (
             "server",
@@ -137,8 +175,23 @@ def load(path: str | Path) -> GatewayConfig:
             "local_ui",
             "data_source",
             "serial",
+            "storage",
         )
     )
+    config_schema_version = raw.get("config_schema_version", 1)
+    if not isinstance(config_schema_version, int) or isinstance(config_schema_version, bool) or config_schema_version != 1:
+        raise ValueError("config_schema_version must be 1")
+    profile = raw.get("profile") or None
+    if profile is not None and (
+        not isinstance(profile, str)
+        or profile not in {
+            "macos_headband_wired",
+            "ubuntu_headband_wired",
+            "kylin_headset_local",
+            "windows_headset_local",
+        }
+    ):
+        raise ValueError("profile is not a supported deployment profile")
     replay_speed = float(recording.get("replay_speed", 1))
     if replay_speed <= 0:
         raise ValueError("recording.replay_speed must be greater than zero")
@@ -286,6 +339,23 @@ def load(path: str | Path) -> GatewayConfig:
             dtr=dtr,
             rts=rts,
         )
+    algorithm_timeout_ms = algorithm.get("request_timeout_ms", 2000)
+    if not isinstance(algorithm_timeout_ms, int) or isinstance(algorithm_timeout_ms, bool) or not 100 <= algorithm_timeout_ms <= 120000:
+        raise ValueError("algorithm.request_timeout_ms must be an integer between 100 and 120000")
+    storage_values = {
+        "warning_threshold_bytes": storage.get("warning_threshold_bytes", 5 * 1024**3),
+        "critical_threshold_bytes": storage.get("critical_threshold_bytes", 1 * 1024**3),
+        "segment_duration_seconds": storage.get("segment_duration_seconds", 600),
+        "segment_max_bytes": storage.get("segment_max_bytes", 256 * 1024**2),
+        "writer_queue_size": storage.get("writer_queue_size", 1024),
+    }
+    if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in storage_values.values()):
+        raise ValueError("storage size, duration, and queue settings must be positive integers")
+    if storage_values["critical_threshold_bytes"] >= storage_values["warning_threshold_bytes"]:
+        raise ValueError("storage.critical_threshold_bytes must be below storage.warning_threshold_bytes")
+    auto_cleanup_enabled = storage.get("auto_cleanup_enabled", False)
+    if not isinstance(auto_cleanup_enabled, bool):
+        raise ValueError("storage.auto_cleanup_enabled must be boolean")
     config = GatewayConfig(
         server=ServerConfig(host, port, endpoint),
         ble=ble_config,
@@ -297,6 +367,7 @@ def load(path: str | Path) -> GatewayConfig:
         algorithm=AlgorithmConfig(
             bool(algorithm.get("enabled", True)),
             tuple(algorithm.get("command") or DEFAULT_ALGORITHM_COMMAND),
+            algorithm_timeout_ms,
         ),
         download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path),
         logging=LoggingConfig(log_directory, log_filename, log_level),
@@ -310,6 +381,9 @@ def load(path: str | Path) -> GatewayConfig:
         ),
         data_source=DataSourceConfig(data_source_type),
         serial=serial_config,
+        storage=StorageConfig(**storage_values, auto_cleanup_enabled=auto_cleanup_enabled),
+        config_schema_version=config_schema_version,
+        profile=profile,
     )
     from .northbound.strategy import access_strategy
 

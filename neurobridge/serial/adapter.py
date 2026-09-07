@@ -353,6 +353,7 @@ class SerialAdapter:
         candidate_provider: Callable[[SerialConfig], Iterable[str]] = discover_serial_candidates,
         serial_factory: Callable[[str, SerialConfig], Any] = _open_serial,
         identity_provider: Callable[[str], dict[str, str | None]] = serial_candidate_metadata,
+        raw_chunk: Callable[[bytes, int], Awaitable[None]] | None = None,
     ) -> None:
         self.config = config
         self.packet = packet
@@ -362,6 +363,7 @@ class SerialAdapter:
         self.candidate_provider = candidate_provider
         self.serial_factory = serial_factory
         self.identity_provider = identity_provider
+        self.raw_chunk = raw_chunk
         self._client: Any | None = None
         self._target: str | None = None
         self._stopping = False
@@ -890,6 +892,8 @@ class SerialAdapter:
     async def _stream(self, initial: bytes, initial_received_at_ms: int | None = None) -> None:
         buffer = bytearray(initial)
         buffer_received_at_ms = initial_received_at_ms
+        if initial and self.raw_chunk is not None:
+            await self.raw_chunk(initial, initial_received_at_ms if initial_received_at_ms is not None else wall_clock_ms())
         last_frame_at = time.monotonic()
         self._stats["readBytes"] = int(self._stats["readBytes"]) + len(initial)
         while not self._stopping:
@@ -923,6 +927,8 @@ class SerialAdapter:
                 chunk = bytes(await asyncio.to_thread(client.read, 4096))
             if chunk:
                 buffer_received_at_ms = wall_clock_ms()
+                if self.raw_chunk is not None:
+                    await self.raw_chunk(chunk, buffer_received_at_ms)
                 self._stats["readBytes"] = int(self._stats["readBytes"]) + len(chunk)
                 buffer.extend(chunk)
                 if len(buffer) > self.config.max_buffer_bytes:

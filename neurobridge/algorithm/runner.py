@@ -79,7 +79,10 @@ class AlgorithmRunner:
             request = {"timestampMs": window.end_ms, "eegRawBase64": base64.b64encode(b"".join(x.value for x in window.eeg)).decode(), "hrRawBase64": base64.b64encode(b"".join(x.value for x in window.hr)).decode()}
             self.process.stdin.write((json.dumps(request) + "\n").encode())
             await self.process.stdin.drain()
-            response = await asyncio.wait_for(self.process.stdout.readline(), timeout=2)
+            response = await asyncio.wait_for(
+                self.process.stdout.readline(),
+                timeout=self.config.request_timeout_ms / 1000,
+            )
             if not response:
                 raise RuntimeError("algorithm bridge closed stdout without a response")
             result = json.loads(response)

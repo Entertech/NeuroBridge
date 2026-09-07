@@ -2,7 +2,7 @@
 
 NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。当前交付目标是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机。网关核心负责串口采集、数据与算法处理、北向协议适配、录播和运行维护。
 
-当前需求与实现基线见[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于本次实现或验收范围。
+统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于 M1 验收范围。
 
 ## 可运行网关与部署
 
@@ -53,11 +53,13 @@ python3 -m venv .venv
 
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
-运行时代码按职责组织：`neurobridge/device/` 选择设备策略，`neurobridge/ble/` 和 `neurobridge/serial/` 分别负责 Flowtime BLE 与 USB TTY 接入；`neurobridge/algorithm/` 隔离算法 SDK bridge；`neurobridge/business/` 负责订阅、状态、录制与录播；`neurobridge/northbound/` 仅负责 WS/WebSocket 传输。
+运行时稳定内核按 `domain/`、`ports/`、`application/` 分层；`adapters/` 放置设备 Parser、数据源、算法、存储和北向实现，`profiles/` 固定操作系统/设备/接入能力，`bootstrap/` 是唯一组合根。M1 的 `kylin_headset_local` 固定绑定 POSIX TTY、修订号 181 Parser、本机回环页面和禁用录播能力。原 `device/`、`ble/`、`serial/`、`business/` 与 `northbound/` 在渐进迁移期间保留兼容入口，正式启动不再绕过 Profile 校验。
 
 ## 仓库结构
 
 - `neurobridge/`：跨平台网关核心，不依赖 macOS、Windows 或 Linux 的启动方式。
+- `neurobridge/domain/`、`ports/`、`application/`：不可变领域模型、端口合同和设备无关应用管线。
+- `neurobridge/adapters/`、`profiles/`、`bootstrap/`：I/O 实现、固定 Deployment Profile 和唯一运行时组合根。
 - `web/`：由网关托管、无构建步骤的静态网页；`capture/` 是通过网关 WebSocket 查看耳机原始数据的页面，`b-client-test/` 是完整的 B 端协议联调页。
 - `mac/`：仅 macOS POC 的启动器、蓝牙验证、原生算法 bridge 与本机配置模板。
 - `linux/`：银河麒麟项目一键流程、Ubuntu 兼容部署脚本、systemd 单元与日志轮转配置。
@@ -127,11 +129,13 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 1. 在最终 N100/N150 + 银河麒麟镜像上验证多 TTY 遍历、已有合法 28 字节流直接进入 `validated` 并跳过 ACK/`0xE1`、静默候选主动 ACK 后以独立单字节 `0x01` 进入 `validated`、无响应 `0xE1`/`0xE0` 写入、数据超时、分帧、丢包统计、拔插重连和长时间运行。
 2. 在同一环境构建算法 C++ bridge，固定 Eigen3/NumCpp/CMake/编译器版本，并以真实串口原始字节验证输入长度、字节序、分组、性能和结果。
-3. 使用同机浏览器覆盖实时、录播、设备离线/恢复和浏览器断线重连；若项目切换旧方案，再单独完成专网 B 端联调。
+3. 使用同机浏览器覆盖实时、设备离线/恢复和浏览器断线重连，并确认耳机离线及存在历史录制时均不会产生 replay；若进入 M2 兼容阶段，再单独完成头环录播和专网 B 端联调。
 4. 完成启动、systemd、日志轮转、一键诊断导出、升级和回滚演练，交付版本号、配置哈希、操作手册和问题日志。
 
 ## 文档
 
+- [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入_PRD.md)：统一架构、固定系统映射与分阶段验收基线。
+- [NeuroBridge 项目结构与多系统接入技术方案](doc/tech/NeuroBridge项目结构与多系统接入_技术方案.md)：领域模型、Ports、Profile、组合根、存储和迁移方案。
 - [银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)：当前内部需求基线。
 - [银河麒麟 V10 耳机 USB 串口接入技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)：当前内部实现基线。
 - [头环蓝牙网关对接方案 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%AF%B9%E6%8E%A5%E6%96%B9%E6%A1%88_v0.1.md)：历史方案，不属于当前银河麒麟耳机 USB 串口需求。
