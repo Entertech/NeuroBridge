@@ -25,10 +25,10 @@
 
 | 网关操作系统 | 设备类型 | 设备链路 | 目标状态 |
 |---|---|---|---|
-| macOS | 蓝牙头环 | BLE | 支持头环采集、算法处理、录制和北向分发 |
-| Ubuntu | 蓝牙头环 | BLE | 支持头环采集、算法处理、录制和北向分发 |
-| 银河麒麟 V10 x86_64 | 耳机 | USB 派生 TTY 串口 | 最终产品平台；以可安装、升级、卸载的离线安装包交付 |
-| Windows x86_64 | 耳机 | USB 虚拟串口（COM） | 后续最终产品平台；以可安装、升级、卸载的安装包交付 |
+| macOS | 蓝牙头环 | BLE | 支持头环实时采集、录播、算法处理、录制和北向分发 |
+| Ubuntu | 蓝牙头环 | BLE | 支持头环实时采集、录播、算法处理、录制和北向分发 |
+| 银河麒麟 V10 x86_64 | 耳机 | USB 派生 TTY 串口 | 最终产品平台；仅支持实时数据，不支持录播；以可安装、升级、卸载的离线安装包交付 |
+| Windows x86_64 | 耳机 | USB 虚拟串口（COM） | 后续最终产品平台；仅支持实时数据，不支持录播；以可安装、升级、卸载的安装包交付 |
 
 系统和设备的对应关系由网关运行环境固定决定，不允许根据设备扫描结果自动切换到另一类设备传输。
 
@@ -41,6 +41,8 @@ macOS 和 Ubuntu 用于 BLE 头环兼容、开发、验证或特定部署；面�
 - **源数据解析器（Raw Data Parser）**：负责将某一种设备原始字节解析为网关统一的信号批次；解析器不得调用算法或北向服务。
 - **统一信号批次（Parsed Signal Batch）**：与设备传输无关的 EEG、HR、状态和时间窗口模型，供算法、录制和北向层共同使用。
 - **算法输入**：由统一信号批次经过算法适配器转换得到的 SDK 输入，不等同于设备原始帧。
+- **录制（Recording）**：为追溯、诊断或合规目的持久化设备原始数据、解析数据和算法结果。录制不代表数据允许录播。
+- **录播（Replay）**：将已保存数据按历史采集时间间隔重新通过北向协议发送。录播仅适用于蓝牙头环；USB 串口耳机数据不支持录播。
 
 ### 2.3 不在本 PRD 范围
 
@@ -49,6 +51,7 @@ macOS 和 Ubuntu 用于 BLE 头环兼容、开发、验证或特定部署；面�
 - 当前阶段的 Windows 实现与现场验收；Windows Profile 及其串口数据源属于后续扩展目标；
 - 未确认设备 VID/PID、端点和传输合同的原生 USB/HID/Bulk/Interrupt 接入；
 - 浏览器直接使用 Web Serial 或 WebUSB；
+- USB 串口耳机历史数据的北向录播；
 - 修改已发布或预发布北向协议版本、字段和错误码；
 - 多耳机、多网关和多受试者并发场景。
 
@@ -57,10 +60,10 @@ macOS 和 Ubuntu 用于 BLE 头环兼容、开发、验证或特定部署；面�
 ### 3.1 主要目标
 
 1. 当前三种目标操作系统均通过统一网关核心完成“设备采集 → 原始数据解析 → 算法 → 持久化 → 北向 WebSocket 分发”，并为后续 Windows 串口耳机接入保留相同扩展路径。
-2. 新增或替换设备传输时，只增加对应 Source 和 Parser 实现，不修改核心业务、算法和北向协议代码。
+2. 按 Domain、Ports、Application、Adapters、Profiles 和 Entrypoints 重新组织项目结构；新增或替换设备传输时，只增加对应 Source、Parser 和 Profile 实现，不修改核心业务、算法和北向协议代码。
 3. 保留设备原始字节，并能将其与解析结果、算法结果、录制会话和采集窗口时间戳关联。
 4. 通过运行环境配置校验保证系统与设备类型的固定映射，防止错误部署。
-5. 实时模式与录播模式复用同一套统一信号模型和北向事件模型。
+5. 蓝牙头环的实时与录播模式复用同一套统一信号模型和北向事件模型；USB 串口耳机只允许实时模式。
 6. 银河麒麟 V10 和 Windows 的最终交付物由受控 Workflow 从已审核源码生成可追溯安装包，不以源码目录或 Git bundle 代替产品安装包。
 
 ### 3.2 成功标准
@@ -70,7 +73,9 @@ macOS 和 Ubuntu 用于 BLE 头环兼容、开发、验证或特定部署；面�
 - 当前三条链路以及后续 Windows 串口链路都使用相同根包络的北向消息；
 - 算法层不依赖 BLE、串口或具体设备名称；
 - 北向层不依赖 Bleak、pyserial 或设备帧格式；
+- 公共领域模型和接口层不反向依赖具体设备、操作系统、WebSocket、文件系统或算法 SDK；
 - 设备接入失败、解析失败和算法失败不会导致主进程退出；
+- 银河麒麟和 Windows 耳机离线时不自动选择任何录播数据，耳机北向事件不得出现 `mode="replay"`；
 - 银河麒麟与 Windows 安装包可在干净目标系统上完成安装、启动、升级、修复和卸载，并能通过版本、摘要和构建清单追溯到唯一源码提交。
 
 ## 4. 目标总体架构
@@ -160,19 +165,21 @@ flowchart LR
     N --> O[WebSocket<br/>getLatest / subscribe / status]
 ```
 
-### 4.3 实时、断线和录播分支流程
+### 4.3 实时、断线与头环录播分支流程
 
 ```mermaid
 flowchart TD
     A[设备 Source 运行] --> B{设备是否在线并通过验证}
     B -->|是| C[实时 RawChunk]
     B -->|否| D[更新 disconnected / not_connected 状态]
-    D --> E{是否存在可用录播}
-    E -->|是| F[收到 getLatest 或 subscribe]
+    D --> E{当前设备 Profile}
+    E -->|USB 串口耳机| J[禁止启动 replay<br/>请求返回设备离线或数据流不可用]
+    E -->|BLE 头环| E1{是否存在可用录播}
+    E1 -->|是| F[收到 getLatest 或 subscribe]
     F --> G[启动 replay 任务]
     G --> H[按原始时间间隔读取 raw、parsed、algorithm]
     H --> I[NorthboundPublisher 输出 mode=replay]
-    E -->|否| J[返回明确错误：无可用录播]
+    E1 -->|否| J1[返回明确错误：无可用录播]
 
     C --> K[Parser 解析]
     K --> L[保存原始数据和解析批次]
@@ -180,16 +187,123 @@ flowchart TD
     M --> N[保存算法结果]
     N --> O[NorthboundPublisher 输出 mode=live]
 
-    O --> P{设备恢复}
-    P -->|是| Q[停止 replay，建立新连接并重新订阅]
-    P -->|否| R[继续重连或保持录播]
+    O --> P{设备是否持续在线}
+    P -->|是| R[继续实时采集]
+    P -->|否| D
+
+    I --> Q{头环设备恢复}
+    Q -->|是| Q1[停止 replay，建立新连接并重新订阅]
+    Q -->|否| Q2[继续头环录播或重连]
 
     K --> S{解析或算法异常}
     S -->|异常| T[记录错误并标记 valid=false]
     T --> L
 ```
 
-### 4.4 分层依赖规则
+### 4.4 目标项目结构重设计
+
+当前目录按功能逐步演进，已经出现公共模型位于 `ble/`、串口 Source 与 Parser 混合、平台入口绕过统一组合逻辑等问题。目标结构采用“领域模型 + 接口端口 + 应用编排 + 外部适配器 + 系统 Profile + 组合根”，建议目录如下。文件名可在技术设计阶段微调，但职责边界和依赖方向属于本 PRD 的强制要求。
+
+```text
+NeuroBridge/
+├── neurobridge/
+│   ├── domain/                         # 纯领域模型，不依赖外部框架
+│   │   ├── raw.py                      # RawChunk、SourceStatus、连接会话
+│   │   ├── signal.py                   # ParsedSignalBatch、时间窗口、有效性
+│   │   ├── algorithm.py                # AlgorithmInput、AlgorithmResult
+│   │   └── capabilities.py             # ProfileCapabilities，如 supportsReplay
+│   ├── ports/                          # 面向接口编程的抽象边界
+│   │   ├── raw_source.py               # RawDataSource
+│   │   ├── raw_parser.py               # RawDataParser
+│   │   ├── algorithm.py                # AlgorithmEngine
+│   │   ├── recording.py                # RecordingRepository
+│   │   ├── replay.py                   # ReplayRepository / ReplayReader
+│   │   └── northbound.py               # NorthboundSink / 会话输出接口
+│   ├── application/                    # 用例与管线编排，只依赖 domain + ports
+│   │   ├── acquisition.py              # Source → Parser → Window 主流程
+│   │   ├── processing.py               # 算法输入映射与执行编排
+│   │   ├── subscriptions.py            # getLatest/subscribe/unsubscribe 用例
+│   │   ├── replay.py                   # 仅在 Profile 允许时启动头环录播
+│   │   └── status.py                   # 统一运行状态和错误转换
+│   ├── adapters/                       # ports 的具体实现
+│   │   ├── sources/
+│   │   │   ├── bluetooth_bleak.py      # macOS/Ubuntu BLE 连接与原始通知
+│   │   │   ├── serial_posix.py         # 银河麒麟 TTY 发现、打开、读取
+│   │   │   └── serial_windows.py       # Windows COM 发现、打开、读取（规划）
+│   │   ├── parsers/
+│   │   │   ├── headband_ble.py         # 头环 BLE 通知语义解析
+│   │   │   └── headset_rev181.py       # 耳机 28 字节帧解析，麒麟/Windows 共用
+│   │   ├── algorithms/
+│   │   │   └── affective_sdk.py        # C++ SDK bridge 适配
+│   │   ├── storage/
+│   │   │   └── filesystem.py           # raw/parsed/algorithm 分层持久化
+│   │   └── northbound/
+│   │       ├── protocol.py              # 根包络、字段映射、错误映射
+│   │       ├── websocket.py             # WS 连接与 UTF-8 JSON 传输
+│   │       └── local_ui.py              # 本机 HTTP 页面
+│   ├── profiles/                        # OS 与设备组合及能力声明
+│   │   ├── resolver.py                  # OS/架构/配置校验
+│   │   ├── macos_headband.py            # BLE + 头环 Parser + replay=true
+│   │   ├── ubuntu_headband.py           # BLE + 头环 Parser + replay=true
+│   │   ├── kylin_headset.py             # POSIX Serial + 耳机 Parser + replay=false
+│   │   └── windows_headset.py           # Windows Serial + 耳机 Parser + replay=false
+│   ├── bootstrap/                       # 唯一组合根，实例化并注入具体实现
+│   │   ├── container.py
+│   │   └── app.py
+│   ├── entrypoints/                     # CLI、systemd/Windows Service 进程入口
+│   │   ├── cli.py
+│   │   └── service.py
+│   └── configuration/                   # 配置模型、加载、迁移和校验
+├── config/                              # 各 Profile 默认配置模板
+├── web/                                 # 本机浏览器静态资源
+├── packaging/
+│   ├── kylin/                           # 原生包/.run、systemd、权限和升级脚本
+│   └── windows/                         # MSI/EXE、Windows Service 和签名配置
+├── tests/
+│   ├── unit/                            # domain、Parser、应用用例
+│   ├── contract/                        # Source/Parser/算法/北向接口合同测试
+│   ├── integration/                     # Profile 完整管线与录播策略
+│   ├── platform/                        # macOS/Ubuntu/Kylin/Windows 平台测试
+│   └── package/                         # 安装、升级、卸载测试
+└── .github/workflows/                   # 校验、候选包与受保护发布 Workflow
+```
+
+结构设计规则：
+
+1. `domain/` 和 `ports/` 是稳定内核，不得导入 `adapters/`、`profiles/`、系统 API 或第三方 I/O 库；
+2. `application/` 通过 ports 调用设备、算法、持久化和北向输出，不实例化 Bleak、pyserial、WebSocket 或文件存储实现；
+3. `adapters/sources/` 只处理传输和设备生命周期，`adapters/parsers/` 只解释设备数据语义，两者必须能独立做合同测试；
+4. POSIX TTY 与 Windows COM 是两个 Source 实现，但共用 `headset_rev181` Parser，禁止复制耳机帧解析逻辑；
+5. `profiles/` 只声明 Source、Parser、配置约束和能力，不承载采集、算法、录制或北向业务代码；
+6. `bootstrap/` 是唯一允许同时认识 ports 和具体 adapters 的组合根，所有 CLI、systemd 与 Windows Service 入口必须经该组合根启动；
+7. 录制能力与录播能力分开建模：RecordingRepository 可保存所有设备数据，ReplayReader 只能由 `supportsReplay=true` 的头环 Profile 使用；
+8. `packaging/` 与平台安装脚本不得被 `neurobridge/domain`、`ports` 或 `application` 导入；
+9. 迁移可以分阶段进行，并可短期保留兼容导出层，但不得长期同时维护两套 Gateway、领域模型或耳机 Parser。
+
+### 4.5 目标依赖方向
+
+```mermaid
+flowchart TD
+    ENTRY[Entrypoints<br/>CLI / systemd / Windows Service] --> BOOT[Bootstrap 组合根]
+    BOOT --> PROFILE[OS Profiles]
+    BOOT --> APP[Application 用例与管线]
+    BOOT --> ADAPTERS[Adapters 具体实现]
+
+    PROFILE --> PORTS[Ports 接口]
+    PROFILE --> DOMAIN[Domain 模型]
+    APP --> PORTS
+    APP --> DOMAIN
+    ADAPTERS --> PORTS
+    ADAPTERS --> DOMAIN
+
+    PACKAGING[Packaging / Workflow] --> ENTRY
+
+    PORTS --> DOMAIN
+```
+
+图中箭头表示“可以依赖”。`Domain` 不依赖其他业务层；具体设备和平台实现通过 `Bootstrap` 注入应用层，禁止从 `Application` 反向导入 `Adapters`。
+
+### 4.6 分层依赖规则
 
 | 层 | 可以依赖 | 禁止依赖 |
 |---|---|---|
@@ -272,11 +386,17 @@ RawDataParser
 北向发布器接收统一信号批次和算法结果，负责：
 
 - 生成既有 `{protocolVersion, code, data, message}` 根包络；
-- 按 `live` / `replay` 生成事件；
+- 按设备 Profile 生成事件：蓝牙头环允许 `live` / `replay`，USB 串口耳机只允许 `live`；
 - 过滤订阅流；
 - 处理 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。
 
 设备源、解析器和算法适配器不得直接持有 WebSocket 连接对象。
+
+对于 USB 串口耳机，北向发布器还必须保证：
+
+- 不从历史录制推导 `availableStreams`；
+- 不创建 replay task，不输出 `mode="replay"`；
+- 耳机离线后的 `getLatest`、`subscribe` 和状态查询不以历史数据伪装为当前可用数据。
 
 ## 6. 系统固定映射与 Windows 扩展需求
 
@@ -298,7 +418,7 @@ Windows（后续规划） → serial    + HeadsetSerialParser
 5. Kylin 必须校验 x86_64 和串口参数；
 6. Ubuntu BLE 运行时不得要求或依赖 ttyACM/ttyUSB 权限；
 7. macOS 和 Ubuntu 的 BLE 配置必须包含设备匹配条件和 BLE 权限检查；
-8. 只有经过显式开发/回归开关授权，才允许在非目标系统运行其他传输策略。
+8. 只有经过显式开发/回归开关授权，才允许在非目标系统运行其他传输策略；
 9. Windows Profile 必须识别 USB 虚拟串口 COM 设备，不依赖 Linux 的 `/dev/ttyACM*`、`/dev/ttyUSB*` 或 sysfs；
 10. Windows 与银河麒麟复用同一耳机帧语义、Parser、统一信号模型和北向链路，只允许串口发现、端口打开、权限和服务运行方式存在平台差异。
 
@@ -348,6 +468,8 @@ HeadsetSerialParser 负责：
 
 完整串口帧必须原样持久化；对算法的 EEG/HR 投影不得替代完整原始帧。
 
+耳机数据只允许走实时处理和北向分发链路。保存完整帧、解析数据和算法结果仅用于追溯、诊断、导出或后续离线分析，不得由网关重新读取并作为 `mode="replay"` 的北向事件发送。
+
 ## 8. 数据、算法与北向链路
 
 ### 8.1 实时链路
@@ -366,7 +488,17 @@ RawDataSource
 
 ### 8.2 录播链路
 
-录播直接读取已保存的原始数据、解析数据和算法结果，按原始时间间隔发送，不重新调用算法。录播输出必须显式带 `mode = "replay"`。
+录播只适用于蓝牙头环。头环录播直接读取已保存的原始数据、解析数据和算法结果，按原始时间间隔发送，不重新调用算法；录播输出必须显式带 `mode = "replay"`。
+
+USB 串口耳机不支持录播，必须遵守以下规则：
+
+1. 耳机在线时只输出 `mode = "live"`；
+2. 耳机离线时，`subscribe` 或 `getLatest` 不得触发历史数据回放；
+3. 即使录制目录存在耳机历史数据，也不得将其识别为耳机可用录播源；
+4. 耳机离线请求应返回北向协议已定义的设备离线或数据流不可用错误；具体错误码和字段以最终签字协议为准；
+5. 网关重启、耳机拔出或串口异常后，只执行设备重连，不从历史时间点补播；
+6. 耳机数据持久化、导出和离线分析能力不因禁止录播而取消；
+7. 已发布北向协议若只有 `live` / `replay` 两种 `mode`，耳机离线状态的 `mode` 表达及具体错误响应必须在实现前完成合同评审；在确认前不得用 `replay` 代表“离线”。
 
 ### 8.3 时间戳要求
 
@@ -519,7 +651,8 @@ flowchart TD
 7. 重复安装或修复安装不会创建重复服务和冲突端口；
 8. 卸载后服务和程序文件被移除，默认保留配置与业务数据；
 9. 安装包签名、SHA-256、SBOM 和 manifest 校验通过；
-10. 安装、升级或卸载失败时输出可诊断错误，且不记录敏感原始数据。
+10. 安装、升级或卸载失败时输出可诊断错误，且不记录敏感原始数据；
+11. 银河麒麟和 Windows 包验证耳机离线、服务重启及存在历史录制时均不会启动 replay 或输出 `mode="replay"`。
 
 ### 9.9 当前实现差距
 
@@ -538,7 +671,7 @@ flowchart TD
 | Kylin 串口 | 已有发现、握手、28 字节分帧、重连、E1/E0、序列统计 | 基本符合当前串口基线 |
 | 原始持久化 | 串口完整帧写入受保护目录，EEG/HR 与算法结果分开保存 | 基本符合 |
 | 北向链路 | Gateway 生成统一 envelope，WebSocket 层负责传输 | 基本符合 |
-| 录播 | 独立读取保存的 raw/algorithm 数据并输出 replay | 基本符合 |
+| 录播 | 当前实现会在实时设备不可用时通用读取 raw/algorithm 数据并输出 replay，未区分头环和耳机 | 不符合耳机禁用录播规则 |
 
 ### 10.2 与本 PRD 的差距
 
@@ -553,8 +686,28 @@ flowchart TD
 9. **缺少系统 Profile 集成验收测试。** 现有测试覆盖较多串口和 BLE 单元行为，但没有验证 macOS BLE、Ubuntu BLE、Kylin 串口的系统映射和错误组合拒绝，也没有 Windows 串口扩展测试基线。
 10. **当前串口发现实现仅适用于 Linux。** 现有实现依赖 `/dev/serial/by-id`、`ttyACM`、`ttyUSB` 和 sysfs；后续 Windows 需要独立的 COM 发现后端，但应复用相同 Source 接口及 `HeadsetSerialParser`。
 11. **没有最终产品安装包 Workflow。** 当前 CI 主要运行测试和生成对外文档包；现有银河麒麟 `.run` 是源码更新器，不能替代可独立安装、升级和卸载的产品包，Windows 安装器尚不存在。
+12. **当前录播没有按设备类型隔离。** Gateway 依据实时连接状态和录制目录统一判断录播可用性，串口耳机离线时仍可能选择历史录制并输出 `mode="replay"`，与本 PRD 的耳机禁用录播规则冲突。
+13. **当前目录不是目标项目结构。** `business/gateway.py` 同时承担应用编排和协议业务，`ble/packets.py` 承载公共窗口模型，`serial/adapter.py` 混合 Source 与 Parser，`mac/` 入口可绕过统一工厂；目前也没有独立的 `domain`、`ports`、`profiles` 和唯一组合根。
 
 因此，当前分支的结论是：**具备多传输适配器和共享下游链路，但尚未满足本 PRD 的完整项目结构要求。**
+
+### 10.3 项目结构迁移要求
+
+| 当前模块或目录 | 目标归属 | 迁移要求 |
+|---|---|---|
+| `neurobridge/device/packet.py` | `domain/raw.py` | 保留原始字节和接收时间语义，去除对具体适配器的认识 |
+| `neurobridge/ble/packets.py` | `domain/signal.py` + `adapters/parsers/headband_ble.py` | 将公共窗口模型与 BLE 特征解析拆开，公共模型不得保留 FFxx 命名 |
+| `neurobridge/ble/flowtime.py` | `adapters/sources/bluetooth_bleak.py` + `adapters/parsers/headband_ble.py` | 扫描/连接/通知与载荷解析分离 |
+| `neurobridge/serial/adapter.py` | `adapters/sources/serial_posix.py` + `adapters/parsers/headset_rev181.py` | 串口发现、握手和读取留在 Source；28 字节分帧及字段解析移到 Parser |
+| `neurobridge/device/strategy.py` | `profiles/` + `bootstrap/container.py` | 从按配置字符串选择适配器，改为先解析 OS Profile，再由组合根注入实现 |
+| `neurobridge/business/gateway.py` | `application/` 用例 + `adapters/northbound/protocol.py` | 拆分采集、订阅、状态、录播和报文映射，不形成新的万能 Gateway |
+| `neurobridge/business/recording.py` | `ports/recording.py` + `adapters/storage/filesystem.py` | 接口与文件系统实现分离，并独立表达 Recording 与 Replay |
+| `neurobridge/algorithm/runner.py` | `ports/algorithm.py` + `adapters/algorithms/affective_sdk.py` | 应用层只依赖 AlgorithmEngine 与统一 AlgorithmInput |
+| `neurobridge/northbound/` | `adapters/northbound/` | 协议映射、WebSocket 传输和本机页面分开，均不得解析设备帧 |
+| `mac/`、`linux/`、`windows/` | `packaging/` + `entrypoints/` + `profiles/` | 平台安装/服务脚本与运行期 Profile 分开；所有正式入口统一经过 Bootstrap |
+| `tests/` | `unit/contract/integration/platform/package` | 先建立接口合同测试，再迁移实现，避免目录调整改变既有行为 |
+
+迁移顺序应遵循“先抽取模型和接口，再建立组合根与 Profile，然后逐个迁移 Source/Parser，最后拆分 Gateway 和平台入口”。每个阶段必须保持可运行和可回归；目录移动本身不得被表述为功能已验收。
 
 ## 11. 非功能要求
 
@@ -562,7 +715,7 @@ flowchart TD
 
 - 设备断线、串口异常、BLE 异常、解析异常和算法异常均转换为可观测状态；
 - 适配器自动重连，主进程不因单次设备错误退出；
-- 缓冲上限、重连间隔、窗口大小和录播速度均配置化。
+- 缓冲上限、重连间隔和窗口大小均配置化；录播速度配置只对蓝牙头环 Profile 生效。
 
 ### 11.2 安全与隐私
 
@@ -577,7 +730,8 @@ flowchart TD
 - 公共领域模型不得位于 `ble/` 或 `serial/` 私有目录；
 - 新设备接入应通过新增 Source、Parser 和 Profile 完成，核心 Gateway 不得增加设备类型分支；
 - 配置错误应在启动前失败，错误信息需指出系统、期望传输和实际传输；
-- 平台安装、服务注册、串口发现和签名逻辑保留在平台目录；公共网关核心不得依赖 RPM/DEB、MSI 或 Windows Service API。
+- 平台安装、服务注册、串口发现和签名逻辑保留在平台目录；公共网关核心不得依赖 RPM/DEB、MSI 或 Windows Service API；
+- 录播能力必须由设备 Profile 显式声明；不得仅凭录制目录中存在历史数据就推断当前设备支持录播。
 
 ### 11.4 可交付性
 
@@ -595,12 +749,16 @@ flowchart TD
 - 银河麒麟 V10 x86_64 启动后只能选择 USB 串口耳机 Profile；
 - Windows 扩展完成后只能选择 USB 虚拟串口耳机 Profile；当前阶段只验收其接口扩展点，不宣称 Windows 已实现；
 - 在任一系统配置另一类传输时，启动前明确拒绝；
-- 不允许通过设备扫描结果自动切换 Profile。
+- 不允许通过设备扫描结果自动切换 Profile；
+- Bluetooth Profile 声明支持录播，Kylin/Windows Serial Headset Profile 声明不支持录播。
 
 ### 12.2 源数据接口与解析
 
 - BLE 和串口均通过同一 `RawDataSource` 事件边界输出原始字节；
 - BLE 和串口均有独立 Parser，Parser 输出同一 `ParsedSignalBatch`；
+- `domain/`、`ports/` 和 `application/` 的依赖检查不得发现对 Bleak、pyserial、具体设备 Parser、WebSocket 服务端或平台安装 API 的反向导入；
+- 所有正式入口均通过唯一 Bootstrap 组合根创建 Source、Parser、算法、存储和北向实现，不得由平台脚本直接实例化具体设备适配器；
+- 银河麒麟 TTY Source 与 Windows COM Source 通过同一 Source 合同测试，并复用同一个耳机协议 Parser 测试集；
 - Parser 单元测试覆盖正常包、拆包、粘包、非法包、时间戳和无效原因；
 - 串口完整 28 字节帧可从持久化记录恢复；
 - 新增模拟 Source 不需要修改 Gateway、AlgorithmRunner 或 NorthboundPublisher。
@@ -609,16 +767,17 @@ flowchart TD
 
 - 算法输入只依赖统一模型，不导入 `ble` 或 `serial` 实现模块；
 - 算法失败时 raw/parsed 数据仍保存，北向事件正确标记 `valid=false` 或算法不可用原因；
-- 实时和录播均输出统一根包络；
-- `subscribe`、`getLatest`、`getStatus`、`unsubscribe` 在当前三种目标 Profile 下行为一致；Windows 实现后必须满足同一行为。
+- 蓝牙头环实时和录播均输出统一根包络；USB 串口耳机只输出 `mode="live"`；
+- `subscribe`、`getLatest`、`getStatus`、`unsubscribe` 在各 Profile 下使用相同请求和响应包络，但结果必须遵守 Profile 能力：头环允许录播，耳机离线时不得录播；Windows 实现后遵守同一耳机规则。
 
 ### 12.4 场景验收
 
 - macOS BLE 头环持续采集、断线重连、浏览器重连；
 - Ubuntu BLE 头环持续采集、BlueZ 权限、断线重连、服务重启；
 - 银河麒麟串口耳机已有流接管、ACK/`0x01` 验证、E1/E0、拔插重连；
-- 当前三种系统分别完成原始数据、解析数据、算法结果和录播回放验证；
-- Windows 后续实现需增加 COM 发现、插拔恢复、服务重启及同一耳机帧录播兼容性验证；
+- macOS、Ubuntu 分别完成头环原始数据、解析数据、算法结果和录播回放验证；
+- 银河麒麟完成耳机原始数据、解析数据、算法结果和持久化验证，并验证离线请求不会启动录播；
+- Windows 后续实现需增加 COM 发现、插拔恢复、服务重启、耳机数据持久化及禁用录播验证；
 - 目标环境结果区分“源码支持”“POC 已验证”和“现场验收通过”。
 
 ### 12.5 安装包与 Workflow
@@ -629,18 +788,20 @@ flowchart TD
 - 正式发布需经过测试、安装验证、人工审批、签名和摘要复验；
 - Artifact 同时包含安装包、SHA-256、SBOM、许可证、manifest 和测试摘要；
 - 安装后的应用版本、北向报文版本、算法依赖和源码 commit 与 manifest 一致；
-- 安装包内不含 `.git`、人体数据、现场日志、凭据或未锁定依赖。
+- 安装包内不含 `.git`、人体数据、现场日志、凭据或未锁定依赖；
+- 银河麒麟和 Windows 安装验收必须覆盖“历史录制存在但耳机离线”的场景，并确认不会输出 replay 数据。
 
 ## 13. 交付物
 
-1. OS Profile 与固定映射实现；
-2. `RawDataSource`、`RawDataParser` 和统一领域模型；
-3. macOS/Ubuntu BLE 与银河麒麟串口的 Source/Parser 实现，以及 Windows COM 串口 Source 扩展设计；
-4. 算法输入适配器和独立的 NorthboundPublisher；
-5. 当前三系统配置模板和启动入口，以及后续 Windows 配置与服务入口规范；
-6. 单元测试、集成测试和目标系统验收记录；
-7. 更新后的 README、内部技术方案和部署说明；
-8. 不改变已发布北向协议语义的变更记录；
-9. 银河麒麟 V10 x86_64 产品安装包及其安装、升级、卸载逻辑；
-10. Windows x86_64 产品安装包及 Windows Service/COM 串口集成；
-11. 双平台安装包 Workflow、签名门禁、SBOM、构建清单、摘要和安装回归报告。
+1. 按第 4.4 节落地的目标项目目录、依赖门禁和唯一 Bootstrap 组合根；
+2. OS Profile 与固定映射实现；
+3. `RawDataSource`、`RawDataParser` 和统一领域模型；
+4. macOS/Ubuntu BLE 与银河麒麟串口的 Source/Parser 实现，以及 Windows COM 串口 Source 扩展设计；
+5. 算法输入适配器和独立的 NorthboundPublisher；
+6. 当前三系统配置模板和启动入口，以及后续 Windows 配置与服务入口规范；
+7. 按 unit、contract、integration、platform 和 package 分层的测试，以及目标系统验收记录；
+8. 更新后的 README、内部技术方案和部署说明；
+9. 不改变已发布北向协议语义的变更记录；
+10. 银河麒麟 V10 x86_64 产品安装包及其安装、升级、卸载逻辑；
+11. Windows x86_64 产品安装包及 Windows Service/COM 串口集成；
+12. 双平台安装包 Workflow、签名门禁、SBOM、构建清单、摘要和安装回归报告。
