@@ -8,6 +8,7 @@ managed_marker="# Managed by NeuroBridge Galaxy Kylin project autostart"
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 runtime_dir="$root_dir/.runtime"
 start_script="$root_dir/linux/start-kylin-gateway.sh"
+unit_renderer="$root_dir/linux/lib/kylin-systemd-unit.sh"
 config_path="$runtime_dir/config/gateway.toml"
 preference_path="$runtime_dir/config/kylin-autostart.conf"
 action=${1:-}
@@ -33,14 +34,6 @@ this project checkout; the service never runs the gateway as root. Autostart is
 the project default. The disable action records an explicit persistent opt-out;
 the enable action clears that opt-out.
 EOF
-}
-
-systemd_quote() {
-  local value=$1
-  value=${value//\\/\\\\}
-  value=${value//\"/\\\"}
-  value=${value//%/%%}
-  printf '"%s"' "$value"
 }
 
 autostart_preference() {
@@ -131,6 +124,10 @@ if [[ $action == disable ]]; then
 fi
 
 [[ -x $start_script && ! -L $start_script ]] || fail "Startup script is missing or unsafe: $start_script"
+[[ -f $unit_renderer && ! -L $unit_renderer ]] || fail \
+  "Systemd unit renderer is missing or unsafe: $unit_renderer"
+# shellcheck source=linux/lib/kylin-systemd-unit.sh
+. "$unit_renderer"
 [[ -f $config_path && ! -L $config_path ]] || fail \
   "Project configuration is missing. Choose menu 1 before enabling autostart."
 python_path=
@@ -180,40 +177,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-quoted_root=$(systemd_quote "$root_dir")
-quoted_start=$(systemd_quote "$start_script")
-cat >"$unit_tmp" <<EOF
-$managed_marker
-[Unit]
-Description=NeuroBridge Galaxy Kylin USB serial gateway
-After=local-fs.target systemd-udev-settle.service
-Wants=systemd-udev-settle.service
-StartLimitIntervalSec=60
-StartLimitBurst=10
-
-[Service]
-Type=simple
-User=$service_user
-Group=$service_group
-WorkingDirectory=$quoted_root
-Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=$quoted_start
-Restart=on-failure
-RestartSec=3
-TimeoutStopSec=20
-UMask=0077
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=full
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictSUIDSGID=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
+render_neurobridge_kylin_unit \
+  "$root_dir" "$start_script" "$service_user" "$service_group" "$managed_marker" >"$unit_tmp" \
+  || fail "Could not render the managed systemd unit."
 chmod 0600 "$unit_tmp"
 
 if command -v systemd-analyze >/dev/null 2>&1; then

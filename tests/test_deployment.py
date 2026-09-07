@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -318,15 +319,17 @@ class DeploymentTests(unittest.TestCase):
 
     def test_kylin_autostart_runs_project_gateway_as_desktop_user(self) -> None:
         script_path = ROOT / "linux" / "setup-kylin-autostart.sh"
+        renderer_path = ROOT / "linux" / "lib" / "kylin-systemd-unit.sh"
         script = script_path.read_text(encoding="utf-8")
         self.assertTrue(os.access(script_path, os.X_OK))
-        syntax = subprocess.run(
-            ["bash", "-n", str(script_path)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+        for shell_path in (script_path, renderer_path):
+            syntax = subprocess.run(
+                ["bash", "-n", str(shell_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
         help_result = subprocess.run(
             ["bash", str(script_path), "--help"],
             capture_output=True,
@@ -336,14 +339,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
         self.assertIn("enable|status|disable", help_result.stdout)
         self.assertIn("never runs the gateway as root", help_result.stdout)
-        self.assertIn("# Managed by NeuroBridge Galaxy Kylin project autostart", script)
-        self.assertIn("User=$service_user", script)
-        self.assertIn("Group=$service_group", script)
-        self.assertIn("WorkingDirectory=$quoted_root", script)
-        self.assertIn("ExecStart=$quoted_start", script)
-        self.assertIn("Restart=on-failure", script)
-        self.assertIn("RestartSec=3", script)
-        self.assertIn("Environment=PYTHONDONTWRITEBYTECODE=1", script)
+        self.assertIn('unit_renderer="$root_dir/linux/lib/kylin-systemd-unit.sh"', script)
+        self.assertIn("render_neurobridge_kylin_unit", script)
         self.assertIn('sudo systemctl enable "$unit_name"', script)
         self.assertIn('sudo systemctl start "$unit_name"', script)
         self.assertIn('serviceAlreadyActive=true', script)
@@ -359,6 +356,60 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("refusing to overwrite it", script)
         self.assertNotIn("ProtectHome=", script)
         self.assertNotIn("sudo \"$start_script\"", script)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            project_root = Path(temporary_directory) / "银河麒麟V10" / "NeuroBridge"
+            start_script = project_root / "linux" / "start-kylin-gateway.sh"
+            start_script.parent.mkdir(parents=True)
+            start_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            start_script.chmod(0o755)
+            service_user = subprocess.run(
+                ["id", "-un"], capture_output=True, text=True, check=True
+            ).stdout.strip()
+            service_group = subprocess.run(
+                ["id", "-gn"], capture_output=True, text=True, check=True
+            ).stdout.strip()
+            render_result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    '. "$1"; render_neurobridge_kylin_unit "$2" "$3" "$4" "$5" "$6"',
+                    "render-kylin-unit",
+                    str(renderer_path),
+                    str(project_root),
+                    str(start_script),
+                    service_user,
+                    service_group,
+                    "# Managed by NeuroBridge Galaxy Kylin project autostart",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(render_result.returncode, 0, render_result.stderr)
+            unit = render_result.stdout
+            self.assertIn("# Managed by NeuroBridge Galaxy Kylin project autostart", unit)
+            self.assertIn(f"User={service_user}", unit)
+            self.assertIn(f"Group={service_group}", unit)
+            self.assertIn(f"WorkingDirectory={project_root}", unit)
+            self.assertNotIn(f'WorkingDirectory="{project_root}"', unit)
+            self.assertIn(f'ExecStart="{start_script}"', unit)
+            self.assertIn("Restart=on-failure", unit)
+            self.assertIn("RestartSec=3", unit)
+            self.assertIn("Environment=PYTHONDONTWRITEBYTECODE=1", unit)
+            self.assertNotIn("ProtectHome=", unit)
+
+            systemd_analyze = shutil.which("systemd-analyze")
+            if systemd_analyze:
+                unit_path = project_root / "neurobridge.service"
+                unit_path.write_text(unit, encoding="utf-8")
+                verify_result = subprocess.run(
+                    [systemd_analyze, "verify", str(unit_path)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(verify_result.returncode, 0, verify_result.stderr)
 
     def test_kylin_usb_serial_diagnosis_prompts_times_out_and_preserves_logs(self) -> None:
         script_path = ROOT / "linux" / "diagnose-kylin-usb-serial.sh"
