@@ -4,11 +4,11 @@
 
 日期：2026-09-07
 
-适用分支：当前 NeuroBridge 分支
+适用范围：NeuroBridge 统一目标架构；当前实现评估截至本文日期
 
 ## 1. 文档目的
 
-本文定义 NeuroBridge 在 macOS、Ubuntu、银河麒麟 V10 及后续 Windows 网关上的统一项目结构、设备接入边界、源数据处理链路和验收要求。
+本文定义 NeuroBridge 在 macOS、Ubuntu、银河麒麟 V10 及后续 Windows 网关上的统一项目结构、设备接入边界、源数据处理链路和分阶段验收要求。
 
 本文解决以下问题：
 
@@ -17,28 +17,37 @@
 3. 设备采集、源数据解析、算法输入、持久化和北向分发之间如何隔离；
 4. 当前代码已经满足哪些要求，哪些地方仍不能作为目标架构验收依据。
 
-本文是内部项目结构和实现约束，不修改已发布的北向协议，也不替代双方最终签字的报文语义。
+本文是内部项目结构和实现约束，不直接修改已发布的北向协议，也不替代双方最终签字的报文语义。本文识别出的北向变更需求必须进入一致性评审，在所有受影响文档同步后才能实现和发布。
+
+关联文档包括银河麒麟 V10 耳机 USB 串口接入 PRD、头环蓝牙网关对接方案、北向网络协议及版本台账。各文档分别描述项目结构、专项设备、接入合同或版本事实；其中重复出现的系统映射、设备能力、错误语义和验收范围必须按第 13 节保持一致。
+
+本文后续所称“银河麒麟 V10”均指客户已确认的目标产品线“银河麒麟桌面操作系统 V10 x86_64”。2026-09-07 实机诊断已观测到 SP1 2503 和 systemd 245；该镜像是否作为正式验收基线，以及最终 ISO 文件名、SHA-256 和包管理器，仍需在候选包构建前锁定。
+
+NeuroBridge 的运行与交付形态是安装在本机的后台服务端程序：银河麒麟下由 systemd 管理，Windows 下由 Windows Service 管理。“项目软件以服务端形式运行”不等于“目标操作系统必须是银河麒麟高级服务器版”；操作系统产品线仍以最终客户镜像为准。
 
 ## 2. 产品范围
 
 ### 2.1 支持矩阵
 
-| 网关操作系统 | 设备类型 | 设备链路 | 目标状态 |
-|---|---|---|---|
-| macOS | 蓝牙头环 | BLE | 支持头环实时采集、录播、算法处理、录制和北向分发 |
-| Ubuntu | 蓝牙头环 | BLE | 支持头环实时采集、录播、算法处理、录制和北向分发 |
-| 银河麒麟 V10 x86_64 | 耳机 | USB 派生 TTY 串口 | 最终产品平台；仅支持实时数据，不支持录播；以可安装、升级、卸载的离线安装包交付 |
-| Windows x86_64 | 耳机 | USB 虚拟串口（COM） | 后续最终产品平台；仅支持实时数据，不支持录播；以可安装、升级、卸载的安装包交付 |
+| 网关操作系统 | 设备类型 | 设备链路 | 北向接入方式 | 目标状态 |
+|---|---|---|---|---|
+| macOS | 蓝牙头环 | BLE | 旧 B 端专网，`access.mode="wired_b_side"` | 兼容链路；支持头环实时采集、录播、算法处理、录制和北向分发 |
+| Ubuntu | 蓝牙头环 | BLE | 旧 B 端专网，`access.mode="wired_b_side"` | 兼容链路；支持头环实时采集、录播、算法处理、录制和北向分发 |
+| 银河麒麟桌面操作系统 V10 x86_64（实机观测 SP1 2503，正式验收镜像待锁定） | 耳机 | USB 派生 TTY 串口 | 本机页面，`access.mode="local_browser"`，仅回环地址 | 当前最终产品平台；仅支持实时数据，不支持录播；以可安装、升级、卸载的离线安装包交付 |
+| Windows 7 x86_64 及以上 | 耳机 | USB 虚拟串口（COM） | 本机页面，`access.mode="local_browser"`，仅回环地址 | 后续最终产品平台；仅支持实时数据，不支持录播；以可安装、升级、卸载的安装包交付 |
 
 系统和设备的对应关系由网关运行环境固定决定，不允许根据设备扫描结果自动切换到另一类设备传输。
 
-macOS 和 Ubuntu 用于 BLE 头环兼容、开发、验证或特定部署；面向最终客户的标准产品交付形态为银河麒麟 V10 安装包或 Windows 安装包。不得要求最终用户获取 Git 仓库、执行源码脚本或自行准备 Python/C++ 构建环境。
+macOS 和 Ubuntu 使用既有隔离 B 端专网拓扑，不提供本机浏览器作为其标准接入方式；银河麒麟 V10 和 Windows 使用同机浏览器与 `127.0.0.1` 回环 HTTP/WebSocket。面向最终客户的标准产品交付形态为银河麒麟 V10 安装包或 Windows 安装包。不得要求最终用户获取 Git 仓库、执行源码脚本或自行准备 Python/C++ 构建环境。
 
 ### 2.2 统一术语
 
-- **原始数据（Raw Data）**：设备接入边界收到的、尚未改变字节序和载荷语义的数据。包括 BLE 特征通知原始字节和耳机串口完整 28 字节帧。
+- **传输原始块（Raw Chunk）**：一次 BLE 通知或一次串口读取边界收到的原始字节。串口 RawChunk 可能是半帧、多帧或包含噪声，不等同于完整设备帧。
+- **设备原始帧（Device Frame）**：按设备协议完成边界识别后的完整原始帧。包括 BLE 特征通知帧和耳机完整 28 字节帧；必须保持原始字节序和载荷语义。
 - **源数据源（Raw Data Source）**：负责发现设备、建立连接、读取原始字节和报告连接状态的组件。
-- **源数据解析器（Raw Data Parser）**：负责将某一种设备原始字节解析为网关统一的信号批次；解析器不得调用算法或北向服务。
+- **源数据解析器（Raw Data Parser）**：负责把 RawChunk 分帧并解析为 DeviceFrame、设备无关的 ParsedSignal 和诊断结果；解析器不得调用算法或北向服务。
+- **解析结果（Parse Outcome）**：Parser 一次处理的结果集合，包含零到多个 DeviceFrame、ParsedSignal、缓存字节数、丢弃字节数和解析诊断。
+- **解析信号（Parsed Signal）**：从一个或一组 DeviceFrame 中提取的设备无关 EEG、HR 或状态片段，尚未按算法窗口聚合。
 - **统一信号批次（Parsed Signal Batch）**：与设备传输无关的 EEG、HR、状态和时间窗口模型，供算法、录制和北向层共同使用。
 - **算法输入**：由统一信号批次经过算法适配器转换得到的 SDK 输入，不等同于设备原始帧。
 - **录制（Recording）**：为追溯、诊断或合规目的持久化设备原始数据、解析数据和算法结果。录制不代表数据允许录播。
@@ -55,11 +64,35 @@ macOS 和 Ubuntu 用于 BLE 头环兼容、开发、验证或特定部署；面�
 - 修改已发布或预发布北向协议版本、字段和错误码；
 - 多耳机、多网关和多受试者并发场景。
 
+### 2.4 交付阶段
+
+本 PRD 描述统一目标架构，但各平台不在同一个版本同时验收：
+
+| 阶段 | 交付范围 | 完成判定 |
+|---|---|---|
+| M1 当前交付 | 银河麒麟桌面操作系统 V10、USB 串口耳机、本机页面、耳机禁用录播、银河麒麟安装包 | 按最终实机锁定的银河麒麟桌面操作系统 V10 x86_64 镜像完成 24 小时长稳和安装包验收 |
+| M2 兼容链路重构 | macOS/Ubuntu、BLE 头环、旧 B 端专网、头环实时与录播 | 两个平台分别完成 Source/Parser/Profile 迁移、旧 B 端专网回归和 24 小时长稳 |
+| M3 后续产品 | Windows 7 x86_64 及以上、USB COM 耳机、本机页面、Windows 安装包 | 至少在 Windows 7 最低基线目标机完成 COM、服务、24 小时长稳和安装包验收 |
+
+后续阶段的目录和接口可以在 M1 建立扩展点，但不得把“已设计”或“已有兼容代码”写成该平台已经交付。每个阶段只用本阶段目标系统的实机结果完成验收，不能用其他系统替代。
+
+### 2.5 实施优先级
+
+正式安装包发布和 Workflow 门禁在各产品平台的实施排期中优先级最低，但安装目录、服务账户、配置/日志/数据目录和 systemd/Windows Service 骨架必须提前落地，以保证长稳验收使用真实安装布局，而不是开发者源码目录。排期顺序为：
+
+1. 先完成 Source/Parser 接口、系统 Profile 与设备连接；
+2. 同步建立服务安装布局与可重复的 systemd/Windows Service 测试骨架；
+3. 再完成信号窗口、算法、双状态模块、持久化和北向数据链路；
+4. 然后在安装布局或候选包环境中完成异常恢复、日志与 24 小时长稳验证；
+5. 最后完成正式安装包、签名、SBOM、构建清单和 Workflow 发布门禁。
+
+“优先级最低”仅表示实施顺序最后，不表示可以用源码目录代替最终安装包，也不表示正式交付可以跳过打包验收。
+
 ## 3. 产品目标
 
 ### 3.1 主要目标
 
-1. 当前三种目标操作系统均通过统一网关核心完成“设备采集 → 原始数据解析 → 算法 → 持久化 → 北向 WebSocket 分发”，并为后续 Windows 串口耳机接入保留相同扩展路径。
+1. macOS、Ubuntu 和银河麒麟 V10 分阶段通过统一网关核心完成“设备采集 → 原始数据解析 → 算法 → 持久化 → 北向 WebSocket 分发”，并为后续 Windows 串口耳机接入保留相同扩展路径。
 2. 按 Domain、Ports、Application、Adapters、Profiles 和 Entrypoints 重新组织项目结构；新增或替换设备传输时，只增加对应 Source、Parser 和 Profile 实现，不修改核心业务、算法和北向协议代码。
 3. 保留设备原始字节，并能将其与解析结果、算法结果、录制会话和采集窗口时间戳关联。
 4. 通过运行环境配置校验保证系统与设备类型的固定映射，防止错误部署。
@@ -77,38 +110,33 @@ macOS 和 Ubuntu 用于 BLE 头环兼容、开发、验证或特定部署；面�
 - 设备接入失败、解析失败和算法失败不会导致主进程退出；
 - 银河麒麟和 Windows 耳机离线时不自动选择任何录播数据，耳机北向事件不得出现 `mode="replay"`；
 - 银河麒麟与 Windows 安装包可在干净目标系统上完成安装、启动、升级、修复和卸载，并能通过版本、摘要和构建清单追溯到唯一源码提交。
+- 当前交付在最终锁定的银河麒麟桌面操作系统 V10 x86_64 实机连续运行 24 小时，主进程不退出，且形成可用于后续确定延迟、资源、队列和丢弃阈值的运行日志。
 
 ## 4. 目标总体架构
 
 ```text
-┌─────────────────────────────────────────────────────────────┐
-│                    OS Profile Resolver                      │
-│ macOS → BLE Headband       Ubuntu → BLE Headband            │
-│ Kylin V10 → USB Serial     Windows（规划）→ USB COM Serial  │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ selects exactly one profile
-┌──────────────────────────────▼──────────────────────────────┐
-│                    Raw Data Source Layer                     │
-│ BluetoothSource                  SerialSource                │
-│ - scan/connect/notify             - tty discovery/open/read   │
-│ - device lifecycle                - handshake/control         │
-│ - emit RawChunk                   - emit RawChunk              │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ raw bytes + receive timestamp
-┌──────────────────────────────▼──────────────────────────────┐
-│                    Raw Data Parser Layer                     │
-│ BluetoothParser                  HeadsetSerialParser          │
-│ - BLE characteristic mapping     - 28-byte frame validation   │
-│ - payload validity               - resync/sequence tracking   │
-│                                   - EEG/HR field extraction    │
-│                 emit ParsedSignalBatch                       │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ unified signal model
-       ┌───────────────────────┼─────────────────────────┐
-       ▼                       ▼                         ▼
- AlgorithmInputMapper     RecordingStore           NorthboundPublisher
-       ▼                       ▼                         ▼
- AlgorithmRunner        raw + parsed + result       WS/JSON event
+┌──────────────────────────────────────────────────────────────────┐
+│ Deployment Profile Resolver                                     │
+│ platform + transport + deviceProtocol + accessMode + capability │
+└───────────────────────────────┬──────────────────────────────────┘
+                                │ Bootstrap 一次性绑定
+           ┌────────────────────┼─────────────────────┐
+           ▼                    ▼                     ▼
+ RawDataSource           RawDataParser          DeviceControl
+ connection/RawChunk     ParseOutcome            E1/E0 等出数控制
+           └────────────────────┬─────────────────────┘
+                                ▼
+          DeviceFrame + ParsedSignal + Diagnostics
+              ┌─────────────────┼──────────────────┐
+              ▼                 ▼                  ▼
+   RecordingRepository  SignalWindowAssembler  双状态模块/日志
+                                ▼
+          ParsedSignalBatch → AlgorithmEngine
+                     └──────────┬──────────┘
+                                ▼
+          WindowResultAggregator → LatestSnapshotStore
+                                ▼
+       Application Use Cases → NorthboundController/Publisher
 ```
 
 ### 4.1 系统与设备策略选择流程
@@ -118,24 +146,20 @@ flowchart TD
     A[网关进程启动] --> B[读取 OS、CPU 架构和配置]
     B --> C{识别运行环境}
 
-    C -->|macOS / Darwin| D[固定选择 Bluetooth Profile]
-    C -->|Ubuntu x86_64| E[固定选择 Bluetooth Profile]
-    C -->|银河麒麟 V10 x86_64| F[固定选择 Serial Profile]
-    C -->|Windows，后续规划| W[固定选择 Windows Serial Profile]
+    C -->|macOS / Darwin| D[macOS Headband Wired Profile]
+    C -->|Ubuntu x86_64| E[Ubuntu Headband Wired Profile]
+    C -->|银河麒麟桌面操作系统 V10 x86_64| F[Kylin Headset Local Profile]
+    C -->|Windows，后续规划| W[Windows Headset Local Profile]
     C -->|其他系统或架构| X[启动失败：不在支持范围]
 
-    D --> G{配置 data_source.type 是否为 bluetooth}
+    D --> G{校验 transport、deviceProtocol、accessMode}
     E --> G
-    F --> H{配置 data_source.type 是否为 serial}
-    W --> H
+    F --> G
+    W --> G
 
-    G -->|是| I[创建 BluetoothSource + BluetoothParser]
-    G -->|否| Y[启动失败：系统与设备映射不一致]
-    H -->|是| J[创建 SerialSource + HeadsetSerialParser]
-    H -->|否| Y
-
-    I --> K[进入统一采集管线]
-    J --> K
+    G -->|不一致| Y[启动失败：配置与 Deployment Profile 不一致]
+    G -->|一致| I[组合根绑定 Source + Parser + DeviceControl + Capabilities]
+    I --> K[进入统一采集管线，运行期不再按 Source Type 选择 Parser]
 ```
 
 ### 4.2 原始数据处理主流程
@@ -146,23 +170,30 @@ flowchart LR
     B[耳机 USB TTY 字节流] --> S
 
     S --> C[RawChunk<br/>原始字节 + 通道 + 接收时间]
-    C --> D{按 Source Type 选择 Parser}
-    D -->|bluetooth| E[BluetoothParser]
-    D -->|serial| F[HeadsetSerialParser]
+    C -.可配置诊断留存.-> TRACE[TransportTraceStore]
+    C --> D[Profile 已绑定的 RawDataParser]
+    D --> E[ParseOutcome]
 
-    E --> G[ParsedSignalBatch]
-    F --> G
+    E --> F[DeviceFrame]
+    E --> G[ParsedSignal]
+    E --> DIAG[ParseDiagnostics]
 
-    G --> H[统一时间窗口与有效性判断]
+    F --> R1[RecordingRepository<br/>完整设备原始帧]
+    DIAG --> LOG[日志与 DataState]
+
+    G --> H[SignalWindowAssembler<br/>ParsedSignalBatch + 有效性]
+    H --> R2[RecordingRepository<br/>解析批次]
     H --> I[AlgorithmInputMapper]
     I --> J[AlgorithmRunner / SDK Bridge]
     J --> K[AlgorithmResult]
+    K --> R3[RecordingRepository<br/>算法结果]
 
-    H --> L[RecordingStore<br/>raw + parsed]
-    K --> M[RecordingStore<br/>algorithm]
-    H --> N[NorthboundPublisher]
-    K --> N
-    N --> O[WebSocket<br/>getLatest / subscribe / status]
+    H --> AGG[WindowResultAggregator]
+    K --> AGG
+    AGG --> SNAP[LatestSnapshotStore<br/>按流原子替换最新值]
+    SNAP --> USECASE[Application Query / Subscription]
+    USECASE --> N[NorthboundController / Publisher]
+    N --> O[WebSocket<br/>subscribe 推送 / getLatest 响应]
 ```
 
 ### 4.3 实时、断线与头环录播分支流程
@@ -173,7 +204,7 @@ flowchart TD
     B -->|是| C[实时 RawChunk]
     B -->|否| D[更新 disconnected / not_connected 状态]
     D --> E{当前设备 Profile}
-    E -->|USB 串口耳机| J[禁止启动 replay<br/>请求返回设备离线或数据流不可用]
+    E -->|USB 串口耳机| J[禁止启动 replay<br/>麒麟返回 409；Windows 合同待 M3 确认]
     E -->|BLE 头环| E1{是否存在可用录播}
     E1 -->|是| F[收到 getLatest 或 subscribe]
     F --> G[启动 replay 任务]
@@ -181,11 +212,13 @@ flowchart TD
     H --> I[NorthboundPublisher 输出 mode=replay]
     E1 -->|否| J1[返回明确错误：无可用录播]
 
-    C --> K[Parser 解析]
-    K --> L[保存原始数据和解析批次]
-    L --> M[算法计算]
-    M --> N[保存算法结果]
-    N --> O[NorthboundPublisher 输出 mode=live]
+    C --> K[Parser 输出 ParseOutcome]
+    K --> L1[保存完整 DeviceFrame]
+    K --> L2[聚合并保存 ParsedSignalBatch]
+    L2 --> M[算法计算]
+    M --> N[保存 AlgorithmResult]
+    N --> N1[合成 WindowResult 并替换最新快照]
+    N1 --> O[NorthboundPublisher 输出 mode=live]
 
     O --> P{设备是否持续在线}
     P -->|是| R[继续实时采集]
@@ -197,10 +230,75 @@ flowchart TD
 
     K --> S{解析或算法异常}
     S -->|异常| T[记录错误并标记 valid=false]
-    T --> L
+    T --> T1[更新 DataState 与诊断日志]
 ```
 
-### 4.4 目标项目结构重设计
+### 4.4 设备连接状态机
+
+设备连接模块只负责设备发现、连接、验证、断线与重连，不负责判断业务数据是否新鲜，也不负责持有北向客户端状态。
+
+```mermaid
+stateDiagram-v2
+    [*] --> disconnected
+    disconnected --> discovering: Source 启动或重试
+    discovering --> connecting: 找到候选设备
+    discovering --> reconnecting: 未找到候选
+    connecting --> connected: BLE 连接并订阅成功
+    connecting --> validating: 串口打开成功
+    connecting --> reconnecting: 打开或连接失败
+    validating --> connected: 串口合法流 / 独立 0x01
+    validating --> validation_failed: 候选均未通过验证
+    validation_failed --> reconnecting: 下一轮重试
+    connected --> reconnecting: 拔出、断链或数据超时
+    reconnecting --> discovering: 到达重连时间
+    connected --> disconnected: 服务正常停止
+    reconnecting --> disconnected: 服务正常停止
+```
+
+要求：
+
+- BLE 可以从 `connecting` 在完成订阅后进入 `connected`；串口必须经过 `validating`；
+- 串口已有合法流时，连接状态进入 `connected` 且不得发送 ACK/E1；静默设备只有收到 ACK 后独立 `0x01` 才能进入 `connected`；
+- `validation_failed` 是内部诊断状态，北向是否以及如何映射必须与已确认北向协议保持一致；
+- DeviceConnectionState 的变更通过领域事件发送给数据状态模块，两个模块不得读写彼此的内部状态对象；
+- 北向连接状态与内部详细状态分开，未经协议评审不得直接暴露 `discovering`、`validating` 等内部值。
+
+### 4.5 数据状态机
+
+数据状态模块负责算法准备、设备出数、窗口生成、最新值、存储健康和数据新鲜度，不负责发现或连接设备。
+
+```mermaid
+stateDiagram-v2
+    [*] --> unavailable
+    unavailable --> preparing: DeviceConnected
+    preparing --> ready: 数据管线完成准备
+    preparing --> error: 必需的启动依赖失败
+    ready --> streaming: 收到首个有效数据窗口
+    streaming --> stale: 超过数据新鲜度阈值未产生新窗口
+    stale --> streaming: 重新产生数据窗口
+    streaming --> error: 数据管线不可继续
+    error --> preparing: 管线重置或异常恢复
+    ready --> unavailable: DeviceDisconnected
+    streaming --> unavailable: DeviceDisconnected
+    stale --> unavailable: DeviceDisconnected
+    error --> unavailable: DeviceDisconnected
+```
+
+数据状态至少包含以下内部字段；未经北向合同评审，不直接把内部枚举作为对外字段：
+
+- `dataState`：`unavailable`、`preparing`、`ready`、`streaming`、`stale` 或 `error`；
+- `lastProducedAtMs`：最近一个完整 WindowResult 的采集时间；
+- `lastPublishedAtMs`：最近一次北向发布完成时间；
+- `algorithmState`：算法准备、可用、不可用或错误状态；
+- `storageState`：`ok`、`warning`、`full` 或 `error`；
+- `persistenceGuaranteed`：当前产生数据是否具备持久化保障，与解析/算法 `valid` 独立；
+- 最近错误原因、累计生产窗口数、覆盖旧快照数和发送失败数。
+
+串口 ACK 路径进入设备 `connected` 后，数据状态先进入 `preparing`；算法 ready 后由应用层调用 DeviceControl `start_stream()` 发送无响应 E1。该路径算法准备失败时进入 `error` 且不得发送 E1。已有合法流路径不发送 E1，即使算法暂不可用也可继续保存和分发允许的原始数据，收到首个窗口后进入 `streaming`。正常停止时 DeviceControl 最多发送一次无响应 E0，并释放串口资源。
+
+`algorithmState` 与 `storageState` 是数据状态模块中的正交状态：算法或存储异常不必然把仍在产生的原始数据改成 `error`。存储写满或写入错误时仍继续处理和分发可用的实时数据，并通过 `persistenceGuaranteed=false` 单独表达未持久化保障。存储阈值和恢复判定按第 8.5.1 节执行；数据新鲜度阈值仍需配置化并根据 24 小时观测调整。
+
+### 4.6 目标项目结构重设计
 
 当前目录按功能逐步演进，已经出现公共模型位于 `ble/`、串口 Source 与 Parser 混合、平台入口绕过统一组合逻辑等问题。目标结构采用“领域模型 + 接口端口 + 应用编排 + 外部适配器 + 系统 Profile + 组合根”，建议目录如下。文件名可在技术设计阶段微调，但职责边界和依赖方向属于本 PRD 的强制要求。
 
@@ -208,12 +306,14 @@ flowchart TD
 NeuroBridge/
 ├── neurobridge/
 │   ├── domain/                         # 纯领域模型，不依赖外部框架
-│   │   ├── raw.py                      # RawChunk、SourceStatus、连接会话
-│   │   ├── signal.py                   # ParsedSignalBatch、时间窗口、有效性
+│   │   ├── raw.py                      # RawChunk、DeviceFrame、ParseOutcome
+│   │   ├── signal.py                   # ParsedSignal、ParsedSignalBatch、有效性
 │   │   ├── algorithm.py                # AlgorithmInput、AlgorithmResult
+│   │   ├── status.py                   # DeviceConnectionState、DataState、StorageState
 │   │   └── capabilities.py             # ProfileCapabilities，如 supportsReplay
 │   ├── ports/                          # 面向接口编程的抽象边界
 │   │   ├── raw_source.py               # RawDataSource
+│   │   ├── device_control.py            # DeviceControl，E1/E0 等设备出数控制
 │   │   ├── raw_parser.py               # RawDataParser
 │   │   ├── algorithm.py                # AlgorithmEngine
 │   │   ├── recording.py                # RecordingRepository
@@ -221,8 +321,10 @@ NeuroBridge/
 │   │   └── northbound.py               # NorthboundSink / 会话输出接口
 │   ├── application/                    # 用例与管线编排，只依赖 domain + ports
 │   │   ├── acquisition.py              # Source → Parser → Window 主流程
+│   │   ├── windowing.py                # ParsedSignal → ParsedSignalBatch
 │   │   ├── processing.py               # 算法输入映射与执行编排
 │   │   ├── subscriptions.py            # getLatest/subscribe/unsubscribe 用例
+│   │   ├── snapshots.py                # WindowResult 聚合与按流最新值
 │   │   ├── replay.py                   # 仅在 Profile 允许时启动头环录播
 │   │   └── status.py                   # 统一运行状态和错误转换
 │   ├── adapters/                       # ports 的具体实现
@@ -239,14 +341,16 @@ NeuroBridge/
 │   │   │   └── filesystem.py           # raw/parsed/algorithm 分层持久化
 │   │   └── northbound/
 │   │       ├── protocol.py              # 根包络、字段映射、错误映射
+│   │       ├── controller.py            # 请求解码并调用 Application 用例
 │   │       ├── websocket.py             # WS 连接与 UTF-8 JSON 传输
-│   │       └── local_ui.py              # 本机 HTTP 页面
+│   │       ├── publisher.py             # 响应和事件序列化发送
+│   │       └── local_ui.py              # 麒麟/Windows 本机 HTTP 页面
 │   ├── profiles/                        # OS 与设备组合及能力声明
 │   │   ├── resolver.py                  # OS/架构/配置校验
-│   │   ├── macos_headband.py            # BLE + 头环 Parser + replay=true
-│   │   ├── ubuntu_headband.py           # BLE + 头环 Parser + replay=true
-│   │   ├── kylin_headset.py             # POSIX Serial + 耳机 Parser + replay=false
-│   │   └── windows_headset.py           # Windows Serial + 耳机 Parser + replay=false
+│   │   ├── macos_headband_wired.py       # BLE + 头环 Parser + wired_b_side
+│   │   ├── ubuntu_headband_wired.py      # BLE + 头环 Parser + wired_b_side
+│   │   ├── kylin_headset_local.py        # POSIX Serial + 耳机 Parser + local_browser
+│   │   └── windows_headset_local.py      # Windows Serial + 耳机 Parser + local_browser
 │   ├── bootstrap/                       # 唯一组合根，实例化并注入具体实现
 │   │   ├── container.py
 │   │   └── app.py
@@ -272,20 +376,22 @@ NeuroBridge/
 
 1. `domain/` 和 `ports/` 是稳定内核，不得导入 `adapters/`、`profiles/`、系统 API 或第三方 I/O 库；
 2. `application/` 通过 ports 调用设备、算法、持久化和北向输出，不实例化 Bleak、pyserial、WebSocket 或文件存储实现；
-3. `adapters/sources/` 只处理传输和设备生命周期，`adapters/parsers/` 只解释设备数据语义，两者必须能独立做合同测试；
+3. `adapters/sources/` 只处理传输和设备连接生命周期，`adapters/parsers/` 只负责分帧与设备数据语义，两者必须能独立做合同测试；
 4. POSIX TTY 与 Windows COM 是两个 Source 实现，但共用 `headset_rev181` Parser，禁止复制耳机帧解析逻辑；
-5. `profiles/` 只声明 Source、Parser、配置约束和能力，不承载采集、算法、录制或北向业务代码；
+5. `profiles/` 以 Deployment Profile 声明平台、传输、设备协议、接入方式和能力，并由组合根一次性绑定 Source、Parser 与 DeviceControl；运行期不得按 `sourceType` 再选择 Parser；
 6. `bootstrap/` 是唯一允许同时认识 ports 和具体 adapters 的组合根，所有 CLI、systemd 与 Windows Service 入口必须经该组合根启动；
 7. 录制能力与录播能力分开建模：RecordingRepository 可保存所有设备数据，ReplayReader 只能由 `supportsReplay=true` 的头环 Profile 使用；
 8. `packaging/` 与平台安装脚本不得被 `neurobridge/domain`、`ports` 或 `application` 导入；
-9. 迁移可以分阶段进行，并可短期保留兼容导出层，但不得长期同时维护两套 Gateway、领域模型或耳机 Parser。
+9. NorthboundController 只负责协议输入适配，订阅、查询、状态和录播决策属于 Application，NorthboundPublisher 只负责输出；
+10. 设备连接状态模块与数据状态模块通过领域事件通信，不共享可变状态；
+11. 迁移可以分阶段进行，并可短期保留兼容导出层，但不得长期同时维护两套 Gateway、领域模型或耳机 Parser。
 
-### 4.5 目标依赖方向
+### 4.7 目标依赖方向
 
 ```mermaid
 flowchart TD
     ENTRY[Entrypoints<br/>CLI / systemd / Windows Service] --> BOOT[Bootstrap 组合根]
-    BOOT --> PROFILE[OS Profiles]
+    BOOT --> PROFILE[Deployment Profiles]
     BOOT --> APP[Application 用例与管线]
     BOOT --> ADAPTERS[Adapters 具体实现]
 
@@ -303,14 +409,16 @@ flowchart TD
 
 图中箭头表示“可以依赖”。`Domain` 不依赖其他业务层；具体设备和平台实现通过 `Bootstrap` 注入应用层，禁止从 `Application` 反向导入 `Adapters`。
 
-### 4.6 分层依赖规则
+### 4.8 分层依赖规则
 
 | 层 | 可以依赖 | 禁止依赖 |
 |---|---|---|
-| OS Profile | OS 探测、配置校验、策略注册表 | 具体业务数据、北向消息 |
+| Deployment Profile | OS/架构探测、配置校验、传输/设备/接入能力声明 | 具体业务数据、北向消息 |
 | Raw Data Source | 系统驱动、Bleak、pyserial、设备连接协议 | 算法、RecordingStore、北向协议 |
 | Raw Data Parser | 设备帧格式、统一领域模型 | Bleak、pyserial、算法进程、WebSocket |
+| Device Control | 已验证的设备会话、设备启停命令 | 算法实现、录播、北向连接 |
 | Domain/Window | 统一信号模型、时间窗口和有效性 | 设备特征 UUID、串口对象、操作系统 |
+| Application | Domain、Ports、ProfileCapabilities | 具体 Source/Parser、WebSocket、文件系统 |
 | Algorithm | AlgorithmInput、SDK bridge | BLE/串口实现细节、北向连接 |
 | Recording | Raw/Parsed/Algorithm 事件及会话 ID | WebSocket 连接对象 |
 | Northbound | 统一领域事件、协议序列化 | Bleak、pyserial、设备帧解析 |
@@ -327,107 +435,164 @@ flowchart TD
 RawDataSource
   start() -> async
   stop() -> async
-  events() -> async iterator[RawChunk]
+  chunks() -> async iterator[RawChunk]
+  connection_events() -> async iterator[DeviceConnectionEvent]
   status() -> SourceStatus
 ```
 
+`start()` 表示启动设备发现、连接和验证循环，不等同于向设备发送“开始出数”命令。Source 验证成功后通过连接事件通知 Application；是否启动出数由 Application 在算法和管线准备完成后调用 DeviceControl 决定。
+
 `RawChunk` 至少包含：
 
-- `sourceType`：`bluetooth` 或 `serial`；
+- `sourceType`：`bluetooth` 或 `serial`，只用于追踪来源，不作为运行期 Parser 选择键；
 - `channel`：来源通道，如 BLE characteristic 或 `serial.read`；
 - `bytes`：未经修改的原始字节；
 - `receivedAtMs`：读取边界时间；
-- `sessionId` 或可关联的连接会话标识；
+- `receivedAtMonotonicNs`：用于进程内排序和耗时计算的单调时钟；
+- `connectionSessionId`：可关联的设备连接会话标识；
 - 可选的设备元数据，但不得把敏感凭据和完整人体数据写入日志。
 
-### 5.2 源数据解析器接口
+### 5.2 设备控制接口
 
-解析器接收 RawChunk，输出统一信号批次和解析状态。
+设备控制接口只负责已验证会话的出数控制：
+
+```text
+DeviceControl
+  start_stream(connectionSessionId) -> async ControlResult
+  stop_stream(connectionSessionId) -> async ControlResult
+```
+
+- RawDataSource 是传输连接和底层串口/BLE 对象的唯一所有者；DeviceControl 不得重复打开串口或建立第二条设备连接；
+- Bootstrap 为每个已验证的 Source 会话创建共享同一受控写通道的 DeviceControl，并与 `connectionSessionId` 绑定；
+- Source 断线、停止或重连后，旧 `connectionSessionId` 的所有控制请求必须返回 `staleSession`，不得写入新会话或已释放句柄；
+- 底层读取、ACK/E1/E0 写入和关闭操作必须经同一会话内的串行化锁或等价机制协调，避免写命令与释放端口竞态；
+- 串口静默设备在算法 ready 后由 `start_stream()` 无响应发送一次 E1；已有合法流时返回 `alreadyStreaming`，不得补发 E1；
+- 串口停止时 `stop_stream()` 最多无响应发送一次 E0；写失败仍必须继续释放端口和任务；
+- BLE 的具体开始/停止命令由 Bluetooth DeviceControl 实现，不得泄漏到 Application；
+- 未处于允许状态、重复调用、写失败和超时必须返回结构化 ControlResult，并转换为连接或数据状态事件；
+- DeviceControl 不初始化算法、不操作录制、不发送北向消息。
+
+### 5.3 源数据解析器接口
+
+解析器接收 RawChunk，输出完整设备帧、设备无关信号片段和解析诊断；统一时间窗口由 Application 的 SignalWindowAssembler 形成。
 
 ```text
 RawDataParser
-  feed(chunk: RawChunk) -> list[ParsedSignalBatch]
-  flush() -> list[ParsedSignalBatch]
+  feed(chunk: RawChunk) -> ParseOutcome
+  flush(reason) -> ParseOutcome
   reset() -> None
 ```
+
+`ParseOutcome` 至少包含：
+
+- `frames`：零到多个保持原始字节的 DeviceFrame；
+- `signals`：零到多个 ParsedSignal；
+- `diagnostics`：非法长度、包头/包尾错误、序列间隙、重复、乱序和迟到等结果；
+- `bufferedBytes` 与 `discardedBytes`；
+- 输入 RawChunk 与输出帧/信号片段的关联标识。
 
 解析器必须：
 
 - 保留原始字节引用或原始记录关联；
-- 显式返回无效原因、丢包、拆包、粘包和时间窗口信息；
+- 显式返回无效原因、丢包、拆包、粘包和信号时间信息；
+- `flush()` 必须说明服务停止、断线或 Parser 重置时残留半帧如何记为诊断，不能静默丢弃；
 - 不在解析失败时抛出导致网关退出的未处理异常；
 - 不调用算法，不发送北向消息。
 
-### 5.3 统一信号批次
+### 5.4 统一信号批次
 
-统一模型至少包含：
+SignalWindowAssembler 接收 ParsedSignal，并按配置的窗口策略形成 ParsedSignalBatch。统一批次模型至少包含：
 
-- `sourceType`；
-- `sessionId`；
+- `deviceProtocol` 与内部 `schemaVersion`；
+- `sourceType` 与 `connectionSessionId`；
+- `recordingSessionId`；
+- `batchId` 或等价的窗口关联键；
 - `windowStartMs`、`windowEndMs`；
-- EEG 批量样本及其字节格式；
-- HR 批量样本及其字节格式；
+- EEG/HR 通道、样本格式、样本数量、单位及批量数据；
 - `valid` 与 `invalidReasons`；
-- 原始数据引用（录制 ID、序号或时间范围）。
+- 原始 DeviceFrame 引用、序号范围和接收时间范围。
 
-统一模型不得使用 `ff31`、`ff51` 等只属于某一设备协议的名称作为公共业务字段。
+统一模型不得使用 `ff31`、`ff51` 等只属于某一设备协议的名称作为公共业务字段。未经真实数据和算法合同确认，不得假设采样率、单位、缩放规则、每 600 ms 样本数或算法触发数量；未确认项必须保留为显式配置或待确认字段。
 
-### 5.4 算法适配接口
+对于修订号 181 耳机帧，公共解析模型必须将偏移 `4～5` 的无符号大端序列号与偏移 `6～23` 的 18 字节 EEG 原始值分开表达，不得把序列号当作 EEG 采样值。为保持当前算法 SDK 的原始输入合同，AlgorithmInputMapper 可从已关联 DeviceFrame 中取出 `frame[4:24]` 的 20 字节作为算法原始输入（包含 2 字节序列号和 18 字节 EEG）；该 SDK 专用投影不得反向污染 ParsedSignal 的公共语义。
+
+### 5.5 算法适配接口
 
 算法层只接收 `ParsedSignalBatch` 或明确的 `AlgorithmInput`，不得导入 BLE 或串口包模块。算法适配器负责：
 
 - 保持算法要求的原始字节序和分组；
 - 将统一 EEG/HR 批次转换为 SDK 输入；
-- 返回算法指标、计算时间和错误原因；
+- 返回携带同一 `batchId`、算法版本、计算开始/完成时间、算法指标和错误原因的 AlgorithmResult；
 - 算法不可用时保留原始数据和解析结果。
 
-### 5.5 北向发布接口
+### 5.6 应用用例与北向接口
 
-北向发布器接收统一信号批次和算法结果，负责：
+Application 提供 `getStatus`、`getLatest`、`subscribe` 和 `unsubscribe` 用例。NorthboundController 负责把 WebSocket 请求解析为用例调用并映射协议错误；NorthboundPublisher 只接收完成聚合的 WindowResult、状态快照或用例响应并负责序列化发送。
+
+北向适配层负责：
 
 - 生成既有 `{protocolVersion, code, data, message}` 根包络；
 - 按设备 Profile 生成事件：蓝牙头环允许 `live` / `replay`，USB 串口耳机只允许 `live`；
 - 过滤订阅流；
-- 处理 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。
+- 将请求交给对应 Application 用例，不在适配层决定录播、设备能力或最新值语义。
 
 设备源、解析器和算法适配器不得直接持有 WebSocket 连接对象。
 
-对于 USB 串口耳机，北向发布器还必须保证：
+对于 USB 串口耳机，Application 用例和 Profile 能力门禁必须保证：
 
 - 不从历史录制推导 `availableStreams`；
 - 不创建 replay task，不输出 `mode="replay"`；
 - 耳机离线后的 `getLatest`、`subscribe` 和状态查询不以历史数据伪装为当前可用数据。
+
+WindowResultAggregator 必须以 `batchId` 合并解析窗口与算法结果。完整 WindowResult 表示“解析批次已经确定，并且算法已返回结果，或已经形成明确的算法不可用/超时标记”，不得无限等待算法。算法超时值必须配置化；首轮 24 小时观测前使用实施配置中的明确候选值，不在业务代码中隐藏默认。超时后先发布带明确原因的 `valid=false` WindowResult；同一 `batchId` 的算法结果迟到时，可持久化并记录迟到指标，但不得重新发布、不得回写已更新的 LatestSnapshotStore。必须记录窗口产生时间、算法完成时间、发布完成时间、迟到结果、发送失败和被最新值覆盖的计数。
+
+WebSocket 不使用应用层 Ping/Pong 或 JSON 心跳。连接实际断开后释放该连接的订阅；客户端重新连接后先调用 `getStatus`，再重新 `subscribe`，旧 `subscriptionId` 不可复用。
 
 ## 6. 系统固定映射与 Windows 扩展需求
 
 ### 6.1 映射规则
 
 ```text
-Darwin/macOS       → bluetooth + BluetoothParser
-Ubuntu             → bluetooth + BluetoothParser
-Galaxy Kylin V10   → serial    + HeadsetSerialParser
-Windows（后续规划） → serial    + HeadsetSerialParser
+Darwin/macOS       → bluetooth + HeadbandBleParser + wired_b_side
+Ubuntu             → bluetooth + HeadbandBleParser + wired_b_side
+Galaxy Kylin V10   → serial_posix + HeadsetRev181Parser + local_browser
+Windows 7+（后续规划） → serial_windows + HeadsetRev181Parser + local_browser
 ```
 
 ### 6.2 校验规则
 
 1. 启动时读取系统标识、架构和配置；
-2. 解析 OS Profile；
-3. 配置中的 `data_source.type` 必须与 OS Profile 一致；
+2. 解析 Deployment Profile；
+3. 配置中的传输、设备协议和 `access.mode` 必须与 Deployment Profile 一致；
 4. 不一致时启动失败并给出明确错误，不自动降级到另一传输；
 5. Kylin 必须校验 x86_64 和串口参数；
 6. Ubuntu BLE 运行时不得要求或依赖 ttyACM/ttyUSB 权限；
 7. macOS 和 Ubuntu 的 BLE 配置必须包含设备匹配条件和 BLE 权限检查；
 8. 只有经过显式开发/回归开关授权，才允许在非目标系统运行其他传输策略；
-9. Windows Profile 必须识别 USB 虚拟串口 COM 设备，不依赖 Linux 的 `/dev/ttyACM*`、`/dev/ttyUSB*` 或 sysfs；
-10. Windows 与银河麒麟复用同一耳机帧语义、Parser、统一信号模型和北向链路，只允许串口发现、端口打开、权限和服务运行方式存在平台差异。
+9. macOS/Ubuntu Profile 必须使用经确认的旧 B 端隔离专网地址和 `wired_b_side`，不得默认绑定公网或切换为本机页面；
+10. 银河麒麟/Windows Profile 必须使用 `local_browser`，HTTP/WebSocket 仅监听 `127.0.0.1`；
+11. Windows Profile 必须识别 USB 虚拟串口 COM 设备，不依赖 Linux 的 `/dev/ttyACM*`、`/dev/ttyUSB*` 或 sysfs；
+12. Windows 与银河麒麟复用同一耳机帧语义、Parser、统一信号模型和北向链路，只允许串口发现、端口打开、权限和服务运行方式存在平台差异。
+13. Windows 目标平台的最低产品基线为 Windows 7 x86_64；具体 Service Pack、SHA-2 签名支持补丁及可用浏览器版本必须在 M3 实现前由目标机确认。
 
 ### 6.3 入口要求
 
-- macOS：统一入口应使用共享网关核心和 BluetoothSource，不再维护一套绕过策略注册表的 POC 控制器；
-- Ubuntu：部署脚本默认生成 BLE 配置，安装 BlueZ/Bleak 运行依赖，不以串口作为默认设备；
+- macOS：统一入口应使用共享网关核心和 BluetoothSource，固定接入旧 B 端隔离专网，不再维护一套绕过策略注册表的 POC 控制器；
+- Ubuntu：部署脚本默认生成 BLE 与 `wired_b_side` 配置，安装 BlueZ/Bleak 运行依赖，不以串口或本机页面作为默认策略；
 - 银河麒麟：项目入口固定生成 serial 配置，并执行串口权限、算法 bridge 和本机运行环境检查；
 - Windows（后续）：提供 Windows 服务或受控进程入口，固定生成 serial 配置，通过 COM 端口发现实现接入，不复制 Gateway、Parser、算法和北向业务代码。
+
+### 6.4 配置合同
+
+配置采用单一类型化 Schema，并至少包含 `configSchemaVersion`、Deployment Profile 标识、传输参数、设备协议参数、接入方式、录制和日志参数。设计要求如下：
+
+1. 产品安装包固化允许的 Deployment Profile；生产配置只能填写该 Profile 允许调整的参数，不能把麒麟安装包切换为 BLE 或把 macOS/Ubuntu 切换为本机页面；
+2. 配置加载顺序为“安装包默认值 → 系统级配置文件 → 显式运维配置”；命令行临时覆盖只允许在标记为开发/回归的运行模式中使用；
+3. 未知字段、错误类型、Profile 不匹配和缺少强制字段必须在建立设备连接前失败，并输出不含敏感信息的明确错误；
+4. 设备源、设备协议和接入方式的变更需要重启，不支持运行时热切换；
+5. 升级前备份配置，按 `configSchemaVersion` 执行幂等迁移；迁移失败时保留原配置和原程序，不得以部分迁移状态启动；
+6. 存储配置至少包含 `warningThresholdBytes`、`criticalThresholdBytes`、`recoveryHysteresisBytes`、`segmentDurationMinutes`、`segmentMaxBytes`、`fsyncInterval`、`autoCleanupEnabled` 和会话保留标记；`autoCleanupEnabled` 的安装默认值固定为 `false`；
+7. 系统配置路径、Windows 7 的具体 Service Pack/补丁基线、可由现场调整的其他字段白名单和配置迁移保留版本数仍待实施设计确认。
 
 ## 7. 设备接入要求
 
@@ -449,13 +614,15 @@ BluetoothParser 负责：
 
 ### 7.2 USB 串口耳机
 
-SerialSource 负责：
+SerialSource 的平台实现负责：
 
-- 遍历 USB 派生 TTY 候选；
+- 银河麒麟遍历 USB 派生 TTY 候选；Windows 遍历 USB 虚拟串口 COM 候选；
 - 打开 115200 8-N-1 串口；
-- 执行已有流观察、ACK、独立 `0x01` 验证和重连；
+- 执行已有流观察、ACK、独立 `0x01` 验证和重连，并通过设备连接状态事件报告阶段；
 - 报告连接、验证和超时状态；
 - 输出读取边界的原始字节块。
+
+Headset DeviceControl 负责算法 ready 后的 E1 和停止时的 E0；Application 只依赖 DeviceControl 接口，不直接写串口命令。
 
 HeadsetSerialParser 负责：
 
@@ -463,7 +630,7 @@ HeadsetSerialParser 负责：
 - 校验包头、长度、包尾；
 - 处理拆包、粘包、噪声和缓冲上限；
 - 解析序列号、EEG 和 HR 字段；
-- 输出完整帧与统一 EEG/HR 批次之间的关联；
+- 通过 ParseOutcome 输出完整 DeviceFrame、统一 EEG/HR ParsedSignal 及其关联；
 - 记录丢包、重复、乱序和迟到信息。
 
 完整串口帧必须原样持久化；对算法的 EEG/HR 投影不得替代完整原始帧。
@@ -477,16 +644,44 @@ HeadsetSerialParser 负责：
 ```text
 RawDataSource
   → RawDataParser
-  → ParsedSignalBatch
-  → AlgorithmInputMapper / AlgorithmRunner
-  → RecordingStore（raw、parsed、algorithm 分开保存）
-  → NorthboundPublisher
-  → WebSocket 客户端
+  → ParseOutcome（DeviceFrame + ParsedSignal + Diagnostics）
+      ├─ DeviceFrame → RecordingRepository（完整原始帧）
+      ├─ Diagnostics → DataState + 结构化日志
+      └─ ParsedSignal → SignalWindowAssembler → ParsedSignalBatch
+                           ├─ RecordingRepository（解析批次）
+                           └─ AlgorithmInputMapper / AlgorithmRunner
+                                  └─ RecordingRepository（AlgorithmResult）
+  → WindowResultAggregator → LatestSnapshotStore
+  → Application Query / Subscription
+  → NorthboundController / NorthboundPublisher → WebSocket 客户端
 ```
 
 算法异常只影响算法结果的有效性，不得阻止原始数据和解析批次保存，也不得让采集主循环退出。
 
-### 8.2 录播链路
+### 8.2 生产者与消费者模型
+
+统一数据管线分为生产者和消费者两部分：
+
+- **生产者**：Source、Parser、窗口和算法组成数据生产链路。每当形成完整 WindowResult，就原子写入 LatestSnapshotStore，并把新结果交给已订阅的 NorthboundPublisher；没有新数据时不生产空数据事件。
+- **消费者**：`getLatest` 从 LatestSnapshotStore 获取所请求流的最新快照，不扫描历史录制、不等待下一窗口，也不建立连续队列。`subscribe` 只登记持续接收关系，由生产者有新数据时主动推送。
+
+```mermaid
+flowchart LR
+    SRC[生产者<br/>Source + Parser + Algorithm] -->|产生完整 WindowResult| SNAP[LatestSnapshotStore<br/>每个流只保留最新快照]
+    SNAP -->|新数据通知| SUB[subscribe 消费者<br/>主动推送]
+    GET[getLatest 消费者] -->|读取当前最新值| SNAP
+    SNAP -->|立即返回最新快照或无可用数据| GET
+```
+
+要求：
+
+1. 快照以 `batchId`、`mode`、采集时间、有效性和流类型关联，更新过程必须原子化，消费者不能读取一半旧、一半新的组合结果；
+2. 生产者不得因没有消费者而停止采集、算法或持久化；
+3. `getLatest` 只返回最新值，不承担历史补传；USB 串口耳机也不得因此触发 replay；
+4. 订阅发送失败或消费者过慢不得阻塞设备读取。每个 WebSocket 连接、每个已订阅流使用容量为 1 的待发最新值位；前一值尚未发出时，新值原子覆盖旧值，不累积无界队列、不停止生产者。对每个流记录发送耗时、发送失败、覆盖次数和最后成功时间；
+5. 连续波形仍按已确认北向协议的窗口/批量方式发送，不得退化为逐采样点 JSON。
+
+### 8.3 录播链路
 
 录播只适用于蓝牙头环。头环录播直接读取已保存的原始数据、解析数据和算法结果，按原始时间间隔发送，不重新调用算法；录播输出必须显式带 `mode = "replay"`。
 
@@ -495,19 +690,85 @@ USB 串口耳机不支持录播，必须遵守以下规则：
 1. 耳机在线时只输出 `mode = "live"`；
 2. 耳机离线时，`subscribe` 或 `getLatest` 不得触发历史数据回放；
 3. 即使录制目录存在耳机历史数据，也不得将其识别为耳机可用录播源；
-4. 耳机离线请求应返回北向协议已定义的设备离线或数据流不可用错误；具体错误码和字段以最终签字协议为准；
+4. 银河麒麟耳机离线后的 `subscribe` 或 `getLatest` 返回已确认的 `409 STREAM_NOT_AVAILABLE_REASON`；Windows 是否复用同一错误合同必须在 M3 实现前完成一致性评审；
 5. 网关重启、耳机拔出或串口异常后，只执行设备重连，不从历史时间点补播；
 6. 耳机数据持久化、导出和离线分析能力不因禁止录播而取消；
-7. 已发布北向协议若只有 `live` / `replay` 两种 `mode`，耳机离线状态的 `mode` 表达及具体错误响应必须在实现前完成合同评审；在确认前不得用 `replay` 代表“离线”。
+7. 已发布北向协议只有 `live` / `replay` 两种 `mode` 时，耳机离线仍保持配置的 `live` 能力语义，并通过连接状态和错误响应表达不可用；不得用 `replay` 代表“离线”。
 
-### 8.3 时间戳要求
+### 8.4 时间戳要求
 
 - 原始数据使用设备读取/通知到达边界时间；
 - Parser 不得使用页面发送时间替代采集时间；
 - 同一原始帧派生出的多个信号应共享可关联的时间范围；
 - 算法结果同时保存采集窗口时间和计算完成时间。
 
+Unix Epoch 毫秒用于持久化和北向合同；进程内排序、阶段耗时和超时判断使用单调时钟，避免系统时间校准造成负耗时或错误超时。日志应能通过 `connectionSessionId`、`recordingSessionId` 和 `batchId` 关联同一链路，但不得记录完整敏感数据。
+
+### 8.5 存储容量与北向可观察性
+
+存储模块必须持续检测录制目录的可用空间和写入结果。`storageState` 至少包含 `ok`、`warning`、`full` 和 `error`，并归入数据状态模块统一管理。
+
+当空间不足或写入失败时：
+
+1. 不得静默丢失持久化结果，也不得使北向服务或主进程直接退出；
+2. 日志记录发生时间、存储状态、剩余空间、失败操作、录制会话和影响的数据时间范围，但不得记录完整原始数据；
+3. 只要设备数据、解析和北向连接仍可用，生产者就继续处理并实时分发；存储异常不得停止 Source、Parser、Algorithm 或订阅发送；
+4. 允许出现“业务数据有效，但未获得持久化保障”的运行状态。此时数据的 `valid` 仍按解析/算法语义判定，不因存储失败被改为 `false`；必须单独输出 `persistenceGuaranteed=false`；
+5. 持久化写入队列必须有界。存储不可用时不得为了等待恢复而在内存中无界积压原始数据；失败记录按序列号/时间范围汇总为可观测缺口，恢复后不默认补写已丢失的持久化记录；
+6. `getStatus` 和状态事件必须向客户端暴露存储健康和持久化保障状态；连续数据事件同步携带 `persistenceGuaranteed`，使消费者可以识别受影响时间段；
+7. 自动清理为显式配置开关，默认关闭。关闭时绝不自动删除录制的人体数据；开启时也只能按本节规则清理已结束、未锁定的会话；
+8. 当前已发布北向协议尚未定义下述字段，因此必须作为一次北向合同变更，由所有受影响文档、模拟服务端和录播兼容测试同步评审后发布。
+
+#### 8.5.1 北向存储状态合同
+
+`getStatus` 成功响应和状态事件中的 `data.storage` 使用同一对象：
+
+```json
+{
+  "state": "ok",
+  "persistenceGuaranteed": true,
+  "reason": "none",
+  "availableBytes": 21474836480,
+  "warningThresholdBytes": 5368709120,
+  "criticalThresholdBytes": 1073741824,
+  "autoCleanupEnabled": false,
+  "lastSuccessfulWriteAtMs": 1788768000000,
+  "affectedFromMs": null
+}
+```
+
+字段语义：
+
+- `state`：`ok` / `warning` / `full` / `error`；
+- `persistenceGuaranteed`：当前产生的数据是否具备持久化保障；它与业务数据 `valid` 正交；
+- `reason`：`none` / `low_space` / `no_space` / `quota_exceeded` / `read_only` / `permission_denied` / `io_error` / `path_unavailable` / `write_queue_overflow`；
+- `availableBytes`：录制文件系统当前可用字节数，无法取得时为 `null`；
+- `warningThresholdBytes` 和 `criticalThresholdBytes`：本机生效阈值；
+- `autoCleanupEnabled`：是否启用自动清理；
+- `lastSuccessfulWriteAtMs`：最后一次完整持久化写入成功的 Unix Epoch 毫秒；
+- `affectedFromMs`：当前未获得持久化保障的连续时间段起点，正常时为 `null`。
+
+存储异常不导致 `getStatus`、`getLatest` 或实时 `subscribe` 失败：只要实时数据可用，这些请求仍返回 `code=200`，并携带存储状态。只有一个请求的主要目标本身依赖成功持久化，且当前无法完成时，才返回 `code=507`、`message="STORAGE_UNAVAILABLE: <reason>"`。设备离线仍使用已确认的 `409 STREAM_NOT_AVAILABLE_REASON`，不得与存储错误混用。
+
+默认阈值为 `warningThresholdBytes=5 GiB`、`criticalThresholdBytes=1 GiB`。可用空间低于 warning 阈值进入 `warning`；低于 critical 阈值，或写入返回 `ENOSPC` / `EDQUOT`，进入 `full`；只读文件系统、权限、I/O 或路径不可用进入 `error`。恢复阈值比进入阈值高 1 GiB，并需要连续 3 次健康检查及至少 1 次实际写入成功后才恢复 `ok`，避免状态抖动。阈值必须可配置，可在首轮 24 小时观测后调整。
+
+#### 8.5.2 文件分段与崩溃恢复
+
+每个 `recordingSessionId` 使用独立会话目录，原始帧、解析批次和算法结果按 `raw/`、`parsed/`、`algorithm/` 分类保存。记录使用带 `schemaVersion`、会话标识、帧/批次关联键和采集时间的追加式 JSONL；完整原始帧只能进入受保护的 raw 分段，不得进入普通运行日志。
+
+默认每 10 分钟或单分段达到 256 MiB 时轮转，以先到条件为准。正在写入的文件使用 `.partial` 后缀；轮转时执行 flush/fsync，记录起止序号、时间、条数、字节数和 SHA-256，再原子重命名为已完成分段并更新会话 manifest。时长、字节上限和 fsync 频率必须可配置。
+
+服务启动时扫描 `.partial`：只保留到最后一条完整 JSONL 记录，对可解析部分重建条数、时间范围和摘要后关闭为 `recovered` 分段；无法安全恢复的文件移入受保护的 quarantine 目录并产生 `storageState=error`，不得静默删除或将其当作完整录制。
+
+#### 8.5.3 自动清理开关
+
+`storage.autoCleanupEnabled` 默认为 `false`。启用后，只允许选择“已结束、非当前活动、未标记保留、未被导出/诊断任务占用”的会话，按会话结束时间从旧到新删除。同一会话的 raw/parsed/algorithm/manifest 必须作为一个整体清理，不得只删原始数据或只删算法结果而破坏关联。清理到可用空间高于对应恢复阈值即停止；没有合格会话可清理时保持 `full` / `error`，不得删除活动会话。
+
+正式对外运维操作文档必须说明开关默认关闭、开启/关闭方法、可被清理的数据范围和顺序、保留标记、存储状态字段、数据删除风险与审计日志。在该文档完成评审之前，正式安装包不得将开关默认为开启。
+
 ## 9. 最终产品安装包与 Workflow 打包需求
+
+本节是正式交付门禁。服务安装布局、系统目录、运行账户和 systemd/Windows Service 骨架必须在相应平台的最终 24 小时长稳验收前完成，长稳不得只验证开发者源码目录。正式签名、SBOM、构建清单和发布 Workflow 门禁可在功能与长稳基线通过后完成。
 
 ### 9.1 最终交付形态
 
@@ -515,8 +776,8 @@ USB 串口耳机不支持录播，必须遵守以下规则：
 
 | 产品平台 | 首选安装包 | 兼容备选 | 安装结果 |
 |---|---|---|---|
-| 银河麒麟 V10 x86_64 | 与最终目标镜像包管理器匹配的原生系统包 | 经批准的自包含离线 `.run` 安装包 | 安装网关程序、算法 bridge、本机网页、配置、systemd 服务和运维工具 |
-| Windows x86_64 | 已签名 MSI | 已签名 EXE 安装器 | 安装网关程序、算法 bridge、本机网页、配置和 Windows Service |
+| 银河麒麟桌面操作系统 V10 x86_64 | 与最终目标镜像包管理器匹配的原生系统包 | 经批准的自包含离线 `.run` 安装包 | 安装网关程序、算法 bridge、本机网页、配置、systemd 服务和运维工具 |
+| Windows 7 x86_64 及以上 | 已签名 MSI | 已签名 EXE 安装器 | 安装网关程序、算法 bridge、本机网页、配置和 Windows Service |
 
 银河麒麟使用 RPM、DEB 或其他原生包格式，必须以最终验收镜像实际提供的包管理器为准，在实施前锁定。未经目标镜像确认，不得只根据“银河麒麟 V10”名称假设固定包格式。
 
@@ -557,7 +818,9 @@ USB 串口耳机不支持录播，必须遵守以下规则：
 
 #### Windows
 
-- 安装程序校验 Windows 版本、x86_64 架构、管理员权限、可用空间和包签名；
+- 最低产品基线为 Windows 7 x86_64；安装程序校验 Windows 版本、架构、管理员权限、可用空间和包签名；
+- Windows 7 的 Service Pack、SHA-2 代码签名支持补丁、系统根证书及可用浏览器基线待目标机确认；不满足已锁定基线时安装必须给出可诊断错误；
+- 网关运行时、C++ 编译工具链、算法 SDK、安装器和 Windows Service 实现必须确认仍支持已锁定的 Windows 7 基线；
 - 安装后注册 Windows Service，并以最小权限账户运行；
 - 使用 Windows COM 端口发现后端接入耳机，不依赖 Linux TTY/sysfs；
 - 默认仅绑定 `127.0.0.1` 提供本机 HTTP/WS，不因安装自动开放公网防火墙规则；
@@ -610,8 +873,8 @@ flowchart TD
     F -->|否| X
     F -->|是| G[平台构建矩阵]
 
-    G --> K[银河麒麟 V10 x86_64 目标环境]
-    G --> W[Windows x86_64 目标环境]
+    G --> K[银河麒麟桌面操作系统 V10 x86_64 目标环境]
+    G --> W[Windows 7+ x86_64 目标环境]
 
     K --> K1[构建 Python 运行时和 C++ 算法 bridge]
     K1 --> K2[组装麒麟安装包]
@@ -622,18 +885,22 @@ flowchart TD
     W2 --> T
     T --> U{安装验收是否通过}
     U -->|否| X
-    U -->|是| V[生成 SBOM、许可证、manifest 和 SHA-256]
-    V --> R{是否为获批正式发布}
-    R -->|否| CANDIDATE[上传内部候选 Artifact]
+    U -->|是| R{是否为获批正式发布}
+    R -->|否| VC[生成候选 SBOM、许可证、manifest 和 SHA-256]
+    VC --> CANDIDATE[上传内部候选 Artifact]
     R -->|是| S[使用平台证书签名]
-    S --> Q[复验签名和文件摘要]
-    Q --> P[上传正式安装包并生成发布记录]
+    S --> Q[验证安装包签名]
+    Q --> V[基于已签名文件生成最终 SBOM、许可证、manifest 和 SHA-256]
+    V --> Q2[复验最终摘要并保护 manifest 完整性]
+    Q2 --> P[上传正式安装包并生成发布记录]
 ```
+
+候选包与正式包必须使用不同的发布状态和摘要。正式安装包的 SHA-256 只能在代码签名完成后计算；`release-manifest.json` 必须引用最终已签名文件，并通过签名或等价完整性证明防止被单独替换。
 
 ### 9.7 平台构建环境
 
-- 银河麒麟安装包和算法 bridge 必须在与正式银河麒麟 V10 x86_64 ABI 兼容的受控 runner、构建机或已验证容器中生成；Ubuntu runner 的构建结果不能替代银河麒麟目标包验证；
-- Windows 安装包和算法 bridge 必须在受控 Windows x86_64 runner 上生成；
+- 银河麒麟安装包和算法 bridge 必须在与正式银河麒麟桌面操作系统 V10 x86_64 ABI 兼容的受控 runner、构建机或已验证容器中生成；Ubuntu runner 的构建结果不能替代银河麒麟目标包验证；
+- Windows 安装包和算法 bridge 必须在受控 Windows x86_64 runner 上生成；Windows 7 兼容性不能仅由较新 Windows runner 的构建成功代替，必须在已锁定的 Windows 7 目标镜像或实机上运行安装与长稳验收；
 - 两个平台分别锁定编译器、CMake、Python、Eigen、NumCpp、算法 SDK 和安装器工具版本；
 - Workflow 禁止在目标包构建过程中临时拉取未锁定源码；外部依赖必须来自锁文件、经摘要校验的缓存或批准制品库；
 - 同一 commit 和同一构建输入应尽可能产生可复现产物；无法做到字节级复现的签名时间戳等差异必须在构建清单中说明。
@@ -645,7 +912,7 @@ flowchart TD
 1. 在干净目标环境完成离线安装；
 2. 查询版本与版本台账一致；
 3. 后台服务正确注册、启动、停止和重启；
-4. 默认 HTTP/WS 只监听 `127.0.0.1`；
+4. 银河麒麟和 Windows 的 HTTP/WS 只监听 `127.0.0.1`；macOS/Ubuntu 兼容验收只监听双方确认的旧 B 端隔离专网地址；
 5. 使用模拟设备或已批准测试夹具完成 Source → Parser → Algorithm → Northbound 冒烟测试；
 6. 从上一受支持版本升级，配置和录制数据保持完整；
 7. 重复安装或修复安装不会创建重复服务和冲突端口；
@@ -671,23 +938,27 @@ flowchart TD
 | Kylin 串口 | 已有发现、握手、28 字节分帧、重连、E1/E0、序列统计 | 基本符合当前串口基线 |
 | 原始持久化 | 串口完整帧写入受保护目录，EEG/HR 与算法结果分开保存 | 基本符合 |
 | 北向链路 | Gateway 生成统一 envelope，WebSocket 层负责传输 | 基本符合 |
-| 录播 | 当前实现会在实时设备不可用时通用读取 raw/algorithm 数据并输出 replay，未区分头环和耳机 | 不符合耳机禁用录播规则 |
+| 录播 | 当前 Gateway、配置校验和测试已禁止 serial 使用 replay；Bluetooth 仍保留录播 | 源码符合耳机禁用录播规则，尚需银河麒麟目标机验收 |
 
 ### 10.2 与本 PRD 的差距
 
-1. **没有 OS Profile Resolver。** 当前根据 `data_source.type` 选择适配器，没有强制 macOS/Ubuntu/Kylin 与设备类型的固定映射。
+1. **没有 Deployment Profile Resolver。** 当前根据 `data_source.type` 选择适配器，没有同时强制校验平台、传输、设备协议和接入方式的固定映射。
 2. **Ubuntu 默认关系错误。** `config/gateway.toml.example` 默认是 `type = "serial"`，Ubuntu 安装脚本还会授予 tty 设备组权限；这不符合 Ubuntu BLE 头环目标。
-3. **macOS 配置不完整。** `mac/gateway.capture.toml.example` 没有 `[data_source]`，而当前 `config.load()` 要求该字段显式存在。按当前模板加载会报 `data_source.type must be explicitly configured`。
+3. **macOS 配置不完整。** `mac/gateway.capture.toml.example` 没有 `[data_source]` 与完整 `wired_b_side` 配置，而当前 `config.load()` 要求数据源显式存在。按当前模板不能形成目标 Deployment Profile。
 4. **macOS 入口绕过统一策略。** `mac/poc_server.py` 直接实例化 `FlowtimeAdapter`，没有使用统一的 `create_device_adapter()`。
 5. **Source 与 Parser 职责混合。** `SerialAdapter` 同时承担串口发现、控制握手、分帧、字段切片和输出通道投影；BLE 适配器也同时承担扫描、订阅和通道映射。
 6. **公共模型被 BLE 命名污染。** `DataWindow`、`RawPacket` 位于 `neurobridge/ble/packets.py`，算法层和 Gateway 都依赖该模块；串口数据被转换为 `ff31`/`ff51` 兼容通道后才进入公共处理。
 7. **没有明确的算法输入模型。** `AlgorithmRunner` 直接拼接窗口字节并发送 `eegRawBase64`/`hrRawBase64`，尚未形成独立的设备无关 `AlgorithmInput`。
-8. **北向协议业务仍集中在 Gateway。** WebSocket 传输已分离，但请求解析、事件映射和协议过滤仍与设备业务同处 Gateway，后续可继续抽出 NorthboundPublisher。
+8. **北向协议业务仍集中在 Gateway。** WebSocket 传输已分离，但请求解析、应用用例、最新值、事件映射和协议过滤仍与设备业务同处 Gateway，尚未拆成 NorthboundController、Application 用例与 NorthboundPublisher。
 9. **缺少系统 Profile 集成验收测试。** 现有测试覆盖较多串口和 BLE 单元行为，但没有验证 macOS BLE、Ubuntu BLE、Kylin 串口的系统映射和错误组合拒绝，也没有 Windows 串口扩展测试基线。
 10. **当前串口发现实现仅适用于 Linux。** 现有实现依赖 `/dev/serial/by-id`、`ttyACM`、`ttyUSB` 和 sysfs；后续 Windows 需要独立的 COM 发现后端，但应复用相同 Source 接口及 `HeadsetSerialParser`。
 11. **没有最终产品安装包 Workflow。** 当前 CI 主要运行测试和生成对外文档包；现有银河麒麟 `.run` 是源码更新器，不能替代可独立安装、升级和卸载的产品包，Windows 安装器尚不存在。
-12. **当前录播没有按设备类型隔离。** Gateway 依据实时连接状态和录制目录统一判断录播可用性，串口耳机离线时仍可能选择历史录制并输出 `mode="replay"`，与本 PRD 的耳机禁用录播规则冲突。
-13. **当前目录不是目标项目结构。** `business/gateway.py` 同时承担应用编排和协议业务，`ble/packets.py` 承载公共窗口模型，`serial/adapter.py` 混合 Source 与 Parser，`mac/` 入口可绕过统一工厂；目前也没有独立的 `domain`、`ports`、`profiles` 和唯一组合根。
+12. **当前目录不是目标项目结构。** `business/gateway.py` 同时承担应用编排和协议业务，`ble/packets.py` 承载公共窗口模型，`serial/adapter.py` 混合 Source、Parser 与 DeviceControl，`mac/` 入口可绕过统一工厂；目前也没有独立的 `domain`、`ports`、`profiles` 和唯一组合根。
+13. **状态职责尚未拆分。** 当前状态集中在 Gateway 字典和适配器回调中，设备连接状态与数据状态没有独立模型、状态机和领域事件边界。
+14. **接口表达不足。** 当前 DeviceAdapter 只有 `run/stop`，没有独立 DeviceControl；Parser 也没有 ParseOutcome，无法通过统一合同同时返回完整帧、批次、缓冲和诊断。
+15. **最新值模型仍内嵌 Gateway。** 当前已有 latest algorithm 等状态，但没有独立、按 `batchId` 原子更新的 LatestSnapshotStore，也没有生产者与消费者的合同测试。
+16. **存储健康设计尚未实现和对外发布。** 本 PRD 已确认 `storageState`、`persistenceGuaranteed`、阈值、分段恢复和默认关闭的自动清理策略；当前代码尚缺容量水位、有界持久化队列、分段 manifest/恢复及对应北向映射，且对外合同仍需按发布门禁同步。
+17. **24 小时长稳尚未形成验收记录。** 当前日志可提供部分连接和处理统计，但尚未证明银河麒麟实机连续运行 24 小时，也未完整记录用于确定后续性能阈值的生产、消费、队列、存储和资源观测项。
 
 因此，当前分支的结论是：**具备多传输适配器和共享下游链路，但尚未满足本 PRD 的完整项目结构要求。**
 
@@ -695,19 +966,19 @@ flowchart TD
 
 | 当前模块或目录 | 目标归属 | 迁移要求 |
 |---|---|---|
-| `neurobridge/device/packet.py` | `domain/raw.py` | 保留原始字节和接收时间语义，去除对具体适配器的认识 |
+| `neurobridge/device/packet.py` | `domain/raw.py` + `domain/signal.py` | 拆出 RawChunk、DeviceFrame、ParseOutcome 和 ParsedSignal，保留原始字节和接收时间语义 |
 | `neurobridge/ble/packets.py` | `domain/signal.py` + `adapters/parsers/headband_ble.py` | 将公共窗口模型与 BLE 特征解析拆开，公共模型不得保留 FFxx 命名 |
 | `neurobridge/ble/flowtime.py` | `adapters/sources/bluetooth_bleak.py` + `adapters/parsers/headband_ble.py` | 扫描/连接/通知与载荷解析分离 |
-| `neurobridge/serial/adapter.py` | `adapters/sources/serial_posix.py` + `adapters/parsers/headset_rev181.py` | 串口发现、握手和读取留在 Source；28 字节分帧及字段解析移到 Parser |
-| `neurobridge/device/strategy.py` | `profiles/` + `bootstrap/container.py` | 从按配置字符串选择适配器，改为先解析 OS Profile，再由组合根注入实现 |
-| `neurobridge/business/gateway.py` | `application/` 用例 + `adapters/northbound/protocol.py` | 拆分采集、订阅、状态、录播和报文映射，不形成新的万能 Gateway |
+| `neurobridge/serial/adapter.py` | `adapters/sources/serial_posix.py` + `adapters/parsers/headset_rev181.py` + `ports/device_control.py` | 串口发现、打开、验证和读取留在 Source；28 字节分帧移到 Parser；E1/E0 通过 DeviceControl 调用 |
+| `neurobridge/device/strategy.py` | `profiles/` + `bootstrap/container.py` | 从按配置字符串选择适配器，改为先解析 Deployment Profile，再由组合根注入实现 |
+| `neurobridge/business/gateway.py` | `application/` 用例与 snapshots + `domain/status.py` + `adapters/northbound/` | 拆分采集、双状态模块、最新值、订阅、录播和报文映射，不形成新的万能 Gateway |
 | `neurobridge/business/recording.py` | `ports/recording.py` + `adapters/storage/filesystem.py` | 接口与文件系统实现分离，并独立表达 Recording 与 Replay |
 | `neurobridge/algorithm/runner.py` | `ports/algorithm.py` + `adapters/algorithms/affective_sdk.py` | 应用层只依赖 AlgorithmEngine 与统一 AlgorithmInput |
-| `neurobridge/northbound/` | `adapters/northbound/` | 协议映射、WebSocket 传输和本机页面分开，均不得解析设备帧 |
+| `neurobridge/northbound/` | `adapters/northbound/` | Controller、Publisher、WebSocket 传输和本机页面分开，均不得承载应用用例或解析设备帧 |
 | `mac/`、`linux/`、`windows/` | `packaging/` + `entrypoints/` + `profiles/` | 平台安装/服务脚本与运行期 Profile 分开；所有正式入口统一经过 Bootstrap |
 | `tests/` | `unit/contract/integration/platform/package` | 先建立接口合同测试，再迁移实现，避免目录调整改变既有行为 |
 
-迁移顺序应遵循“先抽取模型和接口，再建立组合根与 Profile，然后逐个迁移 Source/Parser，最后拆分 Gateway 和平台入口”。每个阶段必须保持可运行和可回归；目录移动本身不得被表述为功能已验收。
+迁移顺序应遵循“先抽取 RawChunk/DeviceFrame/ParseOutcome/ParsedSignal 和接口，再建立统一 WindowAssembler、双状态模块、组合根与 Deployment Profile，然后逐个迁移 Source/Parser/DeviceControl，最后拆分 Gateway、最新值、北向适配和平台入口”。每个阶段必须保持可运行和可回归；目录移动本身不得被表述为功能已验收。
 
 ## 11. 非功能要求
 
@@ -715,11 +986,15 @@ flowchart TD
 
 - 设备断线、串口异常、BLE 异常、解析异常和算法异常均转换为可观测状态；
 - 适配器自动重连，主进程不因单次设备错误退出；
-- 缓冲上限、重连间隔和窗口大小均配置化；录播速度配置只对蓝牙头环 Profile 生效。
+- 缓冲上限、重连间隔和窗口大小均配置化；录播速度配置只对蓝牙头环 Profile 生效；
+- 银河麒麟当前交付和 Windows 后续交付均以连续运行 24 小时作为长稳验收时长；macOS/Ubuntu 兼容阶段也应分别完成 24 小时回归；
+- 24 小时内主进程不得退出，设备断开后可自动重连，生产者不得因客户端未连接而停止；
+- 延迟、内存、CPU、句柄、队列和丢弃率的通过阈值当前未定，先通过结构化日志持续采样，评审后再配置化为验收阈值。
 
 ### 11.2 安全与隐私
 
-- 默认本机浏览器和 WebSocket 仅监听 `127.0.0.1`；
+- 银河麒麟和 Windows 的本机浏览器、HTTP 与 WebSocket 仅监听 `127.0.0.1`；
+- macOS 和 Ubuntu 只监听双方确认的旧 B 端隔离专网地址，不得监听公网地址或未受控网络；
 - 日志不得记录令牌、密码、私钥或完整人体原始数据；
 - 完整串口帧和 BLE 原始数据只能写入受保护的录制目录；
 - 北向层不得暴露设备扫描、UUID、串口路径和内部帧格式。
@@ -740,22 +1015,38 @@ flowchart TD
 - 每个正式安装包必须可验证签名或摘要，并可追溯到唯一版本台账和源码 commit；
 - 客户部署不得依赖开发人员现场修改源码或手工创建 Python 环境。
 
+### 11.5 日志与观测基线
+
+在性能阈值尚未确认期间，网关至少按连接会话和固定周期记录以下结构化摘要：
+
+- 设备连接状态迁移、各阶段耗时、验证结果、重连次数和连续离线时间；
+- RawChunk 字节数、DeviceFrame 数、合法/非法帧数、缓存字节、丢弃字节、序列间隙、重复、乱序和迟到数；
+- 每个数据流的生产窗口数、最近生产时间、算法耗时、聚合耗时、发布耗时和端到端观测耗时；
+- `getLatest` 次数、订阅数、发送成功/失败次数、慢消费者次数、发送队列水位和最新快照覆盖次数；
+- 录制写入成功/失败数、可用空间、存储水位变化和 `storageState`；
+- 进程 CPU、内存、线程/任务、文件描述符或 Windows Handle 数量，以及服务异常重启次数。
+
+日志必须包含应用版本、Deployment Profile、`connectionSessionId`、`recordingSessionId` 和必要的 `batchId` 关联信息，但不得包含完整原始帧、Base64 生理数据、令牌、密码或私钥。日志采样周期、告警阈值和保留周期当前未定，应根据 24 小时观测结果确认。
+
 ## 12. 验收标准
 
 ### 12.1 系统映射
 
 - macOS 启动后只能选择 BLE 头环 Profile；
 - Ubuntu 24.04 启动后默认选择 BLE 头环 Profile；
-- 银河麒麟 V10 x86_64 启动后只能选择 USB 串口耳机 Profile；
+- 银河麒麟桌面操作系统 V10 x86_64 启动后只能选择 USB 串口耳机 Profile；
 - Windows 扩展完成后只能选择 USB 虚拟串口耳机 Profile；当前阶段只验收其接口扩展点，不宣称 Windows 已实现；
 - 在任一系统配置另一类传输时，启动前明确拒绝；
 - 不允许通过设备扫描结果自动切换 Profile；
+- macOS/Ubuntu Profile 固定为旧 B 端隔离专网，Kylin/Windows Profile 固定为本机回环页面；
 - Bluetooth Profile 声明支持录播，Kylin/Windows Serial Headset Profile 声明不支持录播。
 
 ### 12.2 源数据接口与解析
 
-- BLE 和串口均通过同一 `RawDataSource` 事件边界输出原始字节；
-- BLE 和串口均有独立 Parser，Parser 输出同一 `ParsedSignalBatch`；
+- BLE 和串口均通过同一 `RawDataSource` 事件边界输出 RawChunk；
+- BLE 和串口均有独立 Parser，Parser 输出统一 ParseOutcome、DeviceFrame 和 ParsedSignal；共享 SignalWindowAssembler 输出 ParsedSignalBatch；
+- Profile 在组合根绑定 Parser，运行期不允许按 `sourceType` 分支选择；
+- 串口 ACK 路径验证 DeviceControl 只在算法 ready 后发送 E1，正常停止最多发送一次 E0；已有合法流不得发送 E1；
 - `domain/`、`ports/` 和 `application/` 的依赖检查不得发现对 Bleak、pyserial、具体设备 Parser、WebSocket 服务端或平台安装 API 的反向导入；
 - 所有正式入口均通过唯一 Bootstrap 组合根创建 Source、Parser、算法、存储和北向实现，不得由平台脚本直接实例化具体设备适配器；
 - 银河麒麟 TTY Source 与 Windows COM Source 通过同一 Source 合同测试，并复用同一个耳机协议 Parser 测试集；
@@ -767,23 +1058,40 @@ flowchart TD
 
 - 算法输入只依赖统一模型，不导入 `ble` 或 `serial` 实现模块；
 - 算法失败时 raw/parsed 数据仍保存，北向事件正确标记 `valid=false` 或算法不可用原因；
+- 设备连接状态与数据状态具有独立状态机和合同测试，只通过领域事件关联；
+- WindowResult 以 `batchId` 原子更新 LatestSnapshotStore，`getLatest` 只读取最新快照，生产者无数据时不发送空数据事件；
+- 慢消费者或北向发送失败不能阻塞 Source；每个连接的每个流最多保留 1 个待发最新值，新值覆盖旧值时相关计数写入日志；
+- 算法超时后发布的 `valid=false` 快照不被迟到结果回写；迟到结果可持久化，但不二次北向发布；
 - 蓝牙头环实时和录播均输出统一根包络；USB 串口耳机只输出 `mode="live"`；
 - `subscribe`、`getLatest`、`getStatus`、`unsubscribe` 在各 Profile 下使用相同请求和响应包络，但结果必须遵守 Profile 能力：头环允许录播，耳机离线时不得录播；Windows 实现后遵守同一耳机规则。
 
 ### 12.4 场景验收
 
-- macOS BLE 头环持续采集、断线重连、浏览器重连；
-- Ubuntu BLE 头环持续采集、BlueZ 权限、断线重连、服务重启；
+- macOS BLE 头环通过旧 B 端隔离专网完成连接、订阅、断线恢复和录播回归；
+- Ubuntu BLE 头环通过旧 B 端隔离专网完成 BlueZ 权限、持续采集、断线重连、服务重启和录播回归；
 - 银河麒麟串口耳机已有流接管、ACK/`0x01` 验证、E1/E0、拔插重连；
 - macOS、Ubuntu 分别完成头环原始数据、解析数据、算法结果和录播回放验证；
 - 银河麒麟完成耳机原始数据、解析数据、算法结果和持久化验证，并验证离线请求不会启动录播；
 - Windows 后续实现需增加 COM 发现、插拔恢复、服务重启、耳机数据持久化及禁用录播验证；
+- M1 在银河麒麟实机连续运行 24 小时；M2、M3 完成时在各自目标平台分别运行 24 小时；
+- 24 小时报告包含第 11.5 节的全部观测项，未确认阈值以观测值呈现，不自行判定为协议或性能承诺；
 - 目标环境结果区分“源码支持”“POC 已验证”和“现场验收通过”。
 
-### 12.5 安装包与 Workflow
+### 12.5 存储异常
+
+- 使用受控方式模拟剩余空间进入 warning、写满和写入错误，主进程与北向服务不得直接退出；
+- 日志包含存储水位、写入失败、受影响会话和数据时间范围，但不包含完整原始数据；
+- 存储进入 `warning`、`full` 或 `error` 时，只要设备与北向链路可用，实时数据仍持续分发，且业务 `valid` 不因存储失败改变；
+- `getStatus`、状态事件和连续数据按第 8.5.1 节暴露 `storage` 和 `persistenceGuaranteed`；存储合同未完成文档同步及合同测试前，本验收项不得标记通过；
+- 持久化队列写满或文件系统长时间不可写时不发生无界内存增长，未持久化范围可通过状态和日志定位；
+- 崩溃中止的 `.partial` 分段可被截断到最后完整记录并标记为 `recovered`；无法安全恢复的文件进入 quarantine；
+- `storage.autoCleanupEnabled=false` 时不删除任何会话；开启后只按已结束会话由旧到新整体清理，不删除活动、锁定或占用会话；
+- 恢复空间并通过防抖条件后状态可自动恢复，同时产生完整审计日志；恢复不触发历史数据补播或默认补写。
+
+### 12.6 安装包与 Workflow
 
 - 银河麒麟候选包在最终 V10 x86_64 镜像完成离线安装、启动、升级和卸载验收；
-- Windows 功能交付时，MSI/EXE 在受支持的干净 Windows x86_64 环境完成相同验收；
+- Windows 功能交付时，MSI/EXE 至少在已锁定的干净 Windows 7 x86_64 最低基线环境完成相同验收；
 - PR 和普通 `master` 构建不能访问正式签名凭据或直接发布正式安装包；
 - 正式发布需经过测试、安装验证、人工审批、签名和摘要复验；
 - Artifact 同时包含安装包、SHA-256、SBOM、许可证、manifest 和测试摘要；
@@ -791,17 +1099,57 @@ flowchart TD
 - 安装包内不含 `.git`、人体数据、现场日志、凭据或未锁定依赖；
 - 银河麒麟和 Windows 安装验收必须覆盖“历史录制存在但耳机离线”的场景，并确认不会输出 replay 数据。
 
-## 13. 交付物
+## 13. 文档一致性与决策管理
 
-1. 按第 4.4 节落地的目标项目目录、依赖门禁和唯一 Bootstrap 组合根；
-2. OS Profile 与固定映射实现；
+### 13.1 文档一致性规则
+
+当前有效的项目文档之间不存在“某份文档覆盖另一份文档”的关系。相同事实在项目结构 PRD、专项 PRD、技术方案、README、仓库规则、测试和北向协议中必须保持一致。历史发布版本保留当时合同，但必须明确版本、状态和迁移关系，不能被误认为当前实现要求。
+
+1. 设备映射、接入方式、串口协议、录播能力、错误语义、状态字段和验收范围发生变化时，必须识别所有受影响文档，并在同一评审变更中同步；
+2. 已发布对外协议按既有发布门禁生成新版本，不能回写历史版本；在新版本正式发布前，对应功能不得按“已对外支持”验收；
+3. 发现文档冲突时，相关实现、发布和验收状态标记为 `blocked_by_document_conflict`，由相关方确认同一个事实后同步修订全部受影响文档；不得由开发人员自行选择其中一份执行；
+4. CI 应检查至少以下跨文档固定事实：系统/设备映射、`access.mode`、耳机禁用 replay、银河麒麟离线 409 语义、北向报文版本和当前交付平台；
+5. 文档同步后必须同时更新对应合同测试或验收用例，避免正文一致但实现语义仍不一致。
+
+当前已识别到仓库级规则仍存在“耳机串口离线自动录播”的旧描述，与本 PRD、银河麒麟专项 PRD及当前代码不一致。在该规则完成同步修订前，文档一致性门禁不得判定通过。本 PRD 只记录此问题，不在本次范围内修改其他文档或已发布对外协议。
+
+### 13.2 决策台账
+
+| ID | 状态 | 决策或待确认事项 | 最迟确认阶段 |
+|---|---|---|---|
+| DEC-001 | 已确认 | macOS/Ubuntu 使用旧 B 端隔离专网；银河麒麟/Windows 使用本机回环页面 | 已确认 |
+| DEC-002 | 已确认 | USB 串口耳机不支持录播；银河麒麟离线数据请求返回 `409 STREAM_NOT_AVAILABLE_REASON` | 已确认 |
+| DEC-003 | 已确认 | 状态拆成设备连接模块和数据状态模块，通过领域事件通信 | 已确认 |
+| DEC-004 | 已确认 | 各阶段目标平台连续运行验收时长为 24 小时 | 已确认 |
+| DEC-005 | 已确认 | 生产者有完整数据即更新并发布；消费者通过 `getLatest` 获取最新快照 | 已确认 |
+| DEC-006 | 已确认设计、对外发布待同步 | 存储容量不足或写入失败必须通过 `data.storage` 和 `persistenceGuaranteed` 北向可观察；存储异常不影响仍可用的实时分发 | M1 发布前完成北向文档同步 |
+| DEC-007 | 已确认 | 默认 warning/critical 阈值为 5 GiB/1 GiB；自动清理开关默认关闭，开启后按已结束会话由旧到新整体清理 | 已确认 |
+| DEC-008 | 待确认 | 延迟、CPU、内存、队列、发送超时和丢弃率阈值 | 首轮 24 小时日志评审后 |
+| DEC-009 | 部分确认 | 客户已确认目标产品线为银河麒麟桌面操作系统 V10 x86_64；2026-09-07 实机诊断已观测到 SP1 2503 和 systemd 245。该镜像是否为正式验收基线、ISO 名称/SHA-256、包管理器/原生包格式、安装和系统配置路径待确认 | M1 服务布局/候选包前 |
+| DEC-010 | 部分确认 | 已确认最低产品基线为 Windows 7 x86_64；具体 Service Pack/补丁基线、安装器技术、签名证书责任方和时间戳服务策略待确认 | M3 打包前（打包为最低实施优先级） |
+| DEC-011 | 部分确认 | 耳机公共解析模型将序列号与 18 字节 EEG 分开，算法 SDK 仍使用 `frame[4:24]` 20 字节专用投影；采样率、每 600 ms 样本数、触发条件、结果单位和有效范围待真实数据确认 | 各设备算法验收前 |
+| DEC-012 | 待确认 | 可由现场调整的配置字段白名单、日志采样周期和保留周期 | M1 部署前 |
+| DEC-013 | 已确认 | RawDataSource 唯一持有底层传输会话；DeviceControl 绑定 `connectionSessionId`，断线后拒绝旧会话控制 | 已确认 |
+| DEC-014 | 已确认 | 慢消费者采用“每连接每流仅保留 1 个待发最新值”策略，新值覆盖旧值并记录计数 | 已确认 |
+| DEC-015 | 已确认 | 算法超时后发布 `valid=false`；迟到结果只持久化和记录，不再发布或回写快照 | 已确认 |
+| DEC-016 | 已确认 | 持久化默认每 10 分钟或 256 MiB 分段，使用 `.partial` + fsync + 原子重命名 + manifest，启动时恢复完整 JSONL 记录 | 已确认 |
+| DEC-017 | 已确认 | NeuroBridge 以本机后台服务运行；最终 24 小时长稳必须使用安装布局或候选包，正式签名和 Workflow 可后置 | 已确认 |
+| DEC-018 | 待确认 | 用于合同测试的脱敏真实串口数据、握手记录、预期解析结果和预期算法结果基线 | M1 真实数据算法验收前 |
+
+每条待确认项必须补充负责人、确认日期、依据链接和影响的文档/测试；负责人尚未指定时统一记录为“待指定”，不得隐含分配给开发人员。达到“最迟确认阶段”仍未确认时，对应实现或发布保持阻塞，不得在源码中自行假设。
+
+## 14. 交付物
+
+1. 按第 4.6 节落地的目标项目目录、依赖门禁和唯一 Bootstrap 组合根；
+2. Deployment Profile 与固定映射实现；
 3. `RawDataSource`、`RawDataParser` 和统一领域模型；
 4. macOS/Ubuntu BLE 与银河麒麟串口的 Source/Parser 实现，以及 Windows COM 串口 Source 扩展设计；
-5. 算法输入适配器和独立的 NorthboundPublisher；
+5. 算法输入适配器、双状态模块、LatestSnapshotStore，以及独立的 NorthboundController/NorthboundPublisher；
 6. 当前三系统配置模板和启动入口，以及后续 Windows 配置与服务入口规范；
-7. 按 unit、contract、integration、platform 和 package 分层的测试，以及目标系统验收记录；
+7. 按 unit、contract、integration、platform 和 package 分层的测试，以及各阶段目标系统 24 小时验收记录；
 8. 更新后的 README、内部技术方案和部署说明；
-9. 不改变已发布北向协议语义的变更记录；
-10. 银河麒麟 V10 x86_64 产品安装包及其安装、升级、卸载逻辑；
-11. Windows x86_64 产品安装包及 Windows Service/COM 串口集成；
-12. 双平台安装包 Workflow、签名门禁、SBOM、构建清单、摘要和安装回归报告。
+9. 文档一致性检查、决策台账，以及存储状态北向变更在正式发布前所需的同步协议与合同测试；
+10. 银河麒麟桌面操作系统 V10 x86_64 产品安装包及其安装、升级、卸载逻辑（最低实施优先级）；
+11. Windows 7 x86_64 及以上的产品安装包及 Windows Service/COM 串口集成（最低实施优先级）；
+12. 双平台安装包 Workflow、签名门禁、SBOM、构建清单、摘要和安装回归报告；
+13. 正式对外运维操作文档，说明存储状态、容量阈值、默认关闭的自动清理开关、数据保留/清理顺序、审计日志和风险提示。
