@@ -76,7 +76,7 @@ function renderSourceState() {
   if (deviceConnectionState === null) {
     elements.deviceState.textContent = "—";
   } else if (deviceConnectionState === "disconnected" && dataMode === "replay") {
-    elements.deviceState.textContent = "实时耳机未连接 · 当前数据为录播";
+    elements.deviceState.textContent = "配置异常 · 串口耳机不应进入 replay";
   } else if (deviceConnectionState === "disconnected" && dataMode === "live") {
     elements.deviceState.textContent = "实时耳机未就绪 · 可能未发现、校验失败或已断开";
   } else {
@@ -87,7 +87,7 @@ function renderSourceState() {
   if (dataMode === "live") {
     elements.sourceNotice.textContent = "当前数据来源：实时耳机。耳机连接状态与正在显示的数据来自同一条 USB 串口实时链路。";
   } else if (dataMode === "replay") {
-    elements.sourceNotice.textContent = "当前数据来源：历史录播，不是当前耳机实时流。实时耳机未连接时，网关会按配置自动读取已保存数据并继续发送。";
+    elements.sourceNotice.textContent = "协议状态异常：耳机串口模式禁止录播，网关不应发送 mode=replay。请停止接收并检查网关 Profile 与日志。";
   } else {
     elements.sourceNotice.textContent = "正在等待网关报告数据来源。耳机串口未验证时不会发送历史录播数据，需等待实时串口恢复。";
   }

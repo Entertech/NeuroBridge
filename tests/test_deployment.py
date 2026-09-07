@@ -1158,6 +1158,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("已有合法数据流或 ACK 返回独立 01", javascript)
         self.assertIn("银河麒麟耳机串口场景不支持录播", javascript)
         self.assertIn("耳机串口未验证时不会发送历史录播数据", javascript)
+        self.assertIn("串口耳机不应进入 replay", javascript)
+        self.assertIn("耳机串口模式禁止录播", javascript)
+        self.assertNotIn("网关会按配置自动读取已保存数据并继续发送", javascript)
         self.assertIn('validation_failed: "校验失败"', javascript)
         self.assertIn("Serial device validation failed:", javascript)
         self.assertIn("实时耳机未就绪 · 可能未发现、校验失败或已断开", javascript)
@@ -1181,6 +1184,19 @@ class DeploymentTests(unittest.TestCase):
         for forbidden in ("fetch(", "XMLHttpRequest", "EventSource", "https://"):
             self.assertNotIn(forbidden, javascript)
             self.assertNotIn(forbidden, html)
+
+    def test_serial_replay_policy_is_consistent_across_repository_rules(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        prd = (ROOT / "doc" / "tech" / "NeuroBridge项目结构与多系统接入_PRD.md").read_text(encoding="utf-8")
+        design = (ROOT / "doc" / "tech" / "NeuroBridge项目结构与多系统接入_技术方案.md").read_text(encoding="utf-8")
+
+        self.assertNotIn("耳机串口实时路径不可用时，网关在收到 `subscribe` 或 `getLatest` 后自动使用录播", agents)
+        self.assertIn("耳机串口 Profile 固定 `supports_replay=false`", agents)
+        self.assertIn("串口离线及存在历史录制时仍不启动录播", agents)
+        self.assertNotIn("当前已识别到仓库级规则仍存在", prd)
+        self.assertNotIn("当前已知的一致性问题是：仓库级规则中仍存在", design)
+        self.assertIn("耳机串口 Profile 固定禁用 replay", prd)
+        self.assertIn("耳机 Profile 固定禁用 replay", design)
 
     def test_diagnostic_collector_excludes_sensitive_gateway_inputs(self) -> None:
         script = (ROOT / "linux" / "collect-ubuntu-build-diagnostics.sh").read_text(encoding="utf-8")
