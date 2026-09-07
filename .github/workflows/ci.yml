@@ -98,3 +98,29 @@ jobs:
           path: artifacts/
           if-no-files-found: error
           retention-days: 90
+
+  product-candidates:
+    name: Unsigned ${{ matrix.platform }} product candidate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: kylin
+            runner: ubuntu-latest
+          - platform: windows
+            runner: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build unsigned candidate and metadata
+        run: python tools/build-product-candidate.py --platform ${{ matrix.platform }} --output-dir artifacts
+      - name: Upload unsigned candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: neurobridge-${{ matrix.platform }}-unsigned-candidate
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30

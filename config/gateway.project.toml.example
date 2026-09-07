@@ -19,6 +19,8 @@ port = 8080
 
 [data_source]
 type = "serial"
+window_interval_ms = 600
+stale_after_ms = 1800
 
 [serial]
 device = "auto"
@@ -69,4 +71,8 @@ critical_threshold_bytes = 1073741824
 segment_duration_seconds = 600
 segment_max_bytes = 268435456
 writer_queue_size = 1024
+recovery_margin_bytes = 1073741824
+recovery_checks = 3
+fsync_interval_records = 64
+session_retention_days = 30
 auto_cleanup_enabled = false

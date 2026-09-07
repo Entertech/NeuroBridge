@@ -1,9 +1,7 @@
-# macOS BLE headband compatibility profile. Keep recordings outside Git.
 config_schema_version = 1
-profile = "macos_headband_wired"
+profile = "ubuntu_headband_wired"
 
 [server]
-# Replace only with the jointly approved RFC1918 address on the isolated link.
 host = "192.168.88.1"
 port = 8765
 path = "/neurobridge/v1/ws"
@@ -18,7 +16,7 @@ port = 8080
 
 [network]
 mode = "static"
-interface = "en0"
+interface = "enp1s0"
 subnet_cidr = "192.168.88.0/24"
 
 [data_source]
@@ -34,25 +32,24 @@ scan_timeout_seconds = 5
 reconnect_delay_seconds = 3
 
 [recording]
-directory = "/tmp/neurobridge-headband-poc"
-subject_id = "POC-LOCAL"
+directory = "/var/lib/neurobridge/recordings"
+subject_id = ""
 replay_recording_id = ""
 replay_speed = 1.0
 
 [download]
-enabled = false
+enabled = true
 host = "192.168.88.1"
 port = 8766
 path = "/downloads"
 
 [logging]
-directory = "/tmp/neurobridge-headband-poc"
-filename = "poc-server.log"
+directory = "/var/log/neurobridge"
+filename = "neurobridge.log"
 level = "INFO"
 
 [algorithm]
-enabled = false
-command = ["/tmp/neurobridge-affective-runtime/affective_bridge"]
+enabled = true
 request_timeout_ms = 2000
 
 [storage]

@@ -42,11 +42,12 @@ mode = "static"
 # serial. Native usb remains blocked until its VID/PID/interface/endpoints and
 # transfer contract are confirmed. Use bluetooth only for an approved BLE
 # regression deployment. Changing this value requires a service restart.
-# On Ubuntu, install-ubuntu.sh grants the service account the group of each
-# currently enumerated ttyACM/ttyUSB node. If no serial device is connected
-# during installation, connect it and rerun the installer before starting.
+# The Kylin product installer grants the service account only the group of an
+# actually enumerated ttyACM/ttyUSB node and stops when none is present.
 [data_source]
 type = "serial"
+window_interval_ms = 600
+stale_after_ms = 1800
 
 [serial]
 # auto probes only USB-derived ttyACM/ttyUSB candidates in stable order and
@@ -107,11 +108,9 @@ filename = "neurobridge.log"
 level = "INFO"
 
 [algorithm]
-# Ubuntu installation builds the locked bridge automatically at
-# /usr/local/lib/neurobridge/neurobridge_affective_bridge; no command needs to
-# be entered here. The default is enabled; use false only for a deliberate
-# raw-data-only POC or maintenance window.
+# The product candidate requires the locked bridge inside its bundled runtime.
 enabled = true
+command = ["/opt/neurobridge/runtime/bin/neurobridge_affective_bridge"]
 request_timeout_ms = 2000
 
 [storage]
@@ -120,4 +119,8 @@ critical_threshold_bytes = 1073741824
 segment_duration_seconds = 600
 segment_max_bytes = 268435456
 writer_queue_size = 1024
+recovery_margin_bytes = 1073741824
+recovery_checks = 3
+fsync_interval_records = 64
+session_retention_days = 30
 auto_cleanup_enabled = false

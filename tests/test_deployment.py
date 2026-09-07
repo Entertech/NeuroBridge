@@ -534,15 +534,13 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('[[ $# -eq 0 ]]', install_script)
         self.assertIn("systemctl enable neurobridge.service", install_script)
 
-    def test_ubuntu_installer_grants_only_the_current_serial_device_groups(self) -> None:
+    def test_ubuntu_ble_installer_does_not_grant_serial_device_groups(self) -> None:
         install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
-        self.assertIn("for tty_device in /dev/ttyACM* /dev/ttyUSB*", install_script)
-        self.assertIn("stat -Lc '%G'", install_script)
-        self.assertIn('[[ $tty_group == root ]]', install_script)
-        self.assertIn('usermod -aG "$tty_group" neurobridge', install_script)
-        self.assertIn("no current ttyACM/ttyUSB device group was granted", install_script)
+        self.assertIn("gateway.ubuntu.toml.example", install_script)
+        self.assertIn("usermod -aG bluetooth neurobridge", install_script)
+        self.assertNotIn("for tty_device in /dev/ttyACM* /dev/ttyUSB*", install_script)
+        self.assertNotIn("tty_group", install_script)
         self.assertNotIn("chmod 666", install_script)
-        self.assertNotIn("for tty_group in dialout uucp", install_script)
 
     def test_local_browser_pages_connect_and_query_status_automatically(self) -> None:
         auto_connect = (

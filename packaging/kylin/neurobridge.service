@@ -1,14 +1,13 @@
 [Unit]
-Description=NeuroBridge Ubuntu BLE headband gateway
-After=network-online.target
-Wants=network-online.target
+Description=NeuroBridge Kylin USB serial gateway
+After=local-fs.target
 
 [Service]
 Type=simple
 User=neurobridge
 Group=neurobridge
-Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/neurobridge/venv/bin/neurobridge --config /etc/neurobridge/gateway.toml
+WorkingDirectory=/opt/neurobridge
+ExecStart=/opt/neurobridge/runtime/bin/python -m neurobridge --config /etc/neurobridge/gateway.toml
 Restart=always
 RestartSec=3
 UMask=0027
