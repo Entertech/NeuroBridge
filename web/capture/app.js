@@ -444,6 +444,10 @@ function handleMessage(message) {
     subscriptionId = data.result.subscriptionId;
     setState("ok", "接收中", "订阅成功，正在等待网关转发耳机数据。即使数据暂未到达，网关服务仍保持运行。");
     refreshControls();
+    // The device may have become ready after the page's initial getStatus but
+    // before this subscription existed, so its status event was not delivered
+    // to this page. Refresh the snapshot now that status events are subscribed.
+    sendRequest("getStatus", {});
   } else if (data.action === "unsubscribe") {
     subscriptionId = null;
     setState("ok", "已连接", "已停止向当前网页推送数据；网关后台和耳机连接未停止。再次点击“开始接收”即可恢复。");
