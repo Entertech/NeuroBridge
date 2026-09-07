@@ -7,6 +7,9 @@ const MAX_PROTOCOL_LINES = 300;
 const SEQUENCE_MODULUS = 0x10000;
 const SEQUENCE_HALF_RANGE = 0x8000;
 const RECENT_SEQUENCE_WINDOW = 4096;
+const SERIAL_FRAME_BYTES = 28;
+const SERIAL_FRAME_HEADER = Uint8Array.of(0xAA, 0xAA, 0xAA);
+const SERIAL_FRAME_TAIL = Uint8Array.of(0xBB, 0xBB, 0xBB);
 
 const elements = {
   endpoint: document.querySelector("#endpoint"),
@@ -317,6 +320,17 @@ function decodeRawPackets(name, raw, expectedPacketBytes) {
   }
 }
 
+function restoreSerialFrame(eegPacket, hrPacket) {
+  if (eegPacket.length !== 20 || hrPacket.length !== 1) return null;
+  const frame = new Uint8Array(SERIAL_FRAME_BYTES);
+  frame.set(SERIAL_FRAME_HEADER, 0);
+  frame[3] = SERIAL_FRAME_BYTES;
+  frame.set(eegPacket, 4);
+  frame[24] = hrPacket[0];
+  frame.set(SERIAL_FRAME_TAIL, 25);
+  return frame;
+}
+
 function printRawPayload(payload) {
   const eeg = decodeRawPackets("EEG", payload.eegRaw, 20);
   const hr = decodeRawPackets("HR", payload.hrRaw, 1);
@@ -333,16 +347,19 @@ function printRawPayload(payload) {
   const eegCount = eeg?.packets.length ?? 0;
   const hrCount = hr?.packets.length ?? 0;
   if (eeg && hr && eegCount !== hrCount) {
-    appendDataRecord({ type: "note", text: `同一窗口 EEG/HR 包数不一致：EEG=${eegCount}，HR=${hrCount}；未配对数据仍会单独显示` });
+    appendDataRecord({ type: "note", text: `同一窗口 EEG/HR 包数不一致：EEG=${eegCount}，HR=${hrCount}；该窗口不生成完整串口原始帧` });
   }
 
   const recordCount = Math.max(eegCount, hrCount);
+  const canRestoreFrames = Boolean(eeg && hr && eegCount === hrCount);
   for (let index = 0; index < recordCount; index += 1) {
     const packetIndex = index + 1;
     const eegPacket = eeg?.packets[index];
     const hrPacket = hr?.packets[index];
-    if (eegPacket) appendRawRecord(eegPacket, eeg.windowEndMs);
-    if (hrPacket) appendRawRecord(hrPacket, hr.windowEndMs);
+    if (canRestoreFrames && eegPacket && hrPacket) {
+      const serialFrame = restoreSerialFrame(eegPacket, hrPacket);
+      if (serialFrame) appendRawRecord(serialFrame, eeg.windowEndMs);
+    }
     const eegRecord = eegPacket ? parseEegPacket(eegPacket, eeg.windowStartMs, eeg.windowEndMs, packetIndex) : null;
     if (eegRecord && hrPacket) {
       appendDataRecord({ ...eegRecord, type: "frame", hrBytes: hrPacket, hrValue: hrPacket[0] });
@@ -360,8 +377,6 @@ function printRawPayload(payload) {
       });
     }
   }
-  if (eeg?.trailing) appendRawRecord(eeg.trailing, eeg.windowEndMs);
-  if (hr?.trailing) appendRawRecord(hr.trailing, hr.windowEndMs);
 }
 
 function rawRecordText(record) {
@@ -555,7 +570,7 @@ function exportRawData() {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
-  elements.gatewayMessage.textContent = `原始数据已导出：${filename}；共 ${rawRecords.length} 行，格式为毫秒时间戳加原始字节。`;
+  elements.gatewayMessage.textContent = `原始数据已导出：${filename}；共 ${rawRecords.length} 行，格式为毫秒时间戳加完整 28 字节串口帧。`;
 }
 
 function exportDiagnosticLog() {
