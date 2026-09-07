@@ -53,7 +53,7 @@ python3 -m venv .venv
 
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
-运行时稳定内核按 `domain/`、`ports/`、`application/` 分层；`adapters/` 放置设备 Parser、数据源、算法、存储和北向实现，`profiles/` 固定操作系统/设备/接入能力，`bootstrap/` 是唯一组合根。M1 的 `kylin_headset_local` 固定绑定 POSIX TTY、修订号 181 Parser、本机回环页面和禁用录播能力。原 `device/`、`ble/`、`serial/`、`business/` 与 `northbound/` 在渐进迁移期间保留兼容入口，正式启动不再绕过 Profile 校验。
+运行时稳定内核按 `domain/`、`ports/`、`application/` 分层；`adapters/` 放置设备 Parser、数据源、算法、存储和北向实现，`profiles/` 固定操作系统/设备/接入能力，`bootstrap/` 是唯一组合根。正式采集使用统一 ApplicationService，保留 `frameId → batchId → algorithm result` 关联；M1 的 `kylin_headset_local` 固定绑定 POSIX TTY、修订号 181 Parser、本机回环页面和禁用录播能力。原 `device/`、`ble/`、`serial/`、`business/` 与 `northbound/` 仅保留兼容入口，正式启动和 macOS POC 均不再绕过 Profile 校验。
 
 ## 仓库结构
 
@@ -63,7 +63,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 - `web/`：由网关托管、无构建步骤的静态网页；`capture/` 是通过网关 WebSocket 查看耳机原始数据的页面，`b-client-test/` 是完整的 B 端协议联调页。
 - `mac/`：仅 macOS POC 的启动器、蓝牙验证、原生算法 bridge 与本机配置模板。
 - `linux/`：银河麒麟项目一键流程、Ubuntu 兼容部署脚本、systemd 单元与日志轮转配置。
-- `windows/`：Windows 平台接入说明；当前没有经过验证的 Windows 服务启动器或部署脚本。
+- `windows/`：Windows COM Source 配置、Service 入口与后续目标机验收说明；`packaging/` 提供银河麒麟/Windows unsigned 候选安装骨架。
 
 网页不再放入平台目录。两个页面都由当前网关的回环 HTTP 服务托管并连接同一个北向 WebSocket，不直接访问 USB 串口，也不控制 systemd 进程。
 
@@ -72,9 +72,9 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 | 场景 | 入口 | 当前状态 |
 | --- | --- | --- |
 | 银河麒麟 V10 x86_64 网关 | [`linux/neurobridge-kylin-bootstrap.sh`](linux/neurobridge-kylin-bootstrap.sh) | 菜单 `1` 完成项目内配置并默认安装/启动 systemd 开机自启服务；菜单 `9` 可查看状态或显式配置为非自启。 |
-| Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 首期部署入口；安装为 systemd 服务。 |
-| macOS 历史 POC | [`mac/start-poc.command`](mac/start-poc.command) | 保留代码，不属于当前银河麒麟耳机 USB 串口交付或验收。 |
-| Windows 网关 | [`windows/README.md`](windows/README.md) | 尚未完成设备、算法和后台服务验证，不能作为交付部署入口。 |
+| Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 固定 BLE 头环与旧 B 端专网 Profile；源码入口已统一，仍需 M2 实机回归。 |
+| macOS 历史 POC | [`mac/start-poc.command`](mac/start-poc.command) | 已接入统一 Bootstrap/BLE Profile，不属于当前 M1 验收。 |
+| Windows 网关 | [`windows/README.md`](windows/README.md) | 已有 COM/Service/unsigned 候选源码，Windows 7 运行时、签名和实机验收未完成，不能作为交付入口。 |
 | 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；明确区分实时耳机连接与 `live`/`replay` 数据来源，原始数据区与解析数据区固定上下排列。 |
 | 本机可视化/兼容 B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 默认由网关在回环地址提供；兼容模式仍可作为独立 B 端联调页。 |
 

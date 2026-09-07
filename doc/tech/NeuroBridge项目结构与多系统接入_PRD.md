@@ -300,7 +300,7 @@ stateDiagram-v2
 
 ### 4.6 目标项目结构重设计
 
-当前目录按功能逐步演进，已经出现公共模型位于 `ble/`、串口 Source 与 Parser 混合、平台入口绕过统一组合逻辑等问题。目标结构采用“领域模型 + 接口端口 + 应用编排 + 外部适配器 + 系统 Profile + 组合根”，建议目录如下。文件名可在技术设计阶段微调，但职责边界和依赖方向属于本 PRD 的强制要求。
+改造前目录按功能逐步演进，曾出现公共模型位于 `ble/`、串口 Source 与 Parser 混合、平台入口绕过统一组合逻辑等问题。当前分支已按“领域模型 + 接口端口 + 应用编排 + 外部适配器 + 系统 Profile + 组合根”落地以下结构；兼容目录暂时保留，但职责边界和依赖方向仍属于本 PRD 的强制要求。
 
 ```text
 NeuroBridge/
@@ -923,9 +923,9 @@ flowchart TD
 
 ### 9.9 当前实现差距
 
-当前仓库只有通用 CI、银河麒麟源码启动/配置脚本和面向已有 Git 工作区的离线源码更新 `.run`，没有满足本节要求的银河麒麟产品安装包、Windows MSI/EXE、双平台构建矩阵、代码签名、SBOM、安装升级回归和正式安装包发布门禁。
+当前仓库已增加银河麒麟/Windows 无签名候选包构建矩阵、安装/卸载骨架、manifest、SHA-256、CycloneDX SBOM、依赖清单和净包自动检查。候选构建会显式记录是否包含离线运行时；未提供 `--runtime-dir` 时只能用于检查包结构，不能安装交付。
 
-本节只定义后续产品与 Workflow 要求，不代表当前分支已经具备安装包交付能力。
+最终银河麒麟原生包格式、完整离线运行时、签名、干净机升级/回滚验收和正式发布审批仍受目标镜像与签名设施门禁约束；Windows 7 的 Python/服务运行时、补丁和签名基线也尚未锁定。因此当前仅具备“候选包源码支持”，不代表已经形成正式安装包交付能力。
 
 ## 10. 当前分支评估
 
@@ -933,34 +933,29 @@ flowchart TD
 
 | 领域 | 当前代码表现 | 判断 |
 |---|---|---|
-| 设备策略 | `DeviceAdapter` Protocol 和 `create_device_adapter()` 支持 bluetooth/serial | 有接口雏形 |
-| 统一事件 | `DevicePacket` 携带 transport、channel、bytes、receivedAtMs | 部分符合 |
-| Kylin 串口 | 已有发现、握手、28 字节分帧、重连、E1/E0、序列统计 | 基本符合当前串口基线 |
-| 原始持久化 | 串口完整帧写入受保护目录，EEG/HR 与算法结果分开保存 | 基本符合 |
-| 北向链路 | Gateway 生成统一 envelope，WebSocket 层负责传输 | 基本符合 |
-| 录播 | 当前 Gateway、配置校验和测试已禁止 serial 使用 replay；Bluetooth 仍保留录播 | 源码符合耳机禁用录播规则，尚需银河麒麟目标机验收 |
+| Deployment Profile | Resolver 固定校验操作系统、架构、传输、设备协议、接入模式和录播能力 | 源码支持 |
+| 统一实时管线 | 正式入口按 `RawDataSource → RawDataParser → ApplicationService → AlgorithmEngine/RecordingRepository/NorthboundSink` 组合 | 源码支持 |
+| Kylin 串口 | POSIX Source 负责发现/验证/读取；纯 Parser 负责 28 字节分帧；会话绑定 DeviceControl 负责 E1/E0 | 源码支持，目标机验收待完成 |
+| BLE 兼容 | macOS/Ubuntu Profile 均通过统一 Bootstrap、BLE Source、BLE Parser 和公共 ApplicationService | 源码支持，M2 实机与专网/录播回归待完成 |
+| Windows 扩展 | COM 发现/打开、共享耳机 Parser、Windows Service 与无签名候选包骨架已建立 | 源码支持，Windows 7 基线与实机验收待完成 |
+| 关联与持久化 | 保留 `frameId → batchId → algorithm result`；有界 Writer 分开保存 raw/parsed/algorithm，支持分段、恢复、manifest 和防抖 | 源码支持 |
+| 北向链路 | `NorthboundController` 解析和调度请求，Application 通过 Sink 发布，WebSocket 只负责传输；旧 Gateway 兼容 API 暂保留 | 源码支持，存储新增字段未对外发布 |
+| 录播 | Serial Profile 固定禁止 replay；Bluetooth Profile 继续按保存结果录播且不重算算法 | 源码支持，平台回归待完成 |
 
 ### 10.2 与本 PRD 的差距
 
-1. **没有 Deployment Profile Resolver。** 当前根据 `data_source.type` 选择适配器，没有同时强制校验平台、传输、设备协议和接入方式的固定映射。
-2. **Ubuntu 默认关系错误。** `config/gateway.toml.example` 默认是 `type = "serial"`，Ubuntu 安装脚本还会授予 tty 设备组权限；这不符合 Ubuntu BLE 头环目标。
-3. **macOS 配置不完整。** `mac/gateway.capture.toml.example` 没有 `[data_source]` 与完整 `wired_b_side` 配置，而当前 `config.load()` 要求数据源显式存在。按当前模板不能形成目标 Deployment Profile。
-4. **macOS 入口绕过统一策略。** `mac/poc_server.py` 直接实例化 `FlowtimeAdapter`，没有使用统一的 `create_device_adapter()`。
-5. **Source 与 Parser 职责混合。** `SerialAdapter` 同时承担串口发现、控制握手、分帧、字段切片和输出通道投影；BLE 适配器也同时承担扫描、订阅和通道映射。
-6. **公共模型被 BLE 命名污染。** `DataWindow`、`RawPacket` 位于 `neurobridge/ble/packets.py`，算法层和 Gateway 都依赖该模块；串口数据被转换为 `ff31`/`ff51` 兼容通道后才进入公共处理。
-7. **没有明确的算法输入模型。** `AlgorithmRunner` 直接拼接窗口字节并发送 `eegRawBase64`/`hrRawBase64`，尚未形成独立的设备无关 `AlgorithmInput`。
-8. **北向协议业务仍集中在 Gateway。** WebSocket 传输已分离，但请求解析、应用用例、最新值、事件映射和协议过滤仍与设备业务同处 Gateway，尚未拆成 NorthboundController、Application 用例与 NorthboundPublisher。
-9. **缺少系统 Profile 集成验收测试。** 现有测试覆盖较多串口和 BLE 单元行为，但没有验证 macOS BLE、Ubuntu BLE、Kylin 串口的系统映射和错误组合拒绝，也没有 Windows 串口扩展测试基线。
-10. **当前串口发现实现仅适用于 Linux。** 现有实现依赖 `/dev/serial/by-id`、`ttyACM`、`ttyUSB` 和 sysfs；后续 Windows 需要独立的 COM 发现后端，但应复用相同 Source 接口及 `HeadsetSerialParser`。
-11. **没有最终产品安装包 Workflow。** 当前 CI 主要运行测试和生成对外文档包；现有银河麒麟 `.run` 是源码更新器，不能替代可独立安装、升级和卸载的产品包，Windows 安装器尚不存在。
-12. **当前目录不是目标项目结构。** `business/gateway.py` 同时承担应用编排和协议业务，`ble/packets.py` 承载公共窗口模型，`serial/adapter.py` 混合 Source、Parser 与 DeviceControl，`mac/` 入口可绕过统一工厂；目前也没有独立的 `domain`、`ports`、`profiles` 和唯一组合根。
-13. **状态职责尚未拆分。** 当前状态集中在 Gateway 字典和适配器回调中，设备连接状态与数据状态没有独立模型、状态机和领域事件边界。
-14. **接口表达不足。** 当前 DeviceAdapter 只有 `run/stop`，没有独立 DeviceControl；Parser 也没有 ParseOutcome，无法通过统一合同同时返回完整帧、批次、缓冲和诊断。
-15. **最新值模型仍内嵌 Gateway。** 当前已有 latest algorithm 等状态，但没有独立、按 `batchId` 原子更新的 LatestSnapshotStore，也没有生产者与消费者的合同测试。
-16. **存储健康设计尚未实现和对外发布。** 本 PRD 已确认 `storageState`、`persistenceGuaranteed`、阈值、分段恢复和默认关闭的自动清理策略；当前代码尚缺容量水位、有界持久化队列、分段 manifest/恢复及对应北向映射，且对外合同仍需按发布门禁同步。
-17. **24 小时长稳尚未形成验收记录。** 当前日志可提供部分连接和处理统计，但尚未证明银河麒麟实机连续运行 24 小时，也未完整记录用于确定后续性能阈值的生产、消费、队列、存储和资源观测项。
+2026-09-07 复核后，原 1～16 项的仓库结构与源码扩展点均已实现：独立 Profile Resolver；Ubuntu BLE 与 macOS 完整模板；平台入口统一经过 Bootstrap；Source/Parser/DeviceControl 分离；领域模型和 AlgorithmInput 独立；ApplicationService、NorthboundController、LatestSnapshotStore 和双状态机接入正式组合；Windows COM Source/Service 骨架；存储水位、防抖、分段恢复；以及 `unit/contract/integration/platform/package` 测试和双平台无签名候选构建。
 
-因此，当前分支的结论是：**具备多传输适配器和共享下游链路，但尚未满足本 PRD 的完整项目结构要求。**
+仍未完成的是不能由当前开发机源码替代的交付门禁：
+
+1. 银河麒麟目标镜像、真实耳机、真实算法数据、拔插/重连、systemd 安装升级和 24 小时长稳验收；
+2. macOS/Ubuntu 真实 BLE、旧 B 端隔离专网、录播与各平台 24 小时回归；
+3. Windows 7 Service Pack、SHA-2 补丁、可运行 Python/冻结运行时、签名证书与安装器技术锁定，以及 COM/服务/安装/24 小时实机验收；
+4. 提供各平台完整离线运行时并按最终目标镜像生成原生候选包，执行干净机安装、升级、回滚和卸载；
+5. `data.storage`、`persistenceGuaranteed` 和 507 语义的下一版对外协议发布。当前没有更新对外文档授权，代码仍通过兼容过滤保持已发布 v0.2 不变；
+6. 自动清理正式启用、签名与正式发布审批。默认仍关闭清理，普通 CI 只生成明确标记为 unsigned 的候选包。
+
+因此，当前分支的结论是：**目标项目结构和可自动验证的源码能力已经闭环；真实设备、目标系统、正式协议与签名发布仍须按阶段完成外部验收。**
 
 ### 10.3 项目结构迁移要求
 
@@ -1035,7 +1030,7 @@ flowchart TD
 - macOS 启动后只能选择 BLE 头环 Profile；
 - Ubuntu 24.04 启动后默认选择 BLE 头环 Profile；
 - 银河麒麟桌面操作系统 V10 x86_64 启动后只能选择 USB 串口耳机 Profile；
-- Windows 扩展完成后只能选择 USB 虚拟串口耳机 Profile；当前阶段只验收其接口扩展点，不宣称 Windows 已实现；
+- Windows 源码扩展只能选择 USB 虚拟串口耳机 Profile；当前仅验收接口、COM 枚举和候选结构的自动化支持，不宣称 Windows 产品或实机验收已完成；
 - 在任一系统配置另一类传输时，启动前明确拒绝；
 - 不允许通过设备扫描结果自动切换 Profile；
 - macOS/Ubuntu Profile 固定为旧 B 端隔离专网，Kylin/Windows Profile 固定为本机回环页面；

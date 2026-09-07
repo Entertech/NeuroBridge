@@ -1,6 +1,6 @@
 # NeuroBridge 项目结构与多系统接入技术方案
 
-状态：内部目标技术方案（M1 架构实现已落地，目标机验收待完成）
+状态：内部目标技术方案（统一源码架构与跨平台扩展已落地，各目标机验收待完成）
 
 日期：2026-09-07
 
@@ -45,31 +45,20 @@
 
 ## 3. 当前实现基线
 
-当前分支已具备以下可复用能力：
+当前分支的生产入口已完成本方案中可由源码验证的架构迁移：
 
-- `neurobridge/device/strategy.py` 可按 `data_source.type` 创建 BLE 或串口适配器；
-- `neurobridge/serial/adapter.py` 已实现银河麒麟 TTY 发现、验证、28 字节分帧、E1/E0 和重连；
-- `neurobridge/ble/flowtime.py` 已实现头环扫描、连接、通知和重连；
-- `neurobridge/business/gateway.py` 已串联窗口、算法、录制、最新值、请求和订阅；
-- `neurobridge/algorithm/runner.py` 已把 C++ 算法 SDK 隔离在线分隔 JSON 子进程之后；
-- `neurobridge/northbound/` 已提供 WebSocket、本机页面和接入策略；
-- 银河麒麟已有 systemd、离线运行时准备、诊断和源码更新脚本；
-- 串口数据源当前已禁止自动选择录播。
+- `profiles/` 与唯一 `bootstrap/` 固定校验系统、架构、设备、接入和录播能力；
+- `RawDataSource → RawDataParser → ApplicationService` 负责采集、解析、窗口、算法、持久化、原子快照和北向发布；
+- `DeviceFrame`、`ParsedSignalBatch` 和 `AlgorithmResult` 通过 `frameId`、`batchId` 与录制会话关联；
+- 串口 Source 负责 TTY/COM 会话发现与协议验证，纯 Parser 负责业务帧解析，会话绑定 DeviceControl 负责 E1/E0；
+- BLE 的 macOS/Ubuntu 入口已统一经过 Bootstrap；算法不可用不会阻断有效原始通知的录制和分发；
+- 有界分段 Writer 已提供容量状态、fsync、manifest、崩溃恢复、quarantine 和恢复防抖；
+- `NorthboundController` 已从 WebSocket 传输层分离，旧 `Gateway` 请求方法和录制格式适配仅为已发布协议与历史录播兼容保留；
+- Windows 已有 USB COM Source、Service 入口和无签名候选骨架；CI 可生成带 manifest、SHA-256、SBOM 和依赖清单的银河麒麟/Windows 候选。
 
-当前实现与目标设计的主要差距：
+旧 `device/`、`ble/`、`serial/` 和 `business/Gateway` 文件仍保留兼容实现，但正式组合不再由其业务字段投影驱动公共模型。串口物理适配器仍执行识别合法流所需的边界校验；完整业务解析结果只由外部 `HeadsetRev181Parser` 产生。
 
-1. `Gateway` 同时承担状态、窗口、算法、持久化、录播、订阅和协议处理，职责过宽；
-2. 串口 Source 内仍包含分帧、字段投影和设备控制，尚未拆成 Source、Parser、DeviceControl；
-3. BLE 连接与载荷解析仍在同一适配器附近，公共窗口模型位于 `ble/`；
-4. `DevicePacket` 只有墙钟接收时间，缺少单调时间、连接会话和追踪关联；
-5. 当前按配置字符串选择适配器，尚无系统、架构、设备协议和能力一体化的 Deployment Profile；
-6. 设备连接状态与数据状态仍共享一个可变状态对象；
-7. 最新值未抽象为按 `batchId` 原子更新的独立存储；
-8. 录制缺少容量状态、有界队列、分段 manifest、崩溃恢复和 quarantine；
-9. 当前平台入口没有全部经过同一个组合根；
-10. 还没有 Windows COM Source、Windows Service 和正式双平台安装包流水线。
-
-因此迁移采用渐进方式：先建立领域模型和接口合同，再迁移实现，最后拆分 Gateway 和平台入口。每一步均保持当前行为可回归。
+剩余差距均属于目标环境或发布门禁：真实设备/算法数据、各目标系统 24 小时长稳、Windows 7 运行时与补丁基线、完整离线运行时、最终原生安装包格式、签名设施，以及存储新增北向字段的下一版协议发布。
 
 ## 4. 架构设计
 
@@ -905,7 +894,7 @@ M1、M2、M3 在各自目标平台完成时分别运行 24 小时。首轮用于
 1. 实现有界 Writer、StorageStatus、分段、manifest、恢复和清理开关；
 2. 完成存储北向合同的发布流程和兼容测试；
 3. 建立麒麟产品安装布局、候选包和干净机验收；
-4. M3 增加 Windows COM、Windows Service 和安装包；
+4. 在已锁定的 Windows 7 基线上验证现有 COM、Windows Service 和候选安装骨架，并生成最终签名安装包；
 5. 完成各阶段目标平台 24 小时长稳。
 
 退出条件：安装无需源码、Git 或编译器；产物与版本、commit、依赖和测试记录可追溯。
@@ -999,17 +988,23 @@ neurobridge-windows-v<applicationVersion>-x86_64.msi
 本轮已达到“源码支持”的范围：
 
 - 新增 `domain`、`ports`、`application`、`adapters`、`profiles`、`bootstrap`、`configuration` 和 `entrypoints` 分层；静态合同测试禁止稳定内核反向导入具体 I/O；
-- M1 启动入口通过唯一 Bootstrap 校验 `kylin_headset_local`，固定 POSIX TTY、`headset_rev181`、`local_browser` 和 `supports_replay=false`；
+- 所有正式入口和 macOS POC 均通过唯一 Bootstrap；四个 Profile 在启动前固定校验操作系统、架构、传输、Parser、接入模式和录播能力；
+- M1 `kylin_headset_local` 固定 POSIX TTY、`headset_rev181`、`local_browser` 和 `supports_replay=false`；
 - M1 串口帧经 Source 边界进入纯 Parser，Parser 覆盖拆包、粘包、噪声、非法尾、缓存、序列诊断，并将 2 字节序列号、18 字节 EEG 和 1 字节 HR 分开；算法专用 Mapper 才使用 `frame[4:24]`；
-- 已实现连接/数据双状态机、公共窗口、算法超时与迟到结果隔离、原子 LatestSnapshotStore、每连接每流容量 1 的最新值扇出；
-- 已实现有界持久化 Writer、raw/parsed/algorithm 分段、`.partial`、fsync、原子关闭、SHA-256、manifest、启动恢复和 quarantine；兼容录制/导出文件继续保留；
-- 配置增加 `config_schema_version`、`profile`、算法超时和存储阈值/分段/队列/清理开关，示例固定为 M1 Profile；
-- 自动化测试已覆盖上述领域合同，并保持原有网关、WebSocket、串口、部署和文档测试通过。
+- 正式采集链路由 `ApplicationService` 编排，保留 `frameId → batchId → algorithm result`，接入连接/数据双状态机、公共窗口、可配置 freshness、算法超时与迟到结果隔离、原子 LatestSnapshotStore；
+- 串口 E1/E0 由会话绑定 DeviceControl 执行：已有合法流跳过 E1，正常停止仍最多发送一次 E0，旧会话不能写入新连接；
+- `NorthboundController` 独立完成请求解析和用例调度，Application 通过 Sink 发布；WebSocket 只保留连接与文本帧传输，旧 Gateway 方法仅作兼容入口；
+- 有界持久化 Writer 分别保存 raw/parsed/algorithm，支持 `.partial`、可配置 fsync、原子关闭、SHA-256、manifest、启动恢复、quarantine、容量水位、恢复余量与连续三次健康检查防抖；
+- 配置支持 defaults → system → explicit override 分层加载，旧无版本配置可确定性迁移，并提供备份、原子替换、审计历史和幂等迁移；
+- macOS/Ubuntu 已绑定 BLE Source/Parser/Application，Ubuntu 安装模板不再使用串口默认值或授予 tty 组；Windows 已增加 USB COM 发现/打开、共享耳机 Parser、Service 入口和 PowerShell 安装骨架；
+- CI 增加银河麒麟/Windows unsigned 候选构建；候选携带 manifest、SHA-256、CycloneDX SBOM 和依赖清单，并通过净包测试排除 `.git`、缓存、人体数据与日志；
+- 自动化测试按 `unit/contract/integration/platform/package` 覆盖领域合同、完整数据关联、四平台 Profile、Windows COM 和候选包结构，并保持既有网关、WebSocket、串口、部署和文档测试兼容。
 
 以下内容仍只能标记为“待验收/待后续阶段”，不能由源码测试替代：
 
-- 银河麒麟目标机真实耳机、算法真实数据、拔插/恢复、systemd 候选安装布局和 24 小时长稳；
+- 银河麒麟目标机真实耳机、算法真实数据、拔插/恢复、systemd 候选安装/升级/卸载和 24 小时长稳；
 - 存储状态新北向字段及 507 语义的对外版本发布；本轮未获得更新对外文档授权，因此只保留内部状态和日志，不改变 v0.2 包络；
-- M2 的 macOS/Ubuntu BLE 全量迁移与专网/录播回归；
-- M3 的 Windows COM、Windows Service、安装包、签名和目标机验收；
+- M2 的 macOS/Ubuntu 真实 BLE、专网、录播和 24 小时回归；源码入口迁移已完成；
+- M3 的 Windows 7 运行时/补丁/签名基线、COM 与 Service 实机、正式安装包和 24 小时验收；当前仅为跨平台源码和 unsigned 候选骨架；
+- 银河麒麟最终 ISO/SHA-256 和包管理器尚未锁定；当前通用候选归档不能冒充最终 RPM/DEB 等原生包，且必须提供目标机离线运行时后才可安装；
 - 自动清理的正式启用仍受运维文档、现场保留策略与破坏性场景验收门禁约束，默认保持关闭。
