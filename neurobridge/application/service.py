@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import replace
 from collections.abc import Callable
 
 from ..domain.algorithm import AlgorithmResult, AlgorithmSession, AlgorithmState
@@ -13,6 +14,7 @@ from ..domain.result import WindowResult
 from ..domain.signal import ParsedSignal, ParsedSignalBatch
 from ..domain.status import ConnectionState, DataState, DeviceConnectionEvent
 from ..ports.algorithm import AlgorithmEngine
+from ..ports.device_control import DeviceControl
 from ..ports.northbound import ApplicationEvent, LatestSnapshotStore, NorthboundSink
 from ..ports.raw_parser import FlushReason, RawDataParser
 from ..ports.recording import PersistenceReceipt, PersistenceRecord, RecordingRepository
@@ -44,6 +46,10 @@ class ApplicationService:
         stale_after_ms: int = 1800,
         recording: RecordingRepository | None = None,
         clock_ms: Callable[[], int] | None = None,
+        control: DeviceControl | None = None,
+        algorithm_queue_size: int = 8,
+        persistence_timeout_ms: int = 100,
+        shutdown_timeout_ms: int = 5000,
     ) -> None:
         self.device_protocol = device_protocol
         self.parser = parser
@@ -51,6 +57,16 @@ class ApplicationService:
         self.snapshots = snapshots
         self.northbound = northbound
         self.recording = recording
+        self.control = control
+        if min(algorithm_queue_size, persistence_timeout_ms, shutdown_timeout_ms) <= 0:
+            raise ValueError("Pipeline limits must be positive")
+        self.persistence_timeout_ms = persistence_timeout_ms
+        self.shutdown_timeout_ms = shutdown_timeout_ms
+        self._batches: asyncio.Queue[tuple[ParsedSignalBatch, PersistenceReceipt]] = asyncio.Queue(algorithm_queue_size)
+        self._worker: asyncio.Task[None] | None = None
+        self._batch_sequence = 0
+        self._batch_order: dict[str, int] = {}
+        self._last_published_order = 0
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self.connection = ConnectionStateMachine()
         self.data = DataStateMachine()
@@ -78,6 +94,11 @@ class ApplicationService:
             "batches": 0,
             "published": 0,
             "persistence_gaps": 0,
+            "algorithm_backlog": 0,
+            "queue_high_water": 0,
+            "superseded_results": 0,
+            "algorithm_duration_ms": 0,
+            "publication_age_ms": 0,
         }
 
     def bind_recording(self, recording: RecordingRepository) -> None:
@@ -86,6 +107,11 @@ class ApplicationService:
         if self.recording is not None and self.recording is not recording:
             raise RuntimeError("Application recording repository is already bound")
         self.recording = recording
+
+    def metrics(self) -> dict[str, int]:
+        return {**self.diagnostics, "algorithm_queue_depth": self._batches.qsize(),
+                "algorithm_queue_capacity": self._batches.maxsize,
+                "retained_frames": len(self._frames), "late_results": self.aggregator.late_result_count}
 
     async def on_connection(self, event: DeviceConnectionEvent) -> None:
         """Apply source events to the independent connection and data machines."""
@@ -138,7 +164,9 @@ class ApplicationService:
                 if self.data.snapshot.data_state != DataState.UNAVAILABLE:
                     self.data.on_connection(applied)
             await self._cancel_stale()
-            await self.flush(FlushReason.DISCONNECTED)
+            await self.flush(FlushReason.DISCONNECTED, drain=False)
+            await self._stop_worker()
+            await self.aggregator.close()
 
     async def prepare_session(
         self,
@@ -157,26 +185,22 @@ class ApplicationService:
             elif self.data.snapshot.data_state in {DataState.ERROR, DataState.PREPARING}:
                 self.data.transition(DataState.PREPARING)
             self._algorithm_state = AlgorithmState.INITIALIZING
+        # A new device session must not share an in-flight SDK evaluation with
+        # its predecessor. Stop the bounded worker before reinitializing it.
+        await self._stop_worker()
+        await self.aggregator.close()
+        self.aggregator = WindowResultAggregator(self.algorithm, self.aggregator.timeout_ms)
         try:
             algorithm_state = await self.algorithm.initialize(
                 AlgorithmSession(connection_session_id, recording_session_id, self.device_protocol)
             )
         except Exception as error:
-            async with self._lifecycle_lock:
-                self._algorithm_state = AlgorithmState.ERROR
-                if self._connection_session_id == connection_session_id:
-                    self.data.transition(
-                        DataState.READY,
-                        algorithm_state=self._algorithm_state.value,
-                        recent_error=type(error).__name__,
-                        error_stage="algorithm_initialize",
-                    )
             LOG.exception(
                 "Algorithm session initialization failed: connectionSessionId=%s recordingSessionId=%s",
                 connection_session_id,
                 recording_session_id,
             )
-            return self._algorithm_state
+            algorithm_state = AlgorithmState.ERROR
         async with self._lifecycle_lock:
             self._algorithm_state = algorithm_state
             if self._connection_session_id == connection_session_id:
@@ -184,7 +208,7 @@ class ApplicationService:
                     self.data.transition(DataState.READY, algorithm_state=self._algorithm_state.value)
                 else:
                     self.data.transition(
-                        DataState.READY,
+                        DataState.ERROR if self.control is not None and not existing_stream else DataState.READY,
                         algorithm_state=self._algorithm_state.value,
                         recent_error="ALGORITHM_NOT_READY",
                         error_stage="algorithm_initialize",
@@ -196,6 +220,17 @@ class ApplicationService:
             self._algorithm_state.value,
             existing_stream,
         )
+        if self.control is not None:
+            if connection_session_id != self._connection_session_id:
+                return AlgorithmState.ERROR
+            if algorithm_state == AlgorithmState.READY or existing_stream:
+                result = await self.control.start_stream(connection_session_id)
+                if result.outcome not in {"started", "alreadyStreaming"}:
+                    if connection_session_id == self._connection_session_id:
+                        self.data.transition(DataState.ERROR, recent_error=result.reason or result.outcome, error_stage="control")
+                    return AlgorithmState.ERROR
+            elif self.device_protocol == "headset_rev181":
+                self.data.transition(DataState.ERROR, recent_error="ALGORITHM_NOT_READY", error_stage="algorithm_initialize")
         return self._algorithm_state
 
     async def process(self, chunk: RawChunk) -> ParseOutcome:
@@ -210,10 +245,20 @@ class ApplicationService:
             return ParseOutcome()
         self.diagnostics["raw_chunks"] += 1
         self.diagnostics["raw_bytes"] += len(chunk.data)
+        if chunk.dropped_before_bytes:
+            # Never splice an old partial frame across a known acquisition gap.
+            await self.flush(FlushReason.RESET, drain=False)
+            self.diagnostics["source_gap_bytes"] = self.diagnostics.get("source_gap_bytes", 0) + chunk.dropped_before_bytes
+            self.data.transition(self.data.snapshot.data_state, recent_error="SOURCE_QUEUE_GAP", error_stage="acquisition")
         outcome = self.parser.feed(chunk)
+        if chunk.dropped_before_bytes:
+            outcome = replace(outcome, signals=tuple(replace(signal, valid=False,
+                invalid_reasons=tuple(dict.fromkeys((*signal.invalid_reasons, "SOURCE_QUEUE_GAP")))) for signal in outcome.signals))
         self.diagnostics["frames"] += len(outcome.frames)
         self.diagnostics["discarded_bytes"] += outcome.discarded_bytes
         for diagnostic in outcome.diagnostics:
+            key = "parser_" + diagnostic.kind
+            self.diagnostics[key] = self.diagnostics.get(key, 0) + 1
             LOG.log(
                 logging.ERROR if diagnostic.severity == "error" else logging.WARNING,
                 "Parser diagnostic: kind=%s byteCount=%s bufferedBytes=%s discardedBytes=%s connectionSessionId=%s",
@@ -250,30 +295,83 @@ class ApplicationService:
                 recording_session_id=self._required_recording_id(),
             )
             for batch in batches:
-                await self._process_batch(batch)
+                await self._submit_batch(batch)
         self._schedule_flush()
         return outcome
 
-    async def flush(self, reason: FlushReason = FlushReason.STOPPED) -> None:
+    async def flush(self, reason: FlushReason = FlushReason.STOPPED, *, drain: bool = True) -> None:
         await self._cancel_flush()
         parser_outcome = self.parser.flush(reason)
+        for diagnostic in parser_outcome.diagnostics:
+            LOG.warning("Parser flushed: kind=%s discardedBytes=%s reason=%s", diagnostic.kind, parser_outcome.discarded_bytes, reason.value)
         self.diagnostics["discarded_bytes"] += parser_outcome.discarded_bytes
         batch = self.assembler.flush()
         if batch is not None:
-            await self._process_batch(batch)
+            await self._submit_batch(batch)
+        if drain:
+            await self.drain()
+
+    async def drain(self) -> None:
+        """Finite barrier for shutdown and tests; never used by acquisition."""
+        try:
+            await asyncio.wait_for(self._batches.join(), self.shutdown_timeout_ms / 1000)
+        except TimeoutError:
+            LOG.error("Pipeline drain timed out: queuedBatches=%s", self._batches.qsize())
+            await self._stop_worker()
+
+    async def _stop_worker(self) -> None:
+        task, self._worker = self._worker, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        while not self._batches.empty():
+            batch, _receipt = self._batches.get_nowait()
+            self._persist_algorithm(batch, self.aggregator._invalid(batch.batch_id, "CONNECTION_SESSION_ENDED"), late=False)
+            self._discard_batch_frames(batch)
+            self._batches.task_done()
+
+    async def _submit_batch(self, batch: ParsedSignalBatch) -> None:
+        self._batch_sequence += 1
+        self._batch_order[batch.batch_id] = self._batch_sequence
+        receipt = self._persist_parsed(batch)
+        try:
+            self._batches.put_nowait((batch, receipt))
+        except asyncio.QueueFull:
+            self.diagnostics["algorithm_backlog"] += 1
+            await self._process_batch(batch, receipt, backlog=True)
+            return
+        self.diagnostics["queue_high_water"] = max(self.diagnostics["queue_high_water"], self._batches.qsize())
+        if self._worker is None or self._worker.done():
+            self._worker = asyncio.create_task(self._process_queued(), name="neurobridge-algorithm-worker")
+
+    async def _process_queued(self) -> None:
+        while True:
+            batch, receipt = await self._batches.get()
+            try:
+                await self._process_batch(batch, receipt)
+            except Exception:
+                LOG.exception("Window processing failed: batchId=%s", batch.batch_id)
+            finally:
+                self._discard_batch_frames(batch)
+                self._batches.task_done()
 
     async def close(self) -> None:
         if self._closed:
             return
+        if self.control is not None and self._connection_session_id is not None:
+            try:
+                await asyncio.wait_for(self.control.stop_stream(self._connection_session_id), self.shutdown_timeout_ms / 1000)
+            except (Exception, TimeoutError):
+                LOG.exception("Device stop failed during application shutdown")
         await self.flush(FlushReason.STOPPED)
+        await self._stop_worker()
         await self.aggregator.close()
         await self._cancel_stale()
         await self.algorithm.close()
         self._closed = True
 
-    async def _process_batch(self, batch: ParsedSignalBatch) -> WindowResult:
-        self.diagnostics["batches"] += 1
-        parsed_receipt = self._persist(
+    def _persist_parsed(self, batch: ParsedSignalBatch) -> PersistenceReceipt:
+        return self._persist(
             PersistenceRecord(
                 1,
                 batch.recording_session_id,
@@ -293,6 +391,8 @@ class ApplicationService:
                 },
             )
         )
+    async def _process_batch(self, batch: ParsedSignalBatch, parsed_receipt: PersistenceReceipt, *, backlog: bool = False) -> WindowResult:
+        self.diagnostics["batches"] += 1
         persistence_guaranteed = parsed_receipt.persistence_guaranteed
         if batch.connection_session_id != self._connection_session_id:
             timestamp = self.clock_ms()
@@ -317,11 +417,13 @@ class ApplicationService:
                 for frame_ref in batch.frame_refs
                 if frame_ref in self._frame_receipts
             )
-            await asyncio.gather(*(self._confirm(receipt) for receipt in stale_receipts))
             self._discard_batch_frames(batch)
             LOG.info("Window discarded before evaluation because its connection session ended: batchId=%s", batch.batch_id)
             return stale_result
-        if self._algorithm_state == AlgorithmState.READY:
+        if backlog:
+            result = WindowResult(batch, self.aggregator._invalid(batch.batch_id, "ALGORITHM_BACKLOG"), "live", self.clock_ms(), False)
+        elif self._algorithm_state == AlgorithmState.READY:
+            evaluation_started = time.monotonic()
             algorithm_input = self.mapper.map(batch, (self._frames[ref] for ref in batch.frame_refs if ref in self._frames))
             result = await self.aggregator.evaluate(
                 batch,
@@ -329,6 +431,7 @@ class ApplicationService:
                 persistence_guaranteed=persistence_guaranteed,
                 on_late_result=lambda value: self._persist_late(batch, value),
             )
+            self.diagnostics["algorithm_duration_ms"] += int((time.monotonic() - evaluation_started) * 1000)
         else:
             timestamp = self.clock_ms()
             unavailable = AlgorithmResult(
@@ -354,7 +457,6 @@ class ApplicationService:
                 for frame_ref in batch.frame_refs
                 if frame_ref in self._frame_receipts
             )
-            await asyncio.gather(*(self._confirm(receipt) for receipt in stale_receipts))
             self._discard_batch_frames(batch)
             return result
         receipts = [parsed_receipt]
@@ -363,12 +465,13 @@ class ApplicationService:
             for frame_ref in batch.frame_refs
             if frame_ref in self._frame_receipts
         )
-        confirmed = await asyncio.gather(*(self._confirm(receipt) for receipt in receipts))
+        confirmed = receipts if backlog else await asyncio.gather(*(self._confirm(receipt) for receipt in receipts))
         persistence_guaranteed = all(receipt.persistence_guaranteed for receipt in confirmed)
         if persistence_guaranteed != result.persistence_guaranteed:
             result = WindowResult(batch, result.algorithm_result, result.mode, result.completed_at_ms, persistence_guaranteed)
         algorithm_receipt = self._persist_algorithm(batch, result.algorithm_result, late=False)
-        algorithm_receipt = await self._confirm(algorithm_receipt)
+        if not backlog:
+            algorithm_receipt = await self._confirm(algorithm_receipt)
         if not algorithm_receipt.persistence_guaranteed and result.persistence_guaranteed:
             result = WindowResult(batch, result.algorithm_result, result.mode, result.completed_at_ms, False)
         async with self._lifecycle_lock:
@@ -376,6 +479,13 @@ class ApplicationService:
                 LOG.info("Window result invalidated while persistence completed: batchId=%s", batch.batch_id)
                 self._discard_batch_frames(batch)
                 return result
+            order = self._batch_order[batch.batch_id]
+            if self._last_published_order > order:
+                self.diagnostics["superseded_results"] += 1
+                self._discard_batch_frames(batch)
+                return result
+            self._last_published_order = order
+            self.diagnostics["publication_age_ms"] = max(0, self.clock_ms() - batch.window_end_ms)
             self.snapshots.replace(result)
             if self.data.snapshot.data_state in {DataState.READY, DataState.STREAMING, DataState.STALE}:
                 self.data.produced(batch.window_end_ms, valid=result.valid)
@@ -400,11 +510,14 @@ class ApplicationService:
                 1,
                 batch.recording_session_id,
                 "algorithm.late_result" if late else "algorithm.result",
-                result.completed_at_ms,
+                batch.window_end_ms,
                 batch.batch_id,
                 {
                     "batchId": batch.batch_id,
                     "algorithmVersion": result.algorithm_version,
+                    "connectionSessionId": batch.connection_session_id,
+                    "windowStartMs": batch.window_start_ms,
+                    "windowEndMs": batch.window_end_ms,
                     "startedAtMs": result.started_at_ms,
                     "completedAtMs": result.completed_at_ms,
                     "metrics": result.metrics,
@@ -431,12 +544,16 @@ class ApplicationService:
         if confirm is None:
             self.diagnostics["persistence_gaps"] += 1
             return PersistenceReceipt(False, False, "confirmation_unsupported")
-        confirmed = await confirm(receipt)
+        try:
+            confirmed = await asyncio.wait_for(confirm(receipt), self.persistence_timeout_ms / 1000)
+        except (TimeoutError, OSError):
+            confirmed = PersistenceReceipt(False, False, "persistence_confirmation_timeout_or_error")
         if not confirmed.persistence_guaranteed:
             self.diagnostics["persistence_gaps"] += 1
         return confirmed
 
     def _discard_batch_frames(self, batch: ParsedSignalBatch) -> None:
+        self._batch_order.pop(batch.batch_id, None)
         for frame_ref in batch.frame_refs:
             self._frames.pop(frame_ref, None)
             self._frame_receipts.pop(frame_ref, None)
@@ -463,7 +580,7 @@ class ApplicationService:
             if self._flush_deadline_ms == deadline_ms:
                 batch = self.assembler.flush()
                 if batch is not None:
-                    await self._process_batch(batch)
+                    await self._submit_batch(batch)
         except asyncio.CancelledError:
             return
         finally:

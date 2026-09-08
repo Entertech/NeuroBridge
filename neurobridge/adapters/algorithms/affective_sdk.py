@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import time
 
 from ...algorithm.runner import AlgorithmRunner
@@ -14,6 +15,7 @@ class AffectiveSdkAlgorithmEngine:
     def __init__(self, config: AlgorithmConfig, algorithm_version: str | None = None) -> None:
         self._runner = AlgorithmRunner(config)
         self.algorithm_version = algorithm_version
+        self._evaluation_lock = asyncio.Lock()
 
     async def initialize(self, session: AlgorithmSession) -> AlgorithmState:
         await self._runner.initialize()
@@ -22,6 +24,12 @@ class AffectiveSdkAlgorithmEngine:
         return AlgorithmState.ERROR if self._runner.error else AlgorithmState.UNAVAILABLE
 
     async def evaluate(self, value: AlgorithmInput) -> AlgorithmResult:
+        # A timed-out aggregation slot may still be collecting a late result.
+        # The line-oriented SDK bridge permits only one outstanding request.
+        async with self._evaluation_lock:
+            return await self._evaluate(value)
+
+    async def _evaluate(self, value: AlgorithmInput) -> AlgorithmResult:
         started = int(time.time() * 1000)
         try:
             eeg = base64.b64decode(str(value.payload.get("eegRawBase64", "")), validate=True)
@@ -50,3 +58,10 @@ class AffectiveSdkAlgorithmEngine:
 
     async def close(self) -> None:
         await self._runner.stop()
+
+    @property
+    def available(self) -> bool:
+        return self._runner.available
+
+    async def stop(self) -> None:
+        await self.close()

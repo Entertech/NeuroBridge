@@ -27,27 +27,30 @@ mode = "local_browser"
   ↓
 银河麒麟 USB/TTY 驱动
   ↓ read boundary + receivedAtMs
-SerialAdapter
-  ├─ 候选发现与 USB 身份校验
-  ├─ 已有流观察 / ACK 与 01 验证
-  ├─ E1/E0 控制
-  ├─ 28 字节分帧、重同步、序列统计
-  └─ DevicePacket
+PosixSerialSource（SerialAdapter 唯一持有 TTY，会话绑定 DeviceControl）
+  ├─ 候选发现与 USB 身份校验 / 已有流观察 / ACK 与 01 验证
+  └─ RawChunk（保留读取边界及已知队列缺口）
        ↓
-Gateway
-  ├─ WindowAssembler → AlgorithmRunner
-  ├─ RecordingStore
-  └─ Northbound WebSocket → 127.0.0.1 浏览器
+HeadsetRev181Parser → DeviceFrame + ParsedSignal + Diagnostics
+       ↓
+ApplicationService
+  ├─ 算法 ready 后调用 DeviceControl E1；停止先调用 E0
+  ├─ SignalWindowAssembler → 有界算法 Worker → WindowResult
+  ├─ SegmentedRecordingRepository（raw / parsed / algorithm）
+  └─ LatestSnapshotStore → GatewayApplication → SubscriptionFanout
+       ↓
+NorthboundController / WebSocket → 127.0.0.1 浏览器
 ```
 
 职责边界：
 
 | 模块 | 职责 | 禁止事项 |
 |---|---|---|
-| `neurobridge/serial/adapter.py` | TTY 发现、验证、启停、读取、分帧、接收时间和重连 | 不调用算法或拼北向消息 |
-| `neurobridge/device/packet.py` | 传递通道、原始字节、来源和接收时间 | 不解释设备字段 |
-| `neurobridge/business/gateway.py` | 状态、窗口、算法、录制、录播和北向发布 | 不依赖 pyserial 对象 |
-| `neurobridge/business/recording.py` | 保存公开会话数据和内部完整设备帧 | 不把内部帧混入对外包 |
+| `neurobridge/adapters/sources/serial_posix.py` | 封装 TTY 发现、验证、读取、时间和重连；内部复用 SerialAdapter | 不调用算法或生成业务投影 |
+| `neurobridge/adapters/parsers/headset_rev181.py` | 纯分帧、重同步、序列诊断和来源追踪 | 不进行 I/O 或调用 SDK |
+| `neurobridge/application/service.py` | 双状态、DeviceControl 决策、窗口、有界算法任务与原子快照 | 不依赖 pyserial 对象 |
+| `neurobridge/application/gateway.py` | 查询、订阅、发布及 Profile 能力约束 | 不直接创建具体设备、存储或 SDK |
+| `neurobridge/adapters/storage/` | 独立分段写入、恢复、历史格式兼容和下载投影 | 不把内部帧混入公开采集包 |
 | `neurobridge/northbound/` | 回环 HTTP/WS、请求与订阅 | 不直接访问串口 |
 | `linux/` | 银河麒麟准备、构建、自检、systemd、诊断和更新 | 不记录敏感原始数据 |
 
@@ -116,7 +119,7 @@ connecting → validating
 - 一个读取批次中的完整帧使用该批次的时间；
 - 跨读取批次完成的帧使用最后一个字节到达批次的时间；
 - 已有流观察缓冲将读取时间与字节一起传入正式流处理，不能在算法初始化后重新取时间；
-- 同一帧派生的 `serial.frame`、`ff31` 和 `ff51` 共用同一时间。
+- 同一帧派生的 DeviceFrame、EEG 和 HR 共用同一时间。
 
 该时间用于窗口、内部持久化和算法输入关联，不以页面发送时间替代。
 
@@ -134,16 +137,19 @@ connecting → validating
 每个合法帧产生：
 
 ```text
-serial.frame = frame[0:28]   # 内部完整帧
-ff31         = frame[4:24]   # 2 字节序列号 + 18 字节 EEG
-ff51         = frame[24:25]  # 1 字节 HR
+DeviceFrame.raw_bytes = frame[0:28]  # 原样持久化
+DeviceFrame.sequence  = frame[4:6]   # 解析为大端整数
+ParsedSignal.eeg      = frame[6:24]  # 不含序列号
+ParsedSignal.hr       = frame[24:25]
+AlgorithmInput.eeg    = frame[4:24]  # SDK 专用 20 字节投影
+Northbound.eegRaw     = sequence + ParsedSignal.eeg  # 保持既有 20 字节合同
 ```
 
 算法兼容仅表示保持现有 20 字节 EEG 和 1 字节 HR 原始输入合同；最终算法正确性必须使用真实耳机数据验证。
 
 ## 8. 算法状态广播
 
-`Gateway.on_device_ready()` 初始化新的算法会话，并统一通过 `update_status()` 更新状态：
+Bootstrap 的 `device_ready()` 调用 `ApplicationService.prepare_session()` 初始化新算法会话，并通过 `GatewayApplication.update_status()` 广播：
 
 - 可用：`algorithmState=ready`；
 - bridge 报错：`algorithmState=error`；
@@ -153,15 +159,30 @@ ff51         = frame[24:25]  # 1 字节 HR
 
 ## 9. 持久化和录播
 
-内部完整设备事件写入：
+生产链路按会话分别写入：
 
 ```text
-<recording-root>/internal-device/<recordingId>/packets.jsonl
+<recording-root>/sessions/<recordingId>/raw/000001.jsonl.partial
+<recording-root>/sessions/<recordingId>/parsed/000001.jsonl.partial
+<recording-root>/sessions/<recordingId>/algorithm/000001.jsonl.partial
+<recording-root>/sessions/<recordingId>/manifest.json
 ```
 
-每行包含 `sessionId`、`transport`、`channel`、`receivedAtMs`、`byteLength`、`encoding` 和 `bytesBase64`。内部文件继承录制目录最小权限，不进入普通网页下载、诊断包、Git 或既有对外采集包。
+每行保留 schemaVersion、recordingSessionId、recordType、capturedAtMs 和 correlationId；payload 中保存完整帧、解析批次或算法结果。算法结果同时携带采集窗口起止时间与计算起止时间，迟到结果单独保存但不覆盖当时发布的结果。完整帧目录与文件分别以 0700/0600 创建。
+
+Writer 独立于事件循环，按 `storage.fsync_interval_records` 有界批量 fsync 后才确认持久化；默认每 10 分钟或 256 MiB 关闭分段，原子重命名去掉 `.partial` 并更新摘要。确认、会话关闭和 Writer 退出都有超时，磁盘卡住时保留部分文件等待下次恢复，不无限等待。队列满或写失败不改变业务 valid，内部状态和日志单独说明持久化缺口。
+
+生产路径不再重复写旧版 raw/metric 文件。下载时在临时目录投影成既有采集包格式，公开文件白名单排除完整设备帧、parsed、数字分段和 `.partial`；历史 `internal-device/` 文件保留，不自动搬迁或删除。
 
 算法结果继续写入会话事件。当前耳机 USB 串口策略不读取这些会话做录播；`subscribe`/`getLatest` 在串口未验证或断开时直接返回 `409 STREAM_NOT_AVAILABLE_REASON`。录播读取逻辑仅保留给明确支持录播的历史兼容数据源。
+
+### 9.1 有界处理与观测
+
+`[pipeline]` 将 Source 队列/等待、算法队列、持久化确认、退出、发送超时和日志周期配置化，默认值及本轮完成情况见[需求补齐与验收清单](NeuroBridge项目结构与多系统接入/需求补齐与验收清单.md)。这些值是可调初始值，不是已通过现场验证的性能承诺。
+
+算法慢时采集仍运行，队列满的窗口记录 `ALGORITHM_BACKLOG`；旧会话和迟到结果不回写快照。已知 Source 丢块后先丢弃解析器残帧，避免跨缺口拼帧。每个订阅按流保存一个待发最新值，状态和波形不互相覆盖；发送超时同时取消该订阅的发送任务。
+
+固定周期 `Runtime metrics` 日志记录 CPU、RSS/峰值 RSS、任务/线程、FD/Handle、数据/连接状态、窗口和算法耗时、队列深度、发送/覆盖、离线时间及存储缺口。不可获得的指标为 null；服务重启次数通过 gatewayBootId 和 systemd 日志关联，不能当作进程内重连次数。
 
 ## 10. 北向和本机页面
 
@@ -204,3 +225,5 @@ ff51         = frame[24:25]  # 1 字节 HR
 - systemd、一键助手重复执行和诊断脱敏。
 
 自动化通过只表示源码支持。上线前仍需在最终银河麒麟镜像和真实耳机上完成 USB 枚举、电气行为、握手、持续实时数据、算法结果、拔插恢复、服务重启、串口离线拒绝录播和长稳验收。
+
+候选安装脚本先暂存校验、停止旧服务，再替换应用、迁移配置和加载 unit；任一步失败恢复应用/配置/unit/启用与运行状态。成功后也保留唯一回滚快照及 rollback.sh，不删除录制数据。SIGTERM 走正常应用清理与 E0 路径。该脚本已有隔离文件夹回滚测试及 shell 语法检查，但不等于最终麒麟安装验收。

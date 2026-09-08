@@ -53,7 +53,9 @@ python3 -m venv .venv
 
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
-运行时稳定内核按 `domain/`、`ports/`、`application/` 分层；`adapters/` 放置设备 Parser、数据源、算法、存储和北向实现，`profiles/` 固定操作系统/设备/接入能力，`bootstrap/` 是唯一组合根。正式采集使用统一 ApplicationService，保留 `frameId → batchId → algorithm result` 关联；M1 的 `kylin_headset_local` 固定绑定 POSIX TTY、修订号 181 Parser、本机回环页面和禁用录播能力。原 `device/`、`ble/`、`serial/`、`business/` 与 `northbound/` 仅保留兼容入口，正式启动和 macOS POC 均不再绕过 Profile 校验。
+运行时稳定内核按 `domain/`、`ports/`、`application/` 分层；`adapters/` 放置设备 Parser、数据源、算法、存储和北向实现，`profiles/` 固定操作系统/设备/接入能力，`bootstrap/` 是唯一组合根。正式采集由 ApplicationService 和 GatewayApplication 编排，保留 `frameId → batchId → algorithm result` 关联，旧 business.Gateway 仅作兼容 facade；设备与历史录制适配器仍复用既有底层实现。M1 固定 POSIX TTY、修订号 181 Parser、本机回环页面和禁用录播能力。
+
+算法处理、分段写入和订阅发送均有界，慢算法/磁盘不会让 RawChunk 消费等待完整处理；`[pipeline]` 配置等待上限和周期资源日志。候选安装器保留应用/配置/服务回滚快照，仍需目标机安装与长稳验收。两组需求的实现对照、额外兼容内容及发布门禁见[需求补齐与验收清单](doc/tech/NeuroBridge项目结构与多系统接入/需求补齐与验收清单.md)。
 
 ## 仓库结构
 

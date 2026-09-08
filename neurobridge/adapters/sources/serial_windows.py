@@ -20,10 +20,8 @@ def discover_windows_com_candidates(
 ) -> list[str]:
     """Return deterministic USB-derived COM names without opening them."""
 
-    if config.device != "auto":
-        if _COM_PATTERN.fullmatch(config.device) is None:
-            return []
-        return [config.device]
+    if config.device != "auto" and _COM_PATTERN.fullmatch(config.device) is None:
+        return []
     if port_provider is None:
         from serial.tools import list_ports
 
@@ -33,6 +31,8 @@ def discover_windows_com_candidates(
         device = str(getattr(port, "device", ""))
         match = _COM_PATTERN.fullmatch(device)
         if match is None:
+            continue
+        if config.device != "auto" and int(_COM_PATTERN.fullmatch(config.device).group(1)) != int(match.group(1)):
             continue
         hwid = str(getattr(port, "hwid", ""))
         if getattr(port, "vid", None) is None and getattr(port, "pid", None) is None and "USB" not in hwid.upper():
@@ -96,6 +96,8 @@ class WindowsSerialSource(PosixSerialSource):
         *,
         queue_size: int = 64,
         external_control: bool = True,
+        application_control: bool = False,
+        enqueue_timeout_ms: int = 50,
         port_provider=None,
         serial_factory=open_windows_com,
     ) -> None:
@@ -111,6 +113,8 @@ class WindowsSerialSource(PosixSerialSource):
             error,
             queue_size=queue_size,
             external_control=external_control,
+            application_control=application_control,
+            enqueue_timeout_ms=enqueue_timeout_ms,
             candidate_provider=candidates,
             serial_factory=serial_factory,
             identity_provider=identity,

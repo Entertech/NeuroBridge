@@ -13,7 +13,7 @@ import tempfile
 from urllib.parse import unquote, urlsplit
 import zipfile
 
-from .business.gateway import Gateway
+from .application.gateway import GatewayApplication as Gateway
 from .versioning import APPLICATION_VERSION
 
 LOG = logging.getLogger(__name__)

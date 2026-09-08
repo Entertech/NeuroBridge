@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import uuid
+from collections import deque
 
 from ...domain.raw import DeviceFrame, ParseDiagnostic, ParseOutcome, RawChunk
 from ...domain.signal import ParsedSignal
 from ...ports.raw_parser import FlushReason
+from .sequence import SequenceLossTracker
 
 FRAME_HEADER = b"\xAA\xAA\xAA"
 FRAME_TAIL = b"\xBB\xBB\xBB"
@@ -25,9 +27,9 @@ class HeadsetRev181Parser:
             raise ValueError("max_buffer_bytes must hold at least one frame")
         self.max_buffer_bytes = max_buffer_bytes
         self._buffer = bytearray()
-        self._source_chunk_ids: list[str] = []
+        self._provenance: deque[tuple[str, int]] = deque()
         self._session_id: str | None = None
-        self._last_sequence: int | None = None
+        self._loss = SequenceLossTracker()
         self._last_received_at_ms: int | None = None
 
     def feed(self, chunk: RawChunk) -> ParseOutcome:
@@ -41,10 +43,11 @@ class HeadsetRev181Parser:
         self._session_id = chunk.connection_session_id
         self._last_received_at_ms = chunk.received_at_ms
         self._buffer.extend(chunk.data)
-        self._source_chunk_ids.append(chunk.trace_id)
+        if chunk.data:
+            self._provenance.append((chunk.trace_id, len(chunk.data)))
         if len(self._buffer) > self.max_buffer_bytes:
             count = len(self._buffer) - self.max_buffer_bytes
-            del self._buffer[:count]
+            self._consume(count)
             discarded += count
             diagnostics.append(self._diagnostic("buffer_overflow", count, chunk.received_at_ms))
 
@@ -56,21 +59,19 @@ class HeadsetRev181Parser:
                 keep = self._header_suffix_length()
                 count = len(self._buffer) - keep
                 if count:
-                    del self._buffer[:count]
+                    self._consume(count)
                     discarded += count
                     diagnostics.append(self._diagnostic("noise", count, chunk.received_at_ms))
-                if not self._buffer:
-                    self._source_chunk_ids.clear()
                 break
             if offset:
-                del self._buffer[:offset]
+                self._consume(offset)
                 discarded += offset
                 diagnostics.append(self._diagnostic("noise", offset, chunk.received_at_ms))
             if len(self._buffer) < 4:
                 break
             if self._buffer[3] != FRAME_BYTES:
                 observed = self._buffer[3]
-                del self._buffer[0]
+                self._consume(1)
                 discarded += 1
                 diagnostics.append(self._diagnostic("invalid_length", 1, chunk.received_at_ms, observed=observed, expected=FRAME_BYTES))
                 continue
@@ -78,11 +79,11 @@ class HeadsetRev181Parser:
                 break
             raw = bytes(self._buffer[:FRAME_BYTES])
             if raw[-3:] != FRAME_TAIL:
-                del self._buffer[0]
+                self._consume(1)
                 discarded += 1
                 diagnostics.append(self._diagnostic("invalid_tail", 1, chunk.received_at_ms))
                 continue
-            del self._buffer[:FRAME_BYTES]
+            source_chunk_ids = self._consume(FRAME_BYTES)
             sequence = int.from_bytes(raw[4:6], "big")
             diagnostics.extend(self._sequence_diagnostics(sequence, chunk.received_at_ms))
             frame_id = f"frame-{uuid.uuid4().hex}"
@@ -92,7 +93,7 @@ class HeadsetRev181Parser:
                 frame_id,
                 sequence,
                 chunk.received_at_ms,
-                tuple(dict.fromkeys(self._source_chunk_ids)),
+                source_chunk_ids,
                 chunk.connection_session_id,
             )
             frames.append(frame)
@@ -103,8 +104,6 @@ class HeadsetRev181Parser:
                     ParsedSignal("hr", raw[HR_OFFSET : HR_OFFSET + 1], "uint8", None, hints, (frame_id,), chunk.received_at_ms),
                 )
             )
-            if not self._buffer:
-                self._source_chunk_ids.clear()
         return ParseOutcome(tuple(frames), tuple(signals), tuple(diagnostics), len(self._buffer), discarded)
 
     def flush(self, reason: FlushReason) -> ParseOutcome:
@@ -118,9 +117,9 @@ class HeadsetRev181Parser:
 
     def reset(self) -> None:
         self._buffer.clear()
-        self._source_chunk_ids.clear()
+        self._provenance.clear()
         self._session_id = None
-        self._last_sequence = None
+        self._loss = SequenceLossTracker()
         self._last_received_at_ms = None
 
     def _header_suffix_length(self) -> int:
@@ -129,26 +128,25 @@ class HeadsetRev181Parser:
                 return length
         return 0
 
+    def _consume(self, count: int) -> tuple[str, ...]:
+        del self._buffer[:count]
+        ids = []
+        while count and self._provenance:
+            trace_id, size = self._provenance.popleft()
+            ids.append(trace_id)
+            consumed = min(count, size)
+            count -= consumed
+            if size > consumed:
+                self._provenance.appendleft((trace_id, size - consumed))
+        return tuple(dict.fromkeys(ids))
+
     def _sequence_diagnostics(self, sequence: int, timestamp_ms: int) -> list[ParseDiagnostic]:
-        previous = self._last_sequence
-        self._last_sequence = sequence
-        if previous is None:
+        observation = self._loss.observe(sequence)
+        if observation.classification in {"baseline", "in_order"}:
             return []
-        expected = (previous + 1) % SEQUENCE_MODULUS
-        if sequence == expected:
-            return []
-        if sequence == previous:
-            kind = "sequence_duplicate"
-            missing = 0
-        else:
-            delta = (sequence - expected) % SEQUENCE_MODULUS
-            if delta < SEQUENCE_MODULUS // 2:
-                kind = "sequence_gap"
-                missing = delta
-            else:
-                kind = "sequence_out_of_order"
-                missing = 0
-        return [self._diagnostic(kind, 0, timestamp_ms, expected=expected, actual=sequence, missing=missing)]
+        return [self._diagnostic("sequence_" + observation.classification, 0, timestamp_ms,
+                                expected=observation.expected_sequence, actual=sequence,
+                                missing=observation.gap_packets)]
 
     @staticmethod
     def _diagnostic(kind: str, count: int, timestamp_ms: int, **details: object) -> ParseDiagnostic:

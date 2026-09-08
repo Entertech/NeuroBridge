@@ -14,7 +14,7 @@ class CollectingNorthboundSink:
 
 
 class GatewayNorthboundSink:
-    """Publish application events through the legacy wire-compatible gateway."""
+    """Publish application events through the wire-compatible query/subscription service."""
 
     def __init__(self, gateway: object) -> None:
         self.gateway = gateway

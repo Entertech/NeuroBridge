@@ -44,6 +44,9 @@ class CandidatePackageTests(unittest.TestCase):
                         manifest = json.load(member)
                 self.assertFalse(manifest["signed"])
                 self.assertFalse(manifest["runtimeBundled"])
+                self.assertFalse(manifest["targetAcceptancePassed"])
+                self.assertIn("sourceDirty", manifest)
+                self.assertIn("payload/neurobridge/version_registry.toml", manifest["files"])
                 self.assertTrue(any(name.endswith("metadata/sbom.cdx.json") for name in names))
                 self.assertFalse(any("/.git/" in name or "__pycache__" in name or name.endswith(".pyc") for name in names))
 
@@ -108,3 +111,31 @@ class CandidatePackageTests(unittest.TestCase):
             self.assertTrue(any(name.endswith("payload/runtime/python.exe") for name in names))
             self.assertIn('runtime\\python.exe', install)
             self.assertTrue(config["algorithm"]["command"][0].endswith(r"runtime\neurobridge_affective_bridge.exe"))
+
+    def test_kylin_rollback_restores_all_state_and_retains_replaced_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = root / "opt/neurobridge-rollback.ABC123"
+            for path in (backup / "app", root / "opt/neurobridge", root / "etc/neurobridge", root / "etc/systemd/system"):
+                path.mkdir(parents=True)
+            (backup / "app/version").write_text("old")
+            (root / "opt/neurobridge/version").write_text("new")
+            (backup / "gateway.toml").write_text("old config")
+            (backup / "neurobridge.service").write_text("old unit")
+            (root / "etc/neurobridge/gateway.toml").write_text("new config")
+            (root / "etc/systemd/system/neurobridge.service").write_text("new unit")
+            for flag in ("had-app", "was-active", "was-enabled"):
+                (backup / flag).touch()
+            script = (ROOT / "packaging/kylin/rollback.sh").read_text()
+            # Execute only against this disposable fixture with service calls
+            # mocked; never run the system installer on the development host.
+            script = script.replace('[[ ${EUID} -eq 0 ]]', 'true')
+            script = script.replace('/opt/', str(root) + '/opt/').replace('/etc/', str(root) + '/etc/')
+            completed = subprocess.run(["bash", "-c", 'systemctl() { return 0; };\n' + script, "rollback-fixture", str(backup)],
+                                       capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual((root / "opt/neurobridge/version").read_text(), "old")
+            self.assertEqual((root / "etc/neurobridge/gateway.toml").read_text(), "old config")
+            self.assertEqual((root / "etc/systemd/system/neurobridge.service").read_text(), "old unit")
+            self.assertEqual((backup / "failed-app/version").read_text(), "new")
+            self.assertTrue((backup / "restored").is_file())

@@ -62,6 +62,25 @@ class HeadsetParserTests(unittest.TestCase):
         self.assertIn("sequence_gap", {item.kind for item in outcome.diagnostics})
         self.assertTrue(all(item.valid for item in outcome.signals))
 
+    def test_reordered_packet_does_not_move_sequence_high_water_backwards(self):
+        parser = HeadsetRev181Parser()
+        for value in (10, 12, 11):
+            parser.feed(chunk(frame(value), timestamp=value))
+        outcome = parser.feed(chunk(frame(13), timestamp=14))
+        self.assertEqual(outcome.diagnostics, ())
+        self.assertEqual(parser._loss.snapshot().lost_packets, 0)
+
+    def test_partial_stream_provenance_is_bounded_and_exact(self):
+        parser = HeadsetRev181Parser()
+        parser.feed(RawChunk("serial", "serial", frame(0)[:10], 1, 1, "conn", "first"))
+        for value in range(1, 1000):
+            outcome = parser.feed(RawChunk("serial", "serial", frame(value - 1)[10:] + frame(value)[:10],
+                                          value, value, "conn", str(value)))
+            self.assertLessEqual(len(parser._provenance), 1)
+            self.assertEqual(len(outcome.frames[0].source_chunk_ids), 2)
+        outcome = parser.feed(RawChunk("serial", "serial", frame(999)[10:], 1000, 1000, "conn", "last"))
+        self.assertEqual(outcome.frames[0].source_chunk_ids, ("999", "last"))
+
 
 class HeadbandParserTests(unittest.TestCase):
     def test_invalid_characteristic_length_is_explicit(self) -> None:

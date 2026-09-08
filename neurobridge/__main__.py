@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import platform
 import sys
+import signal
 import time
 
 from .config import load
@@ -100,8 +101,17 @@ async def run(config_path: str) -> None:
         )
     gateway = container.gateway
     adapter = container.device_adapter
-    await gateway.start()
+    loop = asyncio.get_running_loop()
+    task = asyncio.current_task()
+    handles_sigterm = False
+    if sys.platform != "win32" and task is not None:
+        try:
+            loop.add_signal_handler(signal.SIGTERM, task.cancel)
+            handles_sigterm = True
+        except (NotImplementedError, RuntimeError):
+            pass  # Non-main-thread embedding keeps its own signal lifecycle.
     try:
+        await gateway.start()
         async with asyncio.TaskGroup() as group:
             group.create_task(serve(gateway, container.northbound_controller))
             group.create_task(adapter.run())
@@ -114,8 +124,14 @@ async def run(config_path: str) -> None:
         raise
     finally:
         LOG.info("Process shutdown started: uptimeSeconds=%.3f", time.monotonic() - started_at)
-        await adapter.stop()
-        await gateway.stop()
+        try:
+            await adapter.stop()
+        finally:
+            try:
+                await gateway.stop()
+            finally:
+                if handles_sigterm:
+                    loop.remove_signal_handler(signal.SIGTERM)
         LOG.info("Process shutdown completed: uptimeSeconds=%.3f", time.monotonic() - started_at)
 
 
@@ -125,6 +141,8 @@ def main() -> None:
     args = parser.parse_args()
     try:
         asyncio.run(run(args.config))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
     except Exception:
         # Logging is configured inside run after config validation.  Keep the
         # traceback visible to systemd when a malformed config fails earlier.

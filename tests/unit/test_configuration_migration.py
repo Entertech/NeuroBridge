@@ -9,6 +9,15 @@ from neurobridge.configuration.migration import migrate_file
 
 
 class ConfigurationMigrationTests(unittest.TestCase):
+    def test_pipeline_limits_reject_zero_negative_boolean_and_fraction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            for value in ("0", "-1", "true", "1.5"):
+                with self.subTest(value=value):
+                    path.write_text('[data_source]\ntype="serial"\n[pipeline]\nalgorithm_queue_size=' + value + '\n')
+                    with self.assertRaisesRegex(ValueError, "positive integers"):
+                        load(path)
+
     def test_layered_configuration_merges_defaults_system_and_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

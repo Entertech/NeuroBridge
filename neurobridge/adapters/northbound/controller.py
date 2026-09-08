@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from ...business.gateway import ClientSession, Gateway, ProtocolError, envelope
+from ...application.gateway import ClientSession, GatewayApplication, ProtocolError, envelope
 from ...versioning import NORTHBOUND_PROTOCOL_VERSION
 
 
@@ -16,7 +16,7 @@ LOG = logging.getLogger(__name__)
 class NorthboundController:
     """Keep wire request concerns outside device and application processing."""
 
-    def __init__(self, gateway: Gateway) -> None:
+    def __init__(self, gateway: GatewayApplication) -> None:
         self.gateway = gateway
 
     @staticmethod
@@ -45,6 +45,7 @@ class NorthboundController:
         return request
 
     async def handle(self, session: ClientSession, raw: str, send: Any) -> None:
+        self.gateway.delivery_metrics["requests"] += 1
         self.gateway.sessions.add(session)
         request_id: str | None = None
         action: str | None = None
@@ -54,6 +55,8 @@ class NorthboundController:
             request_id = request["requestId"]
             action = request["action"]
             params = request["params"]
+            if action in {"getStatus", "getLatest", "subscribe"}:
+                await self.gateway.prepare_query()
             safe_request_id = request_id.replace("\n", " ").replace("\r", " ")[:96]
             start_replay = False
             if action == "getStatus":

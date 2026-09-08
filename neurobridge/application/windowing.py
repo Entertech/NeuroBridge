@@ -30,7 +30,7 @@ class SignalWindowAssembler:
             raise ValueError("SignalWindowAssembler cannot span connection sessions")
         ready: list[ParsedSignalBatch] = []
         start = signal.received_at_ms - signal.received_at_ms % self.interval_ms
-        if self._window_start_ms is not None and start > self._window_start_ms:
+        if self._window_start_ms is not None and start != self._window_start_ms:
             batch = self._finish()
             if batch is not None:
                 ready.append(batch)

@@ -20,7 +20,7 @@ LOG = logging.getLogger(__name__)
 
 
 class BluetoothBleakSource:
-    def __init__(self, config: BleConfig, device_ready, error=None, *, queue_size: int = 64) -> None:
+    def __init__(self, config: BleConfig, device_ready, error=None, *, queue_size: int = 64, enqueue_timeout_ms: int = 50) -> None:
         self._chunks: asyncio.Queue[RawChunk | None] = asyncio.Queue(maxsize=queue_size)
         self._events: asyncio.Queue[DeviceConnectionEvent | None] = asyncio.Queue(maxsize=queue_size)
         self._session_id: str | None = None
@@ -29,6 +29,8 @@ class BluetoothBleakSource:
         self._device_ready = device_ready
         self.dropped_raw_chunks = 0
         self.dropped_raw_bytes = 0
+        self._pending_gap_bytes = 0
+        self.enqueue_timeout_ms = enqueue_timeout_ms
         self._adapter = FlowtimeAdapter(config, self._packet, self._status_changed, self._prepare_device, error)
 
     async def start(self) -> None:
@@ -57,12 +59,14 @@ class BluetoothBleakSource:
     async def _packet(self, packet: DevicePacket) -> None:
         if self._session_id is None:
             return
-        value = RawChunk("bluetooth", packet.channel, packet.value, packet.received_at_ms, time.monotonic_ns(), self._session_id, f"trace-{uuid.uuid4().hex}")
+        value = RawChunk("bluetooth", packet.channel, packet.value, packet.received_at_ms, time.monotonic_ns(), self._session_id, f"trace-{uuid.uuid4().hex}", self._pending_gap_bytes)
         try:
-            await asyncio.wait_for(self._chunks.put(value), timeout=0.05)
+            await asyncio.wait_for(self._chunks.put(value), timeout=self.enqueue_timeout_ms / 1000)
+            self._pending_gap_bytes = 0
         except TimeoutError:
             self.dropped_raw_chunks += 1
             self.dropped_raw_bytes += len(packet.value)
+            self._pending_gap_bytes += len(packet.value)
             LOG.error(
                 "Bluetooth RawChunk queue full: connectionSessionId=%s droppedChunks=%s droppedBytes=%s chunkBytes=%s",
                 self._session_id,

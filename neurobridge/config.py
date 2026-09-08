@@ -37,6 +37,17 @@ class DataSourceConfig:
 
 
 @dataclass(frozen=True)
+class PipelineConfig:
+    source_queue_size: int = 64
+    source_enqueue_timeout_ms: int = 50
+    algorithm_queue_size: int = 8
+    persistence_timeout_ms: int = 100
+    shutdown_timeout_ms: int = 5000
+    send_timeout_ms: int = 5000
+    metrics_interval_seconds: int = 10
+
+
+@dataclass(frozen=True)
 class SerialConfig:
     device: str = "auto"
     candidate_types: tuple[str, ...] = ("ttyACM", "ttyUSB")
@@ -138,6 +149,7 @@ class GatewayConfig:
     data_source: DataSourceConfig = field(default_factory=DataSourceConfig)
     serial: SerialConfig = field(default_factory=SerialConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     config_schema_version: int = 1
     profile: str | None = None
 
@@ -170,6 +182,7 @@ def load(
         "data_source": {"type", "window_interval_ms", "stale_after_ms"},
         "serial": {"device", "candidate_types", "baud_rate", "handshake_timeout_ms", "command_response_timeout_ms", "data_timeout_seconds", "reconnect_delay_seconds", "stats_interval_seconds", "max_buffer_bytes", "dtr", "rts"},
         "storage": {"warning_threshold_bytes", "critical_threshold_bytes", "segment_duration_seconds", "segment_max_bytes", "writer_queue_size", "recovery_margin_bytes", "recovery_checks", "fsync_interval_records", "session_retention_days", "auto_cleanup_enabled"},
+        "pipeline": set(PipelineConfig.__dataclass_fields__),
     }
     unknown_top_level = set(raw) - {"config_schema_version", "profile", *section_fields}
     if unknown_top_level:
@@ -391,6 +404,9 @@ def load(
     auto_cleanup_enabled = storage.get("auto_cleanup_enabled", False)
     if not isinstance(auto_cleanup_enabled, bool):
         raise ValueError("storage.auto_cleanup_enabled must be boolean")
+    pipeline_values = raw.get("pipeline", {})
+    if any(type(value) is not int or value <= 0 for value in pipeline_values.values()):
+        raise ValueError("pipeline limits and intervals must be positive integers")
     config = GatewayConfig(
         server=ServerConfig(host, port, endpoint),
         ble=ble_config,
@@ -417,6 +433,7 @@ def load(
         data_source=DataSourceConfig(data_source_type, window_interval_ms, stale_after_ms),
         serial=serial_config,
         storage=StorageConfig(**storage_values, auto_cleanup_enabled=auto_cleanup_enabled),
+        pipeline=PipelineConfig(**pipeline_values),
         config_schema_version=config_schema_version,
         profile=profile,
     )

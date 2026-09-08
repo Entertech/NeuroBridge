@@ -2,10 +2,15 @@
 set -euo pipefail
 [[ ${EUID} -eq 0 ]] || { echo "Run as root." >&2; exit 1; }
 [[ $(uname -m) == x86_64 ]] || { echo "Kylin package requires x86_64." >&2; exit 1; }
-grep -Eqi 'kylin|银河麒麟' /etc/os-release || { echo "This package is restricted to Galaxy Kylin V10." >&2; exit 1; }
+. /etc/os-release
+[[ "${ID:-} ${NAME:-}" =~ [Kk][Yy][Ll][Ii][Nn]|银河麒麟 ]] && [[ ${VERSION_ID:-} =~ ^[Vv]?10([.]|$) ]] || {
+  echo "This package is restricted to Galaxy Kylin V10." >&2; exit 1;
+}
 package_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 [[ -x "$package_root/payload/runtime/bin/python" ]] || { echo "Candidate has no bundled runtime; rebuild with --runtime-dir." >&2; exit 1; }
 [[ -x "$package_root/payload/runtime/bin/neurobridge_affective_bridge" ]] || { echo "Candidate runtime has no executable algorithm bridge." >&2; exit 1; }
+exec 9>/run/lock/neurobridge-install.lock
+flock -n 9 || { echo "Another installation is running." >&2; exit 1; }
 getent group neurobridge >/dev/null 2>&1 || groupadd --system neurobridge
 id -u neurobridge >/dev/null 2>&1 || useradd --system --gid neurobridge --home /nonexistent --shell /usr/sbin/nologin neurobridge
 serial_group_added=false
@@ -20,20 +25,35 @@ done
 [[ $serial_group_added == true ]] || { echo "No USB serial device group was found; connect the headset and rerun the installer." >&2; exit 1; }
 install -d -o root -g neurobridge -m 0750 /etc/neurobridge
 install -d -o neurobridge -g neurobridge -m 0750 /var/lib/neurobridge/recordings /var/log/neurobridge
-staging=/opt/neurobridge.new.$$
-previous=/opt/neurobridge.previous
-rm -rf "$staging"
-install -d -m 0755 "$staging"
+staging=$(mktemp -d /opt/neurobridge-stage.XXXXXX)
 cp -a "$package_root/payload/." "$staging/"
 "$staging/runtime/bin/python" -m compileall -q "$staging/neurobridge"
-rm -rf "$previous"
+previous=$(mktemp -d /opt/neurobridge-rollback.XXXXXX)
+# Snapshot all upgrade state before stopping or replacing the installed service.
+[[ ! -e /etc/neurobridge/gateway.toml ]] || cp -a /etc/neurobridge/gateway.toml "$previous/gateway.toml"
+[[ ! -e /etc/systemd/system/neurobridge.service ]] || cp -a /etc/systemd/system/neurobridge.service "$previous/neurobridge.service"
+systemctl is-active --quiet neurobridge.service && touch "$previous/was-active" || true
+systemctl is-enabled --quiet neurobridge.service && touch "$previous/was-enabled" || true
+[[ ! -d /opt/neurobridge ]] || touch "$previous/had-app"
+install -m 0700 "$package_root/rollback.sh" "$previous/rollback.sh"
+committed=false
+restore_on_failure() {
+  code=$?
+  trap - EXIT
+  if [[ $committed != true ]]; then
+    echo "Installation failed; restoring application, configuration and service from $previous" >&2
+    bash "$previous/rollback.sh" "$previous" || echo "Automatic rollback failed; retained backup: $previous" >&2
+  fi
+  exit "$code"
+}
+trap restore_on_failure EXIT
+if systemctl cat neurobridge.service >/dev/null 2>&1; then
+  systemctl stop neurobridge.service
+fi
 if [[ -d /opt/neurobridge ]]; then
-  mv /opt/neurobridge "$previous"
+  mv /opt/neurobridge "$previous/app"
 fi
-if ! mv "$staging" /opt/neurobridge; then
-  [[ ! -d "$previous" ]] || mv "$previous" /opt/neurobridge
-  exit 1
-fi
+mv "$staging" /opt/neurobridge
 if [[ ! -e /etc/neurobridge/gateway.toml ]]; then
   install -o root -g neurobridge -m 0640 "$package_root/gateway.toml.example" /etc/neurobridge/gateway.toml
 fi
@@ -43,11 +63,13 @@ fi
   --history-path /var/lib/neurobridge/config-migration-history.jsonl
 install -m 0644 "$package_root/neurobridge.service" /etc/systemd/system/neurobridge.service
 systemctl daemon-reload
-if ! systemctl enable --now neurobridge.service; then
-  systemctl disable --now neurobridge.service 2>/dev/null || true
-  rm -rf /opt/neurobridge
-  [[ ! -d "$previous" ]] || mv "$previous" /opt/neurobridge
-  systemctl enable --now neurobridge.service 2>/dev/null || true
-  exit 1
+if [[ ! -e "$previous/had-app" || -e "$previous/was-enabled" ]]; then
+  systemctl enable neurobridge.service
 fi
-rm -rf "$previous"
+if [[ ! -e "$previous/had-app" || -e "$previous/was-active" ]]; then
+  systemctl start neurobridge.service
+  systemctl is-active --quiet neurobridge.service
+fi
+committed=true
+echo "Installation completed. Rollback snapshot retained (recordings are untouched): $previous"
+echo "To roll back: sudo bash $previous/rollback.sh $previous"

@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 
-from ..business.gateway import ClientSession, Gateway
+from ..application.gateway import ClientSession, GatewayApplication as Gateway
 from .strategy import access_strategy
 
 LOG = logging.getLogger(__name__)

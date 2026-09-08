@@ -15,6 +15,8 @@ import sys
 import tarfile
 import tempfile
 import zipfile
+import platform
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -47,19 +49,35 @@ def dependencies() -> list[dict[str, str]]:
         value = line.strip()
         if not value or value.startswith("#") or "==" not in value:
             continue
-        name, version = value.split("==", 1)
+        name, version = value.split(";", 1)[0].strip().split("==", 1)
         result.append({"type": "library", "name": name, "version": version})
     return result
 
 
+def native_dependencies(platform_name: str) -> list[dict[str, str]]:
+    lock = tomllib.loads((ROOT / "sdk.lock").read_text(encoding="utf-8"))
+    sdk = lock["affective_algorithm_sdk"]
+    build = sdk["build"]
+    components = [{"type": "library", "name": "AffectiveCloud-Algorithm-SDK", "version": sdk["version"]},
+                  {"type": "library", "name": "NumCpp", "version": build["numcpp_version"]}]
+    if platform_name == "kylin":
+        components.append({"type": "library", "name": "Eigen", "version": build["eigen_versions"]["galaxy_kylin_v10_x86_64"]})
+    return components
+
+
 def source_commit() -> str:
     configured = os.environ.get("GITHUB_SHA")
-    if configured:
-        return configured
     try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        if configured and configured != actual:
+            raise ValueError("GITHUB_SHA differs from the checked-out source commit")
+        return actual
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
+
+
+def source_dirty() -> bool:
+    return bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=ROOT, text=True).strip())
 
 
 def validate_runtime(platform_name: str, runtime: Path) -> None:
@@ -91,6 +109,7 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
             shutil.copytree(runtime, payload / "runtime", dirs_exist_ok=True)
         metadata = stage / "metadata"
         metadata.mkdir()
+        shutil.copy2(ROOT / "sdk.lock", metadata / "sdk.lock")
         created = datetime.fromtimestamp(int(os.environ.get("SOURCE_DATE_EPOCH", "0")), timezone.utc).isoformat()
         manifest = {
             "schemaVersion": 1,
@@ -98,11 +117,18 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
             "applicationVersion": APPLICATION_VERSION,
             "northboundProtocolVersion": NORTHBOUND_PROTOCOL_VERSION,
             "sourceCommit": source_commit(),
+            "sourceDirty": source_dirty(),
+            "buildKind": "unsigned-development-candidate",
+            "targetAcceptancePassed": False,
+            "toolchain": {"python": platform.python_version(), "hostPlatform": platform.platform()},
+            "nativeDependencyVerification": "not-verified-against-bundled-binaries",
             "platform": platform_name,
             "architecture": "x86_64",
             "signed": False,
             "runtimeBundled": runtime is not None,
             "createdAt": created,
+            "files": {str(path.relative_to(stage)): sha256(path.read_bytes()).hexdigest()
+                      for path in sorted(stage.rglob("*")) if path.is_file()},
         }
         (metadata / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         sbom = {
@@ -110,7 +136,7 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
             "specVersion": "1.5",
             "version": 1,
             "metadata": {"component": {"type": "application", "name": "NeuroBridge", "version": APPLICATION_VERSION}},
-            "components": dependencies(),
+            "components": dependencies() + native_dependencies(platform_name),
         }
         (metadata / "sbom.cdx.json").write_text(json.dumps(sbom, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         (metadata / "THIRD_PARTY_LICENSES.txt").write_text(
@@ -140,7 +166,10 @@ def main() -> None:
     parser.add_argument("--platform", choices=("kylin", "windows"), required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--runtime-dir", type=Path)
+    parser.add_argument("--require-clean", action="store_true", help="Reject development worktrees for traceable CI candidates")
     args = parser.parse_args()
+    if args.require_clean and source_dirty():
+        parser.error("Candidate requires a clean, committed source tree")
     if args.runtime_dir is not None and not args.runtime_dir.is_dir():
         parser.error("--runtime-dir must be an existing directory")
     print(build(args.platform, args.output_dir, args.runtime_dir))

@@ -11,6 +11,7 @@ import logging
 import os
 from pathlib import Path
 import queue
+import re
 import shutil
 from threading import Event, Lock, Thread
 import time
@@ -47,6 +48,12 @@ class _PendingWrite:
     reason: str | None = None
 
 
+@dataclass
+class _CloseSession:
+    session_id: str
+    event: Event
+
+
 class SegmentedRecordingRepository:
     """Keep disk latency outside acquisition and never use an unbounded queue."""
 
@@ -64,9 +71,12 @@ class SegmentedRecordingRepository:
         fsync_interval_records: int = 64,
         session_retention_days: int = 30,
         auto_cleanup_enabled: bool = False,
+        shutdown_timeout_ms: int = 5000,
     ) -> None:
         if queue_size <= 0 or segment_duration_seconds <= 0 or segment_max_bytes <= 0:
             raise ValueError("Recording limits must be positive")
+        if shutdown_timeout_ms <= 0:
+            raise ValueError("Recording shutdown timeout must be positive")
         if recovery_margin_bytes <= 0 or recovery_checks <= 0 or fsync_interval_records <= 0 or session_retention_days <= 0:
             raise ValueError("Storage recovery, fsync, and retention settings must be positive")
         if critical_threshold_bytes >= warning_threshold_bytes:
@@ -85,7 +95,8 @@ class SegmentedRecordingRepository:
         self.fsync_interval_records = fsync_interval_records
         self.session_retention_days = session_retention_days
         self.auto_cleanup_enabled = auto_cleanup_enabled
-        self._queue: queue.Queue[_PendingWrite | None] = queue.Queue(maxsize=queue_size)
+        self.shutdown_timeout_ms = shutdown_timeout_ms
+        self._queue: queue.Queue[_PendingWrite | _CloseSession] = queue.Queue(maxsize=queue_size)
         self._segments: dict[tuple[str, str], _Segment] = {}
         self._lock = Lock()
         self._state = StorageState.OK
@@ -107,6 +118,8 @@ class SegmentedRecordingRepository:
         self._worker.start()
 
     def try_append(self, record: PersistenceRecord) -> PersistenceReceipt:
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", record.recording_session_id) is None:
+            return self._record_gap(record.captured_at_ms, "invalid_session_id")
         if self._stopped:
             return self._record_gap(record.captured_at_ms, "repository_stopped")
         pending = _PendingWrite(record, Event())
@@ -122,14 +135,35 @@ class SegmentedRecordingRepository:
         if not isinstance(receipt.confirmation, _PendingWrite):
             return PersistenceReceipt(False, False, "confirmation_not_found")
         pending = receipt.confirmation
-        await asyncio.to_thread(pending.event.wait)
+        # Polling is cancellation-safe; never strand an executor thread in
+        # Event.wait() when a disk write stalls indefinitely.
+        try:
+            async with asyncio.timeout(self.shutdown_timeout_ms / 1000):
+                while not pending.event.is_set():
+                    await asyncio.sleep(0.005)
+        except TimeoutError:
+            return PersistenceReceipt(True, False, "confirmation_timeout")
         if pending.succeeded:
             return PersistenceReceipt(True, True)
         return PersistenceReceipt(False, False, pending.reason or "write_error")
 
     async def close_session(self, recording_session_id: str) -> None:
-        await asyncio.to_thread(self._queue.join)
-        await asyncio.to_thread(self._close_session_sync, recording_session_id)
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", recording_session_id) is None:
+            raise ValueError("Invalid recording session identifier")
+        command = _CloseSession(recording_session_id, Event())
+        try:
+            async with asyncio.timeout(self.shutdown_timeout_ms / 1000):
+                while True:
+                    try:
+                        self._queue.put_nowait(command)
+                        break
+                    except queue.Full:
+                        await asyncio.sleep(0.005)
+                while not command.event.is_set():
+                    await asyncio.sleep(0.005)
+        except TimeoutError:
+            self._record_gap(int(time.time() * 1000), "session_close_timeout", StorageState.ERROR)
+            LOG.error("Recording session close timed out; partial files retained: recordingSessionId=%s", recording_session_id)
 
     def storage_status(self) -> StorageStatus:
         with self._lock:
@@ -149,77 +183,108 @@ class SegmentedRecordingRepository:
             )
 
     async def close(self) -> None:
-        await asyncio.to_thread(self._queue.join)
         self._stopped = True
-        self._queue.put(None)
-        await asyncio.to_thread(self._worker.join)
-        with self._lock:
-            for segment in tuple(self._segments.values()):
-                self._finalize_segment(segment)
-            self._segments.clear()
+        try:
+            async with asyncio.timeout(self.shutdown_timeout_ms / 1000):
+                while self._worker.is_alive():
+                    await asyncio.sleep(0.005)
+        except TimeoutError:
+            self._record_gap(int(time.time() * 1000), "writer_shutdown_timeout", StorageState.ERROR)
+            LOG.error("Recording writer shutdown timed out; unfinished segments remain recoverable as partial files")
 
     def _writer(self) -> None:
         while True:
-            pending = self._queue.get()
             try:
-                if pending is None:
-                    return
-                record = pending.record
-                self._write(record)
-                pending.succeeded = True
-            except Exception as error:
-                if pending is not None:
-                    record = pending.record
-                    pending.succeeded = False
-                    pending.reason = "write_error"
-                    self._record_gap(record.captured_at_ms, "write_error", StorageState.ERROR)
-                    LOG.exception(
-                        "Recording write failed: recordingSessionId=%s recordType=%s capturedAtMs=%s errorType=%s",
-                        record.recording_session_id,
-                        record.record_type,
-                        record.captured_at_ms,
-                        type(error).__name__,
-                    )
+                first = self._queue.get(timeout=0.05)
+            except queue.Empty:
+                if not self._stopped:
+                    continue
+                try:
+                    for segment in tuple(self._segments.values()):
+                        self._finalize_segment(segment)
+                    self._segments.clear()
+                except Exception:
+                    LOG.exception("Recording finalization failed; partial files retained")
+                return
+            batch = [first]
+            while len(batch) < self.fsync_interval_records and not isinstance(batch[-1], _CloseSession):
+                try:
+                    batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+            for pending in batch:
+                try:
+                    if isinstance(pending, _CloseSession):
+                        self._close_session_sync(pending.session_id)
+                    else:
+                        self._write(pending.record)
+                        pending.succeeded = True
+                except Exception as error:
+                    if isinstance(pending, _PendingWrite):
+                        pending.succeeded = False
+                        pending.reason = "write_error"
+                        self._record_gap(pending.record.captured_at_ms, "write_error", StorageState.ERROR)
+                        LOG.exception("Recording write failed: recordingSessionId=%s recordType=%s capturedAtMs=%s errorType=%s",
+                                      pending.record.recording_session_id, pending.record.record_type,
+                                      pending.record.captured_at_ms, type(error).__name__)
+                    else:
+                        LOG.exception("Recording session finalization failed: recordingSessionId=%s", pending.session_id)
+            try:
+                # Confirm the whole bounded batch only after fsync, amortizing
+                # disk latency without mistaking buffered writes for durability.
+                for segment in tuple(self._segments.values()):
+                    segment.file.flush()
+                    os.fsync(segment.file.fileno())
+                self._last_success_at_ms = int(time.time() * 1000)
+                self._refresh_capacity_locked(write_succeeded=all(
+                    p.succeeded for p in batch if isinstance(p, _PendingWrite)))
+            except Exception:
+                for pending in batch:
+                    if isinstance(pending, _PendingWrite) and pending.succeeded:
+                        pending.succeeded = False
+                        pending.reason = "fsync_error"
+                        self._record_gap(pending.record.captured_at_ms, "fsync_error", StorageState.ERROR)
+                LOG.exception("Recording batch sync failed; persistence is not guaranteed")
             finally:
-                if pending is not None:
+                for pending in batch:
                     pending.event.set()
-                self._queue.task_done()
+                    self._queue.task_done()
 
     def _write(self, record: PersistenceRecord) -> None:
         category = self._category(record.record_type)
         encoded = (json.dumps(self._json_value(record), ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-        with self._lock:
-            segment = self._segments.get((record.recording_session_id, category))
-            if segment is None:
-                segment = self._open_segment(record.recording_session_id, category)
-                self._segments[(record.recording_session_id, category)] = segment
-            elapsed = record.captured_at_ms - segment.opened_at_ms
-            if segment.count and (elapsed >= self.segment_duration_ms or segment.bytes_written + len(encoded) > self.segment_max_bytes):
-                self._finalize_segment(segment)
-                segment = self._open_segment(record.recording_session_id, category, segment.sequence + 1)
-                self._segments[(record.recording_session_id, category)] = segment
-            segment.file.write(encoded)
-            segment.count += 1
-            segment.bytes_written += len(encoded)
-            segment.first_at_ms = segment.first_at_ms if segment.first_at_ms is not None else record.captured_at_ms
-            segment.last_at_ms = record.captured_at_ms
-            if segment.count % self.fsync_interval_records == 0:
-                segment.file.flush()
-                os.fsync(segment.file.fileno())
-            self._last_success_at_ms = int(time.time() * 1000)
-            self._refresh_capacity_locked(write_succeeded=True)
-            should_cleanup = self.auto_cleanup_enabled and self._state in {StorageState.FULL, StorageState.WARNING}
+        segment = self._segments.get((record.recording_session_id, category))
+        if segment is not None and segment.file.closed:
+            # A rename/manifest failure may have closed the previous file.
+            # Open a new sequence on the next write so recovery is possible.
+            self._segments.pop((record.recording_session_id, category), None)
+            segment = None
+        if segment is None:
+            segment = self._open_segment(record.recording_session_id, category)
+            self._segments[(record.recording_session_id, category)] = segment
+        elapsed = record.captured_at_ms - segment.opened_at_ms
+        if segment.count and (elapsed >= self.segment_duration_ms or segment.bytes_written + len(encoded) > self.segment_max_bytes):
+            self._finalize_segment(segment)
+            segment = self._open_segment(record.recording_session_id, category, segment.sequence + 1)
+            self._segments[(record.recording_session_id, category)] = segment
+        segment.file.write(encoded)
+        segment.count += 1
+        segment.bytes_written += len(encoded)
+        segment.first_at_ms = segment.first_at_ms if segment.first_at_ms is not None else record.captured_at_ms
+        segment.last_at_ms = record.captured_at_ms
+        should_cleanup = self.auto_cleanup_enabled and self._state in {StorageState.FULL, StorageState.WARNING}
         if should_cleanup:
             self.cleanup_completed_sessions()
 
     def _open_segment(self, session_id: str, category: str, sequence: int | None = None) -> _Segment:
         directory = self.sessions_root / session_id / category
-        directory.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if sequence is None:
             existing = [int(path.name.split(".", 1)[0]) for path in directory.glob("[0-9][0-9][0-9][0-9][0-9][0-9].jsonl*")]
             sequence = max(existing, default=0) + 1
         path = directory / f"{sequence:06d}.jsonl.partial"
-        return _Segment(session_id, category, sequence, path, path.open("ab"), int(time.time() * 1000))
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        return _Segment(session_id, category, sequence, path, os.fdopen(descriptor, "ab"), int(time.time() * 1000))
 
     def _finalize_segment(self, segment: _Segment, *, recovered: bool = False) -> None:
         segment.file.flush()
@@ -227,7 +292,10 @@ class SegmentedRecordingRepository:
         segment.file.close()
         final = segment.path.with_suffix("")
         os.replace(segment.path, final)
-        digest = sha256(final.read_bytes()).hexdigest()
+        digest = sha256()
+        with final.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
         entry = {
             "path": str(final.relative_to(self.sessions_root / segment.session_id)),
             "category": segment.category,
@@ -236,7 +304,7 @@ class SegmentedRecordingRepository:
             "firstCapturedAtMs": segment.first_at_ms,
             "lastCapturedAtMs": segment.last_at_ms,
             "byteLength": final.stat().st_size,
-            "sha256": digest,
+            "sha256": digest.hexdigest(),
             "status": "recovered" if recovered else "closed",
         }
         self._update_manifest(segment.session_id, entry)
@@ -261,12 +329,11 @@ class SegmentedRecordingRepository:
         os.replace(temporary, path)
 
     def _close_session_sync(self, session_id: str) -> None:
-        with self._lock:
-            keys = [key for key in self._segments if key[0] == session_id]
-            for key in keys:
-                segment = self._segments.pop(key)
-                self._finalize_segment(segment)
-            self._update_manifest(session_id, None, ended=True)
+        keys = [key for key in self._segments if key[0] == session_id]
+        for key in keys:
+            segment = self._segments.pop(key)
+            self._finalize_segment(segment)
+        self._update_manifest(session_id, None, ended=True)
 
     def recover_partials(self) -> None:
         for path in self.sessions_root.glob("*/**/*.jsonl.partial"):
@@ -341,20 +408,24 @@ class SegmentedRecordingRepository:
             if state is not None:
                 available = self._available_bytes if self._available_bytes is not None else 0
                 self._state = self._health.observe(available, write_succeeded=False)
+            if self._gap_count & (self._gap_count - 1) == 0:
+                LOG.error("Persistence gap: reason=%s count=%s affectedFromMs=%s capturedAtMs=%s",
+                          reason, self._gap_count, self._affected_from_ms, timestamp_ms)
         return PersistenceReceipt(False, False, reason)
 
     def _refresh_capacity(self) -> None:
-        with self._lock:
-            self._refresh_capacity_locked()
+        self._refresh_capacity_locked()
 
     def _refresh_capacity_locked(self, *, write_succeeded: bool | None = None) -> None:
         available = shutil.disk_usage(self.root).free
-        self._available_bytes = available
-        previous = self._state
-        self._state = self._health.observe(available, write_succeeded=write_succeeded)
-        if previous != StorageState.OK and self._state == StorageState.OK:
-            self._affected_from_ms = None
-            self._last_failure_reason = None
+        with self._lock:
+            self._available_bytes = available
+            previous = self._state
+            self._state = self._health.observe(available, write_succeeded=write_succeeded)
+            if previous != StorageState.OK and self._state == StorageState.OK:
+                LOG.info("Storage recovered: availableBytes=%s affectedFromMs=%s gapCount=%s", available, self._affected_from_ms, self._gap_count)
+                self._affected_from_ms = None
+                self._last_failure_reason = None
 
     @staticmethod
     def _category(record_type: str) -> str:

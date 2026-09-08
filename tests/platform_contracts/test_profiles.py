@@ -100,3 +100,9 @@ class PlatformProfileTests(unittest.TestCase):
             client = open_windows_com("COM10", config)
         self.assertEqual(client.options["port"], None)
         self.assertEqual(operations, [("dtr", False), ("rts", False), ("open", "COM10")])
+
+    def test_fixed_windows_com_does_not_bypass_usb_identity(self):
+        config = load(ROOT / "windows/gateway.toml.example").serial
+        ports = [Port("COM1", hwid="ACPI"), Port("COM10", vid=1, pid=2)]
+        self.assertEqual(discover_windows_com_candidates(replace(config, device="COM1"), port_provider=lambda: ports), [])
+        self.assertEqual(discover_windows_com_candidates(replace(config, device=r"\\.\COM10"), port_provider=lambda: ports), ["COM10"])

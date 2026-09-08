@@ -24,6 +24,11 @@ class InMemoryLatestSnapshotStore:
             self._version = SnapshotVersion(self._counter, result.batch.batch_id)
             return self._version
 
+    def clear(self) -> None:
+        with self._lock:
+            self._latest = None
+            self._version = None
+
     def get(self, streams: frozenset[str]) -> SnapshotRead:
         with self._lock:
             return SnapshotRead(self._version, self._latest, frozenset(streams))

@@ -61,12 +61,34 @@ class AlgorithmRunner:
         await self.start()
 
     async def stop(self) -> None:
-        if self.process and self.process.returncode is None:
-            LOG.info("Stopping algorithm bridge: pid=%s", self.process.pid)
-            self.process.terminate()
-            await self.process.wait()
-            LOG.info("Algorithm bridge stopped: returncode=%s", self.process.returncode)
-        self.process = None
+        process, self.process = self.process, None
+        if process and process.returncode is None:
+            LOG.info("Stopping algorithm bridge: pid=%s", process.pid)
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
+            except TimeoutError:
+                LOG.error("Algorithm bridge ignored terminate; killing pid=%s", process.pid)
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
+            LOG.info("Algorithm bridge stopped: returncode=%s", process.returncode)
+
+    async def _discard_exchange(self, process: asyncio.subprocess.Process) -> None:
+        # There is no request ID in this bridge protocol. Once an exchange is
+        # interrupted, a late line cannot safely be assigned to another window.
+        # Never close a replacement installed by a concurrent session reset.
+        if self.process is not process:
+            return
+        try:
+            await self.stop()
+        except (TimeoutError, OSError) as exc:
+            LOG.error("Failed to reap discarded algorithm bridge: %s", _safe_log_text(exc))
 
     async def evaluate(self, window: object) -> tuple[dict | None, list[str]]:
         eeg_packets = getattr(window, "eeg")
@@ -94,24 +116,24 @@ class AlgorithmRunner:
 
         if not eeg and not hr:
             return None, []
-        if not self.available or not self.process or not self.process.stdin or not self.process.stdout:
+        process = self.process
+        if not self.available or not process or not process.stdin or not process.stdout:
             return None, ["ALGORITHM_NOT_READY"]
         started_at = time.monotonic()
         try:
             request = {"timestampMs": end_ms, "windowStartMs": start_ms, "eegRawBase64": base64.b64encode(eeg).decode(), "hrRawBase64": base64.b64encode(hr).decode()}
-            self.process.stdin.write((json.dumps(request) + "\n").encode())
-            await self.process.stdin.drain()
-            response = await asyncio.wait_for(
-                self.process.stdout.readline(),
-                timeout=self.config.request_timeout_ms / 1000,
-            )
+            # Include pipe backpressure in the request budget, not just reading.
+            async with asyncio.timeout(self.config.request_timeout_ms / 1000):
+                process.stdin.write((json.dumps(request) + "\n").encode())
+                await process.stdin.drain()
+                response = await process.stdout.readline()
             if not response:
                 raise RuntimeError("algorithm bridge closed stdout without a response")
             result = json.loads(response)
-            bridge_error = result.get("bridgeError") or result.get("pocError")
+            bridge_error = (result.get("bridgeError") or result.get("pocError")) if isinstance(result, dict) else None
             if bridge_error:
                 raise ValueError(f"algorithm bridge: {bridge_error}")
-            if not isinstance(result.get("algorithm"), dict):
+            if not isinstance(result, dict) or not isinstance(result.get("algorithm"), dict):
                 LOG.warning(
                     "Algorithm bridge output invalid: timestampMs=%s eegPackets=%s hrPackets=%s responseFields=%s",
                     end_ms,
@@ -119,6 +141,9 @@ class AlgorithmRunner:
                     hr_packet_count,
                     ",".join(sorted(str(key) for key in result)) if isinstance(result, dict) else "not-an-object",
                 )
+                if self.process is process:
+                    self.error = "algorithm bridge returned an invalid output object"
+                await self._discard_exchange(process)
                 return None, ["ALGORITHM_OUTPUT_INVALID"]
             LOG.debug(
                 "Algorithm window evaluated: timestampMs=%s eegPackets=%s hrPackets=%s durationMs=%s outputFields=%s",
@@ -129,8 +154,14 @@ class AlgorithmRunner:
                 ",".join(sorted(str(key) for key in result["algorithm"])),
             )
             return result["algorithm"], []
+        except asyncio.CancelledError:
+            if self.process is process:
+                self.error = "algorithm bridge request cancelled"
+            await self._discard_exchange(process)
+            raise
         except (asyncio.TimeoutError, json.JSONDecodeError, OSError, UnicodeError, ValueError, RuntimeError) as exc:
-            self.error = str(exc)
+            if self.process is process:
+                self.error = str(exc) or type(exc).__name__
             LOG.warning(
                 "Algorithm bridge evaluation failed: timestampMs=%s eegPackets=%s hrPackets=%s durationMs=%s errorType=%s reason=%s",
                 end_ms,
@@ -138,6 +169,7 @@ class AlgorithmRunner:
                 hr_packet_count,
                 int((time.monotonic() - started_at) * 1000),
                 type(exc).__name__,
-                _safe_log_text(exc),
+                _safe_log_text(str(exc) or type(exc).__name__),
             )
+            await self._discard_exchange(process)
             return None, ["ALGORITHM_ERROR"]

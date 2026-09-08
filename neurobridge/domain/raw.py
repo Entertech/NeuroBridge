@@ -21,6 +21,7 @@ class RawChunk:
     received_at_monotonic_ns: int
     connection_session_id: str
     trace_id: str
+    dropped_before_bytes: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "data", bytes(self.data))
@@ -30,6 +31,8 @@ class RawChunk:
             raise ValueError("RawChunk correlation identifiers are required")
         if self.received_at_ms < 0 or self.received_at_monotonic_ns < 0:
             raise ValueError("RawChunk timestamps cannot be negative")
+        if self.dropped_before_bytes < 0:
+            raise ValueError("RawChunk dropped bytes cannot be negative")
 
     @classmethod
     def received(

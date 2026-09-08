@@ -68,3 +68,13 @@ recovery_checks = 3
 fsync_interval_records = 64
 session_retention_days = 30
 auto_cleanup_enabled = false
+
+# Initial bounds; tune after target-machine observation, not delivery guarantees.
+[pipeline]
+source_queue_size = 64
+source_enqueue_timeout_ms = 50
+algorithm_queue_size = 8
+persistence_timeout_ms = 100
+shutdown_timeout_ms = 5000
+send_timeout_ms = 5000
+metrics_interval_seconds = 10

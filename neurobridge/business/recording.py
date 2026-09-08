@@ -350,7 +350,7 @@ class RecordingStore:
         except (OSError, json.JSONDecodeError):
             existing_manifest = {}
         files = []
-        for path in sorted(session.rglob("*.jsonl")):
+        for path in self._public_files(session):
             lines = path.read_text(encoding="utf-8").splitlines()
             timestamps = []
             for line in lines:
@@ -387,6 +387,14 @@ class RecordingStore:
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return manifest
 
+    @staticmethod
+    def _public_files(session: Path) -> list[Path]:
+        """Allow only files described by the released capture-package contract."""
+        candidates = [session / "raw" / f"{stream}.jsonl" for stream in {**RAW_STREAMS, **LEGACY_REPLAY_STREAMS}]
+        candidates += [session / "algorithm" / f"{metric}.jsonl" for metric in ALGORITHM_FILES]
+        return sorted(path for path in candidates if path.is_file() and not path.is_symlink()
+                      and path.resolve().is_relative_to(session.resolve()))
+
     def _export_documentation_pdf(self) -> Path:
         """Return the published capture-package PDF, rebuilding it when needed."""
         if self._capture_package_pdf is not None:
@@ -422,9 +430,8 @@ class RecordingStore:
         target = self.root / "exports" / f"neurobridge-{recording_id}.zip"
         temporary = target.with_suffix(".zip.tmp")
         with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in sorted(session.rglob("*")):
-                if path.is_file():
-                    archive.write(path, arcname=f"{session.name}/{path.relative_to(session)}")
+            for path in [session / "manifest.json", *self._public_files(session)]:
+                archive.write(path, arcname=f"{session.name}/{path.relative_to(session)}")
             archive.write(documentation_pdf, arcname=f"{session.name}/{documentation_pdf.name}")
         temporary.replace(target)
         return target

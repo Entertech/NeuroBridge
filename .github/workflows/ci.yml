@@ -101,6 +101,7 @@ jobs:
 
   product-candidates:
     name: Unsigned ${{ matrix.platform }} product candidate
+    needs: unit-and-websocket
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -116,7 +117,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Build unsigned candidate and metadata
-        run: python tools/build-product-candidate.py --platform ${{ matrix.platform }} --output-dir artifacts
+        run: python tools/build-product-candidate.py --platform ${{ matrix.platform }} --output-dir artifacts --require-clean
       - name: Upload unsigned candidate
         uses: actions/upload-artifact@v4
         with:

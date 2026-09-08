@@ -19,11 +19,11 @@ LOG = logging.getLogger(__name__)
 
 
 class PosixSerialSource:
-    """Expose only complete, unmodified rev-181 frames at the raw-source port.
+    """Expose unmodified serial read boundaries, including partial frames/noise.
 
     The legacy adapter remains the physical-session owner during the incremental
     migration. Its EEG/HR compatibility projections are deliberately filtered
-    out here; the bound HeadsetRev181Parser recreates them from the full frame.
+    out here; the bound HeadsetRev181Parser owns business payload interpretation.
     """
 
     def __init__(
@@ -34,6 +34,8 @@ class PosixSerialSource:
         *,
         queue_size: int = 64,
         external_control: bool = False,
+        application_control: bool = False,
+        enqueue_timeout_ms: int = 50,
         candidate_provider=None,
         serial_factory=None,
         identity_provider=None,
@@ -46,8 +48,11 @@ class PosixSerialSource:
         self._device_ready = device_ready
         self._existing_stream = False
         self._control = None
+        self.application_control = application_control
+        self.enqueue_timeout_ms = enqueue_timeout_ms
         self.dropped_raw_chunks = 0
         self.dropped_raw_bytes = 0
+        self._pending_gap_bytes = 0
         self._adapter = SerialAdapter(
             config,
             self._compatibility_packet,
@@ -90,6 +95,10 @@ class PosixSerialSource:
     def existing_stream(self) -> bool:
         return self._existing_stream
 
+    @property
+    def control(self):
+        return self._control
+
     async def chunks(self) -> AsyncIterator[RawChunk]:
         while (item := await self._chunk_queue.get()) is not None:
             yield item
@@ -112,12 +121,15 @@ class PosixSerialSource:
             time.monotonic_ns(),
             self._session_id,
             f"trace-{uuid.uuid4().hex}",
+            self._pending_gap_bytes,
         )
         try:
-            await asyncio.wait_for(self._chunk_queue.put(value), timeout=0.05)
+            await asyncio.wait_for(self._chunk_queue.put(value), timeout=self.enqueue_timeout_ms / 1000)
+            self._pending_gap_bytes = 0
         except TimeoutError:
             self.dropped_raw_chunks += 1
             self.dropped_raw_bytes += len(data)
+            self._pending_gap_bytes += len(data)
             LOG.error(
                 "Serial RawChunk queue full: connectionSessionId=%s droppedChunks=%s droppedBytes=%s chunkBytes=%s",
                 self._session_id,
@@ -130,6 +142,10 @@ class PosixSerialSource:
         if self._control is None or self._session_id is None:
             return False
         self._existing_stream = existing_stream
+        if self.application_control:
+            # Existing-stream adoption precedes preparation; Application alone
+            # invokes DeviceControl after preparing its own session.
+            return existing_stream or self._control.is_streaming(self._session_id)
         result = await self._control.start_stream(self._session_id)
         accepted = result.outcome in {"started", "alreadyStreaming"}
         if not accepted:
@@ -167,10 +183,12 @@ class PosixSerialSource:
 
     async def _emit_state(self, state: ConnectionState) -> None:
         if state == ConnectionState.CONNECTED:
+            self._pending_gap_bytes = 0
             self._session_id = f"conn-{uuid.uuid4().hex}"
+            self._existing_stream = self._adapter._capture_started
         elif state != ConnectionState.VALIDATING:
             self._session_id = None
-        event = DeviceConnectionEvent(state, int(time.time() * 1000), self._session_id)
+        event = DeviceConnectionEvent(state, int(time.time() * 1000), self._session_id, self._existing_stream if state == ConnectionState.CONNECTED else False)
         self._status = SourceStatus(state, self._session_id)
         await self._event_queue.put(event)
 

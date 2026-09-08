@@ -15,8 +15,8 @@
   → USB 线缆与转换板
   → 银河麒麟 V10 内核 USB/串口驱动
   → /dev/ttyACM* 或 /dev/ttyUSB*
-  → NeuroBridge SerialAdapter
-  → Gateway → 算法、录制
+  → NeuroBridge PosixSerialSource → HeadsetRev181Parser
+  → ApplicationService / GatewayApplication → 算法、录制
   → 127.0.0.1 WebSocket → 同机浏览器
 ```
 
@@ -182,6 +182,8 @@
 - TTL 电平、供电方向和 DTR/RTS/HUP 对实机的影响；
 - 采样率、每 600 ms 样本数及算法触发条件；
 - 真实数据算法结果的范围、单位、延迟和有效性；
-- 连续运行验收时长、缓存上限及补传是否启用。
+- 连续运行验收按统一架构 PRD 已确认的 24 小时执行；资源与延迟阈值、缓存上限及补传是否启用仍需确认。
 
 这些项目必须配置化或由双方确认，不得由源码和示例自行假定。
+
+2026-09-08 的源码补齐、自动化证据和未完成发布/现场门禁见[需求补齐与验收清单](NeuroBridge项目结构与多系统接入/需求补齐与验收清单.md)。该清单不替代本 PRD 的实机验收要求。
