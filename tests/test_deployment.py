@@ -1185,8 +1185,9 @@ class DeploymentTests(unittest.TestCase):
 
     def test_serial_replay_policy_is_consistent_across_repository_rules(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
-        prd = (ROOT / "doc" / "tech" / "NeuroBridge项目结构与多系统接入_PRD.md").read_text(encoding="utf-8")
-        design = (ROOT / "doc" / "tech" / "NeuroBridge项目结构与多系统接入_技术方案.md").read_text(encoding="utf-8")
+        architecture_docs = ROOT / "doc" / "tech" / "NeuroBridge项目结构与多系统接入"
+        prd = (architecture_docs / "NeuroBridge项目结构与多系统接入_PRD.md").read_text(encoding="utf-8")
+        design = (architecture_docs / "NeuroBridge项目结构与多系统接入_技术方案.md").read_text(encoding="utf-8")
 
         self.assertNotIn("耳机串口实时路径不可用时，网关在收到 `subscribe` 或 `getLatest` 后自动使用录播", agents)
         self.assertIn("耳机串口 Profile 固定 `supports_replay=false`", agents)
