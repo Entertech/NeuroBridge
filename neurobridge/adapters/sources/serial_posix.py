@@ -86,6 +86,10 @@ class PosixSerialSource:
     def status(self) -> SourceStatus:
         return self._status
 
+    @property
+    def existing_stream(self) -> bool:
+        return self._existing_stream
+
     async def chunks(self) -> AsyncIterator[RawChunk]:
         while (item := await self._chunk_queue.get()) is not None:
             yield item
@@ -127,7 +131,10 @@ class PosixSerialSource:
             return False
         self._existing_stream = existing_stream
         result = await self._control.start_stream(self._session_id)
-        return result.outcome in {"started", "alreadyStreaming"}
+        accepted = result.outcome in {"started", "alreadyStreaming"}
+        if not accepted:
+            self._existing_stream = False
+        return accepted
 
     async def _stop_stream(self) -> None:
         if self._control is None or self._session_id is None:

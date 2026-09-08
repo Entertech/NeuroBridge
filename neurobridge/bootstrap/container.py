@@ -84,16 +84,16 @@ class _ApplicationPipelineAdapter:
                 recording_session_id,
             )
             return False
+        existing_stream = bool(getattr(self.source, "existing_stream", False))
         state = await self.application.prepare_session(
             connection_session_id,
             recording_session_id,
-            existing_stream=False,
+            existing_stream=existing_stream,
         )
         await self.gateway.update_status("algorithmState", state.value)
-        if state == AlgorithmState.READY or self.profile.transport != "serial":
+        if state == AlgorithmState.READY or self.profile.transport != "serial" or existing_stream:
             self._ready.set()
-            return True
-        return False
+        return state == AlgorithmState.READY
 
     async def _consume_chunks(self) -> None:
         async for chunk in self.source.chunks():

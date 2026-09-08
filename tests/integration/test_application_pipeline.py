@@ -5,6 +5,7 @@ import base64
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 from neurobridge.adapters.northbound.publisher import CollectingNorthboundSink, GatewayNorthboundSink
@@ -13,10 +14,12 @@ from neurobridge.adapters.storage import SegmentedRecordingRepository
 from neurobridge.application.service import ApplicationService
 from neurobridge.application.snapshots import InMemoryLatestSnapshotStore
 from neurobridge.business.gateway import ClientSession, Gateway
+from neurobridge.bootstrap.container import _ApplicationPipelineAdapter
 from neurobridge.config import load
 from neurobridge.domain.algorithm import AlgorithmResult, AlgorithmState
 from neurobridge.domain.raw import RawChunk
 from neurobridge.domain.status import ConnectionState, DataState, DeviceConnectionEvent
+from neurobridge.ports.raw_source import SourceStatus
 
 
 def headset_frame(sequence: int = 1) -> bytes:
@@ -71,6 +74,39 @@ class SlowAlgorithm(FakeAlgorithm):
 
 
 class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_serial_stream_opens_raw_pipeline_when_algorithm_is_unavailable(self) -> None:
+        class Source:
+            existing_stream = True
+
+            def status(self) -> SourceStatus:
+                return SourceStatus(ConnectionState.CONNECTED, "conn-existing")
+
+        class Application:
+            async def prepare_session(self, connection_id, recording_id, *, existing_stream=False):
+                self.prepared = (connection_id, recording_id, existing_stream)
+                return AlgorithmState.UNAVAILABLE
+
+        class GatewayStub:
+            store = SimpleNamespace(recording_id="rec-existing")
+
+            async def update_status(self, _name, _value) -> None:
+                return None
+
+        application = Application()
+        bridge = _ApplicationPipelineAdapter(
+            Source(),
+            application,
+            GatewayStub(),
+            SimpleNamespace(transport="serial"),
+        )
+        bridge._connected_seen.set()
+
+        algorithm_ready = await bridge.device_ready()
+
+        self.assertFalse(algorithm_ready)
+        self.assertTrue(bridge._ready.is_set())
+        self.assertEqual(application.prepared, ("conn-existing", "rec-existing", True))
+
     async def test_raw_frame_to_algorithm_snapshot_and_storage_keeps_correlations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = SegmentedRecordingRepository(

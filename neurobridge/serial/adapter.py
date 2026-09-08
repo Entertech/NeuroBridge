@@ -574,6 +574,10 @@ class SerialAdapter:
                         ) from probe_error
                     raise TimeoutError("No serial candidate passed the active handshake ACK probe")
 
+                if existing_stream and self.external_control:
+                    if self.external_start is None or not await self.external_start(True):
+                        raise ConnectionError("Session-bound DeviceControl did not adopt the existing serial stream")
+                    self._capture_started = True
                 phase = "algorithm_initialize"
                 LOG.info(
                     "Serial local algorithm preparation started: attempt=%s target=%s startCommandSent=false",
@@ -582,10 +586,6 @@ class SerialAdapter:
                 )
                 algorithm_ready = await self.device_ready()
                 if existing_stream:
-                    if self.external_control:
-                        if self.external_start is None or not await self.external_start(True):
-                            raise ConnectionError("Session-bound DeviceControl did not adopt the existing serial stream")
-                        self._capture_started = True
                     if not algorithm_ready:
                         # A device that is already producing validated frames
                         # must not be interrupted merely because the local
