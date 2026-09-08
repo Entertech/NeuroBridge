@@ -7,6 +7,7 @@ import base64
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import errno
 import logging
 import os
 from pathlib import Path
@@ -84,8 +85,6 @@ class SegmentedRecordingRepository:
         self.root = Path(root)
         self.sessions_root = self.root / "sessions"
         self.quarantine = self.root / "quarantine"
-        self.sessions_root.mkdir(parents=True, exist_ok=True)
-        self.quarantine.mkdir(parents=True, exist_ok=True)
         self.segment_duration_ms = segment_duration_seconds * 1000
         self.segment_max_bytes = segment_max_bytes
         self.warning_threshold_bytes = warning_threshold_bytes
@@ -112,8 +111,15 @@ class SegmentedRecordingRepository:
             recovery_margin_bytes,
             recovery_checks,
         )
-        self.recover_partials()
-        self._refresh_capacity()
+        try:
+            self.sessions_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self.quarantine.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self.recover_partials()
+            self._refresh_capacity()
+        except OSError as error:
+            state, reason = classify_storage_error(error)
+            self._record_gap(int(time.time() * 1000), reason, state)
+            LOG.error("Recording startup degraded; live pipeline remains available: reason=%s", reason)
         self._worker = Thread(target=self._writer, name="neurobridge-recording", daemon=True)
         self._worker.start()
 
@@ -126,7 +132,7 @@ class SegmentedRecordingRepository:
         try:
             self._queue.put_nowait(pending)
         except queue.Full:
-            return self._record_gap(record.captured_at_ms, "writer_queue_full", StorageState.ERROR)
+            return self._record_gap(record.captured_at_ms, "write_queue_overflow", StorageState.ERROR)
         return PersistenceReceipt(True, False, "write_pending", pending)
 
     async def confirm(self, receipt: PersistenceReceipt) -> PersistenceReceipt:
@@ -222,8 +228,8 @@ class SegmentedRecordingRepository:
                 except Exception as error:
                     if isinstance(pending, _PendingWrite):
                         pending.succeeded = False
-                        pending.reason = "write_error"
-                        self._record_gap(pending.record.captured_at_ms, "write_error", StorageState.ERROR)
+                        failure_state, pending.reason = classify_storage_error(error)
+                        self._record_gap(pending.record.captured_at_ms, pending.reason, failure_state)
                         LOG.exception("Recording write failed: recordingSessionId=%s recordType=%s capturedAtMs=%s errorType=%s",
                                       pending.record.recording_session_id, pending.record.record_type,
                                       pending.record.captured_at_ms, type(error).__name__)
@@ -235,15 +241,17 @@ class SegmentedRecordingRepository:
                 for segment in tuple(self._segments.values()):
                     segment.file.flush()
                     os.fsync(segment.file.fileno())
-                self._last_success_at_ms = int(time.time() * 1000)
-                self._refresh_capacity_locked(write_succeeded=all(
-                    p.succeeded for p in batch if isinstance(p, _PendingWrite)))
-            except Exception:
+                writes = [p for p in batch if isinstance(p, _PendingWrite)]
+                all_succeeded = bool(writes) and all(p.succeeded for p in writes)
+                if all_succeeded:
+                    self._last_success_at_ms = int(time.time() * 1000)
+                self._refresh_capacity_locked(write_succeeded=True if all_succeeded else None)
+            except Exception as error:
                 for pending in batch:
                     if isinstance(pending, _PendingWrite) and pending.succeeded:
                         pending.succeeded = False
-                        pending.reason = "fsync_error"
-                        self._record_gap(pending.record.captured_at_ms, "fsync_error", StorageState.ERROR)
+                        failure_state, pending.reason = classify_storage_error(error)
+                        self._record_gap(pending.record.captured_at_ms, pending.reason, failure_state)
                 LOG.exception("Recording batch sync failed; persistence is not guaranteed")
             finally:
                 for pending in batch:
@@ -338,16 +346,31 @@ class SegmentedRecordingRepository:
     def recover_partials(self) -> None:
         for path in self.sessions_root.glob("*/**/*.jsonl.partial"):
             try:
-                data = path.read_bytes()
-                complete = data[: data.rfind(b"\n") + 1] if b"\n" in data else b""
-                rows = [json.loads(line) for line in complete.splitlines() if line]
-                if not rows:
-                    raise ValueError("partial segment has no complete record")
-                path.write_bytes(complete)
+                count, valid_end, first_at, last_at = 0, 0, None, None
+                with path.open("rb+") as source:
+                    while True:
+                        line = source.readline(self.segment_max_bytes + 1)
+                        if not line or not line.endswith(b"\n") or len(line) > self.segment_max_bytes:
+                            break
+                        try:
+                            row = json.loads(line)
+                            captured = row["capturedAtMs"]
+                            if type(captured) is not int:
+                                break
+                        except (ValueError, KeyError, TypeError):
+                            break
+                        count += 1
+                        valid_end = source.tell()
+                        first_at = captured if first_at is None else first_at
+                        last_at = captured
+                    if not count:
+                        raise ValueError("partial segment has no complete record")
+                    source.truncate(valid_end)
                 session_id = path.parents[1].name
                 category = path.parent.name
                 sequence = int(path.name.split(".", 1)[0])
-                segment = _Segment(session_id, category, sequence, path, path.open("ab"), rows[0]["capturedAtMs"], rows[0]["capturedAtMs"], rows[-1]["capturedAtMs"], len(rows), len(complete))
+                segment = _Segment(session_id, category, sequence, path, path.open("ab"),
+                                   first_at, first_at, last_at, count, valid_end)
                 self._finalize_segment(segment, recovered=True)
             except Exception:
                 destination = self.quarantine / f"{path.parents[1].name}-{path.parent.name}-{path.name}"
@@ -357,47 +380,70 @@ class SegmentedRecordingRepository:
                 self._state = self._health.observe(self._available_bytes or 0, write_succeeded=False)
 
     def cleanup_completed_sessions(self) -> tuple[str, ...]:
-        """Delete eligible completed sessions oldest-first when explicitly enabled."""
-
+        """Audit eligible completed sessions and delete only with explicit opt-in."""
         if not self.auto_cleanup_enabled:
             return ()
         with self._lock:
             active_sessions = {session_id for session_id, _category in self._segments}
         candidates: list[tuple[int, Path]] = []
+        retention_cutoff_ms = int(time.time() * 1000) - self.session_retention_days * 86400000
         for session in self.sessions_root.iterdir():
-            if not session.is_dir() or session.name in active_sessions:
+            if not session.is_dir():
                 continue
-            manifest_path = session / "manifest.json"
+            reason = None
             try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            if not isinstance(manifest.get("endedAtMs"), int) or manifest.get("retain") is True:
-                continue
-            if (session / ".in-use").exists() or (session / ".exporting").exists():
-                continue
-            candidates.append((manifest["endedAtMs"], session))
+                manifest = json.loads((session / "manifest.json").read_text(encoding="utf-8"))
+                if session.name in active_sessions or not isinstance(manifest.get("endedAtMs"), int):
+                    reason = "active_or_unfinished"
+                elif manifest.get("retain") is True:
+                    reason = "retained"
+                elif (session / ".in-use").exists() or (session / ".exporting").exists():
+                    reason = "in_use"
+                elif manifest["endedAtMs"] > retention_cutoff_ms:
+                    reason = "retention_period"
+                else:
+                    candidates.append((manifest["endedAtMs"], session))
+            except (OSError, ValueError, TypeError, AttributeError):
+                reason = "invalid_manifest"
+            if reason:
+                self._append_cleanup_audit(session.name, "skipped", reason)
         removed: list[str] = []
         recovery_target = self.warning_threshold_bytes + self.recovery_margin_bytes
-        retention_cutoff_ms = int(time.time() * 1000) - self.session_retention_days * 24 * 60 * 60 * 1000
-        for _ended_at, session in sorted(candidates):
+        for _, session in sorted(candidates):
             if shutil.disk_usage(self.root).free >= recovery_target:
                 break
-            if _ended_at > retention_cutoff_ms:
+            # Recheck occupied markers immediately before the destructive operation.
+            if (session / ".in-use").exists() or (session / ".exporting").exists():
+                self._append_cleanup_audit(session.name, "skipped", "in_use")
                 continue
+            if not self._append_cleanup_audit(session.name, "selected"):
+                break  # Never delete a session without a durable audit trail.
             tombstone = self.root / f".cleanup-{session.name}-{uuid.uuid4().hex}"
-            os.replace(session, tombstone)
-            shutil.rmtree(tombstone)
+            try:
+                os.replace(session, tombstone)
+                shutil.rmtree(tombstone)
+            except OSError as error:
+                self._append_cleanup_audit(session.name, "failed", classify_storage_error(error)[1])
+                LOG.error("Session cleanup failed; retained remainder: recordingSessionId=%s", session.name)
+                break
             removed.append(session.name)
             self._append_cleanup_audit(session.name, "deleted")
         self._refresh_capacity()
         return tuple(removed)
 
-    def _append_cleanup_audit(self, session_id: str, outcome: str) -> None:
-        path = self.root / "cleanup-audit.jsonl"
-        row = {"timestampMs": int(time.time() * 1000), "recordingSessionId": session_id, "outcome": outcome}
-        with path.open("a", encoding="utf-8") as audit:
-            audit.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+    def _append_cleanup_audit(self, session_id: str, outcome: str, reason: str | None = None) -> bool:
+        row = {"timestampMs": int(time.time() * 1000), "recordingSessionId": session_id,
+               "outcome": outcome, "reason": reason}
+        LOG.info("Session cleanup: recordingSessionId=%s outcome=%s reason=%s", session_id, outcome, reason)
+        try:
+            with (self.root / "cleanup-audit.jsonl").open("a", encoding="utf-8") as audit:
+                audit.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+                audit.flush()
+                os.fsync(audit.fileno())
+            return True
+        except OSError:
+            LOG.error("Cleanup audit unavailable; further deletion is disabled for this pass")
+            return False
 
     def _record_gap(self, timestamp_ms: int, reason: str, state: StorageState | None = None) -> PersistenceReceipt:
         with self._lock:
@@ -407,7 +453,7 @@ class SegmentedRecordingRepository:
             self._last_failure_reason = reason
             if state is not None:
                 available = self._available_bytes if self._available_bytes is not None else 0
-                self._state = self._health.observe(available, write_succeeded=False)
+                self._state = self._health.observe(available, write_succeeded=False, failure_state=state)
             if self._gap_count & (self._gap_count - 1) == 0:
                 LOG.error("Persistence gap: reason=%s count=%s affectedFromMs=%s capturedAtMs=%s",
                           reason, self._gap_count, self._affected_from_ms, timestamp_ms)
@@ -452,3 +498,13 @@ class SegmentedRecordingRepository:
         if isinstance(value, (list, tuple)):
             return [cls._encode(item) for item in value]
         return value
+
+
+def classify_storage_error(error: BaseException) -> tuple[StorageState, str]:
+    reason = {
+        errno.ENOSPC: "no_space", errno.EDQUOT: "quota_exceeded",
+        errno.EROFS: "read_only", errno.EACCES: "permission_denied",
+        errno.EPERM: "permission_denied", errno.ENOENT: "path_unavailable",
+        errno.ENOTDIR: "path_unavailable",
+    }.get(getattr(error, "errno", None), "io_error")
+    return (StorageState.FULL if reason in {"no_space", "quota_exceeded"} else StorageState.ERROR, reason)

@@ -12,6 +12,7 @@ class SignalWindowAssembler:
         if interval_ms <= 0:
             raise ValueError("interval_ms must be positive")
         self.interval_ms = interval_ms
+        self._source_type: str | None = None
         self._signals: list[ParsedSignal] = []
         self._window_start_ms: int | None = None
         self._connection_session_id: str | None = None
@@ -25,6 +26,7 @@ class SignalWindowAssembler:
         device_protocol: str,
         connection_session_id: str,
         recording_session_id: str,
+        source_type: str | None = None,
     ) -> tuple[ParsedSignalBatch, ...]:
         if self._connection_session_id not in {None, connection_session_id}:
             raise ValueError("SignalWindowAssembler cannot span connection sessions")
@@ -39,6 +41,7 @@ class SignalWindowAssembler:
             self._connection_session_id = connection_session_id
             self._device_protocol = device_protocol
             self._recording_session_id = recording_session_id
+            self._source_type = source_type
         self._signals.append(signal)
         return tuple(ready)
 
@@ -52,6 +55,7 @@ class SignalWindowAssembler:
         return self._window_start_ms + self.interval_ms
 
     def reset(self) -> None:
+        self._source_type = None
         self._signals.clear()
         self._window_start_ms = None
         self._connection_session_id = None
@@ -75,6 +79,7 @@ class SignalWindowAssembler:
             frame_refs=frame_refs,
             valid=not reasons,
             invalid_reasons=reasons,
+            source_type=self._source_type,
         )
         self.reset()
         return batch

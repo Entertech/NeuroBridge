@@ -262,7 +262,7 @@ class SegmentedRepositoryTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(pending.accepted)
             self.assertFalse(confirmed.accepted)
             self.assertFalse(confirmed.persistence_guaranteed)
-            self.assertEqual(confirmed.reason, "write_error")
+            self.assertEqual(confirmed.reason, "io_error")
             self.assertEqual(repository.storage_status().state, StorageState.ERROR)
             self.assertEqual(repository.storage_status().gap_count, 1)
             await repository.close()

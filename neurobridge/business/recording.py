@@ -39,18 +39,19 @@ def _deep_merge(target: dict, update: dict) -> None:
 class RecordingStore:
     """Persist raw packets and independent algorithm metric events per session."""
 
-    def __init__(self, root: Path, capture_package_pdf: Path | None = None) -> None:
+    def __init__(self, root: Path, capture_package_pdf: Path | None = None, *, create_directories: bool = True) -> None:
         self.root = root
-        self.root.mkdir(parents=True, exist_ok=True)
-        # Retain these legacy directories so pre-v1.0 recordings remain replayable.
-        (root / "raw").mkdir(exist_ok=True)
-        (root / "algorithm").mkdir(exist_ok=True)
-        (root / "sessions").mkdir(exist_ok=True)
-        (root / "exports").mkdir(exist_ok=True)
-        # Internal device-boundary records are deliberately outside sessions:
-        # they are not part of the locked capture-package export or replay
-        # contract, but remain correlated by recording/session ID.
-        (root / "internal-device").mkdir(mode=0o700, exist_ok=True)
+        if create_directories:
+            self.root.mkdir(parents=True, exist_ok=True)
+            # Retain these legacy directories so pre-v1.0 recordings remain replayable.
+            (root / "raw").mkdir(exist_ok=True)
+            (root / "algorithm").mkdir(exist_ok=True)
+            (root / "sessions").mkdir(exist_ok=True)
+            (root / "exports").mkdir(exist_ok=True)
+            # Internal device-boundary records are deliberately outside sessions:
+            # they are not part of the locked capture-package export or replay
+            # contract, but remain correlated by recording/session ID.
+            (root / "internal-device").mkdir(mode=0o700, exist_ok=True)
         self.recording_id: str | None = None
         self.last_recording_id: str | None = None
         self._sequence: dict[str, int] = {}

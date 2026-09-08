@@ -18,8 +18,10 @@ from ..domain.signal import ParsedSignal, ParsedSignalBatch
 from ..ports.recording import PersistenceRecord
 from .recording import RecordingStore
 
-from ..application.gateway import GatewayApplication, ClientSession, Subscription, ProtocolError, envelope, now_ms, safe_log_text, PROTOCOL_VERSION, REPLAY_NOT_AVAILABLE_REASON, STREAM_NOT_AVAILABLE_REASON
-from ..adapters.northbound.protocol import project_window
+from ..application.gateway import GatewayApplication, ClientSession, Subscription, ProtocolError, now_ms, safe_log_text, REPLAY_NOT_AVAILABLE_REASON, STREAM_NOT_AVAILABLE_REASON
+from ..adapters.northbound.protocol import project_window, envelope
+from ..adapters.northbound.codec import GatewayWireCodec
+from ..versioning import NORTHBOUND_PROTOCOL_VERSION as PROTOCOL_VERSION
 from ..adapters.northbound.controller import NorthboundController
 
 LOG = logging.getLogger(__name__)
@@ -39,7 +41,9 @@ class Gateway(GatewayApplication):
                 **{key: value for key, value in vars(config.storage).items() if key != "writer_queue_size"},
             ),
             supports_replay=config.data_source.type == "bluetooth",
-            project_window=project_window,
+            project_window=project_window, wire=GatewayWireCodec(),
+            live_connection_states=frozenset({"validated" if config.data_source.type == "serial" else "connected"}),
+            initial_connection_state="not_connected" if config.data_source.type == "serial" else "disconnected",
         )
         self.log = LOG
         self.assembler = WindowAssembler()

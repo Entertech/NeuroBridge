@@ -105,12 +105,15 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
                 shutil.copy2(source, stage / source.name)
         config_source = ROOT / ("config/gateway.toml.example" if platform_name == "kylin" else "windows/gateway.toml.example")
         shutil.copy2(config_source, stage / "gateway.toml.example")
+        shutil.copy2(config_source, payload / "defaults.toml")
         if runtime is not None:
             shutil.copytree(runtime, payload / "runtime", dirs_exist_ok=True)
         metadata = stage / "metadata"
         metadata.mkdir()
         shutil.copy2(ROOT / "sdk.lock", metadata / "sdk.lock")
-        created = datetime.fromtimestamp(int(os.environ.get("SOURCE_DATE_EPOCH", "0")), timezone.utc).isoformat()
+        (metadata / "licenses").mkdir()
+        shutil.copy2(ROOT / "third_party/NumCpp/LICENSE", metadata / "licenses/NumCpp-LICENSE")
+        created = datetime.fromtimestamp(int(os.environ.get("SOURCE_DATE_EPOCH", str(int(datetime.now(timezone.utc).timestamp())))), timezone.utc).isoformat()
         manifest = {
             "schemaVersion": 1,
             "product": "NeuroBridge",
@@ -145,6 +148,18 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
             + "\n",
             encoding="utf-8",
         )
+        manifest["files"] = {path.relative_to(stage).as_posix(): sha256(path.read_bytes()).hexdigest()
+                             for path in sorted(stage.rglob("*"))
+                             if path.is_file() and path != metadata / "manifest.json"}
+        (metadata / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        checksums = []
+        for path in sorted(stage.rglob("*")):
+            if path.is_file():
+                relative = path.relative_to(stage).as_posix()
+                if any(char in relative for char in ("\n", "\r", "\\")):
+                    raise ValueError("Candidate filenames must not contain newlines or backslashes")
+                checksums.append(f"{sha256(path.read_bytes()).hexdigest()}  {relative}")
+        (metadata / "files.sha256").write_text("\n".join(checksums) + "\n", encoding="utf-8")
         base = output / stage.name
         if platform_name == "kylin":
             archive = Path(str(base) + ".tar.gz")
@@ -158,6 +173,10 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
                         bundle.write(path, Path(stage.name) / path.relative_to(stage))
     digest = sha256(archive.read_bytes()).hexdigest()
     archive.with_suffix(archive.suffix + ".sha256").write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+    release = {**manifest, "package": archive.name, "packageSize": archive.stat().st_size,
+               "packageSha256": digest, "dependencies": dependencies() + native_dependencies(platform_name),
+               "licenseTextsComplete": False}
+    (output / f"{archive.name}.release-manifest.json").write_text(json.dumps(release, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return archive
 
 

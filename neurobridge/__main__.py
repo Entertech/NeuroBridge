@@ -11,7 +11,7 @@ import sys
 import signal
 import time
 
-from .config import load
+from .configuration.runtime import load_runtime_config
 from .bootstrap import build_container
 from .download import serve_downloads
 from .logging_setup import configure_logging
@@ -35,9 +35,9 @@ def _file_sha256(path: str) -> str:
         return f"unavailable:{type(error).__name__}"
 
 
-async def run(config_path: str) -> None:
+async def run(config_path: str, *, override_path: str | None = None, development: bool = False) -> None:
     started_at = time.monotonic()
-    config = load(config_path)
+    config = load_runtime_config(config_path, override_path=override_path, development=development)
     container = build_container(config)
     strategy = access_strategy(config.access.mode)
     configure_logging(config.logging)
@@ -138,9 +138,11 @@ async def run(config_path: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="NeuroBridge gateway")
     parser.add_argument("--config", required=True)
+    parser.add_argument("--development", action="store_true")
+    parser.add_argument("--override-config", help="Temporary override file; requires --development")
     args = parser.parse_args()
     try:
-        asyncio.run(run(args.config))
+        asyncio.run(run(args.config, override_path=args.override_config, development=args.development))
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     except Exception:

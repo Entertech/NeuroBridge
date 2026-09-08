@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from logging.handlers import WatchedFileHandler
+from logging.handlers import RotatingFileHandler, WatchedFileHandler
 import time
 
 from .config import LoggingConfig
@@ -21,14 +21,17 @@ def utc_formatter() -> logging.Formatter:
 def configure_logging(config: LoggingConfig) -> None:
     """Write durable operational logs while retaining systemd journal output.
 
-    WatchedFileHandler cooperates with Ubuntu's logrotate: the service keeps
-    running and reopens the new log file on its next emitted record.
+    Size-based rotation bounds files on every platform, including source-tree
+    Kylin runs. External mode is reserved for deployments managed by logrotate.
     """
 
     config.directory.mkdir(parents=True, exist_ok=True)
     logfile = config.directory / config.filename
     formatter = utc_formatter()
-    file_handler = WatchedFileHandler(logfile, encoding="utf-8")
+    file_handler = (WatchedFileHandler(logfile, encoding="utf-8")
+                    if config.rotation_mode == "external" else
+                    RotatingFileHandler(logfile, maxBytes=config.max_bytes,
+                                        backupCount=config.backup_count, encoding="utf-8"))
     file_handler.setFormatter(formatter)
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)

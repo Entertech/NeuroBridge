@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import platform
+import re
 import sys
 from typing import Mapping
 
@@ -20,6 +21,7 @@ from .windows_headset_local import CAPABILITIES as WINDOWS_CAPABILITIES
 class RuntimePlatform:
     os_family: str
     architecture: str
+    version: str | None = None  # None only for explicitly injected test runtimes.
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +54,7 @@ def detect_runtime_platform(os_release: Mapping[str, str] | None = None) -> Runt
         release = dict(os_release or _read_os_release())
         identity = f"{release.get('ID', '')} {release.get('NAME', '')}".lower()
         if "kylin" in identity or "银河麒麟" in identity:
-            return RuntimePlatform("kylin", architecture)
+            return RuntimePlatform("kylin", architecture, release.get("VERSION_ID", ""))
         if release.get("ID", "").lower() == "ubuntu":
             return RuntimePlatform("ubuntu", architecture)
         return RuntimePlatform("linux", architecture)
@@ -67,6 +69,10 @@ def resolve_profile(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     except KeyError as exc:
         raise ValueError(f"Unsupported deployment profile: {profile_id}") from exc
     mismatches: list[str] = []
+    if profile.os_family == "kylin" and runtime.version is not None and not re.fullmatch(r"[Vv]?10(?:\..*)?", runtime.version):
+        mismatches.append("version expected=Kylin V10; runtime version unsupported or missing")
+    if config.data_source.window_interval_ms != 600:
+        mismatches.append("window_interval_ms expected=600 for the current northbound contract")
     if runtime.os_family != profile.os_family:
         mismatches.append(f"os expected={profile.os_family} actual={runtime.os_family}")
     if profile.architecture != "any" and runtime.architecture != profile.architecture:

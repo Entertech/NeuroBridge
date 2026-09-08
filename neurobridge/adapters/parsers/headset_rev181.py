@@ -100,8 +100,8 @@ class HeadsetRev181Parser:
             hints = {"sequence": sequence}
             signals.extend(
                 (
-                    ParsedSignal("eeg", raw[EEG_START:EEG_END], "bytes", None, hints, (frame_id,), chunk.received_at_ms),
-                    ParsedSignal("hr", raw[HR_OFFSET : HR_OFFSET + 1], "uint8", None, hints, (frame_id,), chunk.received_at_ms),
+                    ParsedSignal("eeg", raw[EEG_START:EEG_END], "bytes", None, hints, (frame_id,), chunk.received_at_ms, sample_count=6),
+                    ParsedSignal("hr", raw[HR_OFFSET : HR_OFFSET + 1], "uint8", None, hints, (frame_id,), chunk.received_at_ms, sample_count=1),
                 )
             )
         return ParseOutcome(tuple(frames), tuple(signals), tuple(diagnostics), len(self._buffer), discarded)

@@ -82,6 +82,8 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 return SourceStatus(ConnectionState.CONNECTED, "conn-existing")
 
         class Application:
+            requires_algorithm_to_start = True
+
             async def prepare_session(self, connection_id, recording_id, *, existing_stream=False):
                 self.prepared = (connection_id, recording_id, existing_stream)
                 return AlgorithmState.UNAVAILABLE

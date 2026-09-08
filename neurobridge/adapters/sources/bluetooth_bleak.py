@@ -8,6 +8,7 @@ import logging
 import time
 import uuid
 
+from .bluetooth_control import BluetoothSessionControl
 from ...ble.flowtime import FlowtimeAdapter
 from ...config import BleConfig
 from ...device.packet import DevicePacket
@@ -31,13 +32,20 @@ class BluetoothBleakSource:
         self.dropped_raw_bytes = 0
         self._pending_gap_bytes = 0
         self.enqueue_timeout_ms = enqueue_timeout_ms
-        self._adapter = FlowtimeAdapter(config, self._packet, self._status_changed, self._prepare_device, error)
+        self._adapter = FlowtimeAdapter(config, self._packet, self._status_changed, self._prepare_device, error, external_control=True)
+        self.control = BluetoothSessionControl(lambda: self._session_id, lambda: False, self._write_control)
+
+    async def _write_control(self, command: bytes) -> None:
+        session = self._session_id
+        await self._adapter.write_control(command, session_valid=lambda: session is not None and session == self._session_id)
 
     async def start(self) -> None:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._adapter.run())
 
     async def stop(self) -> None:
+        if self._session_id is not None:
+            await self.control.stop_stream(self._session_id)
         await self._adapter.stop()
         if self._task and not self._task.done():
             self._task.cancel()
@@ -75,7 +83,7 @@ class BluetoothBleakSource:
                 len(packet.value),
             )
 
-    async def _prepare_device(self) -> None:
+    async def _prepare_device(self) -> bool:
         # Notifications are installed and the BLE link is usable here. Emit the
         # application connection session before algorithm initialization and the
         # FF21 start command, so no post-start bytes precede recording setup.
@@ -85,7 +93,7 @@ class BluetoothBleakSource:
             event = DeviceConnectionEvent(ConnectionState.CONNECTED, int(time.time() * 1000), self._session_id)
             self._status = SourceStatus(ConnectionState.CONNECTED, self._session_id)
             await self._events.put(event)
-        await self._device_ready()
+        return await self._device_ready()
 
     async def _status_changed(self, name: str, value: object) -> None:
         if name != "connectionState":

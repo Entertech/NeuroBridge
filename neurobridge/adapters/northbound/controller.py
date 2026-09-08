@@ -6,7 +6,8 @@ import json
 import logging
 from typing import Any
 
-from ...application.gateway import ClientSession, GatewayApplication, ProtocolError, envelope
+from ...application.gateway import ClientSession, GatewayApplication, ProtocolError
+from .protocol import envelope
 from ...versioning import NORTHBOUND_PROTOCOL_VERSION
 
 
@@ -54,6 +55,8 @@ class NorthboundController:
             request = self.parse_request(raw)
             request_id = request["requestId"]
             action = request["action"]
+            key = action if action in self.gateway.requests_by_action else "invalid"
+            self.gateway.requests_by_action[key] += 1
             params = request["params"]
             if action in {"getStatus", "getLatest", "subscribe"}:
                 await self.gateway.prepare_query()
@@ -84,6 +87,8 @@ class NorthboundController:
             if start_replay:
                 self.gateway._start_replay_if_needed()
         except ProtocolError as error:
+            if action is None:
+                self.gateway.requests_by_action["invalid"] += 1
             LOG.warning(
                 "Northbound request rejected: action=%s requestId=%s code=%s reason=%s",
                 action,

@@ -23,9 +23,11 @@ def wear_state_from_packet(_value: bytes) -> str:
 
 class FlowtimeAdapter:
     """Bleak adapter for the FF31/FF32/FF51/FF21 profile in the device specification."""
-    def __init__(self, config: BleConfig, packet: Callable[[DevicePacket], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]], error: Callable[[str], Awaitable[None]] | None = None) -> None:
+    def __init__(self, config: BleConfig, packet: Callable[[DevicePacket], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]], error: Callable[[str], Awaitable[None]] | None = None, *, external_control: bool = False) -> None:
         self.config, self.packet, self.status, self.device_ready = config, packet, status, device_ready
         self.error = error
+        self.external_control = external_control
+        self._io_lock = asyncio.Lock()
         self._client = None
         self._stopping = False
 
@@ -94,7 +96,8 @@ class FlowtimeAdapter:
                 if ready is False:
                     raise ConnectionError("Local algorithm is not ready; BLE capture command was not sent")
                 phase = "start_capture"
-                await self._client.write_gatt_char(FF21, b"\x05", response=True)
+                if not self.external_control:
+                    await self.write_control(b"\x05")
                 LOG.info("Flowtime start command acknowledged: attempt=%s command=0x05", attempt)
                 # A connection is only published after all notifications, the FF21
                 # start command, and the per-session algorithm initialization succeed.
@@ -134,7 +137,8 @@ class FlowtimeAdapter:
         """Do not leave a device-side BLE link open after incomplete subscription."""
         if self._client and self._client.is_connected:
             try:
-                await self._client.disconnect()
+                async with self._io_lock:
+                    await self._client.disconnect()
             except Exception:
                 LOG.exception("Failed to disconnect Flowtime after connection setup failure")
         self._client = None
@@ -176,14 +180,21 @@ class FlowtimeAdapter:
             LOG.warning("Could not inspect optional Flowtime notification support; continuing without it")
             return False
 
+    async def write_control(self, command: bytes, *, session_valid=None) -> None:
+        async with self._io_lock:
+            if session_valid is not None and not session_valid():
+                raise ConnectionError("BLE control belongs to an expired session")
+            if self._client is None or not self._client.is_connected:
+                raise ConnectionError("BLE session is no longer connected")
+            await self._client.write_gatt_char(FF21, command, response=True)
+
     async def stop(self) -> None:
         self._stopping = True
         LOG.info("Stopping Flowtime BLE adapter")
-        if self._client and self._client.is_connected:
-            try:
-                await self._client.write_gatt_char(FF21, b"\x06", response=True)
-                LOG.info("Flowtime stop command acknowledged: command=0x06")
-                await self._client.disconnect()
-                LOG.info("Flowtime BLE link disconnected during adapter stop")
-            except Exception:
-                LOG.exception("Failed to stop Flowtime collection")
+        try:
+            if not self.external_control and self._client and self._client.is_connected:
+                await self.write_control(b"\x06")
+        except Exception:
+            LOG.exception("Failed to stop Flowtime collection")
+        finally:
+            await self._disconnect_after_failure()

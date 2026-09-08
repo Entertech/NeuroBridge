@@ -56,3 +56,13 @@ class DependencyDirectionTests(unittest.TestCase):
                             imports.append(node.module)
                 for name in imports:
                     self.assertFalse(any(name == item or name.startswith(item + ".") for item in forbidden), f"{path}: {name}")
+
+
+    def test_application_does_not_assemble_wire_envelopes_or_branch_on_transport(self):
+        path = ROOT / "neurobridge/application/gateway.py"
+        source = path.read_text()
+        tree = ast.parse(source)
+        self.assertNotIn('"protocolVersion"', source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Compare):
+                self.assertNotIn("data_source.type", ast.unparse(node))

@@ -9,6 +9,7 @@ import json
 import time
 
 from ..adapters.algorithms import AffectiveSdkAlgorithmEngine
+from ..adapters.northbound.codec import GatewayWireCodec
 from ..adapters.northbound import GatewayNorthboundSink, NorthboundController
 from ..adapters.parsers import HeadbandBleParser, HeadsetRev181Parser
 from ..adapters.sources import BluetoothBleakSource, PosixSerialSource, WindowsSerialSource
@@ -23,7 +24,7 @@ from ..versioning import APPLICATION_VERSION
 from ..config import GatewayConfig
 from ..domain.algorithm import AlgorithmState
 from ..domain.raw import ParseOutcome
-from ..domain.status import ConnectionState, DeviceConnectionEvent
+from ..domain.status import ConnectionState, DataState, DeviceConnectionEvent
 from ..ports.raw_parser import RawDataParser
 from ..ports.raw_source import RawDataSource
 from ..profiles.resolver import DeploymentProfile, RuntimePlatform, resolve_profile
@@ -94,6 +95,10 @@ class _ApplicationPipelineAdapter:
                     "offlineSeconds": time.monotonic() - self._offline_since if self._offline_since else 0,
                     "reconnections": self._reconnections,
                     "pipeline": self.application.metrics(), "delivery": dict(self.gateway.delivery_metrics),
+                    "requestsByAction": dict(self.gateway.requests_by_action),
+                    "deliveryByStream": {stream: {**values, "overwritten": self.gateway.fanout.overwrites_by_stream.get(stream, 0)}
+                                         for stream, values in self.gateway.stream_metrics.items()},
+                    "subscriptions": sum(len(session.subscriptions) for session in self.gateway.sessions),
                     "snapshotOverwrites": self.gateway.snapshot_overwrite_count,
                     "pendingStreams": self.gateway.fanout.pending_count,
                     "storage": dict(storage.details), "process": self._metrics.sample(),
@@ -135,9 +140,12 @@ class _ApplicationPipelineAdapter:
             existing_stream=existing_stream,
         )
         await self.gateway.update_status("algorithmState", state.value)
-        if state == AlgorithmState.READY or self.profile.transport != "serial" or existing_stream:
+        usable = state == AlgorithmState.READY or existing_stream or (
+            not self.application.requires_algorithm_to_start
+            and self.application.data.snapshot.data_state == DataState.READY)
+        if usable:
             self._ready.set()
-        return state == AlgorithmState.READY
+        return state == AlgorithmState.READY or (usable and not self.application.requires_algorithm_to_start)
 
     async def _consume_chunks(self) -> None:
         async for chunk in self.source.chunks():
@@ -197,7 +205,9 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
                       recording_factory=recording_factory,
                       supports_replay=profile.capabilities.supports_replay,
                       replay_reader=ArchiveReplayReader(archive) if profile.capabilities.supports_replay else None,
-                      project_window=project_window)
+                      project_window=project_window, wire=GatewayWireCodec(),
+                      live_connection_states=frozenset({"validated" if profile.transport == "serial" else "connected"}),
+                      initial_connection_state="not_connected" if profile.transport == "serial" else "disconnected")
     parser: RawDataParser
     if profile.device_protocol == "headset_rev181":
         parser = HeadsetRev181Parser(config.serial.max_buffer_bytes)
@@ -208,6 +218,9 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
 
     application = ApplicationService(
         device_protocol=profile.device_protocol,
+        requires_algorithm_to_start=profile.transport == "serial",
+        transport_trace_enabled=config.recording.transport_trace_enabled,
+        transport_trace_max_bytes=config.recording.transport_trace_max_bytes,
         parser=parser,
         algorithm=engine,
         snapshots=gateway.latest_snapshot,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import ipaddress
+import math
 from pathlib import Path
 import re
 import tomllib
@@ -68,6 +69,8 @@ class RecordingConfig:
     subject_id: str | None
     replay_recording_id: str | None
     replay_speed: float
+    transport_trace_enabled: bool = False
+    transport_trace_max_bytes: int = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,9 @@ class LoggingConfig:
     directory: Path = Path("/var/log/neurobridge")
     filename: str = "neurobridge.log"
     level: str = "INFO"
+    rotation_mode: str = "size"
+    max_bytes: int = 10 * 1024**2
+    backup_count: int = 14
 
 
 @dataclass(frozen=True)
@@ -172,10 +178,10 @@ def load(
     section_fields = {
         "server": {"host", "port", "path"},
         "ble": {"enabled", "device_name", "model_nbr_uuid", "scan_timeout_seconds", "reconnect_delay_seconds"},
-        "recording": {"directory", "subject_id", "replay_recording_id", "replay_speed"},
+        "recording": {"directory", "subject_id", "replay_recording_id", "replay_speed", "transport_trace_enabled", "transport_trace_max_bytes"},
         "algorithm": {"enabled", "command", "request_timeout_ms"},
         "download": {"enabled", "host", "port", "path"},
-        "logging": {"directory", "filename", "level"},
+        "logging": {"directory", "filename", "level", "rotation_mode", "max_bytes", "backup_count"},
         "network": {"mode", "interface", "subnet_cidr", "dhcp_range_start", "dhcp_range_end", "dhcp_lease_time"},
         "access": {"mode"},
         "local_ui": {"enabled", "host", "port", "directory"},
@@ -194,6 +200,7 @@ def load(
         unknown = set(values) - allowed_fields
         if unknown:
             raise ValueError(f"Unknown {section} configuration fields: {', '.join(sorted(unknown))}")
+    _validate_types(raw)
     server, ble, recording, algorithm, download, logging, network, access, local_ui, data_source, serial, storage = (
         raw.get(name, {})
         for name in (
@@ -214,6 +221,8 @@ def load(
     config_schema_version = raw.get("config_schema_version", 1)
     if not isinstance(config_schema_version, int) or isinstance(config_schema_version, bool) or config_schema_version != 1:
         raise ValueError("config_schema_version must be 1")
+    if "profile" in raw and not isinstance(raw["profile"], str):
+        raise ValueError("profile must be a string")
     profile = raw.get("profile") or None
     if profile is not None and (
         not isinstance(profile, str)
@@ -226,6 +235,9 @@ def load(
     ):
         raise ValueError("profile is not a supported deployment profile")
     replay_speed = float(recording.get("replay_speed", 1))
+    trace_limit = recording.get("transport_trace_max_bytes", 1024 * 1024)
+    if trace_limit <= 0:
+        raise ValueError("recording.transport_trace_max_bytes must be positive")
     if replay_speed <= 0:
         raise ValueError("recording.replay_speed must be greater than zero")
     host, port, endpoint = str(server.get("host", "127.0.0.1")), int(server.get("port", 8765)), str(server.get("path", "/neurobridge/v1/ws"))
@@ -249,6 +261,11 @@ def load(
     log_level = str(logging.get("level", "INFO")).upper()
     if Path(log_filename).name != log_filename or not log_filename.endswith(".log"):
         raise ValueError("logging.filename must be a plain .log filename")
+    rotation_mode = logging.get("rotation_mode", "size")
+    max_bytes = logging.get("max_bytes", 10 * 1024**2)
+    backup_count = logging.get("backup_count", 14)
+    if rotation_mode not in {"size", "external"} or max_bytes <= 0 or backup_count <= 0:
+        raise ValueError("logging rotation_mode must be size/external and limits must be positive")
     if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise ValueError("logging.level is invalid")
     # Existing deployments predate access.mode. Preserve their private-address
@@ -310,6 +327,8 @@ def load(
     stale_after_ms = data_source.get("stale_after_ms", 1800)
     if not isinstance(window_interval_ms, int) or isinstance(window_interval_ms, bool) or window_interval_ms <= 0:
         raise ValueError("data_source.window_interval_ms must be a positive integer")
+    if window_interval_ms != 600:
+        raise ValueError("data_source.window_interval_ms must be 600 for the current northbound contract")
     if not isinstance(stale_after_ms, int) or isinstance(stale_after_ms, bool) or stale_after_ms <= window_interval_ms:
         raise ValueError("data_source.stale_after_ms must be an integer greater than window_interval_ms")
     replay_recording_id = recording.get("replay_recording_id") or None
@@ -410,7 +429,7 @@ def load(
     config = GatewayConfig(
         server=ServerConfig(host, port, endpoint),
         ble=ble_config,
-        recording=RecordingConfig(recording_directory, recording.get("subject_id") or None, replay_recording_id, replay_speed),
+        recording=RecordingConfig(recording_directory, recording.get("subject_id") or None, replay_recording_id, replay_speed, recording.get("transport_trace_enabled", False), trace_limit),
         # Ubuntu installation places the locked native bridge at this fixed path.
         # ``enabled`` is therefore the only setting an operator needs to change
         # after the bridge's real-data POC has been approved.  An explicit command
@@ -421,7 +440,7 @@ def load(
             algorithm_timeout_ms,
         ),
         download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path),
-        logging=LoggingConfig(log_directory, log_filename, log_level),
+        logging=LoggingConfig(log_directory, log_filename, log_level, rotation_mode, max_bytes, backup_count),
         network=NetworkConfig(network_mode, interface, subnet_cidr, dhcp_range_start, dhcp_range_end, dhcp_lease_time),
         access=AccessConfig(access_mode),
         local_ui=LocalUiConfig(
@@ -452,3 +471,45 @@ def _merge_config(base: dict[str, object], override: dict[str, object]) -> dict[
         else:
             result[key] = value
     return result
+
+
+def _validate_types(raw: dict) -> None:
+    """Reject coercion (especially bool("false")) before using configuration.
+
+    Inactive device sections keep their legacy ignore semantics; no dormant
+    transport parameters are consumed or used to load drivers.
+    """
+    boolean = {"ble.enabled", "algorithm.enabled", "download.enabled", "local_ui.enabled",
+               "serial.dtr", "serial.rts", "storage.auto_cleanup_enabled", "recording.transport_trace_enabled"}
+    integer = {"server.port", "download.port", "local_ui.port", "ble.scan_timeout_seconds",
+               "ble.reconnect_delay_seconds", "serial.baud_rate", "serial.handshake_timeout_ms",
+               "serial.command_response_timeout_ms", "serial.max_buffer_bytes",
+               "algorithm.request_timeout_ms", "data_source.window_interval_ms", "data_source.stale_after_ms",
+               "logging.max_bytes", "logging.backup_count", "recording.transport_trace_max_bytes"}
+    number = {"serial.data_timeout_seconds", "serial.reconnect_delay_seconds", "serial.stats_interval_seconds",
+              "recording.replay_speed"}
+    arrays = {"algorithm.command", "serial.candidate_types"}
+    for section, fields in raw.items():
+        if not isinstance(fields, dict):
+            continue
+        selected = raw.get("data_source", {}).get("type")
+        if (section == "ble" and selected != "bluetooth") or (section == "serial" and selected != "serial"):
+            continue
+        for field, value in fields.items():
+            key = f"{section}.{field}"
+            if section == "pipeline":  # detailed limit error below
+                continue
+            if key in boolean:
+                valid, expected = type(value) is bool, "boolean"
+            elif key in integer or section == "storage":
+                valid, expected = type(value) is int, "integer"
+            elif key in number:
+                valid = type(value) in {int, float} and math.isfinite(value)
+                expected = "finite number"
+            elif key in arrays:
+                valid = isinstance(value, list) and all(isinstance(item, str) and item for item in value)
+                expected = "array of non-empty strings"
+            else:
+                valid, expected = isinstance(value, str), "string"
+            if not valid:
+                raise ValueError(f"{key} must be {expected}")

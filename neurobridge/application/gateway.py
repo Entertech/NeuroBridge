@@ -12,10 +12,10 @@ from typing import Any, Awaitable, Callable
 from ..domain.result import WindowResult
 from ..ports.recording import RecordingRepository
 from .subscriptions import SubscriptionFanout
-from ..versioning import NORTHBOUND_PROTOCOL_VERSION
+from ..ports.errors import ProtocolError
+from ..ports.northbound import NorthboundCodec
 
 LOG = logging.getLogger(__name__)
-PROTOCOL_VERSION = NORTHBOUND_PROTOCOL_VERSION
 STREAMS = frozenset({"eeg", "hr", "eeg.raw", "hr.raw", "status"})
 # These identifiers are part of the locked v0.2 B-side contract.  Keep them
 # stable until a later, explicitly published protocol version replaces them.
@@ -33,15 +33,6 @@ def now_ms() -> int:
 
 def safe_log_text(value: object, limit: int = 512) -> str:
     return "".join(character if character.isprintable() else " " for character in str(value))[:limit]
-
-
-def envelope(code: int, data: dict, message: str = "OK") -> dict:
-    return {"protocolVersion": PROTOCOL_VERSION, "code": code, "data": data, "message": message}
-
-
-class ProtocolError(Exception):
-    def __init__(self, code: int, reason: str, message: str, retryable: bool = False, details: dict | None = None) -> None:
-        self.code, self.reason, self.message, self.retryable, self.details = code, reason, message, retryable, details or {}
 
 
 @dataclass(eq=False)
@@ -63,7 +54,10 @@ class ClientSession:
 class GatewayApplication:
     """Own status, queries, subscriptions, and replay policy through injected ports."""
 
-    def __init__(self, config, *, store, algorithm, snapshots, recording_factory, supports_replay: bool, replay_reader=None, project_window=None) -> None:
+    def __init__(self, config, *, store, algorithm, snapshots, recording_factory, supports_replay: bool, replay_reader=None, project_window=None, wire: NorthboundCodec | None = None, live_connection_states=frozenset({"connected"}), initial_connection_state="disconnected") -> None:
+        if wire is None:
+            raise ValueError("A northbound codec must be supplied by Bootstrap")
+        self.wire = wire
         self.config = config
         self.log = logging.getLogger(__name__)
         self._recording_factory = recording_factory
@@ -75,7 +69,7 @@ class GatewayApplication:
         self.store = store
         self.recording_repository: RecordingRepository | None = None
         self.algorithm = algorithm
-        initial_connection_state = "not_connected" if config.data_source.type == "serial" else "disconnected"
+        self.live_connection_states = frozenset(live_connection_states)
         self.status: dict[str, Any] = {"connectionState": initial_connection_state, "wearState": "unknown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
         # This is deliberately an operational-only field: the released B-side
         # status contract is unchanged.  Linux operators can inspect it in the
@@ -109,7 +103,11 @@ class GatewayApplication:
         self._capture_final_summary_logged = False
         self.snapshot_overwrite_count = 0
         self.fanout = SubscriptionFanout()
-        self.delivery_metrics = {"sent": 0, "failed": 0, "sendDurationMs": 0, "requests": 0}
+        self.delivery_metrics = {"sent": 0, "failed": 0, "sendDurationMs": 0, "requests": 0,
+                                 "lastSuccessfulAtMs": None}
+        self.requests_by_action = {action: 0 for action in ("getStatus", "getLatest", "subscribe", "unsubscribe", "invalid")}
+        self.stream_metrics = {stream: {"sent": 0, "failed": 0, "sendDurationMs": 0,
+                                       "lastSuccessfulAtMs": None} for stream in STREAMS}
 
     async def start(self) -> None:
         # The local algorithm is session scoped and must be initialized only after
@@ -189,7 +187,7 @@ class GatewayApplication:
     async def publish_window_result(self, result: WindowResult) -> None:
         """Wire-compatible publication boundary for the new application service."""
 
-        if self.config.data_source.type == "serial" and result.mode != "live":
+        if not self.supports_replay and result.mode != "live":
             raise ValueError("Serial headset results must always use live mode")
         self._last_live_update = time.monotonic()
         algorithm_payload = dict(result.algorithm_result.metrics) or None
@@ -241,7 +239,7 @@ class GatewayApplication:
                 self._queue_live_message(
                     session,
                     subscription,
-                    envelope(
+                    self.wire.envelope(
                         200,
                         self.event_data(
                             "data",
@@ -260,9 +258,7 @@ class GatewayApplication:
         return self._connection_state_is_live(self.status["connectionState"])
 
     def _connection_state_is_live(self, state: object) -> bool:
-        if self.config.data_source.type == "serial":
-            return state == "validated"
-        return state == "connected"
+        return state in self.live_connection_states
 
     @property
     def replay_available(self) -> bool:
@@ -288,18 +284,12 @@ class GatewayApplication:
         # ``live``/``replay``.  Serial has no replay mode, so an offline serial
         # gateway stays in its configured live mode and reports disconnected
         # separately through connectionState.
-        if self.config.data_source.type == "serial":
+        if not self.supports_replay:
             return "live"
         return "live" if self.live else "replay"
 
     def _offline_data_error(self) -> ProtocolError:
-        if self.config.data_source.type == "serial":
-            if self.status["connectionState"] == "validation_failed":
-                message = "Serial device validation failed: the opened candidate did not return standalone 0x01 after ACK."
-            else:
-                message = "Serial data source is not connected; live data is unavailable and replay is not supported."
-            return ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, message, True)
-        return ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "No replay data is available.", True)
+        return self.wire.offline_data_error(self)
 
     async def update_connection_error(self, error: str) -> None:
         """Record the latest device-transport failure for operational diagnosis.
@@ -357,48 +347,17 @@ class GatewayApplication:
             sum(len(session.subscriptions) for session in self.sessions),
         )
 
-    def filtered_payload(self, raw: dict, algorithm_payload: dict | None, streams: frozenset[str]) -> dict:
-        payload: dict = {}
-        if "eeg.raw" in streams and "eegRaw" in raw:
-            payload["eegRaw"] = raw["eegRaw"]
-        if "hr.raw" in streams and "hrRaw" in raw:
-            payload["hrRaw"] = raw["hrRaw"]
-        if algorithm_payload:
-            algorithm: dict = {}
-            if "eeg" in streams:
-                algorithm.update({key: value for key, value in algorithm_payload.items() if key not in {"hr", "pressure", "coherence", "arousal"}})
-            if "hr" in streams:
-                algorithm.update({key: value for key, value in algorithm_payload.items() if key in {"hr", "pressure", "coherence", "arousal"}})
-            if algorithm:
-                payload["algorithm"] = algorithm
-        return payload
+    def filtered_payload(self, raw, algorithm_payload, streams):
+        return self.wire.filtered_payload(raw, algorithm_payload, streams)
 
-    def event_data(self, event: str, subscription_id: str | None, timestamp_ms: int, mode: str, valid: bool, payload: dict) -> dict:
-        data = {"event": event, "gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": mode, "timestampMs": timestamp_ms, "valid": valid, "payload": payload}
-        if subscription_id:
-            data["subscriptionId"] = subscription_id
-        return data
+    def event_data(self, event, subscription_id, timestamp_ms, mode, valid, payload):
+        return self.wire.event_data(self, event, subscription_id, timestamp_ms, mode, valid, payload)
 
-    def status_result(self) -> dict:
-        return {"gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": self.mode(), **self._northbound_status(), "availableStreams": sorted(self.available_streams()), "serverTimeMs": now_ms()}
+    def status_result(self):
+        return self.wire.status_result(self)
 
-    def _northbound_status(self) -> dict[str, Any]:
-        """Project transport-specific state onto the locked v0.2 status schema."""
-
-        status = {
-            name: self.status[name]
-            for name in ("connectionState", "wearState", "batteryPercent", "signalQuality", "algorithmState")
-        }
-        status["connectionState"] = {
-            "validated": "connected",
-            "connected": "connected",
-            "connecting": "connecting",
-            "validating": "connecting",
-            "not_connected": "disconnected",
-            "validation_failed": "disconnected",
-            "disconnected": "disconnected",
-        }.get(str(status["connectionState"]), "disconnected")
-        return status
+    def _northbound_status(self):
+        return self.wire.northbound_status(self)
 
     def available_streams(self) -> set[str]:
         available = {"status"}
@@ -426,15 +385,12 @@ class GatewayApplication:
                     self._queue_live_message(
                         session,
                         subscription,
-                        envelope(200, self.event_data("status", subscription.id, now_ms(), self.mode(), True, payload)),
+                        self.wire.envelope(200, self.event_data("status", subscription.id, now_ms(), self.mode(), True, payload)),
                     )
         await asyncio.sleep(0)
 
-    def error(self, request_id: str | None, error: ProtocolError) -> dict:
-        data = {"reason": error.reason, "retryable": error.retryable, "details": error.details}
-        if request_id:
-            data["requestId"] = request_id
-        return envelope(error.code, data, error.message)
+    def error(self, request_id, error):
+        return self.wire.error(request_id, error)
 
     def get_latest(self, session: ClientSession, params: dict, *, start_replay: bool = True) -> dict:
         streams = params.get("streams", ["eeg", "hr"])
@@ -610,7 +566,7 @@ class GatewayApplication:
                         filtered.setdefault("algorithm", {})
                     if "invalidReasons" in payload:
                         filtered["invalidReasons"] = payload["invalidReasons"]
-                    await self._send_subscription(subscription, {**message, "data": {**message["data"], "payload": filtered}})
+                    await self._send_subscription(subscription, {**message, "data": {**message["data"], "payload": filtered}}, streams=streams)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -618,17 +574,28 @@ class GatewayApplication:
         finally:
             self._drop_subscription(session, subscription)
 
-    async def _send_subscription(self, subscription: Subscription, message: dict) -> None:
+    async def _send_subscription(self, subscription: Subscription, message: dict, *, streams=None) -> None:
         started = time.monotonic()
+        streams = (subscription.streams - {"status"}) if streams is None else streams
+        counters = [self.stream_metrics[stream] for stream in streams if stream in self.stream_metrics]
         try:
             async with asyncio.timeout(self.config.pipeline.send_timeout_ms / 1000):
                 await subscription.send(message)
             self.delivery_metrics["sent"] += 1
+            self.delivery_metrics["lastSuccessfulAtMs"] = now_ms()
+            for values in counters:
+                values["sent"] += 1
+                values["lastSuccessfulAtMs"] = self.delivery_metrics["lastSuccessfulAtMs"]
         except Exception:
             self.delivery_metrics["failed"] += 1
+            for values in counters:
+                values["failed"] += 1
             raise
         finally:
-            self.delivery_metrics["sendDurationMs"] += int((time.monotonic() - started) * 1000)
+            elapsed = int((time.monotonic() - started) * 1000)
+            self.delivery_metrics["sendDurationMs"] += elapsed
+            for values in counters:
+                values["sendDurationMs"] += elapsed
 
     async def _deliver_replay(self, session: ClientSession, subscription: Subscription) -> None:
         try:
@@ -691,7 +658,7 @@ class GatewayApplication:
                             continue
                         if not valid:
                             payload["invalidReasons"] = reasons
-                        self._queue_replay_message(session, subscription, envelope(200, self.event_data("data", subscription.id, item["timestampMs"], "replay", valid, payload)))
+                        self._queue_replay_message(session, subscription, self.wire.envelope(200, self.event_data("data", subscription.id, item["timestampMs"], "replay", valid, payload)))
                 if not self._replay_should_continue():
                     return
                 if previous is None:
@@ -699,7 +666,7 @@ class GatewayApplication:
                     return
                 ended = {"event": "replayEnded", "gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": "replay", "timestampMs": previous or now_ms(), "valid": True, "payload": {}, "recordingId": recording_id, "endedAtMs": now_ms()}
                 for session, subscription in self._subscription_entries():
-                    self._queue_replay_message(session, subscription, envelope(200, ended))
+                    self._queue_replay_message(session, subscription, self.wire.envelope(200, ended))
                 self.log.info("Replay cycle ended; restarting: recordingId=%s cycle=%s", recording_id, cycle)
                 await asyncio.sleep(REPLAY_CYCLE_MIN_PAUSE_SECONDS)
         except asyncio.CancelledError:

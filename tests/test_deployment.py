@@ -555,7 +555,8 @@ class DeploymentTests(unittest.TestCase):
                     'socket.addEventListener("message",', 1
                 )[0]
                 if relative_path == "web/capture/app.js":
-                    self.assertIn('sendRequest("subscribe", { streams: ["status"]', open_handler)
+                    self.assertIn('sendRequest("getStatus", {});', open_handler)
+                    self.assertNotIn('sendRequest("subscribe"', open_handler)
                     status_subscription_handler = script.split('streams.length === 1 && streams[0] === "status"', 1)[1].split(
                         "} else {", 1
                     )[0]

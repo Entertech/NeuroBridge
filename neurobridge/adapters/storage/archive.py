@@ -25,6 +25,11 @@ from ..northbound.protocol import project_window
 class SegmentedArchive(RecordingStore):
     """Own session identity; the repository alone owns live disk writes."""
 
+    def __init__(self, root, capture_package_pdf=None):
+        # Directory creation belongs to the recoverable writer. Read-only
+        # storage must not prevent the HTTP/WS and live pipeline from starting.
+        super().__init__(root, capture_package_pdf, create_directories=False)
+
     def start(self, started_at_ms=None):
         # Reuse identity generation, but suppress legacy file creation.
         import time
@@ -78,11 +83,12 @@ class SegmentedArchive(RecordingStore):
                     signals = tuple(ParsedSignal(
                         s["signalType"], base64.b64decode(s["samples"]["bytesBase64"], validate=True),
                         s["sampleFormat"], s["unit"], s["windowHint"], tuple(s["frameRefs"]),
-                        s["receivedAtMs"], s["valid"], tuple(s["invalidReasons"]),
+                        s["receivedAtMs"], s["valid"], tuple(s["invalidReasons"]), s.get("sampleCount"),
                     ) for s in p["signals"])
                     batch = ParsedSignalBatch(p["batchId"], p["deviceProtocol"], p["connectionSessionId"],
                                               recording_id, p["windowStartMs"], p["windowEndMs"],
-                                              signals, tuple(p["frameRefs"]), p["valid"], tuple(p["invalidReasons"]))
+                                              signals, tuple(p["frameRefs"]), p["valid"], tuple(p["invalidReasons"]),
+                                              p.get("sourceType"), p.get("schemaVersion", 1))
                     saved = algorithms.execute("SELECT payload FROM results WHERE batch=?", (batch.batch_id,)).fetchone()
                     a = json.loads(saved[0]) if saved else None
                     result = AlgorithmResult(batch.batch_id, a.get("algorithmVersion") if a else None,
@@ -163,6 +169,7 @@ class SegmentedArchive(RecordingStore):
                         valid=result.valid, invalid_reasons=list(dict.fromkeys(result.batch.invalid_reasons + result.algorithm_result.invalid_reasons)))
                 output = projected.export(recording_id)
                 target = self.root / "exports" / output.name
+                target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 temporary = target.with_suffix(".zip.tmp")
                 shutil.copyfile(output, temporary)
                 temporary.replace(target)

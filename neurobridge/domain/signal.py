@@ -17,6 +17,7 @@ class ParsedSignal:
     received_at_ms: int
     valid: bool = True
     invalid_reasons: tuple[str, ...] = ()
+    sample_count: int | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.samples, (bytes, bytearray, memoryview)):
@@ -42,6 +43,8 @@ class ParsedSignalBatch:
     frame_refs: tuple[str, ...]
     valid: bool = True
     invalid_reasons: tuple[str, ...] = ()
+    source_type: str | None = None
+    schema_version: int = 1
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "signals", tuple(self.signals))
@@ -51,3 +54,23 @@ class ParsedSignalBatch:
             raise ValueError("Batch window_end_ms cannot precede window_start_ms")
         if not self.valid and not self.invalid_reasons:
             raise ValueError("Invalid ParsedSignalBatch requires an invalid reason")
+
+
+    @property
+    def sequence_range(self) -> tuple[int, int] | None:
+        values = [s.window_hint["sequence"] for s in self.signals if "sequence" in s.window_hint]
+        return (values[0], values[-1]) if values else None
+
+    @property
+    def received_at_range_ms(self) -> tuple[int, int] | None:
+        values = [s.received_at_ms for s in self.signals]
+        return (min(values), max(values)) if values else None
+
+    @property
+    def sample_counts(self) -> dict[str, int | None]:
+        result: dict[str, int | None] = {}
+        for signal in self.signals:
+            previous = result.get(signal.signal_type, 0)
+            result[signal.signal_type] = (previous + signal.sample_count
+                if previous is not None and signal.sample_count is not None else None)
+        return result

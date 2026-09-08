@@ -43,6 +43,7 @@ const elements = {
 
 let socket = null;
 let statusSubscriptionId = null;
+let initialStatusRequestId = null;
 let dataSubscriptionId = null;
 let dataRecords = [];
 let rawRecords = [];
@@ -153,7 +154,7 @@ function refreshControls() {
   elements.connect.disabled = connected || socket?.readyState === WebSocket.CONNECTING;
   elements.disconnect.disabled = !connected;
   elements.status.disabled = !connected;
-  elements.start.disabled = !connected || Boolean(dataSubscriptionId);
+  elements.start.disabled = !connected || !statusSubscriptionId || Boolean(dataSubscriptionId);
   elements.stop.disabled = !connected || !dataSubscriptionId;
   elements.exportRaw.disabled = rawRecords.length === 0;
   elements.subscriptionState.textContent = dataSubscriptionId
@@ -458,6 +459,10 @@ function handleMessage(message) {
   }
   const data = message.data || {};
   updateStatus(data);
+  if (data.action === "getStatus" && data.requestId === initialStatusRequestId) {
+    initialStatusRequestId = null;
+    sendRequest("subscribe", { streams: ["status"], includeInvalid: true });
+  }
   if (data.action === "subscribe" && data.result?.subscriptionId) {
     const streams = Array.isArray(data.result.streams) ? data.result.streams : [];
     if (streams.length === 1 && streams[0] === "status") {
@@ -498,7 +503,7 @@ function sendRequest(action, params) {
   const payload = { protocolVersion: PROTOCOL_VERSION, messageType: "request", requestId: requestId(), action, params };
   socket.send(JSON.stringify(payload));
   appendProtocol("→", payload);
-  return true;
+  return payload.requestId;
 }
 
 function connect() {
@@ -520,7 +525,7 @@ function connect() {
   socket.addEventListener("open", () => {
     setState("ok", "网关已连接", "网页已连接网关，正在开启耳机状态实时更新。");
     refreshControls();
-    sendRequest("subscribe", { streams: ["status"], includeInvalid: true });
+    initialStatusRequestId = sendRequest("getStatus", {});
   });
   socket.addEventListener("message", (event) => {
     try {
@@ -536,6 +541,7 @@ function connect() {
     appendProtocol("SYSTEM", `WebSocket 已断开 code=${event.code}${event.reason ? ` reason=${event.reason}` : ""}`);
     socket = null;
     statusSubscriptionId = null;
+    initialStatusRequestId = null;
     dataSubscriptionId = null;
     setState("idle", "网关已断开", "网页与网关的连接已断开；网关进程和 USB 串口不会因此停止。");
     refreshControls();

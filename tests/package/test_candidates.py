@@ -42,6 +42,11 @@ class CandidatePackageTests(unittest.TestCase):
                         member = bundle.extractfile(manifest_name)
                         assert member is not None
                         manifest = json.load(member)
+                self.assertTrue(any(name.endswith("metadata/files.sha256") for name in names))
+                self.assertTrue(any(name.endswith("payload/defaults.toml") for name in names))
+                release = json.loads(Path(str(archive) + ".release-manifest.json").read_text())
+                self.assertEqual(release["packageSize"], archive.stat().st_size)
+                self.assertFalse(release["licenseTextsComplete"])
                 self.assertFalse(manifest["signed"])
                 self.assertFalse(manifest["runtimeBundled"])
                 self.assertFalse(manifest["targetAcceptancePassed"])
@@ -49,6 +54,26 @@ class CandidatePackageTests(unittest.TestCase):
                 self.assertIn("payload/neurobridge/version_registry.toml", manifest["files"])
                 self.assertTrue(any(name.endswith("metadata/sbom.cdx.json") for name in names))
                 self.assertFalse(any("/.git/" in name or "__pycache__" in name or name.endswith(".pyc") for name in names))
+
+    def test_candidate_checksums_detect_a_modified_payload(self):
+        import shutil
+        command = ([shutil.which("sha256sum"), "--check"] if shutil.which("sha256sum") else
+                   [shutil.which("shasum"), "-a", "256", "--check"] if shutil.which("shasum") else None)
+        if command is None:
+            self.skipTest("Platform checksum CLI is not available")
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            subprocess.run([sys.executable, str(ROOT / "tools/build-product-candidate.py"),
+                            "--platform", "kylin", "--output-dir", str(root)], check=True, capture_output=True)
+            with tarfile.open(next(root.glob("*.tar.gz"))) as bundle:
+                bundle.extractall(root / "unpacked", filter="data")
+            stage = next((root / "unpacked").iterdir())
+            verified = subprocess.run([*command, "metadata/files.sha256"], cwd=stage, capture_output=True)
+            self.assertEqual(verified.returncode, 0, verified.stderr)
+            (stage / "payload/neurobridge/__init__.py").write_text("modified fixture")
+            rejected = subprocess.run([*command, "metadata/files.sha256"], cwd=stage, capture_output=True)
+            self.assertNotEqual(rejected.returncode, 0)
+
 
     def test_runtime_layout_is_validated_before_packaging(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

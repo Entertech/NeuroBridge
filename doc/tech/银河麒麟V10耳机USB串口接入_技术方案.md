@@ -227,3 +227,16 @@ Writer 独立于事件循环，按 `storage.fsync_interval_records` 有界批量
 自动化通过只表示源码支持。上线前仍需在最终银河麒麟镜像和真实耳机上完成 USB 枚举、电气行为、握手、持续实时数据、算法结果、拔插恢复、服务重启、串口离线拒绝录播和长稳验收。
 
 候选安装脚本先暂存校验、停止旧服务，再替换应用、迁移配置和加载 unit；任一步失败恢复应用/配置/unit/启用与运行状态。成功后也保留唯一回滚快照及 rollback.sh，不删除录制数据。SIGTERM 走正常应用清理与 E0 路径。该脚本已有隔离文件夹回滚测试及 shell 语法检查，但不等于最终麒麟安装验收。
+
+
+## 13. 需求审查后的代码修复（2026-09-08）
+
+- 启动前拒绝配置错误类型，不把字符串 `"false"` 转为开启；真实 Kylin 系统必须提供 V10 的 VERSION_ID。最终 ISO 身份仍需现场锁定。
+- 当前北向合同固定 600 ms。配置和 Profile 均拒绝其他窗口值；不能仅修改 subscribe 返回值来扩大合同。
+- Capture 建连/重连先 getStatus，成功后订阅 status，再读取一次快照以覆盖查询与订阅之间的状态变化；状态订阅成功前禁用数据开始按钮。
+- 日志默认使用进程内大小轮转，`logging.rotation_mode="size"`、`max_bytes=10485760`、`backup_count=14`；该策略同时适用于源码目录自启与候选安装布局，不依赖麒麟额外安装 logrotate。明确由外部工具管理时配置 `rotation_mode="external"`，同一日志不得同时启用两种轮转。
+- 磁盘满/配额耗尽分别记为 full/no_space、full/quota_exceeded；只读、权限、路径和其他 I/O 错误分别分类。失败写入不推进最后成功时间。录制路径启动失败只导致持久化降级，北向服务仍可启动；状态仍仅用于内部日志，不新增已锁定报文字段。
+- 可选 `recording.transport_trace_enabled=false` 默认关闭。开启后，RawChunk 以 `raw.transport_chunk` 写受保护 raw 分段；`transport_trace_max_bytes` 默认 1 MiB，为单次进程录制会话的原始字节预算，超限整块省略并计数，不截断、不中止完整帧录制，也不进入公开 ZIP。字节预算不含 JSON 编码开销。
+- 候选安装前校验 `metadata/files.sha256` 和安装/回滚磁盘空间，迁移后校验完整配置与固定 Profile，再启动服务。候选包自带 defaults.toml；正式入口按包默认值、系统配置加载，仅显式 `--development --override-config <文件>` 可增加临时覆盖，且不能改变包固定 Profile。
+
+回归测试均使用合成数据、临时目录或模拟设备。真实耳机、电气行为、目标机升级/回滚和 24 小时长稳保持待验收。

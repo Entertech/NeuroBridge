@@ -37,6 +37,9 @@ class ApplicationService:
         self,
         *,
         device_protocol: str,
+        requires_algorithm_to_start: bool = True,
+        transport_trace_enabled: bool = False,
+        transport_trace_max_bytes: int = 1024 * 1024,
         parser: RawDataParser,
         algorithm: AlgorithmEngine,
         snapshots: LatestSnapshotStore,
@@ -52,6 +55,10 @@ class ApplicationService:
         shutdown_timeout_ms: int = 5000,
     ) -> None:
         self.device_protocol = device_protocol
+        self.requires_algorithm_to_start = requires_algorithm_to_start
+        self.transport_trace_enabled = transport_trace_enabled
+        self.transport_trace_max_bytes = transport_trace_max_bytes
+        self._trace_bytes = 0
         self.parser = parser
         self.algorithm = algorithm
         self.snapshots = snapshots
@@ -208,7 +215,7 @@ class ApplicationService:
                     self.data.transition(DataState.READY, algorithm_state=self._algorithm_state.value)
                 else:
                     self.data.transition(
-                        DataState.ERROR if self.control is not None and not existing_stream else DataState.READY,
+                        DataState.ERROR if self.requires_algorithm_to_start and self.control is not None and not existing_stream else DataState.READY,
                         algorithm_state=self._algorithm_state.value,
                         recent_error="ALGORITHM_NOT_READY",
                         error_stage="algorithm_initialize",
@@ -223,13 +230,13 @@ class ApplicationService:
         if self.control is not None:
             if connection_session_id != self._connection_session_id:
                 return AlgorithmState.ERROR
-            if algorithm_state == AlgorithmState.READY or existing_stream:
+            if algorithm_state == AlgorithmState.READY or existing_stream or not self.requires_algorithm_to_start:
                 result = await self.control.start_stream(connection_session_id)
                 if result.outcome not in {"started", "alreadyStreaming"}:
                     if connection_session_id == self._connection_session_id:
                         self.data.transition(DataState.ERROR, recent_error=result.reason or result.outcome, error_stage="control")
                     return AlgorithmState.ERROR
-            elif self.device_protocol == "headset_rev181":
+            elif self.requires_algorithm_to_start:
                 self.data.transition(DataState.ERROR, recent_error="ALGORITHM_NOT_READY", error_stage="algorithm_initialize")
         return self._algorithm_state
 
@@ -243,6 +250,17 @@ class ApplicationService:
                 chunk.connection_session_id,
             )
             return ParseOutcome()
+        if self.transport_trace_enabled:
+            if self._trace_bytes + len(chunk.data) <= self.transport_trace_max_bytes:
+                self._trace_bytes += len(chunk.data)
+                self._persist(PersistenceRecord(1, self._required_recording_id(), "raw.transport_chunk",
+                    chunk.received_at_ms, chunk.trace_id,
+                    {"rawBytes": chunk.data, "sourceType": chunk.source_type, "channel": chunk.channel,
+                     "connectionSessionId": chunk.connection_session_id,
+                     "receivedAtMonotonicNs": chunk.received_at_monotonic_ns,
+                     "droppedBeforeBytes": chunk.dropped_before_bytes}))
+            else:
+                self.diagnostics["trace_omitted_bytes"] = self.diagnostics.get("trace_omitted_bytes", 0) + len(chunk.data)
         self.diagnostics["raw_chunks"] += 1
         self.diagnostics["raw_bytes"] += len(chunk.data)
         if chunk.dropped_before_bytes:
@@ -293,6 +311,7 @@ class ApplicationService:
                 device_protocol=self.device_protocol,
                 connection_session_id=chunk.connection_session_id,
                 recording_session_id=self._required_recording_id(),
+                source_type=chunk.source_type,
             )
             for batch in batches:
                 await self._submit_batch(batch)
@@ -380,6 +399,11 @@ class ApplicationService:
                 batch.batch_id,
                 {
                     "batchId": batch.batch_id,
+                    "schemaVersion": batch.schema_version,
+                    "sourceType": batch.source_type,
+                    "sampleCounts": batch.sample_counts,
+                    "sequenceRange": batch.sequence_range,
+                    "receivedAtRangeMs": batch.received_at_range_ms,
                     "connectionSessionId": batch.connection_session_id,
                     "deviceProtocol": batch.device_protocol,
                     "windowStartMs": batch.window_start_ms,
@@ -629,6 +653,7 @@ class ApplicationService:
             "signalType": signal.signal_type,
             "samples": signal.samples,
             "sampleFormat": signal.sample_format,
+            "sampleCount": signal.sample_count,
             "unit": signal.unit,
             "windowHint": signal.window_hint,
             "frameRefs": signal.frame_refs,

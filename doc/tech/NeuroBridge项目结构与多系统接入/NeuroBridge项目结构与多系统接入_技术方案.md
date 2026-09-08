@@ -1020,3 +1020,22 @@ neurobridge-windows-v<applicationVersion>-x86_64.msi
 新增 `[pipeline]` 配置、周期 Runtime metrics、Source 缺口标记、Parser 有界来源追踪与共用序列统计、重连快照清理、单调时钟新鲜度判断和 SIGTERM 清理。麒麟候选安装增加失败回滚及可手动恢复的快照；候选元数据增加 dirty 源树标识、逐文件摘要、构建主机与原生依赖锁。CI 候选构建依赖测试门禁，不使用正式签名凭据。
 
 源码完成、额外工程细节及仍需实际实施/验收的项目逐项列于[需求补齐与验收清单](需求补齐与验收清单.md)，不替代 §24 完成定义。
+
+
+## 27. 需求审查后的代码修复（2026-09-08）
+
+生产应用通过注入的 NorthboundCodec 使用报文包络、流过滤、状态和错误投影；具体实现位于 adapters/northbound/codec.py。GatewayApplication 不再直接生成 protocolVersion 包络或按 data_source.type 比较分支；实时连接状态集合由组合根绑定，录播规则由 Profile 能力控制。结构化用例拒绝保留旧合同的错误标识以兼容既有控制器，未发布新错误码。
+
+BLE 兼容 Source 新增会话绑定 BluetoothSessionControl，应用准备管线后调用启停，FlowtimeAdapter 在生产模式不再重复发送命令。控制请求、断开共享 I/O 锁，并在锁内再次校验会话；停止写失败仍释放连接。BLE 算法不可用时允许原始路径运行，耳机 ACK 路径继续要求算法 ready。此项仍需 M2 真实 BLE 回归。
+
+ParsedSignalBatch 补充 source_type、schema_version、sample_counts、sequence_range、received_at_range_ms，并进入内部 parsed 持久化。耳机每帧为六个 EEG 值和一个 HR 值；未确认单位仍为 null，不推断采样率。旧分段读取对新增字段使用兼容默认值，不重算算法。
+
+配置禁止类型强制转换；生产入口接通包默认值、系统配置与受开发开关限制的覆盖文件；迁移保持原文件权限/所有者。当前报文窗口固定为 600 ms，配置与 Profile 双重校验；新增协议窗口需另行评审。
+
+存储按 errno 区分 full/error 和具体原因，只有成功写入并 fsync 才推进最后成功时间。启动路径不可写时继续提供网关服务。partial 恢复逐行保留最后有效前缀，避免一次载入完整分段；自动清理记录 skipped/selected/failed/deleted，选择审计不能持久化时停止删除。既有 session_retention_days=30 是保守的附加保留条件，开启清理前必须在现场明确该参数，不能假设低空间时任何已结束会话都会删除。
+
+RawChunk 诊断留存复用有界 RecordingRepository，默认关闭，按录制会话限制原始字节预算，超限整块省略；完整帧采集不受该诊断预算影响。RawChunk 仍不会作为耳机录播源或公开下载文件。
+
+周期日志增加 requestsByAction、subscriptions 和 deliveryByStream（发送成功/失败、耗时、最后成功时间及覆盖数）；进程内轮转默认覆盖麒麟和 Windows 源码入口。Ubuntu 示例明确使用 external，配合既有 logrotate。
+
+候选包新增全文件校验清单、包外 release-manifest（文件名、大小、摘要、依赖）、NumCpp 许可证正文和 defaults.toml。麒麟安装器在执行运行时前校验摘要与磁盘空间，迁移配置后再验证 Profile；这些措施不等于签名或目标 ABI 验证。完整运行时/许可证、原生格式、Windows 7 兼容性和发布签名仍未完成。

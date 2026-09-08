@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import tomllib
 import uuid
 
@@ -43,6 +44,7 @@ def migrate_file(
 
     source = Path(path)
     original = source.read_bytes()
+    original_stat = source.stat()
     raw = tomllib.loads(original.decode("utf-8"))
     migrated = migrate(raw)
     if migrated == raw:
@@ -55,6 +57,9 @@ def migrate_file(
     temporary = source.with_name(f".{source.name}.{uuid.uuid4().hex}.tmp")
     try:
         temporary.write_text(_toml_document(migrated), encoding="utf-8")
+        temporary.chmod(stat.S_IMODE(original_stat.st_mode))
+        if hasattr(os, "chown"):
+            os.chown(temporary, original_stat.st_uid, original_stat.st_gid)
         with temporary.open("rb") as handle:
             os.fsync(handle.fileno())
         # Parse and migrate the staged value before replacing the live file.

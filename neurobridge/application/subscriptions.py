@@ -19,6 +19,7 @@ class SubscriptionFanout:
     def __init__(self) -> None:
         self._connections: dict[str, _ConnectionSlots] = {}
         self.snapshot_overwrite_count = 0
+        self.overwrites_by_stream: dict[str, int] = {}
 
     def subscribe(self, connection_id: str, streams: frozenset[str]) -> None:
         self._connections[connection_id] = _ConnectionSlots(frozenset(streams))
@@ -33,6 +34,7 @@ class SubscriptionFanout:
         for stream in streams:
             if stream in slots.pending:
                 overwritten += 1
+                self.overwrites_by_stream[stream] = self.overwrites_by_stream.get(stream, 0) + 1
             slots.pending[stream] = value
         self.snapshot_overwrite_count += overwritten
         if streams:

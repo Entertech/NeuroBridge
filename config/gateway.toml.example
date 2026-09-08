@@ -85,6 +85,9 @@ scan_timeout_seconds = 5
 reconnect_delay_seconds = 3
 
 [recording]
+# Optional protected transport trace; stop retaining whole chunks at the session budget.
+transport_trace_enabled = false
+transport_trace_max_bytes = 1048576
 directory = "/var/lib/neurobridge/recordings"
 subject_id = ""
 # Optional pinned recording ID for offline replay in compatible non-serial
@@ -102,6 +105,9 @@ port = 8766
 path = "/downloads"
 
 [logging]
+rotation_mode = "size"
+max_bytes = 10485760
+backup_count = 14
 # Persisted operations log. Ubuntu logrotate retains 14 daily archives.
 directory = "/var/log/neurobridge"
 filename = "neurobridge.log"

@@ -7,6 +7,13 @@ set -euo pipefail
   echo "This package is restricted to Galaxy Kylin V10." >&2; exit 1;
 }
 package_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Verify every payload, configuration and installer file before executing it.
+(cd "$package_root" && sha256sum --strict --check metadata/files.sha256) || {
+  echo "Candidate integrity verification failed." >&2; exit 1;
+}
+required_kib=$(du -sk "$package_root/payload" | awk '{print $1}')
+free_kib=$(df -Pk /opt | awk 'NR==2 {print $4}')
+[[ $free_kib -gt $((required_kib * 2 + 102400)) ]] || { echo "Insufficient installation/rollback disk space." >&2; exit 1; }
 [[ -x "$package_root/payload/runtime/bin/python" ]] || { echo "Candidate has no bundled runtime; rebuild with --runtime-dir." >&2; exit 1; }
 [[ -x "$package_root/payload/runtime/bin/neurobridge_affective_bridge" ]] || { echo "Candidate runtime has no executable algorithm bridge." >&2; exit 1; }
 exec 9>/run/lock/neurobridge-install.lock
@@ -62,6 +69,9 @@ fi
   --backup-directory /etc/neurobridge/backups \
   --history-path /var/lib/neurobridge/config-migration-history.jsonl
 install -m 0644 "$package_root/neurobridge.service" /etc/systemd/system/neurobridge.service
+# Validate the complete migrated configuration and immutable platform mapping
+# before systemd can open the device. The old files are still available for rollback.
+(cd /opt/neurobridge && runtime/bin/python -c 'from neurobridge.configuration.runtime import load_runtime_config; from neurobridge.profiles.resolver import resolve_profile; resolve_profile(load_runtime_config("/etc/neurobridge/gateway.toml"))')
 systemctl daemon-reload
 if [[ ! -e "$previous/had-app" || -e "$previous/was-enabled" ]]; then
   systemctl enable neurobridge.service

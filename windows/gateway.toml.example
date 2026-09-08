@@ -36,6 +36,9 @@ dtr = false
 rts = false
 
 [recording]
+# Optional protected transport trace; stop retaining whole chunks at the session budget.
+transport_trace_enabled = false
+transport_trace_max_bytes = 1048576
 directory = "C:\\ProgramData\\NeuroBridge\\recordings"
 subject_id = ""
 replay_recording_id = ""
@@ -48,6 +51,9 @@ port = 8766
 path = "/downloads"
 
 [logging]
+rotation_mode = "size"
+max_bytes = 10485760
+backup_count = 14
 directory = "C:\\ProgramData\\NeuroBridge\\logs"
 filename = "neurobridge.log"
 level = "INFO"

@@ -122,9 +122,9 @@ class StorageHealthTracker:
         self._healthy_checks = 0
         self._write_succeeded_since_degraded = True
 
-    def observe(self, available_bytes: int, *, write_succeeded: bool | None = None) -> StorageState:
+    def observe(self, available_bytes: int, *, write_succeeded: bool | None = None, failure_state: StorageState = StorageState.ERROR) -> StorageState:
         if write_succeeded is False:
-            self.state = StorageState.ERROR
+            self.state = failure_state
             self._healthy_checks = 0
             self._write_succeeded_since_degraded = False
             return self.state

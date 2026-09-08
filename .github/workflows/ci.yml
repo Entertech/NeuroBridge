@@ -43,6 +43,10 @@ jobs:
       - run: python -m pip install -r requirements.lock
       - run: python -m pip install --no-deps -e .
       - run: python -m unittest discover -s tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node tests/capture_connection_order.cjs
       - run: python -m compileall -q neurobridge
       - run: bash tools/check-external-protocol.sh
       - name: Detect unpublished external documents

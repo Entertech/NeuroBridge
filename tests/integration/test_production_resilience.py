@@ -16,7 +16,8 @@ from neurobridge.adapters.northbound.protocol import project_window
 from neurobridge.adapters.parsers import HeadbandBleParser
 from neurobridge.adapters.storage.archive import ArchiveReplayReader
 from neurobridge.adapters.storage.filesystem import SegmentedRecordingRepository
-from neurobridge.application.gateway import ClientSession, GatewayApplication, envelope
+from neurobridge.adapters.northbound.protocol import envelope
+from neurobridge.application.gateway import ClientSession, GatewayApplication
 from neurobridge.bootstrap import build_container
 from neurobridge.config import load
 from neurobridge.domain.algorithm import AlgorithmResult, AlgorithmState
@@ -259,6 +260,60 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0].payload["algorithm"], {"attention": 42})
         self.assertEqual(base64.b64decode(rows[0].payload["eegRaw"]["bytesBase64"]), bytes(range(20)))
         self.assertEqual(len(self.service.algorithm.inputs), count)
+
+
+    async def test_optional_trace_is_bounded_and_separate_from_complete_frames(self):
+        self.service.transport_trace_enabled = True
+        self.service.transport_trace_max_bytes = 28
+        await self.connect()
+        await self.capture(2)
+        await self.service.flush()
+        recording_id = self.gateway.store.recording_id
+        await self.gateway.recording_repository.close_session(recording_id)
+        paths = list((Path(self.directory.name)/'sessions'/recording_id/'raw').glob('*.jsonl'))
+        rows = [json.loads(line) for path in paths for line in path.read_text().splitlines()]
+        trace = [r for r in rows if r['recordType']=='raw.transport_chunk']
+        frames = [r for r in rows if r['recordType']=='raw.device_frame']
+        self.assertEqual(len(trace), 1)
+        self.assertEqual(len(frames), 2)
+        self.assertEqual(base64.b64decode(trace[0]['payload']['rawBytes']['bytesBase64']), frame())
+        self.assertEqual(self.service.diagnostics['trace_omitted_bytes'], 28)
+
+
+    async def test_unavailable_recording_path_does_not_prevent_gateway_start(self):
+        bad_root = Path(self.directory.name) / "not-a-directory"
+        bad_root.write_text("fixture")
+        cfg = replace(self.gateway.config, recording=replace(self.gateway.config.recording, directory=bad_root))
+        with patch("neurobridge.bootstrap.container.AffectiveSdkAlgorithmEngine", Algorithm):
+            container = build_container(cfg, RuntimePlatform("kylin", "x86_64"))
+        await container.gateway.start()
+        try:
+            self.assertEqual(container.gateway.status_result()["mode"], "live")
+            self.assertEqual(container.gateway.recording_repository.storage_status().state.value, "error")
+            self.assertIsNone(container.gateway.replay_reader)
+        finally:
+            await container.gateway.stop()
+
+
+    async def test_delivery_metrics_track_success_failure_and_overwrites_per_stream(self):
+        await self.connect()
+        session = ClientSession()
+        async def send(_): pass
+        response = await self.gateway.subscribe(session, {"streams": ["eeg.raw"]}, send)
+        subscription = session.subscriptions[response["subscriptionId"]]
+        await self.gateway._send_subscription(subscription, {}, streams={"eeg.raw"})
+        self.assertEqual(self.gateway.stream_metrics["eeg.raw"]["sent"], 1)
+        self.assertIsNotNone(self.gateway.stream_metrics["eeg.raw"]["lastSuccessfulAtMs"])
+        self.assertEqual(self.gateway.stream_metrics["hr.raw"]["sent"], 0)
+        async def fail(_): raise ConnectionError("synthetic send failure")
+        subscription.send = fail
+        with self.assertRaises(ConnectionError):
+            await self.gateway._send_subscription(subscription, {}, streams={"eeg.raw"})
+        self.assertEqual(self.gateway.stream_metrics["eeg.raw"]["failed"], 1)
+        self.gateway.fanout.offer(subscription.id, frozenset({"eeg.raw"}), 1)
+        self.gateway.fanout.offer(subscription.id, frozenset({"eeg.raw"}), 2)
+        self.assertEqual(self.gateway.fanout.overwrites_by_stream["eeg.raw"], 1)
+        await self.gateway.close_session(session)
 
 
 class StorageStallTests(unittest.IsolatedAsyncioTestCase):
