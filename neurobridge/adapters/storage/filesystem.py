@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 import queue
 import shutil
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 import time
 from typing import Any
 import uuid
@@ -37,6 +37,14 @@ class _Segment:
     last_at_ms: int | None = None
     count: int = 0
     bytes_written: int = 0
+
+
+@dataclass
+class _PendingWrite:
+    record: PersistenceRecord
+    event: Event
+    succeeded: bool | None = None
+    reason: str | None = None
 
 
 class SegmentedRecordingRepository:
@@ -77,7 +85,7 @@ class SegmentedRecordingRepository:
         self.fsync_interval_records = fsync_interval_records
         self.session_retention_days = session_retention_days
         self.auto_cleanup_enabled = auto_cleanup_enabled
-        self._queue: queue.Queue[PersistenceRecord | None] = queue.Queue(maxsize=queue_size)
+        self._queue: queue.Queue[_PendingWrite | None] = queue.Queue(maxsize=queue_size)
         self._segments: dict[tuple[str, str], _Segment] = {}
         self._lock = Lock()
         self._state = StorageState.OK
@@ -101,11 +109,23 @@ class SegmentedRecordingRepository:
     def try_append(self, record: PersistenceRecord) -> PersistenceReceipt:
         if self._stopped:
             return self._record_gap(record.captured_at_ms, "repository_stopped")
+        pending = _PendingWrite(record, Event())
         try:
-            self._queue.put_nowait(record)
+            self._queue.put_nowait(pending)
         except queue.Full:
             return self._record_gap(record.captured_at_ms, "writer_queue_full", StorageState.ERROR)
-        return PersistenceReceipt(True, True)
+        return PersistenceReceipt(True, False, "write_pending", pending)
+
+    async def confirm(self, receipt: PersistenceReceipt) -> PersistenceReceipt:
+        if not receipt.accepted or receipt.confirmation is None:
+            return receipt
+        if not isinstance(receipt.confirmation, _PendingWrite):
+            return PersistenceReceipt(False, False, "confirmation_not_found")
+        pending = receipt.confirmation
+        await asyncio.to_thread(pending.event.wait)
+        if pending.succeeded:
+            return PersistenceReceipt(True, True)
+        return PersistenceReceipt(False, False, pending.reason or "write_error")
 
     async def close_session(self, recording_session_id: str) -> None:
         await asyncio.to_thread(self._queue.join)
@@ -140,13 +160,18 @@ class SegmentedRecordingRepository:
 
     def _writer(self) -> None:
         while True:
-            record = self._queue.get()
+            pending = self._queue.get()
             try:
-                if record is None:
+                if pending is None:
                     return
+                record = pending.record
                 self._write(record)
+                pending.succeeded = True
             except Exception as error:
-                if record is not None:
+                if pending is not None:
+                    record = pending.record
+                    pending.succeeded = False
+                    pending.reason = "write_error"
                     self._record_gap(record.captured_at_ms, "write_error", StorageState.ERROR)
                     LOG.exception(
                         "Recording write failed: recordingSessionId=%s recordType=%s capturedAtMs=%s errorType=%s",
@@ -156,6 +181,8 @@ class SegmentedRecordingRepository:
                         type(error).__name__,
                     )
             finally:
+                if pending is not None:
+                    pending.event.set()
                 self._queue.task_done()
 
     def _write(self, record: PersistenceRecord) -> None:

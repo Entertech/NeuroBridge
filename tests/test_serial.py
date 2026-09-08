@@ -104,6 +104,10 @@ async def ready() -> bool:
     return True
 
 
+async def unavailable() -> bool:
+    return False
+
+
 class SerialDiscoveryTests(unittest.TestCase):
     def test_fixed_path_rejects_non_usb_tty_character_devices(self) -> None:
         for path in ("/dev/null", "/dev/tty"):
@@ -599,6 +603,65 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
                 ("connectionState", "disconnected"),
             ],
         )
+
+    async def test_existing_valid_stream_continues_when_algorithm_is_unavailable(self) -> None:
+        client = FakeSerial([frame(22, 7, 66)])
+        packets: list[DevicePacket] = []
+        adapter: SerialAdapter
+
+        async def receive_and_stop(event: DevicePacket) -> None:
+            packets.append(event)
+            if event.channel == "ff31":
+                await adapter.stop()
+
+        adapter = SerialAdapter(
+            SerialConfig(handshake_timeout_ms=30),
+            receive_and_stop,
+            noop,
+            unavailable,
+            candidate_provider=lambda _config: ["/dev/ttyUSB0"],
+            serial_factory=lambda _path, _config: client,
+        )
+        await adapter.run()
+
+        self.assertEqual([event.channel for event in packets], ["serial.frame", "ff31", "ff51"])
+        self.assertNotIn(HANDSHAKE, client.writes)
+        self.assertNotIn(START_COMMAND, client.writes)
+        self.assertEqual(client.writes, [b"\xE0"])
+
+    async def test_existing_stream_is_adopted_by_session_control_when_algorithm_is_unavailable(self) -> None:
+        client = FakeSerial([frame(23, 8, 67)])
+        adopted: list[bool] = []
+        stopped: list[bool] = []
+        adapter: SerialAdapter
+
+        async def receive_and_stop(event: DevicePacket) -> None:
+            if event.channel == "ff31":
+                await adapter.stop()
+
+        async def adopt(existing_stream: bool) -> bool:
+            adopted.append(existing_stream)
+            return True
+
+        async def stop_control() -> None:
+            stopped.append(True)
+
+        adapter = SerialAdapter(
+            SerialConfig(handshake_timeout_ms=30),
+            receive_and_stop,
+            noop,
+            unavailable,
+            candidate_provider=lambda _config: ["/dev/ttyUSB0"],
+            serial_factory=lambda _path, _config: client,
+            external_control=True,
+            external_start=adopt,
+            external_stop=stop_control,
+        )
+        await adapter.run()
+
+        self.assertEqual(adopted, [True])
+        self.assertEqual(stopped, [True])
+        self.assertEqual(client.writes, [])
 
     async def test_candidate_without_active_ack_01_never_receives_e1(self) -> None:
         client = SlowEmptySerial([])

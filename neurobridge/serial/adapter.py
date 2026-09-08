@@ -581,19 +581,23 @@ class SerialAdapter:
                     _safe_log_text(self._target),
                 )
                 algorithm_ready = await self.device_ready()
-                if not algorithm_ready:
-                    LOG.error(
-                        "Serial algorithm preparation failed after device validation: attempt=%s target=%s "
-                        "reason=local_algorithm_not_ready startCommandSent=false",
-                        attempt,
-                        _safe_log_text(self._target),
-                    )
-                    raise ConnectionError("Local algorithm is not ready; serial start command was not sent")
-                if self.external_control:
-                    if self.external_start is None or not await self.external_start(bool(existing_stream)):
-                        raise ConnectionError("Session-bound DeviceControl did not enable the serial stream")
-                    self._capture_started = True
                 if existing_stream:
+                    if self.external_control:
+                        if self.external_start is None or not await self.external_start(True):
+                            raise ConnectionError("Session-bound DeviceControl did not adopt the existing serial stream")
+                        self._capture_started = True
+                    if not algorithm_ready:
+                        # A device that is already producing validated frames
+                        # must not be interrupted merely because the local
+                        # algorithm is unavailable. The application pipeline
+                        # will persist/distribute raw data and mark the
+                        # algorithm result ALGORITHM_UNAVAILABLE.
+                        LOG.warning(
+                            "Serial algorithm unavailable; adopting existing capture: attempt=%s target=%s "
+                            "reason=local_algorithm_not_ready commandSent=false",
+                            attempt,
+                            _safe_log_text(self._target),
+                        )
                     LOG.info(
                         "Serial existing capture adopted: attempt=%s target=%s commandSent=false "
                         "observedValidFrame=true connectionState=validated",
@@ -605,6 +609,18 @@ class SerialAdapter:
                     if not self._stopping:
                         raise ConnectionError("Serial stream ended")
                     continue
+                if not algorithm_ready:
+                    LOG.error(
+                        "Serial algorithm preparation failed after device validation: attempt=%s target=%s "
+                        "reason=local_algorithm_not_ready startCommandSent=false",
+                        attempt,
+                        _safe_log_text(self._target),
+                    )
+                    raise ConnectionError("Local algorithm is not ready; serial start command was not sent")
+                if self.external_control:
+                    if self.external_start is None or not await self.external_start(False):
+                        raise ConnectionError("Session-bound DeviceControl did not enable the serial stream")
+                    self._capture_started = True
                 phase = "start_command_write"
                 LOG.info(
                     "Serial capture enable started: attempt=%s target=%s algorithmReady=true "

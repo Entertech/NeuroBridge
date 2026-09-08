@@ -24,6 +24,7 @@ class PersistenceReceipt:
     accepted: bool
     persistence_guaranteed: bool
     reason: str | None = None
+    confirmation: object | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,5 +43,6 @@ class StorageStatus:
 
 class RecordingRepository(Protocol):
     def try_append(self, record: PersistenceRecord) -> PersistenceReceipt: ...
+    async def confirm(self, receipt: PersistenceReceipt) -> PersistenceReceipt: ...
     async def close_session(self, recording_session_id: str) -> None: ...
     def storage_status(self) -> StorageStatus: ...

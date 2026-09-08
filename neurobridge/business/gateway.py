@@ -332,7 +332,7 @@ class Gateway:
                     },
                 )
             )
-            if not receipt.persistence_guaranteed:
+            if not receipt.accepted:
                 self.status["storageState"] = self.recording_repository.storage_status().state.value
                 LOG.error(
                     "Raw device frame was not accepted by persistence: recordingId=%s reason=%s",
@@ -488,6 +488,7 @@ class Gateway:
                     },
                 )
             )
+            parsed_receipt = await self.recording_repository.confirm(parsed_receipt)
             persistence_guaranteed = parsed_receipt.persistence_guaranteed
         if not valid:
             self._capture_stats["invalidWindows"] = int(self._capture_stats["invalidWindows"] or 0) + 1
@@ -537,6 +538,7 @@ class Gateway:
                     },
                 )
             )
+            algorithm_receipt = await self.recording_repository.confirm(algorithm_receipt)
             persistence_guaranteed = persistence_guaranteed and algorithm_receipt.persistence_guaranteed
             storage_status = self.recording_repository.storage_status()
             self.status["storageState"] = storage_status.state.value
@@ -681,10 +683,11 @@ class Gateway:
         result_reasons = list(
             dict.fromkeys((*result.batch.invalid_reasons, *result.algorithm_result.invalid_reasons))
         )
-        # An unavailable/failed algorithm must not make correctly parsed raw
-        # signals disappear for subscribers that did not request invalid data.
-        event_valid = result.batch.valid and (result.algorithm_result.valid if algorithm_payload else True)
-        event_reasons = result_reasons if algorithm_payload else list(result.batch.invalid_reasons)
+        # Raw-only subscribers are governed by parsing validity. Algorithm
+        # subscribers must also receive an explicit invalid event when an
+        # evaluation times out/fails even though it produced no metrics.
+        event_valid = result.valid
+        event_reasons = result_reasons
         self.status["persistenceGuaranteed"] = result.persistence_guaranteed
         if self.recording_repository is not None:
             self.status["storageState"] = self.recording_repository.storage_status().state.value
@@ -708,10 +711,19 @@ class Gateway:
         for session in tuple(self.sessions):
             for subscription in tuple(session.subscriptions.values()):
                 payload = self.filtered_payload(raw, algorithm_payload, subscription.streams)
-                if not payload or (not event_valid and not subscription.include_invalid):
+                algorithm_requested = bool(subscription.streams & {"eeg", "hr"})
+                subscription_valid = result.batch.valid and (
+                    result.algorithm_result.valid if algorithm_requested else True
+                )
+                subscription_reasons = (
+                    result_reasons if algorithm_requested else list(result.batch.invalid_reasons)
+                )
+                if algorithm_requested and not algorithm_payload and not result.algorithm_result.valid:
+                    payload["algorithm"] = {}
+                if not payload or (not subscription_valid and not subscription.include_invalid):
                     continue
-                if not event_valid:
-                    payload["invalidReasons"] = event_reasons
+                if not subscription_valid:
+                    payload["invalidReasons"] = subscription_reasons
                 self._queue_live_message(
                     session,
                     subscription,
@@ -722,7 +734,7 @@ class Gateway:
                             subscription.id,
                             result.batch.window_end_ms,
                             result.mode,
-                            event_valid,
+                            subscription_valid,
                             payload,
                         ),
                     ),

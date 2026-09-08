@@ -148,6 +148,38 @@ class WindowAndSnapshotTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_close_waits_for_tracked_late_result_callback(self) -> None:
+        async def scenario() -> None:
+            batch = self._result().batch
+            callback_started = asyncio.Event()
+            release_callback = asyncio.Event()
+
+            class SlowEngine:
+                async def evaluate(self, value: AlgorithmInput) -> AlgorithmResult:
+                    await asyncio.sleep(0.01)
+                    return AlgorithmResult(value.batch_id, "late", 1, 2, {"attention": 99})
+
+            async def persist_late(_result: AlgorithmResult) -> None:
+                callback_started.set()
+                await release_callback.wait()
+
+            aggregator = WindowResultAggregator(SlowEngine(), timeout_ms=1)
+            await aggregator.evaluate(
+                batch,
+                AlgorithmInput(batch.batch_id, {}, "1"),
+                persistence_guaranteed=True,
+                on_late_result=persist_late,
+            )
+            await asyncio.wait_for(callback_started.wait(), 0.1)
+            closing = asyncio.create_task(aggregator.close())
+            await asyncio.sleep(0)
+            self.assertFalse(closing.done())
+            release_callback.set()
+            await asyncio.wait_for(closing, 0.1)
+            self.assertEqual(aggregator._background, set())
+
+        asyncio.run(scenario())
+
 
 class StateMachineTests(unittest.TestCase):
     def test_connection_and_data_states_are_independent(self) -> None:
@@ -182,11 +214,38 @@ class SegmentedRepositoryTests(unittest.IsolatedAsyncioTestCase):
             )
             receipt = repository.try_append(PersistenceRecord(1, "rec-test", "raw.device_frame", 10, "frame-1", {"rawBytes": frame()}))
             self.assertTrue(receipt.accepted)
+            self.assertFalse(receipt.persistence_guaranteed)
+            receipt = await repository.confirm(receipt)
+            self.assertTrue(receipt.persistence_guaranteed)
             await repository.close_session("rec-test")
             manifest = Path(directory) / "sessions/rec-test/manifest.json"
             self.assertTrue(manifest.is_file())
             self.assertTrue(list((manifest.parent / "raw").glob("*.jsonl")))
             self.assertFalse(list((manifest.parent / "raw").glob("*.partial")))
+            await repository.close()
+
+    async def test_write_failure_is_reflected_by_confirmation_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = SegmentedRecordingRepository(
+                directory,
+                warning_threshold_bytes=2,
+                critical_threshold_bytes=1,
+            )
+
+            def fail_write(_record: PersistenceRecord) -> None:
+                raise OSError("disk failed")
+
+            repository._write = fail_write
+            pending = repository.try_append(
+                PersistenceRecord(1, "rec-failed", "parsed.signal_batch", 10, "batch-1", {})
+            )
+            confirmed = await repository.confirm(pending)
+            self.assertTrue(pending.accepted)
+            self.assertFalse(confirmed.accepted)
+            self.assertFalse(confirmed.persistence_guaranteed)
+            self.assertEqual(confirmed.reason, "write_error")
+            self.assertEqual(repository.storage_status().state, StorageState.ERROR)
+            self.assertEqual(repository.storage_status().gap_count, 1)
             await repository.close()
 
     async def test_cleanup_is_off_by_default_and_only_removes_eligible_completed_sessions(self) -> None:

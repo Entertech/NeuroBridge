@@ -61,12 +61,14 @@ class ApplicationService:
             raise ValueError("stale_after_ms must be greater than interval_ms")
         self.stale_after_ms = stale_after_ms
         self._frames: dict[str, DeviceFrame] = {}
+        self._frame_receipts: dict[str, PersistenceReceipt] = {}
         self._recording_session_id: str | None = None
         self._connection_session_id: str | None = None
         self._algorithm_state = AlgorithmState.UNAVAILABLE
         self._flush_task: asyncio.Task[None] | None = None
         self._flush_deadline_ms: int | None = None
         self._stale_task: asyncio.Task[None] | None = None
+        self._lifecycle_lock = asyncio.Lock()
         self._closed = False
         self.diagnostics: dict[str, int] = {
             "raw_chunks": 0,
@@ -122,16 +124,21 @@ class ApplicationService:
             else:
                 applied = event
         if event.state == ConnectionState.CONNECTED:
-            self._connection_session_id = event.connection_session_id
-            if self.data.snapshot.data_state == DataState.UNAVAILABLE:
-                self.data.on_connection(applied)
+            async with self._lifecycle_lock:
+                self._connection_session_id = event.connection_session_id
+                if self.data.snapshot.data_state == DataState.UNAVAILABLE:
+                    self.data.on_connection(applied)
             return
         if event.state in {ConnectionState.DISCONNECTED, ConnectionState.RECONNECTING, ConnectionState.VALIDATION_FAILED}:
+            # Invalidate the connection generation before awaiting any flush or
+            # in-flight algorithm work. Results originating from the previous
+            # device session must never publish into the disconnected/new one.
+            async with self._lifecycle_lock:
+                self._connection_session_id = None
+                if self.data.snapshot.data_state != DataState.UNAVAILABLE:
+                    self.data.on_connection(applied)
             await self._cancel_stale()
             await self.flush(FlushReason.DISCONNECTED)
-            if self.data.snapshot.data_state != DataState.UNAVAILABLE:
-                self.data.on_connection(applied)
-            self._connection_session_id = None
 
     async def prepare_session(
         self,
@@ -142,40 +149,46 @@ class ApplicationService:
     ) -> AlgorithmState:
         """Initialize a clean algorithm session before device capture is enabled."""
 
-        self._connection_session_id = connection_session_id
-        self._recording_session_id = recording_session_id
-        if self.data.snapshot.data_state == DataState.UNAVAILABLE:
-            self.data.transition(DataState.PREPARING)
-        elif self.data.snapshot.data_state in {DataState.ERROR, DataState.PREPARING}:
-            self.data.transition(DataState.PREPARING)
-        self._algorithm_state = AlgorithmState.INITIALIZING
+        async with self._lifecycle_lock:
+            self._connection_session_id = connection_session_id
+            self._recording_session_id = recording_session_id
+            if self.data.snapshot.data_state == DataState.UNAVAILABLE:
+                self.data.transition(DataState.PREPARING)
+            elif self.data.snapshot.data_state in {DataState.ERROR, DataState.PREPARING}:
+                self.data.transition(DataState.PREPARING)
+            self._algorithm_state = AlgorithmState.INITIALIZING
         try:
-            self._algorithm_state = await self.algorithm.initialize(
+            algorithm_state = await self.algorithm.initialize(
                 AlgorithmSession(connection_session_id, recording_session_id, self.device_protocol)
             )
         except Exception as error:
-            self._algorithm_state = AlgorithmState.ERROR
-            self.data.transition(
-                DataState.READY,
-                algorithm_state=self._algorithm_state.value,
-                recent_error=type(error).__name__,
-                error_stage="algorithm_initialize",
-            )
+            async with self._lifecycle_lock:
+                self._algorithm_state = AlgorithmState.ERROR
+                if self._connection_session_id == connection_session_id:
+                    self.data.transition(
+                        DataState.READY,
+                        algorithm_state=self._algorithm_state.value,
+                        recent_error=type(error).__name__,
+                        error_stage="algorithm_initialize",
+                    )
             LOG.exception(
                 "Algorithm session initialization failed: connectionSessionId=%s recordingSessionId=%s",
                 connection_session_id,
                 recording_session_id,
             )
             return self._algorithm_state
-        if self._algorithm_state == AlgorithmState.READY:
-            self.data.transition(DataState.READY, algorithm_state=self._algorithm_state.value)
-        else:
-            self.data.transition(
-                DataState.READY,
-                algorithm_state=self._algorithm_state.value,
-                recent_error="ALGORITHM_NOT_READY",
-                error_stage="algorithm_initialize",
-            )
+        async with self._lifecycle_lock:
+            self._algorithm_state = algorithm_state
+            if self._connection_session_id == connection_session_id:
+                if self._algorithm_state == AlgorithmState.READY:
+                    self.data.transition(DataState.READY, algorithm_state=self._algorithm_state.value)
+                else:
+                    self.data.transition(
+                        DataState.READY,
+                        algorithm_state=self._algorithm_state.value,
+                        recent_error="ALGORITHM_NOT_READY",
+                        error_stage="algorithm_initialize",
+                    )
         LOG.info(
             "Application session prepared: connectionSessionId=%s recordingSessionId=%s algorithmState=%s existingStream=%s",
             connection_session_id,
@@ -212,7 +225,7 @@ class ApplicationService:
             )
         for frame in outcome.frames:
             self._frames[frame.frame_id] = frame
-            self._persist(
+            self._frame_receipts[frame.frame_id] = self._persist(
                 PersistenceRecord(
                     1,
                     self._required_recording_id(),
@@ -281,6 +294,33 @@ class ApplicationService:
             )
         )
         persistence_guaranteed = parsed_receipt.persistence_guaranteed
+        if batch.connection_session_id != self._connection_session_id:
+            timestamp = self.clock_ms()
+            stale_result = WindowResult(
+                batch,
+                AlgorithmResult(
+                    batch.batch_id,
+                    None,
+                    timestamp,
+                    timestamp,
+                    {},
+                    False,
+                    ("CONNECTION_SESSION_ENDED",),
+                ),
+                "live",
+                timestamp,
+                False,
+            )
+            stale_receipts = [parsed_receipt]
+            stale_receipts.extend(
+                self._frame_receipts[frame_ref]
+                for frame_ref in batch.frame_refs
+                if frame_ref in self._frame_receipts
+            )
+            await asyncio.gather(*(self._confirm(receipt) for receipt in stale_receipts))
+            self._discard_batch_frames(batch)
+            LOG.info("Window discarded before evaluation because its connection session ended: batchId=%s", batch.batch_id)
+            return stale_result
         if self._algorithm_state == AlgorithmState.READY:
             algorithm_input = self.mapper.map(batch, (self._frames[ref] for ref in batch.frame_refs if ref in self._frames))
             result = await self.aggregator.evaluate(
@@ -301,22 +341,53 @@ class ApplicationService:
                 ("ALGORITHM_UNAVAILABLE",),
             )
             result = WindowResult(batch, unavailable, "live", timestamp, persistence_guaranteed)
+        if batch.connection_session_id != self._connection_session_id:
+            LOG.info(
+                "Stale window result discarded: batchId=%s batchConnectionSessionId=%s currentConnectionSessionId=%s",
+                batch.batch_id,
+                batch.connection_session_id,
+                self._connection_session_id,
+            )
+            stale_receipts = [parsed_receipt]
+            stale_receipts.extend(
+                self._frame_receipts[frame_ref]
+                for frame_ref in batch.frame_refs
+                if frame_ref in self._frame_receipts
+            )
+            await asyncio.gather(*(self._confirm(receipt) for receipt in stale_receipts))
+            self._discard_batch_frames(batch)
+            return result
+        receipts = [parsed_receipt]
+        receipts.extend(
+            self._frame_receipts[frame_ref]
+            for frame_ref in batch.frame_refs
+            if frame_ref in self._frame_receipts
+        )
+        confirmed = await asyncio.gather(*(self._confirm(receipt) for receipt in receipts))
+        persistence_guaranteed = all(receipt.persistence_guaranteed for receipt in confirmed)
+        if persistence_guaranteed != result.persistence_guaranteed:
+            result = WindowResult(batch, result.algorithm_result, result.mode, result.completed_at_ms, persistence_guaranteed)
         algorithm_receipt = self._persist_algorithm(batch, result.algorithm_result, late=False)
+        algorithm_receipt = await self._confirm(algorithm_receipt)
         if not algorithm_receipt.persistence_guaranteed and result.persistence_guaranteed:
             result = WindowResult(batch, result.algorithm_result, result.mode, result.completed_at_ms, False)
-        self.snapshots.replace(result)
-        if self.data.snapshot.data_state in {DataState.READY, DataState.STREAMING, DataState.STALE}:
-            self.data.produced(batch.window_end_ms, valid=result.valid)
-        await self.northbound.publish(ApplicationEvent("window", result=result))
-        self.data.transition(DataState.STREAMING, last_published_at_ms=self.clock_ms())
-        self._schedule_stale(batch.window_end_ms)
-        self.diagnostics["published"] += 1
-        for frame_ref in batch.frame_refs:
-            self._frames.pop(frame_ref, None)
+        async with self._lifecycle_lock:
+            if batch.connection_session_id != self._connection_session_id:
+                LOG.info("Window result invalidated while persistence completed: batchId=%s", batch.batch_id)
+                self._discard_batch_frames(batch)
+                return result
+            self.snapshots.replace(result)
+            if self.data.snapshot.data_state in {DataState.READY, DataState.STREAMING, DataState.STALE}:
+                self.data.produced(batch.window_end_ms, valid=result.valid)
+            await self.northbound.publish(ApplicationEvent("window", result=result))
+            self.data.transition(DataState.STREAMING, last_published_at_ms=self.clock_ms())
+            self._schedule_stale(batch.window_end_ms)
+            self.diagnostics["published"] += 1
+        self._discard_batch_frames(batch)
         return result
 
     async def _persist_late(self, batch: ParsedSignalBatch, result: AlgorithmResult) -> None:
-        self._persist_algorithm(batch, result, late=True)
+        await self._confirm(self._persist_algorithm(batch, result, late=True))
         LOG.warning(
             "Late algorithm result persisted without republishing: batchId=%s recordingSessionId=%s",
             batch.batch_id,
@@ -349,9 +420,26 @@ class ApplicationService:
             self.diagnostics["persistence_gaps"] += 1
             return PersistenceReceipt(False, False, "recording_repository_not_bound")
         receipt = self.recording.try_append(record)
-        if not receipt.persistence_guaranteed:
+        if not receipt.persistence_guaranteed and receipt.reason != "write_pending":
             self.diagnostics["persistence_gaps"] += 1
         return receipt
+
+    async def _confirm(self, receipt: PersistenceReceipt) -> PersistenceReceipt:
+        if receipt.reason != "write_pending" or self.recording is None:
+            return receipt
+        confirm = getattr(self.recording, "confirm", None)
+        if confirm is None:
+            self.diagnostics["persistence_gaps"] += 1
+            return PersistenceReceipt(False, False, "confirmation_unsupported")
+        confirmed = await confirm(receipt)
+        if not confirmed.persistence_guaranteed:
+            self.diagnostics["persistence_gaps"] += 1
+        return confirmed
+
+    def _discard_batch_frames(self, batch: ParsedSignalBatch) -> None:
+        for frame_ref in batch.frame_refs:
+            self._frames.pop(frame_ref, None)
+            self._frame_receipts.pop(frame_ref, None)
 
     def _required_recording_id(self) -> str:
         if not self._recording_session_id:

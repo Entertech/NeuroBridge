@@ -52,6 +52,24 @@ class FakeUnavailableAlgorithm:
         return None
 
 
+class ControlledAlgorithm(FakeAlgorithm):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def evaluate(self, value) -> AlgorithmResult:
+        self.started.set()
+        await self.release.wait()
+        return await super().evaluate(value)
+
+
+class SlowAlgorithm(FakeAlgorithm):
+    async def evaluate(self, value) -> AlgorithmResult:
+        await asyncio.sleep(0.02)
+        return await super().evaluate(value)
+
+
 class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_raw_frame_to_algorithm_snapshot_and_storage_keeps_correlations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -118,6 +136,39 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             outcome = await service.process(RawChunk("serial", "serial", headset_frame(), 1, 1, "conn-old", "trace-old"))
             self.assertEqual(outcome.frames, ())
             self.assertEqual(sink.events, [])
+            await service.close()
+            await repository.close()
+
+    async def test_disconnect_during_algorithm_evaluation_discards_old_session_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = SegmentedRecordingRepository(directory, warning_threshold_bytes=2, critical_threshold_bytes=1)
+            sink = CollectingNorthboundSink()
+            algorithm = ControlledAlgorithm()
+            service = ApplicationService(
+                device_protocol="headset_rev181",
+                parser=HeadsetRev181Parser(),
+                algorithm=algorithm,
+                snapshots=InMemoryLatestSnapshotStore(),
+                northbound=sink,
+                recording=repository,
+            )
+            for state in (ConnectionState.DISCOVERING, ConnectionState.CONNECTING):
+                await service.on_connection(DeviceConnectionEvent(state, 1))
+            await service.on_connection(DeviceConnectionEvent(ConnectionState.CONNECTED, 2, "conn-1"))
+            await service.prepare_session("conn-1", "rec-1")
+            await service.process(RawChunk("serial", "serial", headset_frame(), 601, 1, "conn-1", "trace-1"))
+            flushing = asyncio.create_task(service.flush())
+            await asyncio.wait_for(algorithm.started.wait(), 0.1)
+            disconnected = asyncio.create_task(
+                service.on_connection(DeviceConnectionEvent(ConnectionState.RECONNECTING, 700, reason="unplugged"))
+            )
+            await asyncio.sleep(0)
+            algorithm.release.set()
+            await asyncio.gather(flushing, disconnected)
+
+            self.assertEqual(sink.events, [])
+            self.assertEqual(service.data.snapshot.data_state, DataState.UNAVAILABLE)
+            self.assertEqual(service.diagnostics["published"], 0)
             await service.close()
             await repository.close()
 
@@ -198,6 +249,79 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await gateway.close_session(session)
             await service.close()
             await gateway.stop()
+
+    async def test_algorithm_timeout_publishes_invalid_event_to_algorithm_subscriber(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "gateway.toml"
+            config_path.write_text(
+                '[data_source]\ntype="bluetooth"\n'
+                f'[recording]\ndirectory="{directory}"\n',
+                encoding="utf-8",
+            )
+            gateway = Gateway(load(config_path))
+            await gateway.start()
+            await gateway.update_status("connectionState", "connected")
+            recording_id = gateway.store.recording_id
+            assert recording_id is not None
+            service = ApplicationService(
+                device_protocol="headband_ble",
+                parser=HeadbandBleParser(),
+                algorithm=SlowAlgorithm(),
+                snapshots=gateway.latest_snapshot,
+                northbound=GatewayNorthboundSink(gateway),
+                recording=gateway.recording_repository,
+                algorithm_timeout_ms=1,
+            )
+            await service.prepare_session("conn-1", recording_id)
+            await gateway.update_status("algorithmState", "ready")
+            sent = []
+
+            async def send(value) -> None:
+                sent.append(value)
+
+            session = ClientSession()
+            await gateway.subscribe(session, {"streams": ["eeg"], "includeInvalid": True}, send)
+            await service.process(RawChunk("bluetooth", "ff31", bytes(range(20)), 601, 1, "conn-1", "trace-1"))
+            await service.flush()
+            await asyncio.sleep(0.01)
+
+            self.assertEqual(len(sent), 1)
+            self.assertFalse(sent[0]["data"]["valid"])
+            self.assertEqual(sent[0]["data"]["payload"]["algorithm"], {})
+            self.assertEqual(sent[0]["data"]["payload"]["invalidReasons"], ["ALGORITHM_TIMEOUT"])
+            await gateway.close_session(session)
+            await service.close()
+            await gateway.stop()
+
+    async def test_failed_batch_write_marks_published_result_not_guaranteed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = SegmentedRecordingRepository(directory, warning_threshold_bytes=2, critical_threshold_bytes=1)
+            original_write = repository._write
+
+            def fail_parsed(record) -> None:
+                if record.record_type == "parsed.signal_batch":
+                    raise OSError("disk failure")
+                original_write(record)
+
+            repository._write = fail_parsed
+            sink = CollectingNorthboundSink()
+            service = ApplicationService(
+                device_protocol="headset_rev181",
+                parser=HeadsetRev181Parser(),
+                algorithm=FakeAlgorithm(),
+                snapshots=InMemoryLatestSnapshotStore(),
+                northbound=sink,
+                recording=repository,
+            )
+            await service.prepare_session("conn-1", "rec-1")
+            await service.process(RawChunk("serial", "serial", headset_frame(), 601, 1, "conn-1", "trace-1"))
+            await service.flush()
+
+            self.assertEqual(len(sink.events), 1)
+            assert sink.events[0].result is not None
+            self.assertFalse(sink.events[0].result.persistence_guaranteed)
+            await service.close()
+            await repository.close()
 
     async def test_gateway_sink_preserves_complete_ble_window_and_replay_index(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
