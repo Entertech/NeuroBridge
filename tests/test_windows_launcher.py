@@ -116,7 +116,7 @@ class WindowsLauncherTests(unittest.TestCase):
         subprocess.run([sys.executable, '-m', 'venv', '--system-site-packages',
                         str(self.root / '.runtime/windows-venv')], check=True, timeout=60)
         command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                   str(self.root / 'windows/setup-windows-gateway.ps1'), '-Action', 'prepare', '-Offline']
+                   str(self.root / 'windows/setup-windows-gateway.ps1'), '-Offline']
         first = subprocess.run(command, capture_output=True, timeout=60)
         self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
         self.assertIn(b'Windows algorithm bridge missing', first.stdout + first.stderr)

@@ -2,10 +2,10 @@
 
 ## 一键入口
 
-在完整项目中双击 `windows\neurobridge-windows-bootstrap.cmd`，输入 `1`。也可在项目根目录的 PowerShell 直接一键执行：
+在完整项目中双击 `windows\neurobridge-windows-bootstrap.cmd` 即可自动准备并启动，无需输入菜单数字。也可在项目根目录的 PowerShell 运行：
 
 ```powershell
-.\windows\neurobridge-windows-bootstrap.cmd -Action prepare
+.\windows\neurobridge-windows-bootstrap.cmd
 ```
 
 入口适用于 Windows 10/11 x64 源码联调。它复用 Python 3.11 x64，缺少时尝试通过 winget 为当前用户安装，创建 `.runtime\windows-venv` 并安装 `requirements.lock` 依赖；生成 `.runtime\config\windows-gateway.toml`，保留已有现场配置；检查算法、端口与 COM 后在前台运行正常网关 Bootstrap。源码启动不执行 Git，不安装服务、不改写系统执行策略，`Ctrl+C` 停止网关。
@@ -14,7 +14,7 @@
 
 离线运行使用 `-Offline`：已有环境不再安装依赖；缺失环境须预先提供完整 Python 3.11 x64（含 venv/pip，可放 `python-runtime\windows\`）及 `wheelhouse\windows\` 下的匹配 wheel。离线参数禁止 winget 和网络 pip 安装。双击入口使用进程级 ExecutionPolicy Bypass；若组织策略禁止脚本，按组织批准方式运行，不修改机器策略。
 
-菜单支持 `1` 一键准备启动、`2` 直接启动、`4` COM 枚举、`5` 创建/校验配置、`6` 算法自检、`7` 诊断摘要、`8` 最近日志、`0` 退出。也可用 `-Action start|check|config|algorithm|diagnostics|logs` 执行对应动作。除 `prepare` 外不安装运行时，缺少环境时提示先选 `1`。没有 COM 时网关仍可启动并等待插入设备；算法不可用、已有进程占用端口或配置错误时不会启动第二个网关。
+需要排障菜单时运行 `.\windows\neurobridge-windows-bootstrap.cmd -Action menu`。菜单支持 `1` 一键准备启动、`2` 直接启动、`4` COM 枚举、`5` 创建/校验配置、`6` 算法自检、`7` 诊断摘要、`8` 最近日志、`0` 退出。也可用 `-Action start|check|config|algorithm|diagnostics|logs` 执行对应动作。除 `prepare` 外不安装运行时，缺少环境时重新双击入口即可准备。没有 COM 时网关仍可启动并等待插入设备；算法不可用、已有进程占用端口或配置错误时不会启动第二个网关。
 
 自动化测试覆盖配置保留、路径转义、录播/监听策略拒绝、端口冲突、算法失败与诊断脱敏；Windows CI 另外运行 PowerShell 5.1 语法、进程锁和离线一键流程检查。CI 不替代真实设备或目标机验收。
 

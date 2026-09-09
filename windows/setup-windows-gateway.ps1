@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('menu', 'prepare', 'start', 'check', 'config', 'algorithm', 'logs', 'diagnostics')]
-    [string]$Action = 'menu',
+    [string]$Action = 'prepare',
     [switch]$Offline
 )
 
