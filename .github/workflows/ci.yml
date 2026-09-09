@@ -49,6 +49,7 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseFile("$PWD/windows/setup-windows-gateway.ps1", [ref]$tokens, [ref]$parseErrors) | Out-Null
           if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
       - run: python -m unittest discover -s tests -p test_windows_launcher.py -v
+      - run: python -m unittest discover -s tests -p test_windows_serial_resume.py -v
       - run: python -m unittest discover -s tests -p test_windows_algorithm_build.py -v
       - name: Verify recording rotation and recovery on Windows
         run: python -m unittest discover -s tests -p test_recording_rotation.py -v

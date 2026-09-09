@@ -1324,3 +1324,15 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户反馈 Actions 34327671060 失败；该次 Windows 录制切段回归与算法构建已通过，失败位于服务测试的临时目录准备及清理。本次仅修复测试设施，不改变生产服务或已发布及预发布协议正文；修复后的原生服务测试仍需 CI 验证。"
+
+
+[[change_records]]
+id = "2026-09-09-windows-headset-e0-e1-restart-recovery"
+date = "2026-09-09"
+scope = "gateway_windows_serial_restart_recovery"
+summary = "按用户确认的设备恢复规则增加 Windows ACK/E1 双阶段探测：正常 E0 停止并匹配 USB/COM 身份摘要时优先 E1，否则 ACK 优先；E1 前准备隔离算法，无合法帧回退 ACK，ACK 超时可试 E1。只以合法帧或独立 ACK 01 验证，原始帧按正常会话持久化，失败/取消探测尽力 E0，复用既有超时与重连配置。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户日志确认 E0 停止后 COM4 可打开但持续无 ACK 回复，并明确授权 ACK/E1 交替及正常停止后优先 E1。仅调整 Windows 内部恢复策略，同步仓库规则、操作文档与回归；不修改已发布及预发布北向正文，麒麟策略保持不变，Windows 真机不拔插重启复测仍待执行。"

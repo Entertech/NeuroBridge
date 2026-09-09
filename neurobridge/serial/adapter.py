@@ -242,6 +242,7 @@ class SerialAdapter:
         external_control: bool = False,
         external_start: Callable[[bool], Awaitable[bool]] | None = None,
         external_stop: Callable[[], Awaitable[None]] | None = None,
+        restart_probe=None,
     ) -> None:
         self.config = config
         self.packet = packet
@@ -255,6 +256,7 @@ class SerialAdapter:
         self.external_control = external_control
         self.external_start = external_start
         self.external_stop = external_stop
+        self.restart_probe = restart_probe
         self._client: Any | None = None
         self._target: str | None = None
         self._stopping = False
@@ -372,6 +374,14 @@ class SerialAdapter:
                         identity = candidate_identities[path]
                         phase = "existing_stream_observation"
                         observed_stream = await self._observe_existing_stream(client, path)
+                        response = b""
+                        if observed_stream is None and self.restart_probe is not None:
+                            phase = "restart_probe"
+                            await self.status("connectionState", "validating")
+                            observed_stream, response = await self.restart_probe.probe(
+                                client, path, self._observe_existing_stream, self._send_handshake_ack,
+                                lambda: self._stopping,
+                            )
                         if observed_stream is not None:
                             self._client, self._target = client, path
                             target_selected = True
@@ -394,18 +404,19 @@ class SerialAdapter:
                             )
                             await self.status("connectionState", "validated")
                             break
-                        phase = "handshake_ack_probe"
-                        await self.status("connectionState", "validating")
-                        LOG.info(
-                            "Serial active handshake ACK probe started: attempt=%s candidateIndex=%s "
-                            "candidateCount=%s path=%s ackBytes=%s expectedResponse=single_byte_0x01",
-                            attempt,
-                            index,
-                            len(candidates),
-                            _safe_log_text(path),
-                            len(HANDSHAKE),
-                        )
-                        response = await self._send_handshake_ack(client)
+                        if self.restart_probe is None:
+                            phase = "handshake_ack_probe"
+                            await self.status("connectionState", "validating")
+                            LOG.info(
+                                "Serial active handshake ACK probe started: attempt=%s candidateIndex=%s "
+                                "candidateCount=%s path=%s ackBytes=%s expectedResponse=single_byte_0x01",
+                                attempt,
+                                index,
+                                len(candidates),
+                                _safe_log_text(path),
+                                len(HANDSHAKE),
+                            )
+                            response = await self._send_handshake_ack(client)
                         if response:
                             self._client, self._target = client, path
                             target_selected = True
@@ -446,6 +457,8 @@ class SerialAdapter:
                     if rejected_candidate_count:
                         validation_failed = True
                         raise TimeoutError(
+                            "Serial candidates opened but no valid frame or standalone 0x01 was received"
+                            if self.restart_probe is not None else
                             "Serial candidates opened but none returned standalone 0x01 after active ACK"
                         )
                     if probe_failures:
@@ -786,6 +799,8 @@ class SerialAdapter:
                     f"expected={len(command)} actual={written}"
                 )
             await self._flush(self._client)
+            if self.restart_probe is not None and self._target is not None:
+                self.restart_probe.command_sent(name, self._target)
         LOG.info(
             "Serial command sent: command=%s commandBytes=%s durationMs=%s "
             "responseExpected=false success=true",

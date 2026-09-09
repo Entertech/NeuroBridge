@@ -39,6 +39,7 @@ class PosixSerialSource:
         candidate_provider=None,
         serial_factory=None,
         identity_provider=None,
+        restart_probe=None,
     ) -> None:
         self._chunk_queue: asyncio.Queue[RawChunk | None] = asyncio.Queue(maxsize=queue_size)
         self._event_queue: asyncio.Queue[DeviceConnectionEvent | None] = asyncio.Queue(maxsize=queue_size)
@@ -63,6 +64,7 @@ class PosixSerialSource:
             external_control=external_control,
             external_start=self._start_stream if external_control else None,
             external_stop=self._stop_stream if external_control else None,
+            restart_probe=restart_probe,
             **({"candidate_provider": candidate_provider} if candidate_provider is not None else {}),
             **({"serial_factory": serial_factory} if serial_factory is not None else {}),
             **({"identity_provider": identity_provider} if identity_provider is not None else {}),

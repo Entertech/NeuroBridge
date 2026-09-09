@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import logging
 import json
@@ -22,7 +23,7 @@ from ..adapters.storage.archive import SegmentedArchive, ArchiveReplayReader
 from ..adapters.observability import ProcessMetrics
 from ..versioning import APPLICATION_VERSION
 from ..config import GatewayConfig
-from ..domain.algorithm import AlgorithmState
+from ..domain.algorithm import AlgorithmSession, AlgorithmState
 from ..domain.raw import ParseOutcome
 from ..domain.status import ConnectionState, DataState, DeviceConnectionEvent
 from ..ports.raw_parser import RawDataParser
@@ -248,12 +249,26 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
             enqueue_timeout_ms=config.pipeline.source_enqueue_timeout_ms,
         )
     elif profile.os_family == "windows":
+        @asynccontextmanager
+        async def probe_algorithm_context():
+            probe_engine = AffectiveSdkAlgorithmEngine(config.algorithm)
+            try:
+                state = await asyncio.wait_for(
+                    probe_engine.initialize(AlgorithmSession("serial-probe", "no-recording", "headset_rev181")),
+                    timeout=config.algorithm.request_timeout_ms / 1000,
+                )
+                yield state == AlgorithmState.READY
+            finally:
+                await probe_engine.close()
+
         source = WindowsSerialSource(
             config.serial,
             device_ready,
             gateway.update_connection_error,
             external_control=True,
             application_control=True,
+            resume_state_path=config.recording.directory / ".windows-serial-resume.json",
+            probe_algorithm_context=probe_algorithm_context,
             queue_size=config.pipeline.source_queue_size,
             enqueue_timeout_ms=config.pipeline.source_enqueue_timeout_ms,
         )
