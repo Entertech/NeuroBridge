@@ -160,7 +160,7 @@ def instance_lock(root: Path, filename: str = 'windows-gateway.lock'):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['config', 'check', 'algorithm', 'start', 'logs', 'diagnostics'])
+    parser.add_argument('action', choices=['config', 'check', 'algorithm', 'start', 'logs', 'diagnostics', 'url'])
     args = parser.parse_args()
     if sys.platform != 'win32' or platform.machine().lower() not in {'amd64', 'x86_64'}:
         parser.error('This entry requires Windows x64; it does not replace Kylin acceptance')
@@ -173,7 +173,9 @@ def main() -> int:
             print(diagnostics(ROOT))
             return 0
         config = validate_config(config_path(ROOT))
-        if args.action == 'logs':
+        if args.action == 'url':
+            print(f'http://127.0.0.1:{config.local_ui.port}/capture/', flush=True)
+        elif args.action == 'logs':
             path = config.logging.directory / config.logging.filename
             # Bounded tail; no second, unrotated console log.
             with path.open('rb') as source:

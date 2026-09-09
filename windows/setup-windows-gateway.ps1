@@ -1,7 +1,7 @@
 ﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidateSet('menu', 'prepare', 'start', 'check', 'config', 'algorithm', 'logs', 'diagnostics')]
+    [ValidateSet('menu', 'prepare', 'start', 'check', 'config', 'algorithm', 'logs', 'diagnostics', 'autostart-enable', 'autostart-disable', 'autostart-status')]
     [string]$Action = 'prepare',
     [switch]$Offline
 )
@@ -104,14 +104,67 @@ function Prepare-Algorithm {
     Invoke-Checked $projectPython $buildArgs
 }
 
+function Get-ServiceValue {
+    param([string]$Operation)
+    $value = & $projectPython (Join-Path $PSScriptRoot 'project_service.py') $Operation
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the project service; check for another installation.' }
+    return $value
+}
+
+function Invoke-ServiceControl {
+    param([string]$Operation)
+    Require-Runtime
+    $serviceScript = Join-Path $PSScriptRoot 'project_service.py'
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if ($Operation -eq 'status' -or $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Invoke-Checked $projectPython @($serviceScript, $Operation)
+    } else {
+        Write-Host 'Windows will request UAC permission to manage the boot service.'
+        $process = Start-Process -FilePath $projectPython -ArgumentList @('-u', ('"' + $serviceScript + '"'), $Operation) -Verb RunAs -Wait -PassThru
+        if ($process.ExitCode -ne 0) { throw 'Service configuration failed. Check .runtime\logs\windows-service-control.log and windows-service.log. Autostart was not silently replaced with foreground mode.' }
+    }
+}
+
+function Show-GatewayPage {
+    $url = & $projectPython $helper 'url'
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot read the configured browser URL.' }
+    Write-Host "Gateway is running in the background: $url"
+    try { Start-Process -FilePath $url | Out-Null }
+    catch { Write-Host "Open this URL in your browser: $url" }
+}
+
+function Start-ConfiguredGateway {
+    $serviceState = Get-ServiceValue 'state'
+    if ($serviceState -notin @('1', '4')) { throw 'Service is starting or stopping. Wait until it finishes, then retry.' }
+    if ($serviceState -eq '4') {
+        Write-Host 'Gateway service is already running; no duplicate process was started.'
+        Show-GatewayPage
+    } elseif ((Get-ServiceValue 'preference') -eq 'enabled') {
+        Invoke-ServiceControl 'enable'
+        Show-GatewayPage
+    } else { Invoke-Helper 'start' }
+}
+
 function Invoke-Action {
     param([string]$Selected)
-    if ($Selected -eq 'prepare') {
+    if ($Selected -like 'autostart-*') {
+        Invoke-ServiceControl ($Selected.Substring(10))
+    } elseif ($Selected -eq 'start') {
+        Require-Runtime
+        Start-ConfiguredGateway
+    } elseif ($Selected -eq 'prepare') {
         Prepare-Runtime
+        if ((Get-ServiceValue 'state') -ne '1') {
+            Start-ConfiguredGateway
+            return
+        }
         Invoke-Helper 'config'
         Prepare-Algorithm
-        Invoke-Helper 'start'
+        Start-ConfiguredGateway
     } elseif ($Selected -eq 'algorithm') {
+        Require-Runtime
+        if ((Get-ServiceValue 'state') -ne '1') { throw 'Stop the project service before rebuilding its algorithm.' }
         Prepare-Algorithm
     } else { Invoke-Helper $Selected }
 }
@@ -123,23 +176,26 @@ try {
     Set-Location -LiteralPath $projectRoot
     New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
     Write-Host "NeuroBridge Windows | project=$projectRoot | offline=$Offline"
-    Write-Host 'Source is never fetched or updated. Foreground mode; no service is installed.'
+    Write-Host 'Source is never fetched or updated. Boot autostart is enabled by default; saved opt-out uses foreground mode.'
     if ($Action -ne 'menu') {
         Invoke-Action $Action
     } else {
         while ($true) {
             Write-Host ''
-            Write-Host '1. 一键准备并启动（推荐，前台运行）'
+            Write-Host '1. 一键准备并启动（默认开机自启）'
             Write-Host '2. 直接启动网关'
             Write-Host '4. 检查当前 USB / COM 串口'
             Write-Host '5. 创建或校验项目配置（保留已有设置）'
             Write-Host '6. 准备 / 修复 Windows 算法程序'
             Write-Host '7. 导出诊断摘要（不含原始数据和日志正文）'
             Write-Host '8. 查看最近日志'
+            Write-Host '9. 查看开机自启状态'
+            Write-Host '10. 启用开机自启并启动'
+            Write-Host '11. 关闭开机自启并停止服务'
             Write-Host '0. 退出'
             $selection = Read-Host '请输入数字'
             if ($selection -eq '0') { break }
-            $actions = @{ '1'='prepare'; '2'='start'; '4'='check'; '5'='config'; '6'='algorithm'; '7'='diagnostics'; '8'='logs' }
+            $actions = @{ '1'='prepare'; '2'='start'; '4'='check'; '5'='config'; '6'='algorithm'; '7'='diagnostics'; '8'='logs'; '9'='autostart-status'; '10'='autostart-enable'; '11'='autostart-disable' }
             if (-not $actions.ContainsKey($selection)) { Write-Host 'Select a listed number.'; continue }
             try { Invoke-Action $actions[$selection] }
             catch {

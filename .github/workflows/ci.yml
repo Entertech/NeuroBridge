@@ -56,6 +56,8 @@ jobs:
           python windows/algorithm_build.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python windows/algorithm_build.py --offline
+      - name: Verify Windows project service lifecycle
+        run: python -m unittest discover -s tests -p test_windows_project_service.py -v
       - uses: actions/upload-artifact@v4
         with:
           name: windows-algorithm-x64-${{ github.sha }}

@@ -97,6 +97,7 @@ class WindowsLauncherTests(unittest.TestCase):
     def test_powershell_offline_start_fails_without_installing_runtime(self):
         shutil.copy2(ROOT / 'windows/setup-windows-gateway.ps1', self.root / 'windows')
         shutil.copy2(ROOT / 'windows/gateway_helper.py', self.root / 'windows')
+        shutil.copy2(ROOT / 'windows/project_service.py', self.root / 'windows')
         (self.root / 'pyproject.toml').write_text('# project fixture')
         result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
                                  '-File', str(self.root / 'windows/setup-windows-gateway.ps1'),
@@ -110,6 +111,7 @@ class WindowsLauncherTests(unittest.TestCase):
         # Reuse CI's installed dependencies; this invocation must work without an index.
         shutil.copy2(ROOT / 'windows/setup-windows-gateway.ps1', self.root / 'windows')
         shutil.copy2(ROOT / 'windows/gateway_helper.py', self.root / 'windows')
+        shutil.copy2(ROOT / 'windows/project_service.py', self.root / 'windows')
         shutil.copy2(ROOT / 'pyproject.toml', self.root)
         shutil.copy2(ROOT / 'requirements.lock', self.root)
         shutil.copy2(ROOT / 'sdk.lock', self.root)
