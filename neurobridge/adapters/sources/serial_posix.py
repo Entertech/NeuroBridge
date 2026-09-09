@@ -182,6 +182,8 @@ class PosixSerialSource:
         await self._emit_state(state)
 
     async def _emit_state(self, state: ConnectionState) -> None:
+        previous_state = self._status.state
+        previous_session = self._status.connection_session_id
         if state == ConnectionState.CONNECTED:
             self._pending_gap_bytes = 0
             self._session_id = f"conn-{uuid.uuid4().hex}"
@@ -190,6 +192,16 @@ class PosixSerialSource:
             self._session_id = None
         event = DeviceConnectionEvent(state, int(time.time() * 1000), self._session_id, self._existing_stream if state == ConnectionState.CONNECTED else False)
         self._status = SourceStatus(state, self._session_id)
+        LOG.info(
+            "Serial connection state changed: previousState=%s state=%s previousConnectionSessionId=%s "
+            "connectionSessionId=%s existingStream=%s eventTimestampMs=%s",
+            previous_state.value,
+            state.value,
+            previous_session,
+            self._session_id,
+            event.existing_stream,
+            event.occurred_at_ms,
+        )
         await self._event_queue.put(event)
 
     @staticmethod
