@@ -113,8 +113,13 @@ def validate_imports(output: str) -> list[str]:
 
 def smoke(path: Path) -> dict:
     validate_pe(path)
-    env = dict(os.environ)
-    system = Path(env['SystemRoot'])
+    # os.environ is case-insensitive on Windows, but a plain dict is not.
+    # Normalize once so SYSTEMROOT/SystemRoot and PATH/Path behave identically.
+    env = {key.upper(): value for key, value in os.environ.items()}
+    system_root = env.get('SYSTEMROOT')
+    if not system_root:
+        raise ValueError('Windows SYSTEMROOT environment variable is missing; cannot isolate the algorithm DLL search path')
+    system = Path(system_root)
     # A successful test must not depend on the compiler's DLL search path.
     env['PATH'] = os.pathsep.join(map(str, (system / 'System32', system)))
     return smoke_test_bridge(path, timeout_seconds=15, environment=env)

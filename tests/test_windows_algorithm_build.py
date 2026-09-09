@@ -109,6 +109,27 @@ class WindowsAlgorithmBuildTests(unittest.TestCase):
             self.assertEqual(external.read_bytes(), b'operator managed')
             download.assert_not_called()
 
+    def test_smoke_preserves_windows_case_insensitive_environment_semantics(self):
+        for root_key, path_key in [('SYSTEMROOT', 'PATH'), ('SystemRoot', 'Path')]:
+            with self.subTest(root_key=root_key), \
+                 patch.dict(builder.os.environ, {root_key: str(self.root), path_key: 'compiler-dll-directory'}, clear=True), \
+                 patch.object(builder, 'validate_pe'), \
+                 patch.object(builder, 'smoke_test_bridge', return_value={}) as smoke:
+                builder.smoke(self.root / 'candidate.exe')
+                env = smoke.call_args.kwargs['environment']
+                self.assertEqual(env['SYSTEMROOT'], str(self.root))
+                self.assertEqual(env['PATH'], os.pathsep.join(map(str, (self.root / 'System32', self.root))))
+                self.assertNotIn('compiler-dll-directory', env['PATH'])
+                self.assertNotIn('Path', env)
+
+    def test_missing_system_root_fails_with_actionable_error(self):
+        with patch.dict(builder.os.environ, {}, clear=True), \
+             patch.object(builder, 'validate_pe'), \
+             patch.object(builder, 'smoke_test_bridge') as smoke:
+            with self.assertRaisesRegex(ValueError, 'SYSTEMROOT environment variable is missing'):
+                builder.smoke(self.root / 'candidate.exe')
+            smoke.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()
