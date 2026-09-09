@@ -1301,3 +1301,15 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户明确要求 Windows 支持开机启动；本次仅调整 Windows 内部启动部署和操作文档，不改变设备、算法、已发布及预发布北向协议。服务使用固定本地项目路径及 LocalSystem，新增开机自启、停机及故障恢复仍需 Windows 目标机验证，不能沿用此前前台联调结论。"
+
+
+[[change_records]]
+id = "2026-09-09-windows-recording-fsync-and-rotation-recovery"
+date = "2026-09-09"
+scope = "gateway_recording_windows_compatibility_and_failure_isolation"
+summary = "修复 Windows 录制索引对只读句柄 fsync 导致每 10 分钟切段失败：通过可写句柄完成写入、flush、fsync 后原子替换；切段失败移除关闭句柄，索引提交失败退回可恢复 partial，清理临时索引；关闭时逐类收尾并记录失败，未完成分段不标记为完整会话，临时恢复 I/O 故障不隔离为坏数据。新增连续切段、故障隔离与重启恢复回归并接入 Windows CI。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户提供 Windows neurobridge.log 并明确要求修复；日志确认串口持续收帧但切段保存失败。本次修复内部持久化兼容性，不改变设备、算法输入或已发布及预发布北向协议；旧录制缺口不能自动补回，Windows 目标机跨分段现场复测仍待执行。"

@@ -26,6 +26,8 @@ PowerShell 环境准备、COM 检查、配置、前台启动、日志排障与�
 
 仓库已提供 Windows USB 虚拟串口的源码扩展：`WindowsSerialSource` 使用 pyserial 的 COM 枚举/打开能力，只选择 USB 派生 COM 端口，并复用 `HeadsetRev181Parser`、统一 ApplicationService、本机回环 WebSocket 与串口耳机禁用录播规则。
 
+录制兼容性：Windows 录制索引使用可写句柄写入、刷新和同步后原子替换，避免旧版每 10 分钟切段时的 `Bad file descriptor`。切段失败会隔离已关闭句柄，保留可恢复文件，真实写入失败仍记录持久化缺口；未完成的分段不会标记为完整会话。升级前正常停止网关并保留录制目录，升级后检查跨越至少两次分段周期的日志。历史已丢失的数据不能自动补回；本次修复已加入本地故障注入回归和 Windows 原生 CI，现场复测仍待完成。
+
 ## 开机自启与维护
 
 首次双击时同意管理员授权即可；拒绝授权会显示错误，不自动改为前台运行。服务使用当前项目 `.runtime\windows-venv`、`.runtime\config\windows-gateway.toml` 和已准备的算法，开机时不联网安装或编译，也不打开桌面浏览器。登录后双击入口打开页面，或手动访问启动时提示的本机地址。

@@ -205,12 +205,14 @@ class SegmentedRecordingRepository:
             except queue.Empty:
                 if not self._stopped:
                     continue
-                try:
-                    for segment in tuple(self._segments.values()):
+                for segment in tuple(self._segments.values()):
+                    try:
                         self._finalize_segment(segment)
-                    self._segments.clear()
-                except Exception:
-                    LOG.exception("Recording finalization failed; partial files retained")
+                    except Exception as error:
+                        state, reason = classify_storage_error(error)
+                        self._record_gap(segment.last_at_ms or int(time.time() * 1000), reason, state)
+                        LOG.exception("Recording finalization failed; segment retained: recordingSessionId=%s category=%s",
+                                      segment.session_id, segment.category)
                 return
             batch = [first]
             while len(batch) < self.fsync_interval_records and not isinstance(batch[-1], _CloseSession):
@@ -226,14 +228,28 @@ class SegmentedRecordingRepository:
                         self._write(pending.record)
                         pending.succeeded = True
                 except Exception as error:
+                    failure_state, reason = classify_storage_error(error)
+                    session_id = (pending.record.recording_session_id if isinstance(pending, _PendingWrite)
+                                  else pending.session_id)
+                    for affected in batch:
+                        if not isinstance(affected, _PendingWrite):
+                            continue
+                        same_stream = (affected.record.recording_session_id == session_id and
+                            (isinstance(pending, _CloseSession) or
+                             self._category(affected.record.record_type) == self._category(pending.record.record_type)))
+                        if affected is pending or (affected.succeeded and same_stream):
+                            # An earlier buffered write may belong to the segment
+                            # whose final fsync just failed. Do not acknowledge it
+                            # merely because that handle left the active set.
+                            affected.succeeded = False
+                            affected.reason = reason
+                            self._record_gap(affected.record.captured_at_ms, reason, failure_state)
                     if isinstance(pending, _PendingWrite):
-                        pending.succeeded = False
-                        failure_state, pending.reason = classify_storage_error(error)
-                        self._record_gap(pending.record.captured_at_ms, pending.reason, failure_state)
                         LOG.exception("Recording write failed: recordingSessionId=%s recordType=%s capturedAtMs=%s errorType=%s",
                                       pending.record.recording_session_id, pending.record.record_type,
                                       pending.record.captured_at_ms, type(error).__name__)
                     else:
+                        self._record_gap(int(time.time() * 1000), reason, failure_state)
                         LOG.exception("Recording session finalization failed: recordingSessionId=%s", pending.session_id)
             try:
                 # Confirm the whole bounded batch only after fsync, amortizing
@@ -295,13 +311,21 @@ class SegmentedRecordingRepository:
         return _Segment(session_id, category, sequence, path, os.fdopen(descriptor, "ab"), int(time.time() * 1000))
 
     def _finalize_segment(self, segment: _Segment, *, recovered: bool = False) -> None:
-        segment.file.flush()
-        os.fsync(segment.file.fileno())
-        segment.file.close()
+        try:
+            segment.file.flush()
+            os.fsync(segment.file.fileno())
+        finally:
+            try:
+                segment.file.close()
+            finally:
+                # Finalization can fail after closing a file. Never leave it in
+                # the batch fsync set, where it would fail unrelated writes too.
+                key = (segment.session_id, segment.category)
+                if self._segments.get(key) is segment:
+                    self._segments.pop(key)
         final = segment.path.with_suffix("")
-        os.replace(segment.path, final)
         digest = sha256()
-        with final.open("rb") as source:
+        with segment.path.open("rb") as source:
             while chunk := source.read(1024 * 1024):
                 digest.update(chunk)
         entry = {
@@ -311,11 +335,21 @@ class SegmentedRecordingRepository:
             "recordCount": segment.count,
             "firstCapturedAtMs": segment.first_at_ms,
             "lastCapturedAtMs": segment.last_at_ms,
-            "byteLength": final.stat().st_size,
+            "byteLength": segment.path.stat().st_size,
             "sha256": digest.hexdigest(),
             "status": "recovered" if recovered else "closed",
         }
-        self._update_manifest(segment.session_id, entry)
+        os.replace(segment.path, final)
+        try:
+            self._update_manifest(segment.session_id, entry)
+        except Exception:
+            # Leave a recoverable partial if the index was not committed. Do
+            # not delete recorded data or leave a closed handle in active use.
+            try:
+                os.replace(final, segment.path)
+            except OSError:
+                LOG.exception("Cannot restore partial after manifest failure; finalized data retained: path=%s", final)
+            raise
 
     def _update_manifest(self, session_id: str, entry: dict[str, object] | None, *, ended: bool = False) -> None:
         directory = self.sessions_root / session_id
@@ -331,16 +365,30 @@ class SegmentedRecordingRepository:
         if ended:
             manifest["endedAtMs"] = int(time.time() * 1000)
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        with temporary.open("rb") as source:
-            os.fsync(source.fileno())
-        os.replace(temporary, path)
+        try:
+            # Windows _commit (os.fsync) requires a writable descriptor. Flush
+            # and sync the same handle used to write before atomically replacing.
+            with temporary.open("x", encoding="utf-8", newline="\n") as source:
+                source.write(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+                source.flush()
+                os.fsync(source.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _close_session_sync(self, session_id: str) -> None:
         keys = [key for key in self._segments if key[0] == session_id]
+        failure = None
         for key in keys:
             segment = self._segments.pop(key)
-            self._finalize_segment(segment)
+            try:
+                self._finalize_segment(segment)
+            except Exception as error:
+                failure = error
+        if failure is not None:
+            raise failure
+        if any((self.sessions_root / session_id).glob("*/*.jsonl.partial")):
+            raise OSError(errno.EIO, "Recording session has unfinished segments awaiting recovery")
         self._update_manifest(session_id, None, ended=True)
 
     def recover_partials(self) -> None:
@@ -372,6 +420,10 @@ class SegmentedRecordingRepository:
                 segment = _Segment(session_id, category, sequence, path, path.open("ab"),
                                    first_at, first_at, last_at, count, valid_end)
                 self._finalize_segment(segment, recovered=True)
+            except OSError:
+                # A transient I/O/index error does not make recorded bytes
+                # corrupt. Keep the partial for recovery on a later startup.
+                raise
             except Exception:
                 destination = self.quarantine / f"{path.parents[1].name}-{path.parent.name}-{path.name}"
                 destination.parent.mkdir(parents=True, exist_ok=True)
