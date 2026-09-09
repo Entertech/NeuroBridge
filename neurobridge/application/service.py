@@ -93,6 +93,10 @@ class ApplicationService:
         self._stale_task: asyncio.Task[None] | None = None
         self._lifecycle_lock = asyncio.Lock()
         self._closed = False
+        self._last_frame_monotonic: float | None = None
+        self._last_frame_at_ms: int | None = None
+        self._last_window_start_ms: int | None = None
+        self._last_window_end_ms: int | None = None
         self.diagnostics: dict[str, int] = {
             "raw_chunks": 0,
             "raw_bytes": 0,
@@ -105,6 +109,12 @@ class ApplicationService:
             "queue_high_water": 0,
             "superseded_results": 0,
             "algorithm_duration_ms": 0,
+            "algorithm_evaluations": 0,
+            "algorithm_max_duration_ms": 0,
+            "algorithm_valid_results": 0,
+            "algorithm_invalid_results": 0,
+            "algorithm_timeout_results": 0,
+            "window_processing_errors": 0,
             "publication_age_ms": 0,
         }
 
@@ -115,10 +125,15 @@ class ApplicationService:
             raise RuntimeError("Application recording repository is already bound")
         self.recording = recording
 
-    def metrics(self) -> dict[str, int]:
+    def metrics(self) -> dict[str, int | None]:
         return {**self.diagnostics, "algorithm_queue_depth": self._batches.qsize(),
                 "algorithm_queue_capacity": self._batches.maxsize,
-                "retained_frames": len(self._frames), "late_results": self.aggregator.late_result_count}
+                "retained_frames": len(self._frames), "late_results": self.aggregator.late_result_count,
+                "last_frame_at_ms": self._last_frame_at_ms,
+                "last_frame_age_ms": (int(max(0, time.monotonic() - self._last_frame_monotonic) * 1000)
+                                      if self._last_frame_monotonic is not None else None),
+                "last_window_start_ms": self._last_window_start_ms,
+                "last_window_end_ms": self._last_window_end_ms}
 
     async def on_connection(self, event: DeviceConnectionEvent) -> None:
         """Apply source events to the independent connection and data machines."""
@@ -273,6 +288,9 @@ class ApplicationService:
             outcome = replace(outcome, signals=tuple(replace(signal, valid=False,
                 invalid_reasons=tuple(dict.fromkeys((*signal.invalid_reasons, "SOURCE_QUEUE_GAP")))) for signal in outcome.signals))
         self.diagnostics["frames"] += len(outcome.frames)
+        if outcome.frames:
+            self._last_frame_monotonic = time.monotonic()
+            self._last_frame_at_ms = outcome.frames[-1].received_at_ms
         self.diagnostics["discarded_bytes"] += outcome.discarded_bytes
         for diagnostic in outcome.diagnostics:
             key = "parser_" + diagnostic.kind
@@ -369,6 +387,7 @@ class ApplicationService:
             try:
                 await self._process_batch(batch, receipt)
             except Exception:
+                self.diagnostics["window_processing_errors"] += 1
                 LOG.exception("Window processing failed: batchId=%s", batch.batch_id)
             finally:
                 self._discard_batch_frames(batch)
@@ -455,7 +474,10 @@ class ApplicationService:
                 persistence_guaranteed=persistence_guaranteed,
                 on_late_result=lambda value: self._persist_late(batch, value),
             )
-            self.diagnostics["algorithm_duration_ms"] += int((time.monotonic() - evaluation_started) * 1000)
+            duration_ms = int((time.monotonic() - evaluation_started) * 1000)
+            self.diagnostics["algorithm_duration_ms"] += duration_ms
+            self.diagnostics["algorithm_evaluations"] += 1
+            self.diagnostics["algorithm_max_duration_ms"] = max(self.diagnostics["algorithm_max_duration_ms"], duration_ms)
         else:
             timestamp = self.clock_ms()
             unavailable = AlgorithmResult(
@@ -468,6 +490,10 @@ class ApplicationService:
                 ("ALGORITHM_UNAVAILABLE",),
             )
             result = WindowResult(batch, unavailable, "live", timestamp, persistence_guaranteed)
+        result_counter = "algorithm_valid_results" if result.algorithm_result.valid else "algorithm_invalid_results"
+        self.diagnostics[result_counter] += 1
+        if "ALGORITHM_TIMEOUT" in result.algorithm_result.invalid_reasons:
+            self.diagnostics["algorithm_timeout_results"] += 1
         if batch.connection_session_id != self._connection_session_id:
             LOG.info(
                 "Stale window result discarded: batchId=%s batchConnectionSessionId=%s currentConnectionSessionId=%s",
@@ -528,6 +554,8 @@ class ApplicationService:
             self.data.transition(DataState.STREAMING, last_published_at_ms=self.clock_ms())
             self._schedule_stale(batch.window_end_ms)
             self.diagnostics["published"] += 1
+            self._last_window_start_ms = batch.window_start_ms
+            self._last_window_end_ms = batch.window_end_ms
         self._discard_batch_frames(batch)
         return result
 

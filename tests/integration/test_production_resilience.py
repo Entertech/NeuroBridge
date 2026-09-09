@@ -260,6 +260,60 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("algorithm_queue_depth", metrics["pipeline"])
         self.assertNotIn("storageState", self.gateway.status_result())
 
+    async def test_long_run_metrics_measure_capture_and_idle_without_payloads(self):
+        await self.connect()
+        adapter = self.container.device_adapter
+        self.assertIsNone(self.service.metrics()["last_frame_age_ms"])
+        with self.assertLogs("neurobridge.bootstrap.container", "INFO") as logs:
+            adapter._log_metrics()
+            await self.capture(2)
+            await self.service.flush()
+            adapter._log_metrics(event_loop_lag_ms=125)
+            adapter._log_metrics()
+        samples = [json.loads(line.split("Runtime metrics: ", 1)[1]) for line in logs.output if "Runtime metrics: " in line]
+        active, idle = samples[-2:]
+        self.assertEqual(active["progress"]["delta"]["frames"], 2)
+        self.assertGreater(active["progress"]["delta"]["algorithm_valid_results"], 0)
+        self.assertEqual(active["progress"]["delta"]["algorithm_invalid_results"], 0)
+        self.assertEqual(idle["progress"]["delta"]["frames"], 0)
+        self.assertEqual(active["eventLoopLagMs"], 125)
+        self.assertIsNotNone(active["lastStorageSuccessAtMs"])
+        self.assertIsNotNone(active["pipeline"]["last_window_start_ms"])
+        before = self.service.metrics()["last_frame_age_ms"]
+        with patch("neurobridge.application.service.time.time", return_value=0):
+            self.assertGreaterEqual(self.service.metrics()["last_frame_age_ms"], before)
+        # Synthetic algorithm values and device bytes belong only in recordings.
+        self.assertNotIn("attention", json.dumps(samples))
+        self.assertNotIn("bytesBase64", json.dumps(samples))
+        self.assertNotIn(base64.b64encode(frame()).decode(), json.dumps(samples))
+
+    async def test_metrics_failure_is_isolated_and_shutdown_emits_final_counters(self):
+        await self.connect()
+        adapter = self.container.device_adapter
+        with patch.object(adapter._metrics, "sample", side_effect=OSError("synthetic counter failure")):
+            with self.assertLogs("neurobridge.bootstrap.container", "ERROR"):
+                adapter._log_metrics()
+        await self.capture()
+        with self.assertLogs("neurobridge.bootstrap.container", "INFO") as logs:
+            await adapter.stop()
+        final = json.loads(next(line.split("Runtime metrics: ", 1)[1] for line in logs.output if "Runtime metrics: " in line))
+        self.assertEqual(final["phase"], "acquisition_shutdown")
+        self.assertEqual(final["pipeline"]["frames"], 1)
+        self.assertGreaterEqual(final["pipeline"]["published"], 1)
+
+    async def test_algorithm_timeout_is_counted_without_requiring_client_subscription(self):
+        await self.connect()
+        self.service.aggregator.timeout_ms = 10
+        self.service.algorithm.hold = asyncio.Event()
+        await self.capture()
+        await self.service.flush()
+        metrics = self.service.metrics()
+        self.assertEqual(metrics["algorithm_evaluations"], 1)
+        self.assertEqual(metrics["algorithm_timeout_results"], 1)
+        self.assertEqual(metrics["algorithm_invalid_results"], 1)
+        self.assertEqual(metrics["algorithm_valid_results"], 0)
+        self.assertGreaterEqual(metrics["algorithm_max_duration_ms"], 1)
+
     async def test_known_source_gap_discards_partial_frame_and_marks_window(self):
         await self.connect()
         session = self.source.status().connection_session_id

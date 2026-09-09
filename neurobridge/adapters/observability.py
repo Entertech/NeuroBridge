@@ -10,6 +10,29 @@ import threading
 import time
 
 
+class RuntimeProgress:
+    """Bounded, monotonic interval accounting for process-lifetime counters."""
+
+    def __init__(self):
+        self._started = self._previous_at = time.monotonic()
+        self._previous: dict[str, int] = {}
+        self._samples = 0
+
+    def sample(self, counters: dict[str, int]) -> dict[str, object]:
+        now = time.monotonic()
+        elapsed = max(0, now - self._previous_at)
+        delta = {key: max(0, value - self._previous.get(key, 0)) for key, value in counters.items()}
+        self._samples += 1
+        self._previous, self._previous_at = dict(counters), now
+        return {
+            "sampleSequence": self._samples,
+            "uptimeSeconds": round(max(0, now - self._started), 3),
+            "intervalSeconds": round(elapsed, 3),
+            "delta": delta,
+            "framesPerSecond": round(delta.get("frames", 0) / elapsed, 3) if elapsed > 0 else None,
+        }
+
+
 class ProcessMetrics:
     def __init__(self):
         self._wall = time.monotonic()

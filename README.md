@@ -61,7 +61,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 运行时稳定内核按 `domain/`、`ports/`、`application/` 分层；`adapters/` 放置设备 Parser、数据源、算法、存储和北向实现，`profiles/` 固定操作系统/设备/接入能力，`bootstrap/` 是唯一组合根。正式采集由 ApplicationService 和 GatewayApplication 编排，保留 `frameId → batchId → algorithm result` 关联，旧 business.Gateway 仅作兼容 facade；设备与历史录制适配器仍复用既有底层实现。M1 固定 POSIX TTY、修订号 181 Parser、本机回环页面和禁用录播能力。
 
-算法处理、分段写入和订阅发送均有界，慢算法/磁盘不会让 RawChunk 消费等待完整处理；`[pipeline]` 配置等待上限和周期资源日志。候选安装器保留应用/配置/服务回滚快照，仍需目标机安装与长稳验收。两组需求的实现对照、额外兼容内容及发布门禁见[需求补齐与验收清单](doc/tech/NeuroBridge项目结构与多系统接入/需求补齐与验收清单.md)。
+算法处理、分段写入和订阅发送均有界，慢算法/磁盘不会让 RawChunk 消费等待完整处理；`[pipeline]` 配置等待上限和周期资源日志。长测日志默认每 10 秒记录运行时长、收帧/算法/发送增量、收帧年龄、写入进度及资源状态，并在连接变化和停止采集时补充记录；配置、字段和 24 小时测试步骤见[内部手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md#71-windows--麒麟长时间运行测试)。候选安装器保留应用/配置/服务回滚快照，仍需目标机安装与长稳验收。两组需求的实现对照、额外兼容内容及发布门禁见[需求补齐与验收清单](doc/tech/NeuroBridge项目结构与多系统接入/需求补齐与验收清单.md)。
 
 ## 仓库结构
 

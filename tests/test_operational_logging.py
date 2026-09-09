@@ -9,12 +9,28 @@ import sys
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from neurobridge.__main__ import _file_sha256
 from neurobridge.logging_setup import utc_formatter
+from neurobridge.adapters.observability import RuntimeProgress
 
 
 class OperationalLoggingTests(unittest.TestCase):
+    def test_progress_uses_elapsed_monotonic_time_and_keeps_only_last_counters(self) -> None:
+        with patch("neurobridge.adapters.observability.time.monotonic", side_effect=[100, 110, 130, 140]):
+            progress = RuntimeProgress()
+            first = progress.sample({"frames": 50, "algorithm_invalid_results": 1})
+            second = progress.sample({"frames": 70, "algorithm_invalid_results": 3})
+            idle = progress.sample({"frames": 70, "algorithm_invalid_results": 3})
+        self.assertEqual(first["framesPerSecond"], 5)
+        self.assertEqual(second["uptimeSeconds"], 30)
+        self.assertEqual(second["intervalSeconds"], 20)
+        self.assertEqual(second["delta"], {"frames": 20, "algorithm_invalid_results": 2})
+        self.assertEqual(second["framesPerSecond"], 1)
+        self.assertEqual(idle["delta"]["frames"], 0)
+        self.assertEqual(idle["sampleSequence"], 3)
+
     def test_bootstrap_does_not_capture_foreground_runtime_output(self) -> None:
         root = Path(__file__).resolve().parents[1]
         source = (root / "linux/neurobridge-kylin-bootstrap.sh").read_text()

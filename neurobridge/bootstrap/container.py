@@ -20,7 +20,7 @@ from ..application.snapshots import InMemoryLatestSnapshotStore
 from ..adapters.northbound.protocol import project_window
 from ..adapters.storage.filesystem import SegmentedRecordingRepository
 from ..adapters.storage.archive import SegmentedArchive, ArchiveReplayReader
-from ..adapters.observability import ProcessMetrics
+from ..adapters.observability import ProcessMetrics, RuntimeProgress
 from ..versioning import APPLICATION_VERSION
 from ..config import GatewayConfig
 from ..domain.algorithm import AlgorithmSession, AlgorithmState
@@ -63,6 +63,7 @@ class _ApplicationPipelineAdapter:
         self._ready = asyncio.Event()
         self._connected_seen = asyncio.Event()
         self._metrics = ProcessMetrics()
+        self._progress = RuntimeProgress()
         self._reconnections = 0
         self._offline_since = time.monotonic()
 
@@ -77,44 +78,73 @@ class _ApplicationPipelineAdapter:
             group.create_task(self._observe())
 
     async def _observe(self) -> None:
+        deadline = time.monotonic()
         while True:
-            try:
-                storage = self.gateway.recording_repository.storage_status()
-                data = self.application.data.snapshot
-                self.application.data.transition(data.data_state, storage_state=storage.state,
-                    persistence_guaranteed=storage.persistence_guaranteed)
-                metrics = {"appVersion": APPLICATION_VERSION, "profile": self.profile.profile_id,
-                    "gatewayBootId": self.gateway.boot_id,
-                    "connectionSessionId": self.source.status().connection_session_id,
-                    "recordingSessionId": self.gateway.store.recording_id,
-                    "connectionState": self.source.status().state.value,
-                    "dataState": data.data_state.value, "storageState": storage.state.value,
-                    "persistenceGuaranteed": storage.persistence_guaranteed,
-                    "availableBytes": storage.available_bytes, "persistenceGaps": storage.gap_count,
-                    "affectedFromMs": storage.affected_from_ms, "lastProducedAtMs": data.last_produced_at_ms,
-                    "lastPublishedAtMs": data.last_published_at_ms,
-                    "offlineSeconds": time.monotonic() - self._offline_since if self._offline_since else 0,
-                    "reconnections": self._reconnections,
-                    "pipeline": self.application.metrics(), "delivery": dict(self.gateway.delivery_metrics),
-                    "requestsByAction": dict(self.gateway.requests_by_action),
-                    "deliveryByStream": {stream: {**values, "overwritten": self.gateway.fanout.overwrites_by_stream.get(stream, 0)}
-                                         for stream, values in self.gateway.stream_metrics.items()},
-                    "subscriptions": sum(len(session.subscriptions) for session in self.gateway.sessions),
-                    "snapshotOverwrites": self.gateway.snapshot_overwrite_count,
-                    "pendingStreams": self.gateway.fanout.pending_count,
-                    "storage": dict(storage.details), "process": self._metrics.sample(),
-                    "droppedRawChunks": getattr(self.source, "dropped_raw_chunks", 0),
-                    "droppedRawBytes": getattr(self.source, "dropped_raw_bytes", 0)}
-                LOG.info("Runtime metrics: %s", json.dumps(metrics, ensure_ascii=False, separators=(",", ":")))
-            except Exception:
-                LOG.exception("Runtime metrics sample failed")
-            await asyncio.sleep(self.gateway.config.pipeline.metrics_interval_seconds)
+            self._log_metrics(event_loop_lag_ms=max(0, time.monotonic() - deadline) * 1000)
+            interval = self.gateway.config.pipeline.metrics_interval_seconds
+            deadline = time.monotonic() + interval
+            await asyncio.sleep(interval)
+
+    def _log_metrics(self, *, phase: str = "periodic", event_loop_lag_ms: float = 0) -> None:
+        try:
+            self._sample_metrics(phase=phase, event_loop_lag_ms=event_loop_lag_ms)
+        except Exception:
+            # Diagnostics must never terminate acquisition or mask shutdown errors.
+            LOG.exception("Runtime metrics sample failed: phase=%s", phase)
+
+    def _sample_metrics(self, *, phase: str, event_loop_lag_ms: float) -> None:
+        storage = self.gateway.recording_repository.storage_status()
+        source = self.source.status()
+        data = self.application.data.snapshot
+        self.application.data.transition(data.data_state, storage_state=storage.state,
+            persistence_guaranteed=storage.persistence_guaranteed)
+        metrics = {"appVersion": APPLICATION_VERSION, "profile": self.profile.profile_id,
+            "gatewayBootId": self.gateway.boot_id,
+            "phase": phase, "sampledAtMs": int(time.time() * 1000),
+            "eventLoopLagMs": round(event_loop_lag_ms, 3),
+            "algorithmState": data.algorithm_state, "recentError": data.recent_error,
+            "errorStage": data.error_stage, "clients": len(self.gateway.sessions),
+            "lastStorageSuccessAtMs": storage.last_success_at_ms,
+            "connectionSessionId": source.connection_session_id,
+            "recordingSessionId": self.gateway.store.recording_id,
+            "connectionState": source.state.value,
+            "dataState": data.data_state.value, "storageState": storage.state.value,
+            "persistenceGuaranteed": storage.persistence_guaranteed,
+            "availableBytes": storage.available_bytes, "persistenceGaps": storage.gap_count,
+            "affectedFromMs": storage.affected_from_ms, "lastProducedAtMs": data.last_produced_at_ms,
+            "lastPublishedAtMs": data.last_published_at_ms,
+            "offlineSeconds": time.monotonic() - self._offline_since if self._offline_since is not None else 0,
+            "reconnections": self._reconnections,
+            "pipeline": self.application.metrics(), "delivery": dict(self.gateway.delivery_metrics),
+            "requestsByAction": dict(self.gateway.requests_by_action),
+            "deliveryByStream": {stream: {**values, "overwritten": self.gateway.fanout.overwrites_by_stream.get(stream, 0)}
+                                 for stream, values in self.gateway.stream_metrics.items()},
+            "subscriptions": sum(len(session.subscriptions) for session in self.gateway.sessions),
+            "snapshotOverwrites": self.gateway.snapshot_overwrite_count,
+            "pendingStreams": self.gateway.fanout.pending_count,
+            "storage": dict(storage.details), "process": self._metrics.sample(),
+            "droppedRawChunks": getattr(self.source, "dropped_raw_chunks", 0),
+            "droppedRawBytes": getattr(self.source, "dropped_raw_bytes", 0)}
+        # Only process-lifetime counters belong in interval deltas; gauges and
+        # per-session counters (such as late_results) may legitimately decrease.
+        counter_names = ("raw_chunks", "raw_bytes", "frames", "discarded_bytes", "batches", "published",
+                         "persistence_gaps", "algorithm_backlog", "algorithm_evaluations",
+                         "algorithm_duration_ms", "algorithm_valid_results", "algorithm_invalid_results",
+                         "algorithm_timeout_results", "window_processing_errors", "source_gap_bytes")
+        counters = {key: self.application.diagnostics.get(key, 0) for key in counter_names}
+        counters.update(deliverySent=self.gateway.delivery_metrics["sent"],
+                        deliveryFailed=self.gateway.delivery_metrics["failed"], reconnections=self._reconnections)
+        metrics["progress"] = self._progress.sample(counters)
+        LOG.info("Runtime metrics: %s", json.dumps(metrics, ensure_ascii=False, separators=(",", ":")))
 
     async def stop(self) -> None:
         try:
             await self.application.close()
         finally:
-            await self.source.stop()
+            try:
+                await self.source.stop()
+            finally:
+                self._log_metrics(phase="acquisition_shutdown")
 
     async def device_ready(self) -> bool:
         """Initialize the algorithm before Source sends its start command."""
@@ -155,6 +185,13 @@ class _ApplicationPipelineAdapter:
 
     async def _consume_events(self) -> None:
         async for event in self.source.connection_events():
+            LOG.info(
+                "Runtime connection transition: gatewayBootId=%s connectionSessionId=%s "
+                "recordingSessionId=%s previous=%s current=%s occurredAtMs=%s reason=%s retryable=%s",
+                self.gateway.boot_id, event.connection_session_id, self.gateway.store.recording_id,
+                self.application.connection.state.value, event.state.value,
+                event.occurred_at_ms, event.reason, event.retryable,
+            )
             if event.state == ConnectionState.CONNECTED:
                 self._offline_since = None
                 gateway_state = "validated" if self.profile.transport == "serial" else "connected"
