@@ -53,6 +53,8 @@ jobs:
       - run: python -m unittest discover -s tests -p test_windows_algorithm_build.py -v
       - name: Verify recording rotation and recovery on Windows
         run: python -m unittest discover -s tests -p test_recording_rotation.py -v
+      - name: Verify timestamped log rotation on Windows
+        run: python -m unittest discover -s tests -p test_operational_logging.py -k TimestampedLogRotationTests -v
       - name: Build the Windows x64 algorithm with the double-click toolchain
         run: |
           python windows/gateway_helper.py config

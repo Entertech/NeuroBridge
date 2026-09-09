@@ -104,11 +104,12 @@ host = "127.0.0.1"
 port = 8766
 path = "/downloads"
 
+# Size archives use UTC timestamps and unique suffixes; active filename stays fixed.
 [logging]
 rotation_mode = "size"
 max_bytes = 10485760
 backup_count = 14
-# Persisted operations log. Ubuntu logrotate retains 14 daily archives.
+# Persisted operations log; external mode is reserved for managed logrotate deployments.
 directory = "/var/log/neurobridge"
 filename = "neurobridge.log"
 level = "INFO"

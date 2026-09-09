@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from datetime import datetime, timezone
 import logging
 import os
 import shlex
@@ -9,11 +10,95 @@ import sys
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 from neurobridge.__main__ import _file_sha256
-from neurobridge.logging_setup import utc_formatter
+from neurobridge.logging_setup import TimestampedRotatingFileHandler, utc_formatter
+from neurobridge.download import _log_archive
 from neurobridge.adapters.observability import RuntimeProgress
+
+
+class TimestampedLogRotationTests(unittest.TestCase):
+    def test_timestamp_rotation_is_unique_across_restart_with_frozen_clock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch("neurobridge.logging_setup.datetime") as clock:
+            clock.now.return_value = datetime(2026, 9, 9, 12, 34, 56, 123456, tzinfo=timezone.utc)
+            logfile = Path(directory) / "neurobridge.log"
+            expected = [f"第{i:02d}条完整日志" for i in range(12)]
+            archived_before_restart = {}
+            for start in (0, 6):
+                handler = TimestampedRotatingFileHandler(logfile, maxBytes=50, backupCount=20, encoding="utf-8")
+                try:
+                    for message in expected[start:start + 6]:
+                        handler.emit(logging.makeLogRecord({"msg": message}))
+                finally:
+                    handler.close()
+                if start == 0:
+                    archived_before_restart = {p: p.read_bytes() for p in Path(directory).glob("neurobridge.log.*")}
+            for path, contents in archived_before_restart.items():
+                self.assertEqual(path.read_bytes(), contents)
+            files = list(Path(directory).glob("neurobridge.log*"))
+            self.assertTrue(all(p.stat().st_size <= 50 for p in files))
+            lines = [line for p in files for line in p.read_text().splitlines()]
+            self.assertCountEqual(lines, expected)
+            for path in files:
+                if path != logfile:
+                    self.assertRegex(path.name, r"^neurobridge\.log\.20260909T123456\.123456Z\.[a-z0-9_]{8}$")
+            archive = _log_archive(Path(directory), logfile.name)
+            with zipfile.ZipFile(archive) as bundle:
+                for path in files:
+                    self.assertEqual(bundle.read(path.name), path.read_bytes())
+
+    def test_retention_includes_old_numbered_backups_but_preserves_other_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("neurobridge.log.1", "neurobridge.log.2", "neurobridge.log.3"):
+                (root / name).write_text("legacy\n")
+                os.utime(root / name, (1, 1))
+            unrelated = root / "neurobridge.log.manual-copy"
+            unrelated.write_text("keep\n")
+            handler = TimestampedRotatingFileHandler(root / "neurobridge.log", maxBytes=20, backupCount=2, encoding="utf-8")
+            try:
+                for i in range(8):
+                    handler.emit(logging.makeLogRecord({"msg": f"record {i:02d} payload"}))
+            finally:
+                handler.close()
+            self.assertFalse(list(root.glob("neurobridge.log.[123]")))
+            self.assertEqual(len(list(root.glob("neurobridge.log*"))), 4)
+            self.assertEqual(unrelated.read_text(), "keep\n")
+            self.assertIn("record 07", (root / "neurobridge.log").read_text())
+
+    def test_oversized_record_is_preserved_and_next_record_rotates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "neurobridge.log"
+            handler = TimestampedRotatingFileHandler(path, maxBytes=20, backupCount=2, encoding="utf-8")
+            try:
+                handler.emit(logging.makeLogRecord({"msg": "x" * 100}))
+                self.assertFalse(list(path.parent.glob("neurobridge.log.*")))
+                handler.emit(logging.makeLogRecord({"msg": "next"}))
+            finally:
+                handler.close()
+            self.assertEqual(path.read_text(), "next\n")
+            self.assertEqual(next(path.parent.glob("neurobridge.log.*")).read_text(), "x" * 100 + "\n")
+
+    def test_locked_archive_does_not_drop_new_logs_and_cleanup_retries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "neurobridge.log"
+            legacy = path.with_name("neurobridge.log.1")
+            legacy.write_text("legacy\n")
+            handler = TimestampedRotatingFileHandler(path, maxBytes=10, backupCount=1, encoding="utf-8")
+            try:
+                handler.emit(logging.makeLogRecord({"msg": "first"}))
+                with patch.object(Path, "unlink", side_effect=PermissionError("locked")), patch("neurobridge.logging_setup.sys.stderr") as stderr:
+                    handler.emit(logging.makeLogRecord({"msg": "second"}))
+                    self.assertTrue(stderr.write.called)
+                self.assertEqual(path.read_text(), "second\n")
+                self.assertTrue(legacy.exists())
+                handler.emit(logging.makeLogRecord({"msg": "third"}))
+                self.assertEqual(path.read_text(), "third\n")
+                self.assertEqual(len(list(path.parent.glob("neurobridge.log.*"))), 1)
+            finally:
+                handler.close()
 
 
 class OperationalLoggingTests(unittest.TestCase):
