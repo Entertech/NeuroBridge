@@ -14,7 +14,7 @@
 
 后续双击按源码指纹及 EXE 摘要复用产物，源码/锁文件变化或校验失败时自动重建。自定义 `algorithm.command` 路径只自检、不会被覆盖。构建日志在 `.runtime\logs\windows-algorithm-build.log`（保留上一份），产物旁 `.manifest.json` 记录源码提交/指纹、工具链、依赖、导入 DLL 和 EXE 摘要。Windows CI 使用同一构建器并上传与提交对应的 unsigned EXE/manifest Artifact，保留 14 天；构建和空输入测试不代表真实设备/算法语义验收。
 
-当前验证证据：使用同版本 LLVM-MinGW 的 Linux 工具在隔离容器交叉编译出 Windows AMD64 EXE，DLL 导入检查通过，在 Wine 中空输入测试返回有效 `algorithm` 对象且 stderr 为空。Python 回归通过；Windows 原生 PowerShell/工具包构建和真实耳机仍需在对应环境执行，不能把交叉编译或 Wine 结果写成 Windows 现场验收通过。
+当前验证证据：Python 回归、Windows 原生 PowerShell/工具包构建 CI（提交 `3395e57`，Actions `34322201486`）已通过；此前还完成同版本 LLVM-MinGW 交叉编译和 Wine 空输入自检。2026-09-09 用户提供 Inspiron 7559（i7-6700HQ、16 GB RAM、Windows x64）设备规格截图，确认运行联调成功；补充的系统规格截图确认 Windows 10 专业版 22H2，OS 内部版本 19045.6466。用户现场确认与 CI/合成输入结果分别记录；真实算法结果比对、24 小时长稳等未逐项提供的验收记录仍待补齐。
 
 离线运行使用 `-Offline`：已有环境不再安装依赖；缺失环境须预先提供完整 Python 3.11 x64（含 venv/pip，可放 `python-runtime\windows\`）及 `wheelhouse\windows\` 下的匹配 wheel。算法未构建时还需在 `algorithm-packages\windows\` 放入 `sdk.lock` 中四个原名 ZIP；已验证的缓存可直接复用。离线参数禁止 winget、网络 pip 安装及算法依赖下载，缺少材料时显示具体文件名。双击入口使用进程级 ExecutionPolicy Bypass；若组织策略禁止脚本，按组织批准方式运行，不修改机器策略。
 
@@ -22,7 +22,7 @@
 
 自动化测试覆盖配置保留、路径转义、录播/监听策略拒绝、端口冲突、算法失败与诊断脱敏；Windows CI 另外运行 PowerShell 5.1 语法、进程锁和离线一键流程检查。CI 不替代真实设备或目标机验收。
 
-PowerShell 环境准备、COM 检查、配置、前台启动、日志排障与已安装服务操作，见[内部手册第 10 节：Windows 操作教程](../doc/tech/麒麟V10网关运行与串口联调内部文档.md#10-windows-操作教程源码联调)。该教程用于源码联调，尚未完成 Windows 实机验收。
+PowerShell 环境准备、COM 检查、配置、前台启动、日志排障与已安装服务操作，见[内部手册第 10 节：Windows 操作教程](../doc/tech/麒麟V10网关运行与串口联调内部文档.md#10-windows-操作教程源码联调)。该教程用于源码联调，用户已确认上述实机运行成功，完整产品验收与签名发布另行管理。
 
 仓库已提供 Windows USB 虚拟串口的源码扩展：`WindowsSerialSource` 使用 pyserial 的 COM 枚举/打开能力，只选择 USB 派生 COM 端口，并复用 `HeadsetRev181Parser`、统一 ApplicationService、本机回环 WebSocket 与串口耳机禁用录播规则。
 
