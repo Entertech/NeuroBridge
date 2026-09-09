@@ -65,9 +65,10 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         config = load(ROOT / "config/gateway.project.toml.example")
+        # Real fsync/rename work needs the normal persistence and shutdown
+        # budgets on shared CI runners. Short deadlines belong to stall tests.
         config = replace(config, recording=replace(config.recording, directory=Path(self.directory.name)),
-                         pipeline=replace(config.pipeline, shutdown_timeout_ms=100, algorithm_queue_size=1,
-                                          send_timeout_ms=30, persistence_timeout_ms=30))
+                         pipeline=replace(config.pipeline, algorithm_queue_size=1, send_timeout_ms=30))
         with patch("neurobridge.bootstrap.container.AffectiveSdkAlgorithmEngine", Algorithm):
             self.container = build_container(config, RuntimePlatform("kylin", "x86_64"))
         self.gateway = self.container.gateway
@@ -79,9 +80,17 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
             self.writes.append(value)
         self.source.control._write = write
         await self.gateway.start()
+        self.addAsyncCleanup(self.cleanup_recording_repository, self.gateway.recording_repository)
         self.service.bind_recording(self.gateway.recording_repository)
         self.events = asyncio.create_task(self.container.device_adapter._consume_events())
         self.addAsyncCleanup(self.cleanup_runtime)
+
+    async def cleanup_recording_repository(self, repository):
+        # Run after runtime cleanup, even when it fails or stop() times out.
+        # Keep the repository reference because gateway.stop() clears its own.
+        await repository.close()
+        await asyncio.to_thread(repository._worker.join, 5)
+        self.assertFalse(repository._worker.is_alive(), "recording writer must exit before temporary directory cleanup")
 
     async def cleanup_runtime(self):
         self.events.cancel()
@@ -204,6 +213,7 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.writes, [])
 
     async def test_algorithm_backlog_does_not_block_acquisition_or_disconnect(self):
+        self.service.shutdown_timeout_ms = 100
         await self.connect()
         self.service.algorithm.hold = asyncio.Event()
         await asyncio.wait_for(self.capture(8), 0.2)
@@ -292,6 +302,21 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(second.result.batch.window_end_ms, now)
 
     async def test_headband_segmented_replay_reads_saved_results_without_sdk(self):
+        await self.check_headband_segmented_replay()
+
+    async def test_headband_replay_waits_for_slow_recording_finalization(self):
+        repository = self.gateway.recording_repository
+        original = repository._close_session_sync
+
+        def slow_close(recording_id):
+            # Exceed the former 100 ms fixture deadline deterministically.
+            time.sleep(0.15)
+            original(recording_id)
+
+        with patch.object(repository, "_close_session_sync", side_effect=slow_close):
+            await self.check_headband_segmented_replay()
+
+    async def check_headband_segmented_replay(self):
         self.service.parser = HeadbandBleParser()
         self.service.device_protocol = "headband_ble"
         await self.connect()
@@ -301,6 +326,10 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.flush()
         recording_id = self.gateway.store.recording_id
         await self.gateway.recording_repository.close_session(recording_id)
+        session_path = Path(self.directory.name) / "sessions" / recording_id
+        manifest = json.loads((session_path / "manifest.json").read_text(encoding="utf-8"))
+        self.assertIn("endedAtMs", manifest, "replay requires completed recording finalization")
+        self.assertEqual(list(session_path.rglob("*.partial")), [])
         self.gateway.store.stop()
         count = len(self.service.algorithm.inputs)
         reader = ArchiveReplayReader(self.gateway.store)
