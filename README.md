@@ -80,7 +80,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 | 银河麒麟 V10 x86_64 网关 | [`linux/neurobridge-kylin-bootstrap.sh`](linux/neurobridge-kylin-bootstrap.sh) | 菜单 `1` 完成项目内配置并默认安装/启动 systemd 开机自启服务；菜单 `9` 可查看状态或显式配置为非自启。 |
 | Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 固定 BLE 头环与旧 B 端专网 Profile；源码入口已统一，仍需 M2 实机回归。 |
 | macOS 历史 POC | [`mac/start-poc.command`](mac/start-poc.command) | 已接入统一 Bootstrap/BLE Profile，不属于当前 M1 验收。 |
-| Windows 网关 | [`windows/README.md`](windows/README.md)；[一键操作教程](doc/tech/麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐) | 双击 `windows/neurobridge-windows-bootstrap.cmd` 即自动准备环境和配置并前台启动，无需输入菜单数字；需配套 Windows 算法程序。Windows 7 运行时、签名和实机验收未完成，不能作为交付入口。 |
+| Windows 网关 | [`windows/README.md`](windows/README.md)；[一键操作教程](doc/tech/麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐) | 双击 `windows/neurobridge-windows-bootstrap.cmd` 即自动准备环境和配置并前台启动，自动构建并自检算法程序，无需输入菜单数字或手动提供 exe/DLL。Windows 7 运行时、签名和实机验收未完成，不能作为交付入口。 |
 | 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；明确区分实时耳机连接与 `live`/`replay` 数据来源，原始数据区与解析数据区固定上下排列。 |
 | 本机可视化/兼容 B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 默认由网关在回环地址提供；兼容模式仍可作为独立 B 端联调页。 |
 

@@ -55,7 +55,7 @@
 - 有界分段 Writer 已提供容量状态、fsync、manifest、崩溃恢复、quarantine 和恢复防抖；
 - `NorthboundController` 已从 WebSocket 传输层分离，旧 `Gateway` 请求方法和录制格式适配仅为已发布协议与历史录播兼容保留；
 - Windows 已有 USB COM Source、Service 入口和无签名候选骨架；CI 可生成带 manifest、SHA-256、SBOM 和依赖清单的银河麒麟/Windows 候选。
-- Windows 源码联调新增 `windows/neurobridge-windows-bootstrap.cmd` 与 PowerShell 入口：双击默认自动准备并启动，`-Action menu` 才打开排障菜单；准备项目 Python/依赖、保留现场配置、检查 COM/端口/算法后，以前台方式调用正常 Bootstrap。离线参数禁止 winget 和网络 pip 安装；运行日志按配置轮转，诊断 ZIP 仅含允许导出的元数据。Windows 算法 exe/DLL 仍需预先提供，默认不安装服务；操作见[内部手册](../麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐)。该入口限定 Windows 10/11 x64、Python 3.11，不构成 Windows 7、算法真实输入或正式安装包验收。
+- Windows 源码联调新增 `windows/neurobridge-windows-bootstrap.cmd` 与 PowerShell 入口：双击默认自动准备并启动，`-Action menu` 才打开排障菜单；准备项目 Python/依赖、保留现场配置、检查 COM/端口/算法后，以前台方式调用正常 Bootstrap。离线参数禁止 winget 和网络 pip 安装；运行日志按配置轮转，诊断 ZIP 仅含允许导出的元数据。Windows 算法由项目内锁定的 LLVM-MinGW/CMake/Ninja/Eigen 自动构建，复用 SDK/NumCpp 源码；产物通过 PE x64、DLL 导入及空输入自检后才安装，源码指纹和 EXE 摘要相符则复用，离线构建仅使用校验过的本地 ZIP。构建失败保留旧程序，自定义算法路径不覆盖，默认不安装服务；操作见[内部手册](../麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐)。该入口限定 Windows 10/11 x64、Python 3.11，不构成 Windows 7、算法真实输入或正式安装包验收。
 
 旧 `device/`、`ble/`、`serial/` 和 `business/Gateway` 文件仍保留兼容实现，但正式组合不再由其业务字段投影驱动公共模型。串口物理适配器仍执行识别合法流所需的边界校验；完整业务解析结果只由外部 `HeadsetRev181Parser` 产生。
 

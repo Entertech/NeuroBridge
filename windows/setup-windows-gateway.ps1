@@ -97,12 +97,22 @@ function Invoke-Helper {
     Invoke-Checked $projectPython @($helper, $Operation)
 }
 
+function Prepare-Algorithm {
+    Require-Runtime
+    $buildArgs = @((Join-Path $PSScriptRoot 'algorithm_build.py'))
+    if ($Offline) { $buildArgs += '--offline' }
+    Invoke-Checked $projectPython $buildArgs
+}
+
 function Invoke-Action {
     param([string]$Selected)
     if ($Selected -eq 'prepare') {
         Prepare-Runtime
         Invoke-Helper 'config'
+        Prepare-Algorithm
         Invoke-Helper 'start'
+    } elseif ($Selected -eq 'algorithm') {
+        Prepare-Algorithm
     } else { Invoke-Helper $Selected }
 }
 
@@ -123,7 +133,7 @@ try {
             Write-Host '2. 直接启动网关'
             Write-Host '4. 检查当前 USB / COM 串口'
             Write-Host '5. 创建或校验项目配置（保留已有设置）'
-            Write-Host '6. 检查 Windows 算法程序'
+            Write-Host '6. 准备 / 修复 Windows 算法程序'
             Write-Host '7. 导出诊断摘要（不含原始数据和日志正文）'
             Write-Host '8. 查看最近日志'
             Write-Host '0. 退出'

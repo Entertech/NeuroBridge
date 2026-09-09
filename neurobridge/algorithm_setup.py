@@ -41,7 +41,7 @@ def _replace_algorithm_section(text: str, block: str) -> str:
     return "\n".join(retained).rstrip() + "\n\n" + block.rstrip() + "\n"
 
 
-def smoke_test_bridge(bridge: Path, timeout_seconds: float = 5.0) -> dict[str, object]:
+def smoke_test_bridge(bridge: Path, timeout_seconds: float = 5.0, *, environment: dict[str, str] | None = None) -> dict[str, object]:
     """Prove the native process starts and answers without persisting input/output values."""
 
     if bridge.is_symlink() or not bridge.is_file() or not os.access(bridge, os.X_OK):
@@ -58,6 +58,7 @@ def smoke_test_bridge(bridge: Path, timeout_seconds: float = 5.0) -> dict[str, o
             text=True,
             timeout=timeout_seconds,
             check=False,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError(f"Algorithm bridge smoke test could not complete: {type(error).__name__}") from error

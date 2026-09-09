@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   windows-launcher:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -49,6 +49,25 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseFile("$PWD/windows/setup-windows-gateway.ps1", [ref]$tokens, [ref]$parseErrors) | Out-Null
           if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
       - run: python -m unittest discover -s tests -p test_windows_launcher.py -v
+      - run: python -m unittest discover -s tests -p test_windows_algorithm_build.py -v
+      - name: Build the Windows x64 algorithm with the double-click toolchain
+        run: |
+          python windows/gateway_helper.py config
+          python windows/algorithm_build.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python windows/algorithm_build.py --offline
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-algorithm-x64-${{ github.sha }}
+          path: .runtime/algorithm/neurobridge_affective_bridge.*
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: windows-algorithm-build-log-${{ github.sha }}
+          path: .runtime/logs/windows-algorithm-build*.log
+          retention-days: 14
 
   unit-and-websocket:
     runs-on: ubuntu-latest

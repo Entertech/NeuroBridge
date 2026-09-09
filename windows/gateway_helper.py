@@ -138,10 +138,10 @@ def diagnostics(root: Path) -> Path:
 
 
 @contextmanager
-def instance_lock(root: Path):
+def instance_lock(root: Path, filename: str = 'windows-gateway.lock'):
     """Keep an OS-owned lock for the entire run; a crash releases it automatically."""
     import msvcrt
-    path = root / '.runtime/windows-gateway.lock'
+    path = root / '.runtime' / filename
     with path.open('a+b') as lock:
         if path.stat().st_size == 0:
             lock.write(b'0')

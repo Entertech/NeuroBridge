@@ -106,12 +106,17 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertFalse((self.root / '.runtime/windows-venv').exists())
 
     @unittest.skipUnless(sys.platform == 'win32', 'Windows PowerShell 5.1 integration')
-    def test_one_click_offline_prepares_config_but_refuses_missing_bridge(self):
+    def test_one_click_offline_prepares_config_but_refuses_missing_build_inputs(self):
         # Reuse CI's installed dependencies; this invocation must work without an index.
         shutil.copy2(ROOT / 'windows/setup-windows-gateway.ps1', self.root / 'windows')
         shutil.copy2(ROOT / 'windows/gateway_helper.py', self.root / 'windows')
         shutil.copy2(ROOT / 'pyproject.toml', self.root)
         shutil.copy2(ROOT / 'requirements.lock', self.root)
+        shutil.copy2(ROOT / 'sdk.lock', self.root)
+        shutil.copy2(ROOT / 'windows/algorithm_build.py', self.root / 'windows')
+        for relative in ('mac/algorithm_bridge', 'third_party/AffectiveCloud-Algorithm-SDK', 'third_party/NumCpp'):
+            (self.root / relative).mkdir(parents=True)
+            (self.root / relative / 'fixture.txt').write_text('offline test fixture')
         shutil.copytree(ROOT / 'neurobridge', self.root / 'neurobridge', ignore=shutil.ignore_patterns('__pycache__'))
         subprocess.run([sys.executable, '-m', 'venv', '--system-site-packages',
                         str(self.root / '.runtime/windows-venv')], check=True, timeout=60)
@@ -119,13 +124,13 @@ class WindowsLauncherTests(unittest.TestCase):
                    str(self.root / 'windows/setup-windows-gateway.ps1'), '-Offline']
         first = subprocess.run(command, capture_output=True, timeout=60)
         self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
-        self.assertIn(b'Windows algorithm bridge missing', first.stdout + first.stderr)
+        self.assertIn(b'Offline build input missing', first.stdout + first.stderr)
         path = helper.config_path(self.root)
         original = path.read_text(encoding='utf-8').replace('device = "auto"', 'device = "COM12"')
         path.write_text(original, encoding='utf-8')
         second = subprocess.run(command, capture_output=True, timeout=60)
         self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
-        self.assertIn(b'Windows algorithm bridge missing', second.stdout + second.stderr)
+        self.assertIn(b'Offline build input missing', second.stdout + second.stderr)
         self.assertEqual(path.read_text(encoding='utf-8'), original)
 
 
