@@ -119,12 +119,8 @@ PY
 fi
 install -d -m 0750 \
   "$runtime_dir" "$runtime_dir/logs" "$runtime_dir/recordings" "$runtime_dir/diagnostics"
-console_log="$runtime_dir/logs/neurobridge-console.log"
-touch "$console_log"
-chmod 0600 "$console_log"
-
 log_preflight() {
-  printf '%s\n' "$*" | tee -a "$console_log"
+  printf '%s\n' "$*"
 }
 
 group_is_listed() {
@@ -206,7 +202,8 @@ if [[ $transport == serial ]]; then
   fi
 fi
 
-exec > >(tee -a "$console_log") 2>&1
+# Keep console output on stdout/stderr (journal under systemd). Python owns
+# the rotated persistent log; do not duplicate it into an unbounded tee file.
 
 echo "NeuroBridge project runtime starting"
 echo "project=$root_dir"

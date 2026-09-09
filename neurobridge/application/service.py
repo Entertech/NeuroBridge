@@ -446,7 +446,7 @@ class ApplicationService:
             return stale_result
         if backlog:
             result = WindowResult(batch, self.aggregator._invalid(batch.batch_id, "ALGORITHM_BACKLOG"), "live", self.clock_ms(), False)
-        elif self._algorithm_state == AlgorithmState.READY:
+        elif self._algorithm_state in {AlgorithmState.READY, AlgorithmState.ERROR}:
             evaluation_started = time.monotonic()
             algorithm_input = self.mapper.map(batch, (self._frames[ref] for ref in batch.frame_refs if ref in self._frames))
             result = await self.aggregator.evaluate(
@@ -509,11 +509,22 @@ class ApplicationService:
                 self._discard_batch_frames(batch)
                 return result
             self._last_published_order = order
+            # Apply health only for the current, publishable window. Backlog
+            # placeholders and late/old-session results cannot change it.
+            if not backlog:
+                if result.algorithm_result.valid and result.algorithm_result.metrics:
+                    self._algorithm_state = AlgorithmState.READY
+                elif set(result.algorithm_result.invalid_reasons) & {
+                    "ALGORITHM_ERROR", "ALGORITHM_TIMEOUT", "ALGORITHM_NOT_READY",
+                    "ALGORITHM_OUTPUT_INVALID", "ALGORITHM_INPUT_INVALID",
+                }:
+                    self._algorithm_state = AlgorithmState.ERROR
+            self.data.transition(self.data.snapshot.data_state, algorithm_state=self._algorithm_state.value)
             self.diagnostics["publication_age_ms"] = max(0, self.clock_ms() - batch.window_end_ms)
             self.snapshots.replace(result)
             if self.data.snapshot.data_state in {DataState.READY, DataState.STREAMING, DataState.STALE}:
                 self.data.produced(batch.window_end_ms, valid=result.valid)
-            await self.northbound.publish(ApplicationEvent("window", result=result))
+            await self.northbound.publish(ApplicationEvent("window", result=result, algorithm_state=self._algorithm_state))
             self.data.transition(DataState.STREAMING, last_published_at_ms=self.clock_ms())
             self._schedule_stale(batch.window_end_ms)
             self.diagnostics["published"] += 1

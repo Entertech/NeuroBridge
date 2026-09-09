@@ -105,7 +105,7 @@ connecting → validating
 
 - 缓冲中出现完整合法 28 字节帧：保存该缓冲及其读取边界时间，立即报告 `validated`，不发送 ACK 或 E1。
 - 观察窗口没有合法帧：清理输入缓冲并写入 `AA 55 01 01 01 01 6F`。
-- ACK 等待窗口只把独立单字节 `0x01` 视为成功；完整重复握手触发再次 ACK，其他内容仅脱敏计数。
+- ACK 等待窗口只把独立单字节 `0x01` 视为成功；完整重复握手触发再次 ACK。遇到未知内容或损坏的响应前缀后，本轮剩余字节只做脱敏计数，不能通过清空缓冲把后续嵌入的 `0x01` 重新识别为确认；下轮探测重新验证。
 - 收到独立 `0x01` 后立即报告 `validated`，再初始化算法。
 - 算法 ready 后无响应写入单字节 `0xE1`，随后进入数据读取。
 - 正常停止尽力无响应写入一次 `0xE0`，无论写入是否成功都关闭资源。
@@ -156,6 +156,8 @@ Bootstrap 的 `device_ready()` 调用 `ApplicationService.prepare_session()` 初
 - 配置或进程不可用：`algorithmState=unavailable`。
 
 状态变化必须向订阅 `status` 的浏览器广播完整北向状态，避免串口已经 `validated` 后页面仍停留在 `unavailable`。
+
+运行中的算法报错、超时、输出非法或进程退出，在当前会话窗口处理后同步为 `algorithmState=error`，更新内部数据状态快照及 `getStatus`，并通过已有 `status` 订阅广播。原始数据采集、保存与分发继续；积压占位窗口、旧会话结果和迟到结果不改变当前算法状态。bridge 失步退出后保持错误状态，下一设备会话重新初始化成功才恢复 ready，不自动重算历史数据。
 
 ## 9. 持久化和录播
 
@@ -235,6 +237,8 @@ Writer 独立于事件循环，按 `storage.fsync_interval_records` 有界批量
 - 当前北向合同固定 600 ms。配置和 Profile 均拒绝其他窗口值；不能仅修改 subscribe 返回值来扩大合同。
 - Capture 建连/重连先 getStatus，成功后订阅 status，再读取一次快照以覆盖查询与订阅之间的状态变化；状态订阅成功前禁用数据开始按钮。
 - 日志默认使用进程内大小轮转，`logging.rotation_mode="size"`、`max_bytes=10485760`、`backup_count=14`；该策略同时适用于源码目录自启与候选安装布局，不依赖麒麟额外安装 logrotate。明确由外部工具管理时配置 `rotation_mode="external"`，同一日志不得同时启用两种轮转。
+- 源码启动脚本的 stdout/stderr 直接交给终端或 systemd journal；不再通过 `tee -a` 额外写入 `neurobridge-console.log`。持久运行日志使用上述轮转文件；旧控制台日志保留但不再增长。
+- 引导及离线更新入口在转入菜单前恢复原 stdout/stderr，菜单前台启动也不使用安装步骤的 `tee`，避免持续采集日志进入这些有限步骤的日志文件。
 - 磁盘满/配额耗尽分别记为 full/no_space、full/quota_exceeded；只读、权限、路径和其他 I/O 错误分别分类。失败写入不推进最后成功时间。录制路径启动失败只导致持久化降级，北向服务仍可启动；状态仍仅用于内部日志，不新增已锁定报文字段。
 - 可选 `recording.transport_trace_enabled=false` 默认关闭。开启后，RawChunk 以 `raw.transport_chunk` 写受保护 raw 分段；`transport_trace_max_bytes` 默认 1 MiB，为单次进程录制会话的原始字节预算，超限整块省略并计数，不截断、不中止完整帧录制，也不进入公开 ZIP。字节预算不含 JSON 编码开销。
 - 候选安装前校验 `metadata/files.sha256` 和安装/回滚磁盘空间，迁移后校验完整配置与固定 Profile，再启动服务。候选包自带 defaults.toml；正式入口按包默认值、系统配置加载，仅显式 `--development --override-config <文件>` 可增加临时覆盖，且不能改变包固定 Profile。

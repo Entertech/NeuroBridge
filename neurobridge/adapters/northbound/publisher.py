@@ -22,5 +22,7 @@ class GatewayNorthboundSink:
     async def publish(self, event: ApplicationEvent) -> None:
         if event.kind != "window" or event.result is None:
             return
+        if event.algorithm_state is not None:
+            await self.gateway.update_status("algorithmState", event.algorithm_state.value)
         publish = getattr(self.gateway, "publish_window_result")
         await publish(event.result)

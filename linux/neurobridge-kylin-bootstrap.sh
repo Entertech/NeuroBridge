@@ -89,6 +89,7 @@ fi
 bootstrap_log="$project_dir/.runtime/logs/kylin-bootstrap-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
 touch "$bootstrap_log" || fail "无法创建引导日志。"
 chmod 0600 "$bootstrap_log" 2>/dev/null || true
+exec 3>&1 4>&2
 exec > >(tee -a "$bootstrap_log") 2>&1
 printf 'project=%s\nlog=%s\nsourceUpdateAttempted=false\n' "$project_dir" "$bootstrap_log"
 printf 'gitPermissionChecked=false\n'
@@ -98,4 +99,7 @@ if [[ ! -f $assistant ]]; then
 fi
 
 printf '正在打开 NeuroBridge 银河麒麟数字菜单……\n'
+# Bootstrap logging ends here; the menu owns its setup logs and Python owns
+# rotated runtime logs. Do not inherit this tee into a foreground gateway.
+exec 1>&3 2>&4 3>&- 4>&-
 exec bash "$assistant"

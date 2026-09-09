@@ -251,8 +251,12 @@ start_gateway() {
     log_message "已显式配置为非自启，本次以前台方式启动；可在菜单 9 中重新启用默认自启。"
     log_message "启动后用本机浏览器打开：http://127.0.0.1:8080/"
     log_message "按 Ctrl+C 停止网关并返回菜单。"
-    run_step "以前台方式启动 NeuroBridge" "$root_dir/linux/start-kylin-gateway.sh"
-    return $?
+    # A gateway may run indefinitely; run_step's setup tee is only for finite
+    # installation commands. Runtime logs already rotate inside Python.
+    "$root_dir/linux/start-kylin-gateway.sh"
+    local result=$?
+    log_message "result=$result step=以前台方式启动 NeuroBridge"
+    return "$result"
   fi
   if [[ -e $autostart_preference_path \
     && ( ! -f $autostart_preference_path || -L $autostart_preference_path ) ]]; then

@@ -633,6 +633,7 @@ class SerialAdapter:
         ack_write_count = 0
         ack_write_bytes = 0
         response = b""
+        response_tainted = False
 
         async def write_ack() -> None:
             nonlocal ack_write_count, ack_write_bytes
@@ -663,9 +664,9 @@ class SerialAdapter:
             )
             previous_timeout = getattr(client, "timeout", None)
             try:
-                # Read one byte at a time so only the device's standalone
-                # 0x01 acknowledgement is accepted. The headset does not
-                # initiate this exchange; the write above starts it.
+                # Read incrementally, but preserve the exchange's framing state:
+                # a one-byte read does not make a byte a standalone response.
+                # Once unknown data appears, reject the rest of this probe.
                 while not self._stopping:
                     remaining_seconds = deadline - time.monotonic()
                     if remaining_seconds <= 0:
@@ -680,6 +681,9 @@ class SerialAdapter:
                         await asyncio.sleep(min(0.01, max(0.0, remaining_seconds)))
                         continue
                     total_read_bytes += len(chunk)
+                    if response_tainted:
+                        unexpected_bytes += len(chunk)
+                        continue
                     response_buffer.extend(chunk)
                     longest_handshake_prefix = max(
                         longest_handshake_prefix,
@@ -715,6 +719,7 @@ class SerialAdapter:
                     # unknown response as the standalone ACK result.
                     unexpected_bytes += len(response_buffer)
                     response_buffer.clear()
+                    response_tainted = True
             finally:
                 client.timeout = previous_timeout
         duration_ms = int((time.monotonic() - started) * 1000)

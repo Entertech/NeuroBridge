@@ -284,6 +284,43 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("timeoutMs=30", rendered)
         self.assertIn("totalReadBytes=0", rendered)
 
+    async def test_unknown_response_cannot_resynchronize_at_embedded_ack(self) -> None:
+        malformed_frame = frame(1)[:-3] + b"bad"
+        for response in (b"bad\x01bad", malformed_frame, b"\xaa\x00\x01", b"bad" + HANDSHAKE + b"\x01"):
+            for reads in ([response], [bytes([value]) for value in response]):
+                with self.subTest(response=response, fragmented=len(reads) > 1):
+                    client = SlowEmptySerial(reads)
+                    adapter = SerialAdapter(SerialConfig(command_response_timeout_ms=100), noop, noop, noop)
+                    self.assertEqual(await adapter._send_handshake_ack(client), b"")
+                    self.assertEqual(client.writes, [HANDSHAKE])
+
+    async def test_tainted_probe_does_not_poison_a_new_ack_exchange(self) -> None:
+        adapter = SerialAdapter(SerialConfig(command_response_timeout_ms=30), noop, noop, noop)
+        self.assertEqual(await adapter._send_handshake_ack(SlowEmptySerial([b"bad\x01"])), b"")
+        self.assertEqual(await adapter._send_handshake_ack(FakeSerial([b"\x01"])), b"\x01")
+
+    async def test_embedded_ack_never_validates_or_enables_device(self) -> None:
+        class MalformedResponder(SlowEmptySerial):
+            def write(self, value):
+                count = super().write(value)
+                if value == HANDSHAKE:
+                    self.reads.append(frame(1)[:-3] + b"bad")
+                return count
+        client, states = MalformedResponder([]), []
+        async def status(name, value):
+            states.append((name, value))
+        async def stop_after_error(_reason):
+            await adapter.stop()
+        async def unexpected_ready():
+            self.fail("Invalid response must not initialize the algorithm")
+        adapter = SerialAdapter(SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=100),
+            noop, status, unexpected_ready, error=stop_after_error,
+            candidate_provider=lambda _: ["/dev/ttyUSB-test"], serial_factory=lambda *_: client)
+        await asyncio.wait_for(adapter.run(), 1)
+        self.assertEqual(client.writes, [HANDSHAKE])
+        self.assertNotIn(("connectionState", "validated"), states)
+        self.assertEqual(states[-1], ("connectionState", "validation_failed"))
+
     async def test_open_failure_preserves_permission_root_cause(self) -> None:
         reasons: list[str] = []
         adapter: SerialAdapter

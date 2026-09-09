@@ -8,11 +8,13 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+import sys
 import unittest
 from unittest.mock import patch
 import zipfile
 
 from neurobridge.adapters.northbound.protocol import project_window
+from neurobridge.adapters.algorithms import AffectiveSdkAlgorithmEngine
 from neurobridge.adapters.parsers import HeadbandBleParser
 from neurobridge.adapters.storage.archive import ArchiveReplayReader
 from neurobridge.adapters.storage.filesystem import SegmentedRecordingRepository
@@ -144,6 +146,54 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.service.data.snapshot.data_state, DataState.STREAMING)
         await self.service.close()
         self.assertEqual(self.writes, [b"\xe0"])
+
+    async def check_algorithm_failure_status(self, program):
+        # The shutdown barrier must outlast the deliberately timed-out request.
+        self.service.shutdown_timeout_ms = 1000
+        engine = AffectiveSdkAlgorithmEngine(replace(self.gateway.config.algorithm,
+            enabled=True, command=(sys.executable, "-u", "-c", program), request_timeout_ms=100))
+        self.gateway.algorithm = self.service.algorithm = engine
+        await self.connect()
+        session, sent = ClientSession(), []
+        async def send(message):
+            sent.append(message)
+        await self.gateway.subscribe(session, {"streams": ["status", "eeg.raw"]}, send)
+        await self.capture()
+        await self.service.flush()
+        self.assertIsNone(engine._runner.process)
+        self.assertEqual(self.gateway.status_result()["algorithmState"], "error")
+        self.assertNotIn("eeg", self.gateway.status_result()["availableStreams"])
+        self.assertEqual(self.service.data.snapshot.algorithm_state, "error")
+        self.assertEqual(self.service._algorithm_state, AlgorithmState.ERROR)
+        async with asyncio.timeout(1):
+            while not any("status" in m["data"]["payload"] for m in sent) or not any("eegRaw" in m["data"]["payload"] for m in sent):
+                await asyncio.sleep(0.005)
+        statuses = [m["data"]["payload"]["status"]["algorithmState"] for m in sent if "status" in m["data"]["payload"]]
+        self.assertEqual(statuses, ["error"])
+        self.assertTrue(next(m for m in sent if "eegRaw" in m["data"]["payload"])["data"]["valid"])
+        # Further windows keep the raw path alive without restoring false ready.
+        await self.capture()
+        await self.service.flush()
+        self.assertEqual(self.gateway.status_result()["algorithmState"], "error")
+        await self.source._emit_state(ConnectionState.RECONNECTING)
+        async with asyncio.timeout(1):
+            while self.gateway.status["connectionState"] != "disconnected":
+                await asyncio.sleep(0.005)
+        await self.connect()
+        self.assertEqual(self.gateway.status_result()["algorithmState"], "ready")
+        self.assertEqual(self.service.data.snapshot.algorithm_state, "ready")
+
+    async def test_bridge_error_updates_status_and_preserves_raw_capture(self):
+        await self.check_algorithm_failure_status('import sys; sys.stdin.readline(); print(\'{"bridgeError":"synthetic failure"}\', flush=True)')
+
+    async def test_bridge_timeout_updates_status_and_preserves_raw_capture(self):
+        await self.check_algorithm_failure_status('import sys, time; sys.stdin.readline(); time.sleep(60)')
+
+    async def test_bridge_exit_updates_status_and_preserves_raw_capture(self):
+        await self.check_algorithm_failure_status('import sys; sys.stdin.readline(); sys.exit(3)')
+
+    async def test_bridge_invalid_output_updates_status_and_preserves_raw_capture(self):
+        await self.check_algorithm_failure_status('import sys; sys.stdin.readline(); print("{}", flush=True)')
 
     async def test_ack_algorithm_initialization_exception_is_error_without_e1(self):
         async def fail(_session):

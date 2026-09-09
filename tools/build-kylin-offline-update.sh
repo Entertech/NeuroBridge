@@ -186,6 +186,7 @@ mkdir -p -- "$project_dir/.runtime/logs" "$project_dir/.runtime/offline-update"
 update_log="$project_dir/.runtime/logs/kylin-offline-update-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
 touch "$update_log"
 chmod 0600 "$update_log" 2>/dev/null || true
+exec 3>&1 4>&2
 exec > >(tee -a "$update_log") 2>&1
 printf 'project=%s\nlog=%s\nofflineBranch=%s\nofflineRevision=%s\nnetworkAccessAttempted=false\n' \
   "$project_dir" "$update_log" "$offline_branch" "$offline_revision"
@@ -242,6 +243,7 @@ printf '离线更新完成：branch=%s revision=%s\n' "$offline_branch" "$offlin
 printf '未访问网络；.runtime、现场配置和录制数据均已保留。\n'
 cleanup_bundle
 trap - EXIT
+exec 1>&3 2>&4 3>&- 4>&-
 exec bash "$project_dir/linux/neurobridge-kylin-bootstrap.sh"
 exit 0
 __NEUROBRIDGE_GIT_BUNDLE__

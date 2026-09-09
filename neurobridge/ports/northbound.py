@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from ..domain.result import WindowResult
+from ..domain.algorithm import AlgorithmState
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,7 @@ class ApplicationEvent:
     kind: str
     result: WindowResult | None = None
     subscription_id: str | None = None
+    algorithm_state: AlgorithmState | None = None
 
 
 class LatestSnapshotStore(Protocol):
