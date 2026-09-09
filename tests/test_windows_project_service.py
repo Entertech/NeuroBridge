@@ -89,6 +89,9 @@ class ServiceLifecycleTests(unittest.IsolatedAsyncioTestCase):
 @unittest.skipUnless(sys.platform == 'win32', 'Requires Windows SCM and administrator CI runner')
 class NativeServiceTests(unittest.TestCase):
     def test_register_start_reuse_stop_and_manual_preference(self):
+        import win32api
+        import win32con
+        import win32event
         import win32service as ws
         from windows.gateway_helper import create_config
         from windows.algorithm_build import ROOT
@@ -99,7 +102,10 @@ class NativeServiceTests(unittest.TestCase):
         name = 'NeuroBridgeProjectCI'
         # Isolated checkout with the service name changed only in the temporary fixture.
         with tempfile.TemporaryDirectory(prefix='neurobridge service ') as directory:
-            root = Path(directory)
+            # PowerShell/Python resolve RUNNER~1 to runneradmin. Use the same
+            # canonical path when registering and checking service ownership.
+            root = Path(directory).resolve()
+            shutil.copy2(ROOT / 'pyproject.toml', root / 'pyproject.toml')
             shutil.copytree(ROOT / 'neurobridge', root / 'neurobridge', ignore=shutil.ignore_patterns('__pycache__'))
             shutil.copytree(ROOT / 'windows', root / 'windows', ignore=shutil.ignore_patterns('__pycache__'))
             shutil.copytree(ROOT / 'web', root / 'web')
@@ -116,6 +122,25 @@ class NativeServiceTests(unittest.TestCase):
             url = subprocess.check_output([str(venv_python), str(root / 'windows/gateway_helper.py'), 'url'],
                                           text=True, timeout=10).strip()
             self.assertEqual(url, 'http://127.0.0.1:8080/capture/')
+            processes = []
+
+            def remember_process(handle):
+                pid = ws.QueryServiceStatusEx(handle)['ProcessId']
+                if pid:
+                    processes.append(win32api.OpenProcess(win32con.SYNCHRONIZE, False, pid))
+                return pid
+
+            def wait_for_processes():
+                outcomes = []
+                while processes:
+                    process = processes.pop()
+                    try:
+                        outcomes.append(win32event.WaitForSingleObject(process, 30000))
+                    finally:
+                        win32api.CloseHandle(process)
+                self.assertTrue(all(result == win32event.WAIT_OBJECT_0 for result in outcomes),
+                                'Stopped service host must exit and release logs before restart/fixture cleanup')
+
             with patch.object(service, 'SERVICE_NAME', name):
                 try:
                     service.enable(root, python)
@@ -123,7 +148,7 @@ class NativeServiceTests(unittest.TestCase):
                     self.assertEqual(first['state'], ws.SERVICE_RUNNING)
                     self.assertTrue(first['automatic'])
                     with service.service_handle(root, python) as (_, handle):
-                        first_pid = ws.QueryServiceStatusEx(handle)['ProcessId']
+                        first_pid = remember_process(handle)
                     with urlopen(url, timeout=5) as response:
                         self.assertEqual(response.status, 200)
                     service.enable(root, python)
@@ -139,7 +164,10 @@ class NativeServiceTests(unittest.TestCase):
                     self.assertFalse(final['automatic'])
                     self.assertFalse(final['configuredAutostart'])
                     self.assertEqual(final['state'], ws.SERVICE_STOPPED)
+                    wait_for_processes()
                     service.enable(root, python)
+                    with service.service_handle(root, python) as (_, handle):
+                        remember_process(handle)
                     self.assertTrue(service.status(root, python)['automatic'])
                 except BaseException:
                     # Temporary service logs would otherwise disappear before CI uploads artifacts.
@@ -147,9 +175,15 @@ class NativeServiceTests(unittest.TestCase):
                         print(f'--- {log.name} ---\n{log.read_text(encoding="utf-8", errors="replace")[-16000:]}')
                     raise
                 finally:
-                    with service.service_handle(root, python, write=True) as (_, handle):
-                        if handle:
-                            if ws.QueryServiceStatus(handle)[1] != ws.SERVICE_STOPPED:
-                                ws.ControlService(handle, ws.SERVICE_CONTROL_STOP)
-                                service.wait_state(handle, ws.SERVICE_STOPPED)
-                            ws.DeleteService(handle)
+                    try:
+                        with service.service_handle(root, python, write=True) as (_, handle):
+                            if handle:
+                                if ws.QueryServiceStatus(handle)[1] != ws.SERVICE_STOPPED:
+                                    remember_process(handle)
+                                    ws.ControlService(handle, ws.SERVICE_CONTROL_STOP)
+                                    service.wait_state(handle, ws.SERVICE_STOPPED)
+                                ws.DeleteService(handle)
+                    finally:
+                        # SERVICE_STOPPED can precede interpreter/DLL shutdown.
+                        # Keep kernel process handles across that transition.
+                        wait_for_processes()
