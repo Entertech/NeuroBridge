@@ -1382,3 +1382,15 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户明确提出移除 ACK、并行发现与算法准备，并确认设备未握手直接 E1 可出数；本次替代旧 ACK/E1 策略，旧配置键兼容保留且不再等待应答。复用既有北向状态与错误、不修改字段或已发布及预发布协议正文；源码/模拟回归不替代 Windows 和银河麒麟的真实冷启动、停止/整机重启、拔插及离线拒绝录播验收。"
+
+
+[[change_records]]
+id = "2026-09-10-windows-log-rotation-test-encoding"
+date = "2026-09-10"
+scope = "gateway_windows_logging_ci_tests"
+summary = "日志轮转测试显式使用 UTF-8 读写文本，与生产日志编码保持一致，修复 Windows 默认 CP1252 解码中文日志时的 UnicodeDecodeError。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户反馈 Actions 34430971789 失败；错误已在本地模拟 CP1252 默认读取时复现。本次仅修复测试的编码假设，不改变生产日志轮转行为、设备接入或已发布及预发布协议正文。"
