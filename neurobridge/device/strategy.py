@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Protocol
 
@@ -24,7 +25,16 @@ def _bluetooth(config: GatewayConfig, gateway: Gateway) -> DeviceAdapter:
 def _serial(config: GatewayConfig, gateway: Gateway) -> DeviceAdapter:
     from ..serial.adapter import SerialAdapter
 
-    return SerialAdapter(config.serial, gateway.receive_device_packet, gateway.update_status, gateway.on_device_ready, gateway.update_connection_error)
+    async def prepare_algorithm():
+        await asyncio.wait_for(gateway.algorithm.initialize(), config.algorithm.request_timeout_ms / 1000)
+        return gateway.algorithm.available
+
+    async def activate_algorithm():
+        return await gateway.on_device_ready(already_prepared=True)
+
+    return SerialAdapter(config.serial, gateway.receive_device_packet, gateway.update_status,
+                         activate_algorithm, gateway.update_connection_error,
+                         prepare_algorithm=prepare_algorithm, release_algorithm=gateway.algorithm.stop)
 
 
 def _unconfirmed_native_usb(_config: GatewayConfig, _gateway: Gateway) -> DeviceAdapter:

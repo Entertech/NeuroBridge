@@ -1358,3 +1358,27 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户要求限制单个日志大小并让文件名关联时间以避免重复；保持当前日志固定入口、已有查看和导出兼容，补充内部手册及 Windows 原生轮转 CI，不修改已发布或预发布北向协议，目标机实际轮转仍需随长测确认。"
+
+
+[[change_records]]
+id = "2026-09-10-device-confirmed-ack-after-handshake"
+date = "2026-09-10"
+scope = "gateway_internal_headset_handshake_documentation"
+summary = "记录设备端确认握手成功后重复 ACK 不再响应 0x01；同步耳机串口与多系统 PRD、技术方案、运行手册、验收清单及仓库摘要/规则，区分首次握手与已握手恢复，撤回仅重试 ACK 即可关闭重启恢复风险的表述，明确 Windows ACK/E1 验证依据与麒麟已握手无流恢复缺口。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户向设备端确认后明确要求更新对应 PRD 和技术文档；本次仅补充内部设备行为事实，不修改运行代码、平台策略、版本号或已发布及预发布北向协议。具体握手复位条件仍待设备端确认，设备行为确认与模拟回归不替代目标机停止/整机重启恢复专项验收。"
+
+
+[[change_records]]
+id = "2026-09-10-serial-direct-e1-parallel-startup"
+date = "2026-09-10"
+scope = "gateway_serial_startup_and_validation"
+summary = "按设备端确认的首次上电无握手也可 E1 出数规则，统一 Windows/麒麟并行串口发现与算法准备，移除 ACK/01 和停止提示恢复；两项就绪后 E1，以完整合法帧验证，复用预备算法并保留首帧读取时间，失败/取消 E0 清理，同步内部需求、方案、操作文档和界面提示。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确提出移除 ACK、并行发现与算法准备，并确认设备未握手直接 E1 可出数；本次替代旧 ACK/E1 策略，旧配置键兼容保留且不再等待应答。复用既有北向状态与错误、不修改字段或已发布及预发布协议正文；源码/模拟回归不替代 Windows 和银河麒麟的真实冷启动、停止/整机重启、拔插及离线拒绝录播验收。"

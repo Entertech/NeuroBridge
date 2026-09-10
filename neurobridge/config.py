@@ -53,8 +53,9 @@ class SerialConfig:
     device: str = "auto"
     candidate_types: tuple[str, ...] = ("ttyACM", "ttyUSB")
     baud_rate: int = 115200
-    handshake_timeout_ms: int = 1000
-    command_response_timeout_ms: int = 1000
+    # Historical config keys retained for installed configurations; no ACK exchange.
+    handshake_timeout_ms: int = 1000  # Passive existing-stream observation.
+    command_response_timeout_ms: int = 1000  # E1/E0 write timeout only.
     data_timeout_seconds: float = 5.0
     reconnect_delay_seconds: float = 3.0
     stats_interval_seconds: float = 10.0

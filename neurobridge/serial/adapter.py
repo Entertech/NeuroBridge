@@ -14,10 +14,8 @@ from ..config import SerialConfig
 from ..device.packet import DevicePacket, wall_clock_ms
 
 LOG = logging.getLogger(__name__)
-HANDSHAKE = bytes.fromhex("AA 55 01 01 01 01 6F")
 START_COMMAND = b"\xE1"
 STOP_COMMAND = b"\xE0"
-EXPECTED_HANDSHAKE_ACK_RESPONSE = b"\x01"
 FRAME_HEADER = b"\xAA\xAA\xAA"
 FRAME_TAIL = b"\xBB\xBB\xBB"
 FRAME_BYTES = 28
@@ -51,15 +49,6 @@ def _serial_discovery_inventory(config: SerialConfig) -> dict[str, int | bool | 
             "not_applicable" if config.device == "auto" else Path(config.device).exists()
         ),
     }
-
-
-def _longest_handshake_prefix(data: bytes | bytearray) -> int:
-    """Measure wrong/partial handshakes without logging unknown serial bytes."""
-
-    return max(
-        (length for length in range(1, len(HANDSHAKE)) if HANDSHAKE[:length] in data),
-        default=0,
-    )
 
 
 from ..adapters.parsers.sequence import LossSnapshot, SequenceObservation, SequenceLossTracker
@@ -242,7 +231,8 @@ class SerialAdapter:
         external_control: bool = False,
         external_start: Callable[[bool], Awaitable[bool]] | None = None,
         external_stop: Callable[[], Awaitable[None]] | None = None,
-        restart_probe=None,
+        prepare_algorithm: Callable[[], Awaitable[bool]] | None = None,
+        release_algorithm: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.config = config
         self.packet = packet
@@ -256,11 +246,13 @@ class SerialAdapter:
         self.external_control = external_control
         self.external_start = external_start
         self.external_stop = external_stop
-        self.restart_probe = restart_probe
+        self.prepare_algorithm = prepare_algorithm
+        self.release_algorithm = release_algorithm
         self._client: Any | None = None
         self._target: str | None = None
         self._stopping = False
         self._capture_started = False
+        self._stop_sent = False
         self._io_lock = asyncio.Lock()
         self._stop_lock = asyncio.Lock()
         self._loss = SequenceLossTracker()
@@ -278,18 +270,19 @@ class SerialAdapter:
             "invalidFrames": 0,
             "discardedBytes": 0,
             "bufferOverflows": 0,
-            "controlResponses": 0,
-            "controlResponseBytes": 0,
-            "controlTimeouts": 0,
-            "controlUnexpectedResponses": 0,
-            "handshakeAckWrites": 0,
-            "handshakeAckWriteBytes": 0,
-            "handshakeAckRepeatedFrames": 0,
-            "handshakeAckPartialTimeouts": 0,
-            "streamHandshakeFrames": 0,
             "startedAtMonotonic": time.monotonic(),
             "lastSummaryAtMonotonic": 0.0,
         }
+
+    async def _prepare_algorithm(self) -> bool:
+        if self.prepare_algorithm is None:
+            LOG.error("Serial algorithm preparation unavailable; E1 disabled")
+            return False
+        try:
+            return bool(await self.prepare_algorithm())
+        except Exception:
+            LOG.exception("Serial algorithm preparation failed before device validation")
+            return False
 
     async def run(self) -> None:
         attempt = 0
@@ -298,318 +291,222 @@ class SerialAdapter:
             phase = "discover"
             target_selected = False
             validation_failed = False
-            existing_stream = b""
-            existing_stream_received_at_ms: int | None = None
+            # Preparation owns no recording or validated connection. It runs
+            # concurrently with discovery/opening/observation and is reclaimed
+            # on every unsuccessful attempt (including cancellation).
+            preparation = asyncio.create_task(self._prepare_algorithm())
             try:
                 self._reset_stats()
                 await self.status("connectionState", "connecting")
-                candidates = list(self.candidate_provider(self.config))
-                inventory = _serial_discovery_inventory(self.config)
+                candidates = list(await asyncio.to_thread(self.candidate_provider, self.config))
+                inventory = await asyncio.to_thread(_serial_discovery_inventory, self.config)
                 LOG.info(
-                    "Serial discovery started: attempt=%s candidates=%s deviceMode=%s captureProbeTimeoutMs=%s "
-                    "byIdEntries=%s ttyACMEntries=%s ttyUSBEntries=%s configuredPathExists=%s",
-                    attempt,
-                    len(candidates),
-                    self.config.device,
-                    self.config.handshake_timeout_ms,
-                    inventory["byIdEntries"],
-                    inventory["ttyACMEntries"],
-                    inventory["ttyUSBEntries"],
+                    "Serial discovery started: attempt=%s candidates=%s deviceMode=%s "
+                    "streamObservationTimeoutMs=%s byIdEntries=%s ttyACMEntries=%s ttyUSBEntries=%s "
+                    "configuredPathExists=%s startupPolicy=direct_e1",
+                    attempt, len(candidates), self.config.device, self.config.handshake_timeout_ms,
+                    inventory["byIdEntries"], inventory["ttyACMEntries"], inventory["ttyUSBEntries"],
                     inventory["configuredPathExists"],
                 )
-                candidate_identities: dict[str, dict[str, str | None]] = {}
-                for index, path in enumerate(candidates, start=1):
-                    identity = self.identity_provider(path)
-                    candidate_identities[path] = identity
-                    LOG.info(
-                        "Serial candidate discovered: attempt=%s candidateIndex=%s candidateCount=%s path=%s "
-                        "resolvedPath=%s vid=%s pid=%s usbSerial=%s usbParent=%s interface=%s driver=%s physicalPath=%s",
-                        attempt,
-                        index,
-                        len(candidates),
-                        _safe_log_text(path),
-                        _safe_log_text(identity["resolvedPath"]),
-                        identity["vid"],
-                        identity["pid"],
-                        identity["usbSerial"],
-                        _safe_log_text(identity["usbParent"]),
-                        identity["interface"],
-                        identity["driver"],
-                        _safe_log_text(identity["physicalPath"]),
-                    )
                 if not candidates:
                     LOG.warning(
-                        "Serial discovery found no usable candidates: attempt=%s deviceMode=%s candidateTypes=%s "
-                        "byIdEntries=%s ttyACMEntries=%s ttyUSBEntries=%s configuredPathExists=%s "
-                        "nextRetrySeconds=%s",
-                        attempt,
-                        self.config.device,
-                        ",".join(self.config.candidate_types),
-                        inventory["byIdEntries"],
-                        inventory["ttyACMEntries"],
-                        inventory["ttyUSBEntries"],
-                        inventory["configuredPathExists"],
+                        "Serial discovery found no usable candidates: attempt=%s byIdEntries=%s "
+                        "ttyACMEntries=%s ttyUSBEntries=%s configuredPathExists=%s nextRetrySeconds=%s",
+                        attempt, inventory["byIdEntries"], inventory["ttyACMEntries"],
+                        inventory["ttyUSBEntries"], inventory["configuredPathExists"],
                         self.config.reconnect_delay_seconds,
                     )
                     raise ConnectionError("No USB-derived serial candidates were found")
-                phase = "candidate_probe"
-                opened_candidate_count = 0
-                rejected_candidate_count = 0
-                probe_failures: list[tuple[str, Exception]] = []
+                opened_count = 0
+                failures = []
+                observed_stream = None
                 for index, path in enumerate(candidates, start=1):
                     if self._stopping:
                         return
                     client = None
+                    capture_requested = False
+                    probe_buffer = bytearray()
+                    probe_chunks = []
                     try:
                         phase = "candidate_open"
-                        client = await asyncio.to_thread(self.serial_factory, path, self.config)
-                        opened_candidate_count += 1
-                        LOG.info(
-                            "Serial candidate opened: attempt=%s candidateIndex=%s candidateCount=%s path=%s",
-                            attempt,
-                            index,
-                            len(candidates),
-                            _safe_log_text(path),
-                        )
-                        identity = candidate_identities[path]
+                        client = await self._open_candidate(path)
+                        opened_count += 1
+                        identity = await asyncio.to_thread(self.identity_provider, path)
+                        LOG.info("Serial candidate discovered: path=%s vid=%s pid=%s driver=%s",
+                                 _safe_log_text(path), _safe_log_text(identity.get("vid")),
+                                 _safe_log_text(identity.get("pid")), _safe_log_text(identity.get("driver")))
+                        LOG.info("Serial candidate opened: attempt=%s candidateIndex=%s candidateCount=%s path=%s",
+                                 attempt, index, len(candidates), _safe_log_text(path))
                         phase = "existing_stream_observation"
-                        observed_stream = await self._observe_existing_stream(client, path)
-                        response = b""
-                        if observed_stream is None and self.restart_probe is not None:
-                            phase = "restart_probe"
+                        observed_stream = await self._observe_existing_stream(client, path, buffer=probe_buffer, read_chunks=probe_chunks)
+                        if observed_stream is None:
                             await self.status("connectionState", "validating")
-                            observed_stream, response = await self.restart_probe.probe(
-                                client, path, self._observe_existing_stream, self._send_handshake_ack,
-                                lambda: self._stopping,
-                            )
-                        if observed_stream is not None:
-                            self._client, self._target = client, path
-                            target_selected = True
-                            existing_stream, existing_stream_received_at_ms = observed_stream
-                            self._capture_started = True
-                            LOG.info(
-                                "Serial target selected: path=%s resolvedPath=%s vid=%s pid=%s usbSerial=%s "
-                                "usbParent=%s interface=%s driver=%s physicalPath=%s selectionMode=%s matchBasis=%s",
-                                _safe_log_text(path),
-                                _safe_log_text(identity["resolvedPath"]),
-                                identity["vid"],
-                                identity["pid"],
-                                identity["usbSerial"],
-                                _safe_log_text(identity["usbParent"]),
-                                identity["interface"],
-                                identity["driver"],
-                                _safe_log_text(identity["physicalPath"]),
-                                "existing_valid_frame",
-                                "valid_28_byte_frame",
-                            )
-                            await self.status("connectionState", "validated")
-                            break
-                        if self.restart_probe is None:
-                            phase = "handshake_ack_probe"
-                            await self.status("connectionState", "validating")
-                            LOG.info(
-                                "Serial active handshake ACK probe started: attempt=%s candidateIndex=%s "
-                                "candidateCount=%s path=%s ackBytes=%s expectedResponse=single_byte_0x01",
-                                attempt,
-                                index,
-                                len(candidates),
-                                _safe_log_text(path),
-                                len(HANDSHAKE),
-                            )
-                            response = await self._send_handshake_ack(client)
-                        if response:
-                            self._client, self._target = client, path
-                            target_selected = True
-                            LOG.info(
-                                "Serial target selected: path=%s resolvedPath=%s vid=%s pid=%s usbSerial=%s "
-                                "usbParent=%s interface=%s driver=%s physicalPath=%s selectionMode=%s matchBasis=%s",
-                                _safe_log_text(path),
-                                _safe_log_text(identity["resolvedPath"]),
-                                identity["vid"],
-                                identity["pid"],
-                                identity["usbSerial"],
-                                _safe_log_text(identity["usbParent"]),
-                                identity["interface"],
-                                identity["driver"],
-                                _safe_log_text(identity["physicalPath"]),
-                                "active_ack_probe",
-                                "standalone_0x01",
-                            )
-                            await self.status("connectionState", "validated")
-                            break
-                        rejected_candidate_count += 1
-                    except Exception as exc:
-                        probe_failures.append((path, exc))
-                        LOG.warning(
-                            "Serial candidate probe failed: attempt=%s candidateIndex=%s candidateCount=%s "
-                            "path=%s errorType=%s reason=%s",
-                            attempt,
-                            index,
-                            len(candidates),
-                            _safe_log_text(path),
-                            type(exc).__name__,
-                            _safe_log_text(exc),
+                            phase = "algorithm_prepare"
+                            if not await preparation:
+                                raise ConnectionError("Local algorithm is not ready; serial E1 was not sent")
+                            if self._stopping:
+                                return
+                            # Observe once more without clearing the driver buffer:
+                            # a stream may have started while the algorithm warmed.
+                            observed_stream = await self._observe_existing_stream(client, path, timeout_seconds=0.01, buffer=probe_buffer, read_chunks=probe_chunks)
+                            if observed_stream is None:
+                                if self._stopping:
+                                    return
+                                phase = "start_command_write"
+                                capture_requested = True  # partial writes also need best-effort E0
+                                await self._write_client_command(client, START_COMMAND, "start")
+                                phase = "first_frame_validation"
+                                observed_stream = await self._observe_existing_stream(
+                                    client, path, timeout_seconds=self.config.data_timeout_seconds,
+                                    buffer=probe_buffer, read_chunks=probe_chunks,
+                                )
+                        if observed_stream is None:
+                            validation_failed = True
+                            LOG.warning("Serial first-frame validation timed out: path=%s timeoutSeconds=%s",
+                                        _safe_log_text(path), self.config.data_timeout_seconds)
+                            continue
+                        self._client, self._target = client, path
+                        self._stop_sent = False
+                        self._capture_started = True
+                        target_selected = True
+                        validation_failed = False
+                        LOG.info(
+                            "Serial target selected: path=%s selectionMode=%s matchBasis=valid_28_byte_frame",
+                            _safe_log_text(path), "direct_e1" if capture_requested else "existing_valid_frame",
                         )
+                        await self.status("connectionState", "validated")
+                        break
+                    except Exception as exc:
+                        failures.append((path, exc))
+                        LOG.warning("Serial candidate probe failed: attempt=%s path=%s phase=%s errorType=%s reason=%s",
+                                    attempt, _safe_log_text(path), phase, type(exc).__name__, _safe_log_text(exc))
                     finally:
                         if client is not None and client is not self._client:
+                            if capture_requested:
+                                try:
+                                    await self._write_client_command(client, STOP_COMMAND, "probe_cleanup_stop")
+                                except Exception:
+                                    LOG.exception("Serial probe cleanup E0 failed: path=%s", _safe_log_text(path))
                             await self._close_client(client)
                 if self._client is None:
-                    if rejected_candidate_count:
-                        validation_failed = True
-                        raise TimeoutError(
-                            "Serial candidates opened but no valid frame or standalone 0x01 was received"
-                            if self.restart_probe is not None else
-                            "Serial candidates opened but none returned standalone 0x01 after active ACK"
-                        )
-                    if probe_failures:
-                        failed_path, probe_error = probe_failures[-1]
-                        action = "open" if opened_candidate_count == 0 else "probe"
+                    if validation_failed:
+                        raise TimeoutError("Serial candidates opened but no valid 28-byte frame was received")
+                    if failures:
+                        failed_path, error = failures[-1]
                         raise ConnectionError(
-                            f"Unable to {action} any usable serial candidate; "
-                            f"lastPath={_safe_log_text(failed_path)} "
-                            f"lastErrorType={type(probe_error).__name__} "
-                            f"lastReason={_safe_log_text(probe_error)}"
-                        ) from probe_error
-                    raise TimeoutError("No serial candidate passed the active handshake ACK probe")
-
-                if existing_stream and self.external_control:
-                    if self.external_start is None or not await self.external_start(True):
-                        raise ConnectionError("Session-bound DeviceControl did not adopt the existing serial stream")
-                    self._capture_started = True
-                phase = "algorithm_initialize"
-                LOG.info(
-                    "Serial local algorithm preparation started: attempt=%s target=%s startCommandSent=false",
-                    attempt,
-                    _safe_log_text(self._target),
-                )
-                algorithm_ready = await self.device_ready()
-                if existing_stream:
-                    if not algorithm_ready:
-                        # A device that is already producing validated frames
-                        # must not be interrupted merely because the local
-                        # algorithm is unavailable. The application pipeline
-                        # will persist/distribute raw data and mark the
-                        # algorithm result ALGORITHM_UNAVAILABLE.
-                        LOG.warning(
-                            "Serial algorithm unavailable; adopting existing capture: attempt=%s target=%s "
-                            "reason=local_algorithm_not_ready commandSent=false",
-                            attempt,
-                            _safe_log_text(self._target),
-                        )
-                    LOG.info(
-                        "Serial existing capture adopted: attempt=%s target=%s commandSent=false "
-                        "observedValidFrame=true connectionState=validated",
-                        attempt,
-                        _safe_log_text(self._target),
-                    )
-                    phase = "streaming"
-                    await self._stream(existing_stream, existing_stream_received_at_ms)
-                    if not self._stopping:
-                        raise ConnectionError("Serial stream ended")
-                    continue
-                if not algorithm_ready:
-                    LOG.error(
-                        "Serial algorithm preparation failed after device validation: attempt=%s target=%s "
-                        "reason=local_algorithm_not_ready startCommandSent=false",
-                        attempt,
-                        _safe_log_text(self._target),
-                    )
-                    raise ConnectionError("Local algorithm is not ready; serial start command was not sent")
+                            f"Unable to {'open' if opened_count == 0 else 'probe'} any usable serial candidate; "
+                            f"lastPath={_safe_log_text(failed_path)} lastErrorType={type(error).__name__} "
+                            f"lastReason={_safe_log_text(error)}"
+                        ) from error
+                    raise ConnectionError("No serial candidate produced a valid frame")
+                # E1 was already sent before validation, or the stream existed.
+                # Adopt control ownership so session setup never sends it twice.
                 if self.external_control:
-                    if self.external_start is None or not await self.external_start(False):
-                        raise ConnectionError("Session-bound DeviceControl did not enable the serial stream")
-                    self._capture_started = True
-                phase = "start_command_write"
-                LOG.info(
-                    "Serial capture enable started: attempt=%s target=%s algorithmReady=true "
-                    "command=E1 responseExpected=false",
-                    attempt,
-                    _safe_log_text(self._target),
-                )
-                if not self.external_control:
-                    try:
-                        await self._send_command(START_COMMAND, "start")
-                    except Exception:
-                        LOG.exception(
-                            "Serial capture enable failed after device validation: attempt=%s target=%s command=E1 "
-                            "reason=control_write_error responseExpected=false",
-                            attempt,
-                            _safe_log_text(self._target),
-                        )
-                        raise
-                    self._capture_started = True
-                LOG.info(
-                    "Serial capture enabled: attempt=%s target=%s command=E1 "
-                    "responseExpected=false connectionState=validated deviceValidationMode=ack_01",
-                    attempt,
-                    _safe_log_text(self._target),
-                )
+                    if self.external_start is None or not await self.external_start(True):
+                        raise ConnectionError("Session-bound DeviceControl did not adopt the serial stream")
+                phase = "session_prepare"
+                await preparation
+                if self._stopping:
+                    return
+                algorithm_ready = await self.device_ready()
+                if not algorithm_ready:
+                    LOG.warning("Serial algorithm unavailable; adopting existing capture: target=%s", self._target)
                 phase = "streaming"
-                await self._stream(b"")
+                initial, received_at_ms = observed_stream
+                await self._stream(initial, received_at_ms, initial_chunks=probe_chunks)
                 if not self._stopping:
                     raise ConnectionError("Serial stream ended")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                log_failure = LOG.warning if isinstance(exc, (ConnectionError, TimeoutError, OSError)) else LOG.exception
-                log_failure(
-                    "Serial connection failed: attempt=%s phase=%s target=%s errorType=%s reason=%s",
-                    attempt,
-                    phase,
-                    _safe_log_text(self._target),
-                    type(exc).__name__,
-                    _safe_log_text(exc),
-                )
+                LOG.warning("Serial connection failed: attempt=%s phase=%s target=%s errorType=%s reason=%s",
+                            attempt, phase, _safe_log_text(self._target), type(exc).__name__, _safe_log_text(exc))
                 if self.error:
                     await self.error(_safe_log_text(exc))
             finally:
+                if not preparation.done():
+                    preparation.cancel()
+                await asyncio.gather(preparation, return_exceptions=True)
                 if self._client is not None:
-                    if self._capture_started:
-                        if self.external_control and self.external_stop is not None:
-                            await self.external_stop()
-                            self._capture_started = False
-                        else:
+                    try:
+                        if self._capture_started:
+                            if self.external_control and self.external_stop is not None:
+                                await self.external_stop()
                             await self._send_stop_best_effort("adapter_cleanup")
-                    self._log_stats("disconnect")
-                    await self._close_client(self._client)
+                        self._log_stats("disconnect")
+                    finally:
+                        await self._close_client(self._client)
                 self._client = None
                 self._target = None
                 self._capture_started = False
-                await self.status(
-                    "connectionState",
-                    "disconnected"
-                    if target_selected
-                    else ("validation_failed" if validation_failed else "not_connected"),
-                )
+                if self.release_algorithm is not None:
+                    try:
+                        await self.release_algorithm()
+                    except Exception:
+                        LOG.exception("Serial algorithm preparation cleanup failed")
+                await self.status("connectionState", "disconnected" if target_selected else
+                                  "validation_failed" if validation_failed else "not_connected")
             if not self._stopping:
-                LOG.info(
-                    "Serial reconnect scheduled: attempt=%s nextAttempt=%s delaySeconds=%s",
-                    attempt,
-                    attempt + 1,
-                    self.config.reconnect_delay_seconds,
-                )
+                LOG.info("Serial reconnect scheduled: attempt=%s nextAttempt=%s delaySeconds=%s",
+                         attempt, attempt + 1, self.config.reconnect_delay_seconds)
                 await asyncio.sleep(self.config.reconnect_delay_seconds)
 
-    async def _observe_existing_stream(self, client: Any, path: str) -> tuple[bytes, int] | None:
+    async def _open_candidate(self, path: str) -> Any:
+        opening = asyncio.create_task(asyncio.to_thread(self.serial_factory, path, self.config))
+        try:
+            return await asyncio.shield(opening)
+        except asyncio.CancelledError:
+            # Opening a COM/TTY happens in a thread; cancellation must still close
+            # the late result rather than leaking a port handle.
+            try:
+                await self._close_client(await opening)
+            except Exception:
+                LOG.exception("Serial candidate open failed during cancellation")
+            raise
+
+    @staticmethod
+    async def _io_call(function, *args):
+        operation = asyncio.create_task(asyncio.to_thread(function, *args))
+        try:
+            return await asyncio.shield(operation)
+        except asyncio.CancelledError:
+            # Never race a still-running read/write against E0 or close.
+            await asyncio.gather(operation, return_exceptions=True)
+            raise
+
+    async def _observe_existing_stream(self, client: Any, path: str, *, timeout_seconds: float | None = None, buffer: bytearray | None = None,
+                                       read_chunks: list[tuple[bytes, int]] | None = None) -> tuple[bytes, int] | None:
         """Return bytes and their read-boundary time for an existing valid stream."""
 
-        buffer = bytearray()
+        buffer = bytearray() if buffer is None else buffer
         started = time.monotonic()
-        deadline = started + self.config.handshake_timeout_ms / 1000
+        deadline = started + (self.config.handshake_timeout_ms / 1000 if timeout_seconds is None else timeout_seconds)
         previous_timeout = getattr(client, "timeout", None)
         try:
             while not self._stopping and time.monotonic() < deadline:
                 remaining = deadline - time.monotonic()
                 client.timeout = min(0.1, max(0.001, remaining))
                 async with self._io_lock:
-                    chunk = bytes(await asyncio.to_thread(client.read, 4096))
+                    chunk = bytes(await self._io_call(client.read, 4096))
                 if not chunk:
                     await asyncio.sleep(min(0.01, max(0.0, remaining)))
                     continue
                 received_at_ms = wall_clock_ms()
                 buffer.extend(chunk)
+                if read_chunks is not None:
+                    read_chunks.append((chunk, received_at_ms))
                 if len(buffer) > self.config.max_buffer_bytes:
-                    del buffer[: len(buffer) - self.config.max_buffer_bytes]
+                    discarded = len(buffer) - self.config.max_buffer_bytes
+                    del buffer[:discarded]
+                    self._stats["bufferOverflows"] = int(self._stats["bufferOverflows"]) + 1
+                    self._record_discarded_bytes(discarded, "probe_buffer_limit", len(buffer))
+                    if read_chunks is not None:
+                        while discarded:
+                            value, stamp = read_chunks.pop(0)
+                            removed = min(discarded, len(value))
+                            discarded -= removed
+                            if removed < len(value):
+                                read_chunks.insert(0, (value[removed:], stamp))
                 if _valid_frame_offset(buffer) is not None:
                     LOG.info(
                         "Serial existing capture detected: path=%s durationMs=%s bufferedBytes=%s "
@@ -624,190 +521,35 @@ class SerialAdapter:
             client.timeout = previous_timeout
         LOG.info(
             "Serial existing capture not detected: path=%s durationMs=%s bufferedBytes=%s "
-            "nextAction=active_ack_probe payloadLogged=false",
+            "nextAction=await_readiness_or_retry payloadLogged=false",
             _safe_log_text(path),
             int((time.monotonic() - started) * 1000),
             len(buffer),
         )
         return None
 
-    async def _send_handshake_ack(self, client: Any | None = None) -> bytes:
-        client = client or self._client
-        if client is None:
-            return b""
+    async def _write_client_command(self, client: Any, command: bytes, name: str) -> None:
         started = time.monotonic()
-        timeout_seconds = self.config.command_response_timeout_ms / 1000
-        deadline = started + timeout_seconds
-        response_buffer = bytearray()
-        total_read_bytes = 0
-        unexpected_bytes = 0
-        longest_handshake_prefix = 0
-        repeated_handshake_frames = 0
-        ack_write_count = 0
-        ack_write_bytes = 0
-        response = b""
-        response_tainted = False
-
-        async def write_ack() -> None:
-            nonlocal ack_write_count, ack_write_bytes
-            written = await asyncio.to_thread(client.write, HANDSHAKE)
-            if written != len(HANDSHAKE):
-                raise OSError(
-                    f"Serial handshake ACK write was incomplete: expected={len(HANDSHAKE)} "
-                    f"actual={written}"
-                )
-            await self._flush(client)
-            ack_write_count += 1
-            ack_write_bytes += written
-            self._stats["handshakeAckWrites"] = int(self._stats["handshakeAckWrites"]) + 1
-            self._stats["handshakeAckWriteBytes"] = (
-                int(self._stats["handshakeAckWriteBytes"]) + written
-            )
-
         async with self._io_lock:
-            if hasattr(client, "reset_input_buffer"):
-                await asyncio.to_thread(client.reset_input_buffer)
-            await write_ack()
-            LOG.info(
-                "Serial handshake ACK written: command=handshake_ack ackWriteCount=%s "
-                "ackWriteBytes=%s repeatedHandshakeFrames=%s writeSuccess=true payloadLogged=false",
-                ack_write_count,
-                ack_write_bytes,
-                repeated_handshake_frames,
-            )
-            previous_timeout = getattr(client, "timeout", None)
-            try:
-                # Read incrementally, but preserve the exchange's framing state:
-                # a one-byte read does not make a byte a standalone response.
-                # Once unknown data appears, reject the rest of this probe.
-                while not self._stopping:
-                    remaining_seconds = deadline - time.monotonic()
-                    if remaining_seconds <= 0:
-                        break
-                    client.timeout = remaining_seconds
-                    chunk = bytes(await asyncio.to_thread(client.read, 1))
-                    if not chunk:
-                        # A real pyserial timeout normally consumes the whole
-                        # remaining interval. Keep the deadline authoritative
-                        # if a driver returns early or a test double is
-                        # non-blocking, without creating a busy loop.
-                        await asyncio.sleep(min(0.01, max(0.0, remaining_seconds)))
-                        continue
-                    total_read_bytes += len(chunk)
-                    if response_tainted:
-                        unexpected_bytes += len(chunk)
-                        continue
-                    response_buffer.extend(chunk)
-                    longest_handshake_prefix = max(
-                        longest_handshake_prefix,
-                        _longest_handshake_prefix(response_buffer),
-                    )
-
-                    if response_buffer == EXPECTED_HANDSHAKE_ACK_RESPONSE:
-                        response = EXPECTED_HANDSHAKE_ACK_RESPONSE
-                        response_buffer.clear()
-                        break
-
-                    if HANDSHAKE.startswith(response_buffer):
-                        if response_buffer == HANDSHAKE:
-                            repeated_handshake_frames += 1
-                            self._stats["handshakeAckRepeatedFrames"] = (
-                                int(self._stats["handshakeAckRepeatedFrames"]) + 1
-                            )
-                            response_buffer.clear()
-                            await write_ack()
-                            LOG.warning(
-                                "Serial repeated handshake received while awaiting ACK result: "
-                                "command=handshake_ack repeatedHandshakeFrames=%s ackWriteCount=%s "
-                                "ackWriteBytes=%s elapsedMs=%s action=ack_resent "
-                                "payloadLogged=false",
-                                repeated_handshake_frames,
-                                ack_write_count,
-                                ack_write_bytes,
-                                int((time.monotonic() - started) * 1000),
-                            )
-                        continue
-
-                    # Do not reinterpret an 0x01 embedded in a malformed or
-                    # unknown response as the standalone ACK result.
-                    unexpected_bytes += len(response_buffer)
-                    response_buffer.clear()
-                    response_tainted = True
-            finally:
-                client.timeout = previous_timeout
-        duration_ms = int((time.monotonic() - started) * 1000)
-        self._stats["controlResponseBytes"] = (
-            int(self._stats["controlResponseBytes"]) + total_read_bytes
-        )
-        if total_read_bytes:
-            self._stats["controlResponses"] = int(self._stats["controlResponses"]) + 1
-        if response:
-            LOG.info(
-                "Serial handshake ACK response received: command=handshake_ack responseBytes=1 "
-                "totalReadBytes=%s durationMs=%s responseClassification=single_byte_0x01 "
-                "expectedAck01=true singleByteHex=01 repeatedHandshakeFrames=%s "
-                "ackWriteCount=%s ackWriteBytes=%s unexpectedBytes=%s "
-                "longestHandshakePrefixBytes=%s success=true acceptedByCurrentPolicy=true "
-                "payloadLogged=false",
-                total_read_bytes,
-                duration_ms,
-                repeated_handshake_frames,
-                ack_write_count,
-                ack_write_bytes,
-                unexpected_bytes,
-                longest_handshake_prefix,
-            )
-        else:
-            self._stats["controlTimeouts"] = int(self._stats["controlTimeouts"]) + 1
-            if unexpected_bytes or response_buffer:
-                self._stats["controlUnexpectedResponses"] = (
-                    int(self._stats["controlUnexpectedResponses"]) + 1
-                )
-            if response_buffer:
-                self._stats["handshakeAckPartialTimeouts"] = (
-                    int(self._stats["handshakeAckPartialTimeouts"]) + 1
-                )
-            LOG.warning(
-                "Serial handshake ACK response timed out: command=handshake_ack timeoutMs=%s "
-                "durationMs=%s totalReadBytes=%s repeatedHandshakeFrames=%s ackWriteCount=%s "
-                "ackWriteBytes=%s unexpectedBytes=%s partialHandshakeBytes=%s "
-                "longestHandshakePrefixBytes=%s expectedAck01=true success=false "
-                "payloadLogged=false",
-                self.config.command_response_timeout_ms,
-                duration_ms,
-                total_read_bytes,
-                repeated_handshake_frames,
-                ack_write_count,
-                ack_write_bytes,
-                unexpected_bytes,
-                len(response_buffer),
-                longest_handshake_prefix,
-            )
-        return response
+            if command == START_COMMAND and self._stopping:
+                raise ConnectionError("Serial start cancelled by service stop")
+            if command == STOP_COMMAND and client is self._client:
+                if self._stop_sent:
+                    return
+                # All normal-session cleanup paths share this claim, including
+                # cancellation before DeviceControl finishes adopting the stream.
+                self._stop_sent = True
+            written = await self._io_call(client.write, command)
+            if written != len(command):
+                raise OSError(f"Serial command write was incomplete: command={name} expected={len(command)} actual={written}")
+            await self._flush(client)
+        LOG.info("Serial command sent: command=%s commandBytes=%s durationMs=%s responseExpected=false success=true",
+                 name, len(command), int((time.monotonic() - started) * 1000))
 
     async def _send_command(self, command: bytes, name: str) -> None:
-        """Write a protocol command which intentionally has no response."""
-
         if self._client is None:
             raise ConnectionError(f"Serial command cannot be sent without a client: {name}")
-        started = time.monotonic()
-        async with self._io_lock:
-            written = await asyncio.to_thread(self._client.write, command)
-            if written != len(command):
-                raise OSError(
-                    f"Serial command write was incomplete: command={name} "
-                    f"expected={len(command)} actual={written}"
-                )
-            await self._flush(self._client)
-            if self.restart_probe is not None and self._target is not None:
-                self.restart_probe.command_sent(name, self._target)
-        LOG.info(
-            "Serial command sent: command=%s commandBytes=%s durationMs=%s "
-            "responseExpected=false success=true",
-            name,
-            len(command),
-            int((time.monotonic() - started) * 1000),
-        )
+        await self._write_client_command(self._client, command, name)
 
     async def control_write(self, command: bytes) -> None:
         """Write only a confirmed stream-control command for DeviceControl."""
@@ -826,6 +568,8 @@ class SerialAdapter:
             # Claim the single stop attempt before awaiting I/O so concurrent
             # service-stop and adapter-cleanup paths cannot both send 0xE0.
             self._capture_started = False
+            if self._stop_sent:
+                return
             try:
                 await self._send_command(STOP_COMMAND, "stop")
                 LOG.info(
@@ -835,11 +579,13 @@ class SerialAdapter:
             except Exception:
                 LOG.exception("Serial stop command failed: reason=%s", reason)
 
-    async def _stream(self, initial: bytes, initial_received_at_ms: int | None = None) -> None:
+    async def _stream(self, initial: bytes, initial_received_at_ms: int | None = None, *,
+                      initial_chunks: list[tuple[bytes, int]] | None = None) -> None:
         buffer = bytearray(initial)
         buffer_received_at_ms = initial_received_at_ms
         if initial and self.raw_chunk is not None:
-            await self.raw_chunk(initial, initial_received_at_ms if initial_received_at_ms is not None else wall_clock_ms())
+            for value, stamp in initial_chunks or [(initial, initial_received_at_ms if initial_received_at_ms is not None else wall_clock_ms())]:
+                await self.raw_chunk(value, stamp)
         last_frame_at = time.monotonic()
         self._stats["readBytes"] = int(self._stats["readBytes"]) + len(initial)
         while not self._stopping:
@@ -853,8 +599,7 @@ class SerialAdapter:
             if now - last_frame_at >= self.config.data_timeout_seconds:
                 LOG.warning(
                     "Serial valid-frame timeout: target=%s timeoutSeconds=%.3f readBytes=%s frames=%s "
-                    "invalidFrames=%s discardedBytes=%s bufferOverflows=%s bufferedBytes=%s "
-                    "streamHandshakeFrames=%s",
+                    "invalidFrames=%s discardedBytes=%s bufferOverflows=%s bufferedBytes=%s",
                     _safe_log_text(self._target),
                     self.config.data_timeout_seconds,
                     self._stats["readBytes"],
@@ -863,14 +608,13 @@ class SerialAdapter:
                     self._stats["discardedBytes"],
                     self._stats["bufferOverflows"],
                     len(buffer),
-                    self._stats["streamHandshakeFrames"],
                 )
                 raise TimeoutError(f"No valid serial data frame for {self.config.data_timeout_seconds:.3f} seconds")
             client = self._client
             if client is None:
                 return
             async with self._io_lock:
-                chunk = bytes(await asyncio.to_thread(client.read, 4096))
+                chunk = bytes(await self._io_call(client.read, 4096))
             if chunk:
                 buffer_received_at_ms = wall_clock_ms()
                 if self.raw_chunk is not None:
@@ -894,7 +638,6 @@ class SerialAdapter:
         while True:
             offset = buffer.find(FRAME_HEADER)
             if offset < 0:
-                self._record_stream_handshakes(buffer, len(buffer))
                 keep = min(len(buffer), len(FRAME_HEADER) - 1)
                 discarded = len(buffer) - keep
                 if discarded:
@@ -902,7 +645,6 @@ class SerialAdapter:
                     self._record_discarded_bytes(discarded, "frame_header_not_found", len(buffer))
                 return parsed
             if offset:
-                self._record_stream_handshakes(buffer[:offset], len(buffer))
                 del buffer[:offset]
                 self._record_discarded_bytes(offset, "bytes_before_frame_header", len(buffer))
             if len(buffer) < 4:
@@ -963,24 +705,6 @@ class SerialAdapter:
             await self.packet(DevicePacket("serial", "ff31", frame[EEG_START:EEG_END], frame_received_at_ms))
             await self.packet(DevicePacket("serial", "ff51", frame[HR_OFFSET:HR_OFFSET + 1], frame_received_at_ms))
 
-    def _record_stream_handshakes(self, discarded_region: bytes | bytearray, buffered_bytes: int) -> None:
-        """Count fixed handshakes only outside confirmed data frames."""
-
-        handshake_frames = discarded_region.count(HANDSHAKE)
-        if not handshake_frames:
-            return
-        previous = int(self._stats["streamHandshakeFrames"])
-        total = previous + handshake_frames
-        self._stats["streamHandshakeFrames"] = total
-        if total <= 3 or total & (total - 1) == 0:
-            LOG.warning(
-                "Serial fixed handshake observed during data stream: observedNow=%s "
-                "streamHandshakeFrames=%s bufferedBytes=%s payloadLogged=false",
-                handshake_frames,
-                total,
-                buffered_bytes,
-            )
-
     def _record_discarded_bytes(self, discarded: int, reason: str, buffered_bytes: int) -> None:
         previous = int(self._stats["discardedBytes"])
         total = previous + discarded
@@ -1020,11 +744,7 @@ class SerialAdapter:
             "readBytes=%s invalidFrames=%s discardedBytes=%s bufferOverflows=%s baseSequence=%s "
             "highestSequence=%s expectedPackets=%s receivedUniquePackets=%s lostPackets=%s "
             "lossRatePercent=%.6f intervalExpectedPackets=%s intervalReceivedUniquePackets=%s "
-            "intervalLostPackets=%s intervalLossRatePercent=%.6f duplicates=%s outOfOrder=%s late=%s "
-            "controlResponses=%s controlResponseBytes=%s controlTimeouts=%s "
-            "controlUnexpectedResponses=%s handshakeAckWrites=%s handshakeAckWriteBytes=%s "
-            "handshakeAckRepeatedFrames=%s handshakeAckPartialTimeouts=%s "
-            "streamHandshakeFrames=%s",
+            "intervalLostPackets=%s intervalLossRatePercent=%.6f duplicates=%s outOfOrder=%s late=%s",
             reason,
             _safe_log_text(self._target),
             time.monotonic() - float(self._stats["startedAtMonotonic"]),
@@ -1047,25 +767,17 @@ class SerialAdapter:
             snapshot.duplicate_packets,
             snapshot.out_of_order_packets,
             snapshot.late_packets,
-            self._stats["controlResponses"],
-            self._stats["controlResponseBytes"],
-            self._stats["controlTimeouts"],
-            self._stats["controlUnexpectedResponses"],
-            self._stats["handshakeAckWrites"],
-            self._stats["handshakeAckWriteBytes"],
-            self._stats["handshakeAckRepeatedFrames"],
-            self._stats["handshakeAckPartialTimeouts"],
-            self._stats["streamHandshakeFrames"],
         )
         self._last_summary_snapshot = snapshot
 
     async def _flush(self, client: Any) -> None:
         if hasattr(client, "flush"):
-            await asyncio.to_thread(client.flush)
+            await self._io_call(client.flush)
 
     async def _close_client(self, client: Any) -> None:
         try:
-            await asyncio.to_thread(client.close)
+            async with self._io_lock:
+                await self._io_call(client.close)
         except Exception:
             LOG.exception("Failed to close serial client: target=%s", _safe_log_text(self._target))
 
@@ -1075,8 +787,6 @@ class SerialAdapter:
         if self._client is not None and self._capture_started:
             if self.external_control and self.external_stop is not None:
                 await self.external_stop()
-                self._capture_started = False
-            else:
-                await self._send_stop_best_effort("service_stop")
+            await self._send_stop_best_effort("service_stop")
         if self._client is not None:
             await self._close_client(self._client)

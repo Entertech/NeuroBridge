@@ -196,8 +196,9 @@ class ApplicationService:
         recording_session_id: str,
         *,
         existing_stream: bool = False,
+        prepared_algorithm_state: AlgorithmState | None = None,
     ) -> AlgorithmState:
-        """Initialize a clean algorithm session before device capture is enabled."""
+        """Bind a clean algorithm session, optionally reusing an unused prepared engine."""
 
         async with self._lifecycle_lock:
             self._connection_session_id = connection_session_id
@@ -213,9 +214,13 @@ class ApplicationService:
         await self.aggregator.close()
         self.aggregator = WindowResultAggregator(self.algorithm, self.aggregator.timeout_ms)
         try:
-            algorithm_state = await self.algorithm.initialize(
-                AlgorithmSession(connection_session_id, recording_session_id, self.device_protocol)
-            )
+            # A serial source may have warmed an unused engine in parallel with
+            # discovery. Bootstrap transfers it only after frame validation.
+            algorithm_state = prepared_algorithm_state
+            if algorithm_state is None:
+                algorithm_state = await self.algorithm.initialize(
+                    AlgorithmSession(connection_session_id, recording_session_id, self.device_protocol)
+                )
         except Exception as error:
             LOG.exception(
                 "Algorithm session initialization failed: connectionSessionId=%s recordingSessionId=%s",

@@ -26,20 +26,19 @@ stale_after_ms = 1800
 device = "auto"
 candidate_types = ["ttyACM", "ttyUSB"]
 baud_rate = 115200
+# Legacy key: observation of an already-running stream, not an ACK handshake.
 handshake_timeout_ms = 1000
-# Wait this long for a standalone 0x01 after the 7-byte handshake ACK. Complete
-# periodic handshakes inside this window are re-ACKed and do not end the wait.
+# Legacy key: write timeout only; E1/E0 have no response.
 command_response_timeout_ms = 1000
+# E1 first-frame wait and ongoing valid-frame timeout.
 data_timeout_seconds = 5
 reconnect_delay_seconds = 3
 stats_interval_seconds = 10
 max_buffer_bytes = 65536
 dtr = false
 rts = false
-# A valid stream already present, or a standalone 0x01 after the active 7-byte
-# ACK, validates the device immediately. Existing streams skip ACK and E1. On
-# the ACK path, algorithm initialization and write-only E1 happen only after
-# validation; algorithm/E1 failure is not classified as validation_failed.
+# Discovery and algorithm preparation run concurrently. Only a complete valid
+# frame validates the device. Silent candidates receive E1 once both are ready.
 
 [recording]
 # Optional protected transport trace; stop retaining whole chunks at the session budget.

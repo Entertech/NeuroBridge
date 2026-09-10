@@ -51,16 +51,16 @@ stale_after_ms = 1800
 
 [serial]
 # auto probes only USB-derived ttyACM/ttyUSB candidates in stable order and
-# stops after the first candidate returns standalone 0x01 to the active ACK.
+# stops after the first candidate produces a complete valid 28-byte frame.
 device = "auto"
 candidate_types = ["ttyACM", "ttyUSB"]
 baud_rate = 115200
 # Observe each newly opened candidate for an already-running valid 28-byte EEG
-# stream before sending the active handshake ACK.
+# stream before E1. Historical key name retained; no ACK is sent.
 handshake_timeout_ms = 1000
-# Wait this long for a standalone 0x01 after the 7-byte handshake ACK. Complete
-# periodic handshakes inside this window are re-ACKed and do not end the wait.
+# Legacy key: serial write timeout only; E1/E0 have no command response.
 command_response_timeout_ms = 1000
+# E1 first-frame wait and ongoing valid-frame timeout.
 data_timeout_seconds = 5
 reconnect_delay_seconds = 3
 # Periodic logs include cumulative expected/received/lost packets and loss rate.
@@ -70,10 +70,8 @@ max_buffer_bytes = 65536
 # jointly confirmed with the device team because DTR/RTS can reset hardware.
 dtr = false
 rts = false
-# A valid stream already present, or a standalone 0x01 after the active 7-byte
-# ACK, validates the device immediately. Existing streams skip ACK and E1. On
-# the ACK path, algorithm initialization and write-only E1 happen only after
-# validation; algorithm/E1 failure is not classified as validation_failed.
+# Discovery and algorithm preparation run concurrently; send E1 once both
+# are ready. Only complete frames validate. Existing streams skip E1.
 
 [ble]
 # Ignored while data_source.type = "serial". Enable only for BLE regression.

@@ -104,7 +104,7 @@ macOS 和 Ubuntu 使用既有隔离 B 端专网拓扑，不提供本机浏览器
 ### 3.2 成功标准
 
 - macOS 和 Ubuntu 能使用 BLE 头环完成连续采集；
-- 银河麒麟 V10 能使用 USB 串口耳机完成握手、分帧、重连和连续采集；
+- 银河麒麟 V10 能使用 USB 串口耳机完成直接 E1 首帧验证、分帧、重连和连续采集；
 - 当前三条链路以及后续 Windows 串口链路都使用相同根包络的北向消息；
 - 算法层不依赖 BLE、串口或具体设备名称；
 - 北向层不依赖 Bleak、pyserial 或设备帧格式；
@@ -248,7 +248,7 @@ stateDiagram-v2
     connecting --> connected: BLE 连接并订阅成功
     connecting --> validating: 串口打开成功
     connecting --> reconnecting: 打开或连接失败
-    validating --> connected: 串口合法流 / 独立 0x01
+    validating --> connected: 完整合法串口帧
     validating --> validation_failed: 候选均未通过验证
     validation_failed --> reconnecting: 下一轮重试
     connected --> reconnecting: 拔出、断链或数据超时
@@ -260,10 +260,14 @@ stateDiagram-v2
 要求：
 
 - BLE 可以从 `connecting` 在完成订阅后进入 `connected`；串口必须经过 `validating`；
-- 串口已有合法流时，连接状态进入 `connected` 且不得发送 ACK/E1；静默设备只有收到 ACK 后独立 `0x01` 才能进入 `connected`；
+- 串口已有合法流时进入 `connected` 并跳过 E1；静默候选须在串口打开与算法 ready 后直接 E1，以完整合法 28 字节帧进入 `connected`。不发送 ACK，独立 `0x01` 不构成验证；
 - `validation_failed` 是内部诊断状态，北向是否以及如何映射必须与已确认北向协议保持一致；
 - DeviceConnectionState 的变更通过领域事件发送给数据状态模块，两个模块不得读写彼此的内部状态对象；
 - 北向连接状态与内部详细状态分开，未经协议评审不得直接暴露 `discovering`、`validating` 等内部值。
+
+2026-09-10 用户确认设备首次上电未握手也能直接 E1 出数。Windows 与麒麟统一采用“并行发现串口与准备算法 → 两项就绪后 E1 → 合法帧验证”；不再依赖 ACK 或本地停止提示。算法准备不创建录制会话，验证成功后复用该实例；失败或取消探测必须回收未接管算法，尝试过 E1 的候选尽力 E0 并关闭。
+
+验收覆盖首次上电、正常 E0 后服务/整机重启、已有流接管、两项准备先后完成、算法失败、无帧、噪声/独立 `0x01`、多候选、取消和首帧持久化。设备端行为确认、模拟测试和各目标机专项验收分别记录。
 
 ### 4.5 数据状态机
 
@@ -296,7 +300,7 @@ stateDiagram-v2
 - `persistenceGuaranteed`：当前产生数据是否具备持久化保障，与解析/算法 `valid` 独立；
 - 最近错误原因、累计生产窗口数、覆盖旧快照数和发送失败数。
 
-串口 ACK 路径进入设备 `connected` 后，数据状态先进入 `preparing`；算法 ready 后由应用层调用 DeviceControl `start_stream()` 发送无响应 E1。该路径算法准备失败时进入 `error` 且不得发送 E1。已有合法流路径不发送 E1，即使算法暂不可用也可继续保存和分发允许的原始数据，收到首个窗口后进入 `streaming`。正常停止时 DeviceControl 最多发送一次无响应 E0，并释放串口资源。
+串口 Source 在验证前执行有界 E1 探测，算法准备与设备发现并行。连接收到合法帧后才进入 `connected` 并绑定正式录制会话，数据状态完成 preparing/ready 后处理窗口；会话复用已准备算法，DeviceControl 只接管已启动流，不再重复 E1。已有流即使算法不可用也可保存原始数据并报告算法错误。正常停止最多尝试一次 E0，再释放资源。
 
 `algorithmState` 与 `storageState` 是数据状态模块中的正交状态：算法或存储异常不必然把仍在产生的原始数据改成 `error`。存储写满或写入错误时仍继续处理和分发可用的实时数据，并通过 `persistenceGuaranteed=false` 单独表达未持久化保障。存储阈值和恢复判定按第 8.5.1 节执行；数据新鲜度阈值仍需配置化并根据 24 小时观测调整。
 
@@ -467,8 +471,8 @@ DeviceControl
 - RawDataSource 是传输连接和底层串口/BLE 对象的唯一所有者；DeviceControl 不得重复打开串口或建立第二条设备连接；
 - Bootstrap 为每个已验证的 Source 会话创建共享同一受控写通道的 DeviceControl，并与 `connectionSessionId` 绑定；
 - Source 断线、停止或重连后，旧 `connectionSessionId` 的所有控制请求必须返回 `staleSession`，不得写入新会话或已释放句柄；
-- 底层读取、ACK/E1/E0 写入和关闭操作必须经同一会话内的串行化锁或等价机制协调，避免写命令与释放端口竞态；
-- 串口静默设备在算法 ready 后由 `start_stream()` 无响应发送一次 E1；已有合法流时返回 `alreadyStreaming`，不得补发 E1；
+- 底层读取、E1/E0 写入和关闭操作必须经同一会话内的串行化锁或等价机制协调，避免写命令与释放端口竞态；
+- 串口静默候选在验证前由 Source 无响应发送 E1；验证后 `start_stream()` 接管该流并返回 `alreadyStreaming`，不得补发 E1；
 - 串口停止时 `stop_stream()` 最多无响应发送一次 E0；写失败仍必须继续释放端口和任务；
 - BLE 的具体开始/停止命令由 Bluetooth DeviceControl 实现，不得泄漏到 Application；
 - 未处于允许状态、重复调用、写失败和超时必须返回结构化 ControlResult，并转换为连接或数据状态事件；
@@ -620,11 +624,11 @@ SerialSource 的平台实现负责：
 
 - 银河麒麟遍历 USB 派生 TTY 候选；Windows 遍历 USB 虚拟串口 COM 候选；
 - 打开 115200 8-N-1 串口；
-- 执行已有流观察、ACK、独立 `0x01` 验证和重连，并通过设备连接状态事件报告阶段；
+- 执行已有流观察、并行等待算法就绪、直接 E1 后合法帧验证和重连，并通过设备连接状态事件报告阶段；
 - 报告连接、验证和超时状态；
 - 输出读取边界的原始字节块。
 
-Headset DeviceControl 负责算法 ready 后的 E1 和停止时的 E0；Application 只依赖 DeviceControl 接口，不直接写串口命令。
+Headset Source 负责算法 ready 后、验证前的 E1；DeviceControl 负责已验证流的接管和停止时的 E0；Application 只依赖 DeviceControl 接口，不直接写串口命令。
 
 HeadsetSerialParser 负责：
 
@@ -1043,7 +1047,7 @@ flowchart TD
 - BLE 和串口均通过同一 `RawDataSource` 事件边界输出 RawChunk；
 - BLE 和串口均有独立 Parser，Parser 输出统一 ParseOutcome、DeviceFrame 和 ParsedSignal；共享 SignalWindowAssembler 输出 ParsedSignalBatch；
 - Profile 在组合根绑定 Parser，运行期不允许按 `sourceType` 分支选择；
-- 串口 ACK 路径验证 DeviceControl 只在算法 ready 后发送 E1，正常停止最多发送一次 E0；已有合法流不得发送 E1；
+- 串口验证路径只在算法 ready 且端口打开后发送 E1，正常停止最多发送一次 E0；已有合法流不得发送 E1；
 - `domain/`、`ports/` 和 `application/` 的依赖检查不得发现对 Bleak、pyserial、具体设备 Parser、WebSocket 服务端或平台安装 API 的反向导入；
 - 所有正式入口均通过唯一 Bootstrap 组合根创建 Source、Parser、算法、存储和北向实现，不得由平台脚本直接实例化具体设备适配器；
 - 银河麒麟 TTY Source 与 Windows COM Source 通过同一 Source 合同测试，并复用同一个耳机协议 Parser 测试集；
@@ -1066,7 +1070,7 @@ flowchart TD
 
 - macOS BLE 头环通过旧 B 端隔离专网完成连接、订阅、断线恢复和录播回归；
 - Ubuntu BLE 头环通过旧 B 端隔离专网完成 BlueZ 权限、持续采集、断线重连、服务重启和录播回归；
-- 银河麒麟串口耳机已有流接管、ACK/`0x01` 验证、E1/E0、拔插重连；
+- 银河麒麟串口耳机已有流接管、直接 E1/完整帧验证、E1/E0、拔插重连；
 - macOS、Ubuntu 分别完成头环原始数据、解析数据、算法结果和录播回放验证；
 - 银河麒麟完成耳机原始数据、解析数据、算法结果和持久化验证，并验证离线请求不会启动录播；
 - Windows 后续实现需增加 COM 发现、插拔恢复、服务重启、耳机数据持久化及禁用录播验证；

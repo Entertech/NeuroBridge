@@ -65,7 +65,7 @@ class GatewayWireCodec:
     def offline_data_error(self, gateway) -> ProtocolError:
         if not gateway.supports_replay:
             if gateway.status["connectionState"] == "validation_failed":
-                message = "Serial device validation failed: the opened candidate did not return standalone 0x01 after ACK."
+                message = "Serial device validation failed: no complete valid data frame was received after starting acquisition."
             else:
                 message = "Serial data source is not connected; live data is unavailable and replay is not supported."
             return ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, message, True)

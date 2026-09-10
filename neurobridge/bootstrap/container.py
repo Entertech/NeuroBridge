@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import logging
 import json
@@ -138,16 +137,20 @@ class _ApplicationPipelineAdapter:
         LOG.info("Runtime metrics: %s", json.dumps(metrics, ensure_ascii=False, separators=(",", ":")))
 
     async def stop(self) -> None:
+        # Serial preparation can enable E1 before a validated session exists;
+        # stop that producer first. Preserve the BLE session-control lifecycle.
+        first, second = ((self.source.stop, self.application.close) if self.profile.transport == "serial"
+                         else (self.application.close, self.source.stop))
         try:
-            await self.application.close()
+            await first()
         finally:
             try:
-                await self.source.stop()
+                await second()
             finally:
                 self._log_metrics(phase="acquisition_shutdown")
 
-    async def device_ready(self) -> bool:
-        """Initialize the algorithm before Source sends its start command."""
+    async def device_ready(self, activate_algorithm=None) -> bool:
+        """Bind the validated connection to its recording and algorithm."""
 
         try:
             await asyncio.wait_for(self._connected_seen.wait(), timeout=2)
@@ -165,10 +168,12 @@ class _ApplicationPipelineAdapter:
             )
             return False
         existing_stream = bool(getattr(self.source, "existing_stream", False))
+        prepared_state = await activate_algorithm() if activate_algorithm is not None else None
         state = await self.application.prepare_session(
             connection_session_id,
             recording_session_id,
             existing_stream=existing_stream,
+            **({"prepared_algorithm_state": prepared_state} if prepared_state is not None else {}),
         )
         await self.gateway.update_status("algorithmState", state.value)
         usable = state == AlgorithmState.READY or existing_stream or (
@@ -272,40 +277,54 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     )
     bridge_ref: dict[str, _ApplicationPipelineAdapter] = {}
 
+    prepared_engine = None
+    prepared_state = AlgorithmState.UNAVAILABLE
+
+    async def prepare_algorithm() -> bool:
+        nonlocal prepared_engine, prepared_state
+        prepared_engine = type(engine)(config.algorithm)
+        prepared_state = AlgorithmState.INITIALIZING
+        LOG.info("Serial algorithm preparation started: parallelWithDiscovery=true")
+        try:
+            prepared_state = await asyncio.wait_for(
+                prepared_engine.initialize(AlgorithmSession("serial-preparation", "no-recording", "headset_rev181")),
+                timeout=config.algorithm.request_timeout_ms / 1000,
+            )
+        except Exception:
+            prepared_state = AlgorithmState.ERROR
+            LOG.exception("Serial algorithm preparation failed")
+        LOG.info("Serial algorithm preparation completed: state=%s", prepared_state.value)
+        return prepared_state == AlgorithmState.READY
+
+    async def release_algorithm() -> None:
+        nonlocal prepared_engine
+        if prepared_engine is not None:
+            value, prepared_engine = prepared_engine, None
+            await value.close()
+
+    async def activate_algorithm() -> AlgorithmState:
+        if prepared_engine is None:
+            raise RuntimeError("Serial algorithm preparation missing for validated connection")
+        # Called only after queued disconnect/connected events have completed,
+        # so old-session cleanup cannot close the newly adopted process.
+        await engine.adopt_prepared(prepared_engine)
+        return prepared_state
+
     async def device_ready() -> bool:
-        return await bridge_ref["bridge"].device_ready()
-
-    if profile.os_family == "kylin":
-        source: RawDataSource = PosixSerialSource(
-            config.serial,
-            device_ready,
-            gateway.update_connection_error,
-            external_control=True,
-            application_control=True,
-            queue_size=config.pipeline.source_queue_size,
-            enqueue_timeout_ms=config.pipeline.source_enqueue_timeout_ms,
+        return await bridge_ref["bridge"].device_ready(
+            activate_algorithm=activate_algorithm if profile.transport == "serial" else None,
         )
-    elif profile.os_family == "windows":
-        @asynccontextmanager
-        async def probe_algorithm_context():
-            probe_engine = AffectiveSdkAlgorithmEngine(config.algorithm)
-            try:
-                state = await asyncio.wait_for(
-                    probe_engine.initialize(AlgorithmSession("serial-probe", "no-recording", "headset_rev181")),
-                    timeout=config.algorithm.request_timeout_ms / 1000,
-                )
-                yield state == AlgorithmState.READY
-            finally:
-                await probe_engine.close()
 
-        source = WindowsSerialSource(
+    if profile.os_family in {"kylin", "windows"}:
+        source_type = PosixSerialSource if profile.os_family == "kylin" else WindowsSerialSource
+        source: RawDataSource = source_type(
             config.serial,
             device_ready,
             gateway.update_connection_error,
             external_control=True,
             application_control=True,
-            resume_state_path=config.recording.directory / ".windows-serial-resume.json",
-            probe_algorithm_context=probe_algorithm_context,
+            prepare_algorithm=prepare_algorithm,
+            release_algorithm=release_algorithm,
             queue_size=config.pipeline.source_queue_size,
             enqueue_timeout_ms=config.pipeline.source_enqueue_timeout_ms,
         )

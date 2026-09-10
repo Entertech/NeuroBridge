@@ -725,7 +725,7 @@ class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
                 gateway.get_latest(ClientSession(), {"streams": ["eeg"]})
             self.assertEqual(latest_error.exception.code, 409)
             self.assertEqual(latest_error.exception.reason, STREAM_NOT_AVAILABLE_REASON)
-            self.assertIn("did not return standalone 0x01 after ACK", latest_error.exception.message)
+            self.assertIn("no complete valid data frame was received after starting acquisition", latest_error.exception.message)
 
             async def send(_: dict) -> None:
                 pass
@@ -734,7 +734,7 @@ class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
                 await gateway.subscribe(ClientSession(), {"streams": ["eeg"]}, send)
             self.assertEqual(subscribe_error.exception.code, 409)
             self.assertEqual(subscribe_error.exception.reason, STREAM_NOT_AVAILABLE_REASON)
-            self.assertIn("did not return standalone 0x01 after ACK", subscribe_error.exception.message)
+            self.assertIn("no complete valid data frame was received after starting acquisition", subscribe_error.exception.message)
 
     async def test_get_latest_automatically_uses_newest_recording_when_no_id_is_configured(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

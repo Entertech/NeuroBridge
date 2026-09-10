@@ -100,8 +100,8 @@ class WindowsSerialSource(PosixSerialSource):
         enqueue_timeout_ms: int = 50,
         port_provider=None,
         serial_factory=open_windows_com,
-        resume_state_path=None,
-        probe_algorithm_context=None,
+        prepare_algorithm=None,
+        release_algorithm=None,
     ) -> None:
         def candidates(value: SerialConfig) -> Iterable[str]:
             return discover_windows_com_candidates(value, port_provider=port_provider)
@@ -109,9 +109,6 @@ class WindowsSerialSource(PosixSerialSource):
         def identity(path: str) -> dict[str, str | None]:
             return windows_com_metadata(path, port_provider=port_provider)
 
-        from .serial_resume import WindowsHeadsetResume
-        restart_probe = (WindowsHeadsetResume(resume_state_path, identity, probe_algorithm_context)
-                         if resume_state_path is not None and probe_algorithm_context is not None else None)
         super().__init__(
             config,
             device_ready,
@@ -123,5 +120,6 @@ class WindowsSerialSource(PosixSerialSource):
             candidate_provider=candidates,
             serial_factory=serial_factory,
             identity_provider=identity,
-            restart_probe=restart_probe,
+            prepare_algorithm=prepare_algorithm,
+            release_algorithm=release_algorithm,
         )

@@ -30,11 +30,13 @@ PowerShell 环境准备、COM 检查、配置、前台启动、日志排障与�
 
 ## 停止后恢复串口
 
-Windows 入口先观察已有合法脑波流；若设备已出数，直接接管，不重复发 ACK/E1。正常发送 E0 停止后，会在录制目录的 `.windows-serial-resume.json` 保存 USB/COM 身份摘要；下次身份匹配时先发 E1，未观察到合法 28 字节数据帧再发 ACK。没有匹配记录时先 ACK；ACK 超时再发 E1，避免停止出数的耳机不回复 ACK 而持续卡住。
+2026-09-10 用户确认耳机未握手也能直接 E1 出数。Windows 与银河麒麟统一并行发现/打开串口与准备算法：已有合法流直接接管，静默候选在算法 ready 后发送 E1，收到完整合法 28 字节帧才验证并创建录制会话。预备算法移交正常会话复用，不重复 E1 或初始化。
 
-E1 无应答，收到 `01` 不能作为 E1 成功依据；只有合法帧才验证并进入正常实时采集。探测 E1 前准备隔离算法进程，探测不创建录制会话，也不计算/输出算法结果；验证后由正常 Bootstrap 创建会话，已恢复的流不再重复发送 E1。两种方式都失败时尽力 E0 关闭本轮探测，释放串口并按 `serial.reconnect_delay_seconds` 重试。观察窗口使用 `serial.handshake_timeout_ms`，ACK 使用 `serial.command_response_timeout_ms`；不自动切换 DTR/RTS、不重置 USB。
+不发送 ACK，不把独立 `01` 或命令写成功当作连接依据；停止提示文件 `.windows-serial-resume.json` 不再读写，历史文件保留但不影响行为。首次上电、E0 停止后服务重启和电脑重启均使用同一路径。
 
-日志中的 `Serial restart probe` 显示顺序，`Serial E1 recovery validated by live frame` 表示 E1 恢复成功。状态文件缺失/损坏时回退 ACK 优先，它只决定顺序，不表示设备已验证。该功能已有模拟停止/重启、ACK/E1 回退、异常数据、算法失败与取消清理回归；真实耳机仍需验证不拔插 USB 连续停止/重启，不能以模拟测试代替现场验收。
+观察已有流保留旧配置键 `serial.handshake_timeout_ms`，串口写超时使用 `serial.command_response_timeout_ms`（不等待控制应答），E1 后首帧等待使用 `serial.data_timeout_seconds`。失败/取消时尝试过 E1 的候选尽力 E0 并关闭，释放未接管算法，按 `serial.reconnect_delay_seconds` 重试；不自动切换 DTR/RTS 或重置 USB。
+
+日志 `startupPolicy=direct_e1` 表示新流程，`Serial target selected ... matchBasis=valid_28_byte_frame` 表示已收到合法帧。模拟及生产接线测试覆盖并行准备、初次启动/主机重启、无帧不误报、算法失败、取消清理和首帧保存；Windows 实机仍须完成冷启动、不拔插停止重启、整机重启与长稳复测。
 
 ## 开机自启与维护
 
@@ -76,4 +78,4 @@ python tools/build-product-candidate.py --platform windows --output-dir artifact
 
 没有 `--runtime-dir` 的候选会在 manifest 中记录 `runtimeBundled=false`，只用于结构检查，不能安装。可安装候选的运行时目录必须直接包含 `python.exe` 与 `neurobridge_affective_bridge.exe`；构建器会拒绝缺少任一文件的运行时。正式候选必须在受控 Windows x86_64 runner 注入经过验证的完整离线运行时与算法 bridge。
 
-当前仍不能宣称 Windows 产品已交付。最低目标是 Windows 7 x86_64，但具体 Service Pack、SHA-2 补丁、可运行的 Python/冻结运行时、浏览器、pywin32 兼容版本、安装器技术、代码签名和时间戳服务尚未锁定。至少需要在该最低基线完成 COM 枚举、ACK/0x01、E1/E0、拔插重连、服务重启、禁用录播、安装/升级/卸载和 24 小时长稳后，才能进入正式发布。
+当前仍不能宣称 Windows 产品已交付。最低目标是 Windows 7 x86_64，但具体 Service Pack、SHA-2 补丁、可运行的 Python/冻结运行时、浏览器、pywin32 兼容版本、安装器技术、代码签名和时间戳服务尚未锁定。至少需要在该最低基线完成 COM 枚举、直接 E1/完整帧验证、E0、拔插重连、服务重启、禁用录播、安装/升级/卸载和 24 小时长稳后，才能进入正式发布。

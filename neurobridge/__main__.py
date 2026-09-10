@@ -84,9 +84,9 @@ async def run(config_path: str, *, override_path: str | None = None, development
     )
     if config.data_source.type == "serial":
         LOG.info(
-            "Serial runtime configuration: device=%s candidateTypes=%s baudRate=%s handshakeTimeoutMs=%s "
-            "handshakeAckResponseTimeoutMs=%s dataTimeoutSeconds=%s reconnectDelaySeconds=%s "
-            "statsIntervalSeconds=%s maxBufferBytes=%s dtr=%s rts=%s activeAckProbe=true",
+            "Serial runtime configuration: device=%s candidateTypes=%s baudRate=%s streamObservationTimeoutMs=%s "
+            "commandWriteTimeoutMs=%s dataTimeoutSeconds=%s reconnectDelaySeconds=%s "
+            "statsIntervalSeconds=%s maxBufferBytes=%s dtr=%s rts=%s startupPolicy=direct_e1 validation=valid_28_byte_frame",
             config.serial.device,
             ",".join(config.serial.candidate_types),
             config.serial.baud_rate,

@@ -28,13 +28,13 @@ mode = "local_browser"
 银河麒麟 USB/TTY 驱动
   ↓ read boundary + receivedAtMs
 PosixSerialSource（SerialAdapter 唯一持有 TTY，会话绑定 DeviceControl）
-  ├─ 候选发现与 USB 身份校验 / 已有流观察 / ACK 与 01 验证
+  ├─ 候选发现与 USB 身份校验 / 已有流观察 / E1 后完整帧验证
   └─ RawChunk（保留读取边界及已知队列缺口）
        ↓
 HeadsetRev181Parser → DeviceFrame + ParsedSignal + Diagnostics
        ↓
 ApplicationService
-  ├─ 算法 ready 后调用 DeviceControl E1；停止先调用 E0
+  ├─ 复用并行准备算法；DeviceControl 接管已启动流，停止先调用 E0
   ├─ SignalWindowAssembler → 有界算法 Worker → WindowResult
   ├─ SegmentedRecordingRepository（raw / parsed / algorithm）
   └─ LatestSnapshotStore → GatewayApplication → SubscriptionFanout
@@ -61,8 +61,8 @@ NorthboundController / WebSocket → 127.0.0.1 浏览器
 | `device` | `auto` 或 USB 派生 TTY 绝对路径 | 自动遍历或固定目标 |
 | `candidate_types` | `ttyACM`、`ttyUSB` 的非空组合 | 限制候选类别 |
 | `baud_rate` | 固定 115200 | 已确认协议参数 |
-| `handshake_timeout_ms` | 默认 1000 | 打开后观察已有合法流 |
-| `command_response_timeout_ms` | 默认 1000 | ACK 后等待独立 `0x01` |
+| `handshake_timeout_ms` | 默认 1000 | 打开后观察已有合法流（历史键名保留，不握手） |
+| `command_response_timeout_ms` | 默认 1000 | 串口写超时（历史键名保留，不等待应答） |
 | `data_timeout_seconds` | 默认 5 | 无合法帧时关闭重连 |
 | `reconnect_delay_seconds` | 默认 3 | 下一轮发现间隔 |
 | `stats_interval_seconds` | 默认 10 | 汇总日志周期 |
@@ -85,32 +85,24 @@ NorthboundController / WebSocket → 127.0.0.1 浏览器
 
 ## 5. 状态机和控制时序
 
-内部状态：
+2026-09-10 设备端经用户确认：首次上电未握手也可直接 E1 出数。Windows 与麒麟使用同一 `SerialAdapter` 启动策略，平台层只处理 COM/TTY 发现与打开。旧 ACK/独立 `0x01` 验证和 Windows 停止提示恢复策略已撤销。
 
 ```text
-not_connected
-  → connecting
-  → validated（观察到已有合法流）
-  → disconnected
-
-候选静默、需要主动 ACK 时：
-connecting → validating
-  ├─ 收到独立 01 → validated
-  └─ ACK 超时且没有其他候选通过 → validation_failed
-
-`validation_failed` 在本轮结束后保持不变；下一轮重试开始才进入 `connecting`。没有找到或无法打开任何候选才使用 `not_connected`，已经完成验证的串口后来关闭才使用 `disconnected`。
+connecting：并行启动算法准备与候选发现/打开/已有流观察
+  ├─ 已有合法帧 → validated（不发送 E1）
+  └─ 无流 → validating：等待算法 ready，发送 E1，观察首帧
+       ├─ 完整合法 28 字节帧 → validated
+       └─ 超时且无其他候选成功 → validation_failed
+validated → 正常会话接管算法和已读帧 → streaming
 ```
 
-每个候选打开后先被动观察：
+Bootstrap 为本轮准备一个尚未处理数据的算法实例，按 `algorithm.request_timeout_ms` 限制初始化时间。Source 与发现同步启动该异步任务；没有候选、准备失败或取消时回收任务和实例。已有流允许在算法不可用时保存原始数据；静默设备只有准备成功才发送 E1。
 
-- 缓冲中出现完整合法 28 字节帧：保存该缓冲及其读取边界时间，立即报告 `validated`，不发送 ACK 或 E1。
-- 观察窗口没有合法帧：清理输入缓冲并写入 `AA 55 01 01 01 01 6F`。
-- ACK 等待窗口只把独立单字节 `0x01` 视为成功；完整重复握手触发再次 ACK。遇到未知内容或损坏的响应前缀后，本轮剩余字节只做脱敏计数，不能通过清空缓冲把后续嵌入的 `0x01` 重新识别为确认；下轮探测重新验证。
-- 收到独立 `0x01` 后立即报告 `validated`，再初始化算法。
-- 算法 ready 后无响应写入单字节 `0xE1`，随后进入数据读取。
-- 正常停止尽力无响应写入一次 `0xE0`，无论写入是否成功都关闭资源。
+Source 在验证前拥有候选串口并执行 E1，无命令应答；`data_timeout_seconds` 控制首帧等待。验证成功后才发布 connected 事件并创建录制会话，Bootstrap 将已准备 SDK 进程交给正式算法实例，Application 不重新初始化它。会话绑定 DeviceControl 接管已启动流，后续停止最多尝试一次 E0。失败/取消的候选若已尝试 E1，则先尽力 E0 再关闭，不能把打开成功或写成功当作验证。
 
-算法初始化、E1 写失败和数据超时都发生在设备验证之后；日志记录实际阶段，但不得产生 `validation_failed`。
+整个观察过程使用有界缓冲，跨观察阶段保留残帧及原始读取时间，不调用输入清空；验证后首帧和同批已读数据按原始边界交给 Parser 和持久化。取消时等待底层读写线程收尾，再 E0/关闭，避免后台线程继续访问已释放句柄。
+
+`validation_failed` 仅表示没有获得合法帧，下一轮才进入 `connecting`；算法准备、候选打开、E1 写失败各自记录实际阶段。历史 `.windows-serial-resume.json` 不再读写，旧文件保留但不起作用。不切换 DTR/RTS、不重置 USB、不回退 ACK 或录播。
 
 ## 6. 读取边界时间
 
@@ -218,7 +210,8 @@ Writer 独立于事件循环，按 `storage.fsync_interval_records` 有界批量
 
 - 候选过滤、去重、排序和固定路径安全校验；
 - 已有合法流接管及读取边界时间保留；
-- ACK、独立 `0x01`、重复握手和超时；
+- 首次上电直接 E1、独立 `0x01`/噪声不验证、首帧超时及无 ACK 写入；
+- 并行准备、算法复用、取消清理、多候选和探测首帧持久化；
 - E1/E0 无响应写入；
 - 粘包、拆包、噪声、非法长度、错误包尾和缓冲上限；
 - 序列号回绕、间隙、重复、乱序和迟到补包；
@@ -226,7 +219,9 @@ Writer 独立于事件循环，按 `storage.fsync_interval_records` 有界批量
 - 北向三态映射、Origin/Host 拒绝和本机页面资源；
 - systemd、一键助手重复执行和诊断脱敏。
 
-自动化通过只表示源码支持。上线前仍需在最终银河麒麟镜像和真实耳机上完成 USB 枚举、电气行为、握手、持续实时数据、算法结果、拔插恢复、服务重启、串口离线拒绝录播和长稳验收。
+自动化通过只表示源码支持。上线前仍需在最终银河麒麟镜像和真实耳机上完成 USB 枚举、电气行为、直接 E1 首帧验证、持续实时数据、算法结果、拔插恢复、服务重启、串口离线拒绝录播和长稳验收。
+
+2026-09-10 补充验收要求：冷启动、E0 后服务重启和整机重启均使用无 ACK 的直接 E1 路径；必须在 Windows 与银河麒麟真实耳机上分别确认首帧到达、停止清理、拔插恢复及离线不录播，不能把用户协议确认等同于新流程现场通过。
 
 候选安装脚本先暂存校验、停止旧服务，再替换应用、迁移配置和加载 unit；任一步失败恢复应用/配置/unit/启用与运行状态。成功后也保留唯一回滚快照及 rollback.sh，不删除录制数据。SIGTERM 走正常应用清理与 E0 路径。该脚本已有隔离文件夹回滚测试及 shell 语法检查，但不等于最终麒麟安装验收。
 

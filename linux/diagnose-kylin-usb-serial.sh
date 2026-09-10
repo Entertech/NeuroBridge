@@ -24,7 +24,7 @@ Default use (no unplug required):
   1. Keep the headset USB connected.
   2. Run this command once.
   3. Existing ttyACM/ttyUSB/by-id candidates are reported immediately; the
-     gateway later confirms the target by its fixed handshake.
+     gateway later confirms the target from complete valid EEG frames.
 
 Optional plug-cycle use:
   1. Unplug the headset USB.

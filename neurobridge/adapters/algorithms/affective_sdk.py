@@ -23,6 +23,16 @@ class AffectiveSdkAlgorithmEngine:
             return AlgorithmState.READY
         return AlgorithmState.ERROR if self._runner.error else AlgorithmState.UNAVAILABLE
 
+    async def adopt_prepared(self, prepared: "AffectiveSdkAlgorithmEngine") -> None:
+        """Transfer an unused, warmed SDK process into the validated session.
+
+        The preparation never evaluates data. Its owner retains our discarded
+        runner and can close it normally without terminating the adopted one.
+        """
+        async with self._evaluation_lock:
+            await self.close()
+            self._runner, prepared._runner = prepared._runner, self._runner
+
     async def evaluate(self, value: AlgorithmInput) -> AlgorithmResult:
         # A timed-out aggregation slot may still be collecting a late result.
         # The line-oriented SDK bridge permits only one outstanding request.

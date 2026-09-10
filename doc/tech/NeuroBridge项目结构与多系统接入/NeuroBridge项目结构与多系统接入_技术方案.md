@@ -55,7 +55,7 @@
 - 有界分段 Writer 已提供容量状态、fsync、manifest、崩溃恢复、quarantine 和恢复防抖；
 - `NorthboundController` 已从 WebSocket 传输层分离，旧 `Gateway` 请求方法和录制格式适配仅为已发布协议与历史录播兼容保留；
 - Windows 已有 USB COM Source、Service 入口和无签名候选骨架；CI 可生成带 manifest、SHA-256、SBOM 和依赖清单的银河麒麟/Windows 候选。
-- Windows 串口增加用户确认的 ACK/E1 恢复探测：已有合法流直接接管，正常 E0 停止且 USB/COM 身份摘要匹配时先 E1 后 ACK，否则先 ACK 后 E1；E1 前准备隔离算法，只以合法 28 字节帧验证恢复，之后才创建正常会话且不重复 E1。探测失败/取消尽力 E0，按既有超时与重连间隔重试；不改变麒麟策略或串口禁用录播规则。模拟回归不替代真实耳机停止重启验收。
+- Windows 与麒麟串口统一直接 E1 启动：设备发现与算法准备并行，只在两项就绪后对静默候选发送 E1，以完整合法帧验证；已有流直接接管。算法实例移交正常会话，不重复初始化或 E1。失败/取消清理候选和未接管算法，探测曾尝试 E1 时尽力 E0，不读写停止提示文件。
 - Windows 源码联调新增 `windows/neurobridge-windows-bootstrap.cmd` 与 PowerShell 入口：双击默认自动准备并启动，`-Action menu` 才打开排障菜单；准备项目 Python/依赖、保留现场配置、检查端口/算法后，首次管理员授权注册 `NeuroBridgeProject` 自动服务，经正常 Bootstrap 在开机时启动，无需桌面登录；重复双击复用服务并打开页面，关闭自启会正常停止并保存前台运行偏好。离线参数禁止 winget 和网络 pip 安装；运行日志按配置轮转，诊断 ZIP 仅含允许导出的元数据。Windows 算法由项目内锁定的 LLVM-MinGW/CMake/Ninja/Eigen 自动构建，复用 SDK/NumCpp 源码；产物通过 PE x64、DLL 导入及空输入自检后才安装，源码指纹和 EXE 摘要相符则复用，离线构建仅使用校验过的本地 ZIP。构建失败保留旧程序，自定义算法路径不覆盖，服务使用固定项目路径和 LocalSystem，提供宿主/设置错误轮转日志及 SCM 异常重启策略；新增开机自启仍待目标机重启验证。操作见[内部手册](../麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐)。该入口限定 Windows 10/11 x64、Python 3.11，不构成 Windows 7、算法真实输入或正式安装包验收。
 
 旧 `device/`、`ble/`、`serial/` 和 `business/Gateway` 文件仍保留兼容实现，但正式组合不再由其业务字段投影驱动公共模型。串口物理适配器仍执行识别合法流所需的边界校验；完整业务解析结果只由外部 `HeadsetRev181Parser` 产生。
@@ -283,7 +283,7 @@ Source Adapter 同时提供 Source 视图和 Control 视图，两者通过 Adapt
 - 每个请求必须匹配当前 `connection_session_id`，旧会话返回 `staleSession`；
 - 读、写、关闭通过同一会话锁或串行执行器协调；
 - 串口已有合法流时 `start_stream` 返回 `alreadyStreaming`，不得发送 E1；
-- 静默串口完成 ACK 和独立 `0x01` 验证、且算法 ready 后，`start_stream` 最多无响应发送一次 E1；
+- 静默串口在算法 ready 后由 Source 探测 E1，完整帧验证后 `start_stream` 接管并返回 `alreadyStreaming`，不补发 E1；
 - 正常停止最多无响应发送一次 E0；写失败不阻止关闭端口和任务；
 - BLE 启停命令只由 BLE Control Adapter 解释，Application 不认识具体字节。
 
@@ -401,42 +401,40 @@ ProfileResolver 必须在连接设备前拒绝：未知字段、缺少强制字�
 
 ### 9.1 串口耳机时序
 
+2026-09-10 用户确认设备首次上电未握手也可直接 E1 出数。以下统一适用于 Windows 和麒麟，替代 ACK/独立 `0x01` 与停止提示探测策略。
+
 ```mermaid
 sequenceDiagram
-    participant APP as AcquisitionSupervisor
     participant SRC as SerialSource
     participant DEV as USB 串口耳机
-    participant ALG as AlgorithmEngine
-    participant CTL as DeviceControl
-    participant PAR as HeadsetRev181Parser
-
-    APP->>SRC: start()
-    SRC->>DEV: 打开候选 115200 8-N-1
-    SRC->>DEV: 被动观察合法 28 字节流
-    alt 已有合法流
-        DEV-->>SRC: 28 字节帧
-        SRC-->>APP: DeviceConnected(existing_stream=true)
-        APP->>ALG: initialize()
-        Note over APP,CTL: 不发送 ACK，不发送 E1
-    else 候选静默
-        SRC->>DEV: 固定 ACK
-        DEV-->>SRC: 独立 0x01
-        SRC-->>APP: DeviceConnected(existing_stream=false)
-        APP->>ALG: initialize()
-        alt 算法 ready
-            APP->>CTL: start_stream(session_id)
-            CTL->>DEV: 0xE1（无响应）
-        else 算法失败
-            APP-->>APP: DataState=error，不发送 E1
-        end
+    participant BOOT as Bootstrap
+    participant ALG as 预备算法实例
+    participant APP as Application
+    par 候选发现与打开
+        SRC->>DEV: 打开串口并观察已有流
+    and 算法准备
+        SRC->>BOOT: prepare_algorithm
+        BOOT->>ALG: initialize（有界超时，无录制会话）
     end
-    DEV-->>SRC: read() 原始字节
-    SRC-->>APP: RawChunk
-    APP->>PAR: feed(RawChunk)
-    PAR-->>APP: ParseOutcome
+    alt 已有合法帧
+        Note over SRC,DEV: 直接验证，跳过 E1
+    else 无流且算法 ready
+        SRC->>DEV: E1（无应答）
+        DEV-->>SRC: 完整合法 28 字节帧
+    end
+    Note over SRC,APP: 只有合法帧才能执行以下成功路径
+    SRC-->>APP: DeviceConnected(existing_stream=true)
+    APP->>APP: 创建录制会话
+    BOOT->>APP: 移交已准备算法，不重复初始化
+    APP->>APP: DeviceControl 接管，不重复 E1
+    SRC-->>APP: 原始读取边界及时间（包含验证首帧）
 ```
 
-协议修订号 181 的固定事实为 115200 8-N-1、28 字节帧、静默时 ACK、独立 `0x01` 验证、算法 ready 后 E1、停止时 E0。Source 负责发现、打开、观察、ACK、验证和读取；Parser 负责 28 字节分帧；DeviceControl 负责 E1/E0。
+未收到合法帧时不发布成功连接、不创建录制会话、不输出有效数据或录播。E1 写失败、首帧超时或取消，若已尝试 E1 则尽力 E0 后关闭候选；无候选成功按配置重试。算法失败阻止向静默设备发送 E1，已有合法流仍允许保存原始数据并标记算法不可用。
+
+Source 拥有验证前的候选句柄及 E1/E0 清理；验证后 DeviceControl 绑定连接会话，正常停止最多尝试一次 E0。读写与关闭串行化，取消须等待已进入线程的 I/O 收尾。候选观察不清空输入；有界保留跨阶段残帧和读取时间，验证后传给正式 Parser/持久化。具体时间配置见[麒麟专项方案](../银河麒麟V10耳机USB串口接入_技术方案.md#3-串口配置)。
+
+Bootstrap 仅将未用于评估的预备 SDK 进程移交正式算法实例；移交发生在旧连接清理和新连接事件消费后。失败尝试与取消回收预备实例，停止提示文件不再读写，已有文件不影响行为。真实设备冷启动、E0 后服务/整机重启与拔插仍须分别在两平台验收。
 
 ### 9.2 BLE 头环
 
@@ -502,7 +500,7 @@ stateDiagram-v2
     connecting --> connected: BLE 已订阅
     connecting --> validating: 串口已打开
     connecting --> reconnecting: 打开失败
-    validating --> connected: 合法流或独立 0x01
+    validating --> connected: 完整合法 28 字节帧
     validating --> validation_failed: 候选均失败
     validation_failed --> reconnecting: 下一轮重试
     connected --> reconnecting: 断链、拔出或数据超时
@@ -842,7 +840,7 @@ M1、M2、M3 在各自目标平台完成时分别运行 24 小时。首轮用于
 ### 20.3 集成与平台测试
 
 - Profile → Bootstrap → Source → Parser → Algorithm → Snapshot → WebSocket 完整链路；
-- 麒麟已有流接管、ACK/0x01、E1/E0、拔插、服务重启和历史录制不触发 replay；
+- 麒麟已有流接管、直接 E1/完整帧、E1/E0、拔插、服务重启和历史录制不触发 replay；
 - macOS/Ubuntu BLE 连接、订阅、断线重连、隔离专网和头环 replay；
 - Windows COM 发现、插拔、Windows Service 和回环访问；
 - 浏览器断开/恢复、重新查询状态和重新订阅；
@@ -1028,7 +1026,7 @@ neurobridge-windows-v<applicationVersion>-x86_64.msi
 
 生产应用通过注入的 NorthboundCodec 使用报文包络、流过滤、状态和错误投影；具体实现位于 adapters/northbound/codec.py。GatewayApplication 不再直接生成 protocolVersion 包络或按 data_source.type 比较分支；实时连接状态集合由组合根绑定，录播规则由 Profile 能力控制。结构化用例拒绝保留旧合同的错误标识以兼容既有控制器，未发布新错误码。
 
-BLE 兼容 Source 新增会话绑定 BluetoothSessionControl，应用准备管线后调用启停，FlowtimeAdapter 在生产模式不再重复发送命令。控制请求、断开共享 I/O 锁，并在锁内再次校验会话；停止写失败仍释放连接。BLE 算法不可用时允许原始路径运行，耳机 ACK 路径继续要求算法 ready。此项仍需 M2 真实 BLE 回归。
+BLE 兼容 Source 新增会话绑定 BluetoothSessionControl，应用准备管线后调用启停，FlowtimeAdapter 在生产模式不再重复发送命令。控制请求、断开共享 I/O 锁，并在锁内再次校验会话；停止写失败仍释放连接。BLE 算法不可用时允许原始路径运行，耳机静默候选的 E1 路径继续要求算法 ready。此项仍需 M2 真实 BLE 回归。
 
 ParsedSignalBatch 补充 source_type、schema_version、sample_counts、sequence_range、received_at_range_ms，并进入内部 parsed 持久化。耳机每帧为六个 EEG 值和一个 HR 值；未确认单位仍为 null，不推断采样率。旧分段读取对新增字段使用兼容默认值，不重算算法。
 

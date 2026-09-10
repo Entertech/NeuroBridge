@@ -14,7 +14,6 @@ from neurobridge.device.packet import DevicePacket
 from neurobridge.serial.adapter import (
     FRAME_HEADER,
     FRAME_TAIL,
-    HANDSHAKE,
     START_COMMAND,
     SequenceLossTracker,
     SerialAdapter,
@@ -23,6 +22,9 @@ from neurobridge.serial.adapter import (
     _serial_discovery_inventory,
     _serial_candidate_order_key,
 )
+
+
+HANDSHAKE = bytes.fromhex("AA 55 01 01 01 01 6F")  # Forbidden legacy command fixture.
 
 
 class FakeSerial:
@@ -70,7 +72,7 @@ class SlowEmptySerial(FakeSerial):
         return b""
 
 
-class AckAndStartDrivenSerial(SlowEmptySerial):
+class StartDrivenSerial(SlowEmptySerial):
     def __init__(self, started_frame: bytes | None) -> None:
         super().__init__([])
         self.started_frame = started_frame
@@ -78,8 +80,8 @@ class AckAndStartDrivenSerial(SlowEmptySerial):
     def write(self, value: bytes) -> int:
         written = super().write(value)
         if value == HANDSHAKE:
-            self.reads.append(b"\x01")
-        elif value == START_COMMAND and self.started_frame is not None:
+            raise AssertionError("ACK must never be written")
+        if value == START_COMMAND and self.started_frame is not None:
             self.reads.append(self.started_frame)
             self.started_frame = None
         return written
@@ -189,6 +191,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             noop,
             noop,
             error=stop_after_error,
+            prepare_algorithm=ready,
             candidate_provider=lambda _config: [],
         )
         entries = {
@@ -254,72 +257,6 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(opened, client)
         self.assertEqual(client.open_snapshot, (False, False, "/dev/ttyACM-test"))
 
-    async def test_active_ack_probe_does_not_wait_for_device_handshake(self) -> None:
-        client = FakeSerial([b"\x01"])
-        adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
-        response = await adapter._send_handshake_ack(client)
-        self.assertEqual(response, b"\x01")
-        self.assertEqual(client.writes, [HANDSHAKE])
-
-    async def test_active_ack_probe_rejects_non_01_without_logging_payload(self) -> None:
-        unexpected = b"bad"
-        client = SlowEmptySerial([unexpected])
-        adapter = SerialAdapter(SerialConfig(command_response_timeout_ms=30), noop, noop, noop)
-        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
-            response = await adapter._send_handshake_ack(client)
-        self.assertEqual(response, b"")
-        rendered = "\n".join(logs.output)
-        self.assertIn("handshake ACK response timed out", rendered)
-        self.assertIn("unexpectedBytes=3", rendered)
-        self.assertIn("payloadLogged=false", rendered)
-        self.assertNotIn("bad", rendered)
-
-    async def test_active_ack_probe_timeout_is_explicit(self) -> None:
-        client = SlowEmptySerial([])
-        adapter = SerialAdapter(SerialConfig(command_response_timeout_ms=30), noop, noop, noop)
-        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
-            response = await adapter._send_handshake_ack(client)
-        self.assertEqual(response, b"")
-        rendered = "\n".join(logs.output)
-        self.assertIn("timeoutMs=30", rendered)
-        self.assertIn("totalReadBytes=0", rendered)
-
-    async def test_unknown_response_cannot_resynchronize_at_embedded_ack(self) -> None:
-        malformed_frame = frame(1)[:-3] + b"bad"
-        for response in (b"bad\x01bad", malformed_frame, b"\xaa\x00\x01", b"bad" + HANDSHAKE + b"\x01"):
-            for reads in ([response], [bytes([value]) for value in response]):
-                with self.subTest(response=response, fragmented=len(reads) > 1):
-                    client = SlowEmptySerial(reads)
-                    adapter = SerialAdapter(SerialConfig(command_response_timeout_ms=100), noop, noop, noop)
-                    self.assertEqual(await adapter._send_handshake_ack(client), b"")
-                    self.assertEqual(client.writes, [HANDSHAKE])
-
-    async def test_tainted_probe_does_not_poison_a_new_ack_exchange(self) -> None:
-        adapter = SerialAdapter(SerialConfig(command_response_timeout_ms=30), noop, noop, noop)
-        self.assertEqual(await adapter._send_handshake_ack(SlowEmptySerial([b"bad\x01"])), b"")
-        self.assertEqual(await adapter._send_handshake_ack(FakeSerial([b"\x01"])), b"\x01")
-
-    async def test_embedded_ack_never_validates_or_enables_device(self) -> None:
-        class MalformedResponder(SlowEmptySerial):
-            def write(self, value):
-                count = super().write(value)
-                if value == HANDSHAKE:
-                    self.reads.append(frame(1)[:-3] + b"bad")
-                return count
-        client, states = MalformedResponder([]), []
-        async def status(name, value):
-            states.append((name, value))
-        async def stop_after_error(_reason):
-            await adapter.stop()
-        async def unexpected_ready():
-            self.fail("Invalid response must not initialize the algorithm")
-        adapter = SerialAdapter(SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=100),
-            noop, status, unexpected_ready, error=stop_after_error,
-            candidate_provider=lambda _: ["/dev/ttyUSB-test"], serial_factory=lambda *_: client)
-        await asyncio.wait_for(adapter.run(), 1)
-        self.assertEqual(client.writes, [HANDSHAKE])
-        self.assertNotIn(("connectionState", "validated"), states)
-        self.assertEqual(states[-1], ("connectionState", "validation_failed"))
 
     async def test_open_failure_preserves_permission_root_cause(self) -> None:
         reasons: list[str] = []
@@ -338,6 +275,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             noop,
             noop,
             error=stop_after_error,
+            prepare_algorithm=ready,
             candidate_provider=lambda _config: ["/dev/ttyUSB0"],
             serial_factory=deny_open,
         )
@@ -352,80 +290,6 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("phase=candidate_open", rendered)
         self.assertNotIn("passed the active handshake ACK probe", rendered)
 
-    async def test_non_01_handshake_ack_response_is_rejected_without_logging_payload(self) -> None:
-        client = SlowEmptySerial([b"bad"])
-        adapter = SerialAdapter(SerialConfig(command_response_timeout_ms=30), noop, noop, noop)
-        adapter._client = client
-        with self.assertLogs("neurobridge.serial.adapter", level="INFO") as logs:
-            response = await adapter._send_handshake_ack()
-        self.assertEqual(response, b"")
-        self.assertEqual(client.writes, [HANDSHAKE])
-        rendered = "\n".join(logs.output)
-        self.assertIn("totalReadBytes=3", rendered)
-        self.assertIn("unexpectedBytes=3", rendered)
-        self.assertIn("expectedAck01=true", rendered)
-        self.assertIn("payloadLogged=false", rendered)
-        self.assertIn("success=false", rendered)
-        self.assertNotIn("bad", rendered)
-
-    async def test_single_byte_01_handshake_ack_response_is_visible_without_raw_payload(self) -> None:
-        client = FakeSerial([b"\x01"])
-        adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
-        adapter._client = client
-        with self.assertLogs("neurobridge.serial.adapter", level="INFO") as logs:
-            response = await adapter._send_handshake_ack()
-        self.assertEqual(response, b"\x01")
-        rendered = "\n".join(logs.output)
-        self.assertIn("responseClassification=single_byte_0x01", rendered)
-        self.assertIn("expectedAck01=true", rendered)
-        self.assertIn("singleByteHex=01", rendered)
-        self.assertIn("ackWriteCount=1", rendered)
-        self.assertIn("ackWriteBytes=7", rendered)
-        self.assertIn("success=true", rendered)
-
-    async def test_repeated_handshake_is_reacked_while_waiting_for_standalone_01(self) -> None:
-        client = FakeSerial([HANDSHAKE, b"\x01"])
-        adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
-        adapter._client = client
-        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
-            response = await adapter._send_handshake_ack()
-        self.assertEqual(response, b"\x01")
-        self.assertEqual(client.writes, [HANDSHAKE, HANDSHAKE])
-        rendered = "\n".join(logs.output)
-        self.assertIn("repeatedHandshakeFrames=1", rendered)
-        self.assertIn("ackWriteCount=2", rendered)
-        self.assertIn("ackWriteBytes=14", rendered)
-        self.assertIn("action=ack_resent", rendered)
-        self.assertNotIn(HANDSHAKE.hex(), rendered.lower())
-        with self.assertLogs("neurobridge.serial.adapter", level="INFO") as summaries:
-            adapter._log_stats("test")
-        summary = "\n".join(summaries.output)
-        self.assertIn("handshakeAckWrites=2", summary)
-        self.assertIn("handshakeAckWriteBytes=14", summary)
-        self.assertIn("handshakeAckRepeatedFrames=1", summary)
-
-    async def test_01_inside_repeated_handshake_is_not_misclassified_as_ack_result(self) -> None:
-        client = SlowEmptySerial([HANDSHAKE])
-        adapter = SerialAdapter(SerialConfig(command_response_timeout_ms=30), noop, noop, noop)
-        adapter._client = client
-        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
-            response = await adapter._send_handshake_ack()
-        self.assertEqual(response, b"")
-        self.assertEqual(client.writes, [HANDSHAKE, HANDSHAKE])
-        rendered = "\n".join(logs.output)
-        self.assertIn("repeatedHandshakeFrames=1", rendered)
-        self.assertIn("success=false", rendered)
-        self.assertNotIn("responseClassification=single_byte_0x01", rendered)
-
-    async def test_empty_handshake_ack_response_is_a_logged_timeout(self) -> None:
-        client = SlowEmptySerial([b""])
-        adapter = SerialAdapter(SerialConfig(command_response_timeout_ms=30), noop, noop, noop)
-        adapter._client = client
-        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
-            response = await adapter._send_handshake_ack()
-        self.assertEqual(response, b"")
-        self.assertIn("timeoutMs=30", "\n".join(logs.output))
-        self.assertIn("success=false", "\n".join(logs.output))
 
     async def test_e1_is_write_only_and_does_not_consume_stream_data(self) -> None:
         pending_frame = frame(9, 3, 64)
@@ -490,19 +354,19 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(invalid_length.hex(), rendered)
         self.assertNotIn(invalid_tail.hex(), rendered)
 
-    async def test_fixed_handshake_during_stream_is_counted_without_payload(self) -> None:
+    async def test_legacy_control_bytes_are_only_discarded_noise(self) -> None:
         adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
         buffer = bytearray(HANDSHAKE + HANDSHAKE)
         with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
             await adapter._consume_frames(buffer)
         rendered = "\n".join(logs.output)
-        self.assertIn("Serial fixed handshake observed during data stream", rendered)
-        self.assertIn("streamHandshakeFrames=2", rendered)
+        self.assertIn("Serial bytes discarded while resynchronizing", rendered)
+        self.assertEqual(adapter._stats["frames"], 0)
         self.assertIn("payloadLogged=false", rendered)
         self.assertNotIn(HANDSHAKE.hex(), rendered.lower())
         with self.assertLogs("neurobridge.serial.adapter", level="INFO") as summaries:
             adapter._log_stats("test")
-        self.assertIn("streamHandshakeFrames=2", "\n".join(summaries.output))
+        self.assertIn("discardedBytes=12", "\n".join(summaries.output))
 
     async def test_existing_stream_preserves_serial_read_boundary_timestamp(self) -> None:
         packets: list[DevicePacket] = []
@@ -522,13 +386,13 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         await adapter._consume_frames(bytearray(buffered), received_at_ms)
         self.assertEqual([packet.received_at_ms for packet in packets], [123456789] * 3)
 
-    async def test_handshake_pattern_inside_valid_frame_is_not_counted(self) -> None:
+    async def test_legacy_pattern_inside_valid_frame_remains_data(self) -> None:
         adapter = SerialAdapter(SerialConfig(), noop, noop, noop)
         valid = bytearray(frame(1))
         valid[7:14] = HANDSHAKE
         parsed = await adapter._consume_frames(valid)
         self.assertEqual(parsed, 1)
-        self.assertEqual(adapter._stats["streamHandshakeFrames"], 0)
+        self.assertEqual(adapter._stats["frames"], 1)
 
     async def test_continuous_invalid_bytes_still_trigger_valid_frame_timeout(self) -> None:
         adapter = SerialAdapter(SerialConfig(data_timeout_seconds=0.01), noop, noop, noop)
@@ -547,8 +411,8 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(client.writes, [b"\xE0"])
 
-    async def test_full_adapter_lifecycle_uses_handshake_control_stream_and_stop(self) -> None:
-        client = AckAndStartDrivenSerial(frame(7, 4, 63))
+    async def test_full_adapter_lifecycle_validates_frame_after_e1_and_stops(self) -> None:
+        client = StartDrivenSerial(frame(7, 4, 63))
         packets: list[tuple[str, bytes]] = []
         states: list[tuple[str, object]] = []
         adapter: SerialAdapter
@@ -566,11 +430,12 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             packet,
             status,
             ready,
+            prepare_algorithm=ready,
             candidate_provider=lambda _config: ["/dev/ttyACM-test"],
             serial_factory=lambda _path, _config: client,
         )
         await adapter.run()
-        self.assertEqual(client.writes, [HANDSHAKE, b"\xE1", b"\xE0"])
+        self.assertEqual(client.writes, [b"\xE1", b"\xE0"])
         self.assertEqual([channel for channel, _value in packets], ["serial.frame", "ff31", "ff51"])
         self.assertEqual(
             states,
@@ -584,30 +449,6 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(states[-1], ("connectionState", "disconnected"))
         self.assertTrue(client.closed)
 
-    async def test_process_restart_repeats_active_ack_and_e1(self) -> None:
-        config = SerialConfig(
-            handshake_timeout_ms=10,
-            command_response_timeout_ms=30,
-            data_timeout_seconds=0.1,
-        )
-        for sequence in (7, 8):
-            client = AckAndStartDrivenSerial(frame(sequence, 4, 63))
-            adapter: SerialAdapter
-
-            async def stop_after_frame(event: DevicePacket) -> None:
-                if event.channel == "ff31":
-                    await adapter.stop()
-
-            adapter = SerialAdapter(
-                config,
-                stop_after_frame,
-                noop,
-                ready,
-                candidate_provider=lambda _config: ["/dev/ttyUSB0"],
-                serial_factory=lambda _path, _config: client,
-            )
-            await adapter.run()
-            self.assertEqual(client.writes, [HANDSHAKE, START_COMMAND, b"\xE0"])
 
     async def test_existing_valid_frame_is_validated_without_ack_or_e1(self) -> None:
         client = FakeSerial([frame(21, 6, 65)])
@@ -626,6 +467,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             receive_and_stop,
             status,
             ready,
+            prepare_algorithm=ready,
             candidate_provider=lambda _config: ["/dev/ttyUSB0"],
             serial_factory=lambda _path, _config: client,
         )
@@ -656,6 +498,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             receive_and_stop,
             noop,
             unavailable,
+            prepare_algorithm=ready,
             candidate_provider=lambda _config: ["/dev/ttyUSB0"],
             serial_factory=lambda _path, _config: client,
         )
@@ -688,6 +531,7 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
             receive_and_stop,
             noop,
             unavailable,
+            prepare_algorithm=ready,
             candidate_provider=lambda _config: ["/dev/ttyUSB0"],
             serial_factory=lambda _path, _config: client,
             external_control=True,
@@ -698,192 +542,4 @@ class SerialAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(adopted, [True])
         self.assertEqual(stopped, [True])
-        self.assertEqual(client.writes, [])
-
-    async def test_candidate_without_active_ack_01_never_receives_e1(self) -> None:
-        client = SlowEmptySerial([])
-        adapter: SerialAdapter
-
-        async def stop_after_error(_reason: str) -> None:
-            await adapter.stop()
-
-        adapter = SerialAdapter(
-            SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=30),
-            noop,
-            noop,
-            ready,
-            error=stop_after_error,
-            candidate_provider=lambda _config: ["/dev/ttyUSB1"],
-            serial_factory=lambda _path, _config: client,
-        )
-        await adapter.run()
-        self.assertEqual(client.writes, [HANDSHAKE])
-
-    async def test_active_ack_does_not_require_persisted_usb_identity(self) -> None:
-        client = AckAndStartDrivenSerial(frame(9, 5, 64))
-        adapter: SerialAdapter
-
-        async def receive_and_stop(event: DevicePacket) -> None:
-            if event.channel == "ff31":
-                await adapter.stop()
-
-        adapter = SerialAdapter(
-            SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=30),
-            receive_and_stop,
-            noop,
-            ready,
-            candidate_provider=lambda _config: ["/dev/ttyUSB0"],
-            serial_factory=lambda _path, _config: client,
-            identity_provider=lambda _path: {
-                "resolvedPath": "/dev/ttyUSB0",
-                "vid": None,
-                "pid": None,
-                "usbSerial": None,
-                "interface": None,
-                "driver": None,
-                "usbParent": None,
-                "physicalPath": None,
-            },
-        )
-        await adapter.run()
-        self.assertEqual(client.writes, [HANDSHAKE, START_COMMAND, b"\xE0"])
-
-    async def test_ack_01_validates_before_e1_produces_a_frame(self) -> None:
-        client = AckAndStartDrivenSerial(None)
-        states: list[tuple[str, object]] = []
-        adapter: SerialAdapter
-
-        async def status(name: str, value: object) -> None:
-            states.append((name, value))
-
-        async def stop_after_error(_reason: str) -> None:
-            await adapter.stop()
-
-        adapter = SerialAdapter(
-            SerialConfig(
-                handshake_timeout_ms=10,
-                command_response_timeout_ms=30,
-                data_timeout_seconds=0.03,
-            ),
-            noop,
-            status,
-            ready,
-            error=stop_after_error,
-            candidate_provider=lambda _config: ["/dev/ttyUSB0"],
-            serial_factory=lambda _path, _config: client,
-        )
-        await adapter.run()
-        self.assertEqual(client.writes, [HANDSHAKE, START_COMMAND, b"\xE0"])
-        self.assertIn(("connectionState", "validated"), states)
-        self.assertNotIn(("connectionState", "validation_failed"), states)
-
-    async def test_algorithm_not_ready_after_handshake_validation_blocks_e1(self) -> None:
-        client = AckAndStartDrivenSerial(None)
-        states: list[tuple[str, object]] = []
-        errors: list[str] = []
-        adapter: SerialAdapter
-
-        async def not_ready() -> bool:
-            return False
-
-        async def status(name: str, value: object) -> None:
-            states.append((name, value))
-
-        async def stop_after_error(reason: str) -> None:
-            errors.append(reason)
-            await adapter.stop()
-
-        adapter = SerialAdapter(
-            SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=30),
-            noop,
-            status,
-            not_ready,
-            error=stop_after_error,
-            candidate_provider=lambda _config: ["/dev/ttyUSB-test"],
-            serial_factory=lambda _path, _config: client,
-        )
-        with self.assertLogs("neurobridge.serial.adapter", level="ERROR") as logs:
-            await adapter.run()
-
-        self.assertEqual(client.writes, [HANDSHAKE])
-        self.assertEqual(
-            states,
-            [
-                ("connectionState", "connecting"),
-                ("connectionState", "validating"),
-                ("connectionState", "validated"),
-                ("connectionState", "disconnected"),
-            ],
-        )
-        self.assertIn("startCommandSent=false", "\n".join(logs.output))
-        self.assertIn("Local algorithm is not ready", errors[0])
-
-    async def test_handshake_ack_timeout_reports_validation_failure_and_never_sends_e1(self) -> None:
-        client = SlowEmptySerial([])
-        states: list[tuple[str, object]] = []
-        packets: list[DevicePacket] = []
-        adapter: SerialAdapter
-
-        async def packet(event: DevicePacket) -> None:
-            packets.append(event)
-
-        async def status(name: str, value: object) -> None:
-            states.append((name, value))
-
-        async def stop_after_error(_reason: str) -> None:
-            await adapter.stop()
-
-        adapter = SerialAdapter(
-            SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=30),
-            packet,
-            status,
-            ready,
-            error=stop_after_error,
-            candidate_provider=lambda _config: ["/dev/ttyUSB-test"],
-            serial_factory=lambda _path, _config: client,
-        )
-        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
-            await adapter.run()
-
-        self.assertEqual(client.writes, [HANDSHAKE])
-        self.assertEqual(packets, [])
-        self.assertEqual(
-            states,
-            [
-                ("connectionState", "connecting"),
-                ("connectionState", "validating"),
-                ("connectionState", "validation_failed"),
-            ],
-        )
-        self.assertIn("none returned standalone 0x01", "\n".join(logs.output))
-
-    async def test_non_frame_existing_bytes_then_ack_timeout_never_sends_e1(self) -> None:
-        client = SlowEmptySerial([HANDSHAKE, b"\xAA"])
-        states: list[tuple[str, object]] = []
-        packets: list[DevicePacket] = []
-        adapter: SerialAdapter
-
-        async def status(name: str, value: object) -> None:
-            states.append((name, value))
-
-        async def stop_after_error(_reason: str) -> None:
-            await adapter.stop()
-
-        adapter = SerialAdapter(
-            SerialConfig(handshake_timeout_ms=10, command_response_timeout_ms=30),
-            packets.append,
-            status,
-            ready,
-            error=stop_after_error,
-            candidate_provider=lambda _config: ["/dev/ttyUSB-test"],
-            serial_factory=lambda _path, _config: client,
-        )
-        with self.assertLogs("neurobridge.serial.adapter", level="WARNING") as logs:
-            await adapter.run()
-
-        self.assertEqual(client.writes, [HANDSHAKE])
-        self.assertEqual(packets, [])
-        self.assertIn(("connectionState", "validation_failed"), states)
-        rendered = "\n".join(logs.output)
-        self.assertIn("none returned standalone 0x01", rendered)
-        self.assertNotIn("connectionState=validated", rendered)
+        self.assertEqual(client.writes, [b"\xE0"])

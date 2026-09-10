@@ -39,7 +39,8 @@ class PosixSerialSource:
         candidate_provider=None,
         serial_factory=None,
         identity_provider=None,
-        restart_probe=None,
+        prepare_algorithm=None,
+        release_algorithm=None,
     ) -> None:
         self._chunk_queue: asyncio.Queue[RawChunk | None] = asyncio.Queue(maxsize=queue_size)
         self._event_queue: asyncio.Queue[DeviceConnectionEvent | None] = asyncio.Queue(maxsize=queue_size)
@@ -64,7 +65,8 @@ class PosixSerialSource:
             external_control=external_control,
             external_start=self._start_stream if external_control else None,
             external_stop=self._stop_stream if external_control else None,
-            restart_probe=restart_probe,
+            prepare_algorithm=prepare_algorithm,
+            release_algorithm=release_algorithm,
             **({"candidate_provider": candidate_provider} if candidate_provider is not None else {}),
             **({"serial_factory": serial_factory} if serial_factory is not None else {}),
             **({"identity_provider": identity_provider} if identity_provider is not None else {}),
@@ -144,10 +146,6 @@ class PosixSerialSource:
         if self._control is None or self._session_id is None:
             return False
         self._existing_stream = existing_stream
-        if self.application_control:
-            # Existing-stream adoption precedes preparation; Application alone
-            # invokes DeviceControl after preparing its own session.
-            return existing_stream or self._control.is_streaming(self._session_id)
         result = await self._control.start_stream(self._session_id)
         accepted = result.outcome in {"started", "alreadyStreaming"}
         if not accepted:

@@ -80,7 +80,7 @@ class Gateway(GatewayApplication):
                 valid=result.valid, invalid_reasons=list(result.algorithm_result.invalid_reasons))
         await super().publish_window_result(result)
 
-    async def on_device_ready(self) -> bool:
+    async def on_device_ready(self, *, already_prepared: bool = False) -> bool:
         """Prepare a fresh local algorithm session and report whether it is usable."""
         LOG.info(
             "Local algorithm preparation started: transport=%s algorithmEnabled=%s",
@@ -88,7 +88,8 @@ class Gateway(GatewayApplication):
             self.config.algorithm.enabled,
         )
         try:
-            await self.algorithm.initialize()
+            if not already_prepared:
+                await self.algorithm.initialize()
         except Exception as exc:
             await self.update_status("algorithmState", "error")
             LOG.exception(
