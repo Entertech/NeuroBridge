@@ -28,6 +28,19 @@ def config_path(root: Path) -> Path:
     return root / '.runtime/config/windows-gateway.toml'
 
 
+def logging_info(root: Path) -> dict:
+    """Expose effective log settings without exporting configuration contents."""
+    from neurobridge.versioning import APPLICATION_VERSION
+    path = config_path(root)
+    config = load_runtime_config(path)
+    directory = config.logging.directory
+    if not directory.is_absolute():
+        directory = root / directory
+    return {'directory': str(directory.resolve()), 'filename': config.logging.filename,
+            'level': config.logging.level, 'metricsIntervalSeconds': config.pipeline.metrics_interval_seconds,
+            'configSha256': sha256(path.read_bytes()).hexdigest(), 'applicationVersion': APPLICATION_VERSION}
+
+
 def validate_config(path: Path):
     config = load_runtime_config(path)
     if config.profile != 'windows_headset_local':
@@ -160,7 +173,7 @@ def instance_lock(root: Path, filename: str = 'windows-gateway.lock'):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['config', 'check', 'algorithm', 'start', 'logs', 'diagnostics', 'url'])
+    parser.add_argument('action', choices=['config', 'check', 'algorithm', 'start', 'logs', 'diagnostics', 'url', 'log-info'])
     args = parser.parse_args()
     if sys.platform != 'win32' or platform.machine().lower() not in {'amd64', 'x86_64'}:
         parser.error('This entry requires Windows x64; it does not replace Kylin acceptance')
@@ -171,6 +184,9 @@ def main() -> int:
             return 0
         if args.action == 'diagnostics':
             print(diagnostics(ROOT))
+            return 0
+        if args.action == 'log-info':
+            print(json.dumps(logging_info(ROOT)))
             return 0
         config = validate_config(config_path(ROOT))
         if args.action == 'url':

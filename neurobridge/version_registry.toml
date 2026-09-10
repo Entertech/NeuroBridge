@@ -1406,3 +1406,15 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户要求把锁占用排查和 Start-Service 命令做成双击脚本；仅增加内部运维工具，现场锁持有者仍须依据诊断确认，不修改设备、算法或已发布及预发布北向协议。Windows UAC、实际 SCM 与锁冲突恢复仍需目标机验证。"
+
+
+[[change_records]]
+id = "2026-09-10-windows-diagnosis-runtime-log-evidence"
+date = "2026-09-10"
+scope = "gateway_windows_internal_runtime_diagnosis"
+summary = "补全双击服务诊断的运行日志证据：按有效配置定位日志，记录本地/UTC 时间、进程创建时间、文件大小及修改时间，读取当前日志和最近两份归档尾部；配置解析失败明确提示并回退默认目录，配置正文及录制数据不导出。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户反馈 USB 反复连接/断开但运行日志显示为昨天，原报告仅含旧服务宿主错误，缺少当前采集证据；本次改善内部诊断，不据旧日志猜测串口根因，不修改设备行为或已发布及预发布协议。Windows 真实故障报告与目标机复测仍待收集。"

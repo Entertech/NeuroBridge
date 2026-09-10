@@ -6,6 +6,15 @@ function Get-GatewayServiceSnapshot {
     Get-CimInstance Win32_Service -Filter "Name='NeuroBridgeProject'"
 }
 
+function Get-GatewayLogInfo {
+    param([string]$ProjectRoot)
+    $python = Join-Path $ProjectRoot '.runtime\windows-venv\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $python -PathType Leaf)) { throw 'Project Python is unavailable; effective log path could not be resolved.' }
+    $value = & $python (Join-Path $ProjectRoot 'windows\gateway_helper.py') log-info
+    if ($LASTEXITCODE -ne 0) { throw 'Effective logging configuration query failed.' }
+    return ($value | ConvertFrom-Json)
+}
+
 function Start-ProjectServiceIfStopped {
     param([string]$ProjectRoot)
     $snapshot = Get-GatewayServiceSnapshot
@@ -55,11 +64,12 @@ function Invoke-ServiceDiagnosis {
             $processes = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^python(w)?\.exe$' })
             if ($processes.Count -eq 0) { Write-Report 'No python.exe/pythonw.exe processes found.' }
             else {
-                Write-Report ($processes | Format-List ProcessId,ParentProcessId,ExecutablePath,CommandLine | Out-String -Width 4096)
+                Write-Report ($processes | Format-List ProcessId,ParentProcessId,CreationDate,ExecutablePath,CommandLine | Out-String -Width 4096)
             }
         } catch { Write-Report ('Process query failed: ' + $_.Exception.Message) }
     }
     Write-Report ('Project: ' + $ProjectRoot)
+    Write-Report ('Computer clock local: ' + [DateTimeOffset]::Now.ToString('o') + '; UTC: ' + [DateTime]::UtcNow.ToString('o'))
     Write-Report 'This tool does not stop processes, delete locks, change service configuration, or upload files.'
     Write-Snapshot 'Before start'
     try { Write-Report (Start-ProjectServiceIfStopped -ProjectRoot $ProjectRoot) }
@@ -77,6 +87,33 @@ function Invoke-ServiceDiagnosis {
             Write-Report ((Get-Content -LiteralPath $hostLog -Tail 200 -Encoding UTF8) -join "`r`n")
         } catch { Write-Report ('Could not read service host log: ' + $_.Exception.Message) }
     }
+    try {
+        Write-Report "`r`n=== Effective runtime logging settings (configuration on disk, not proof of process reload) ==="
+        try {
+            $logInfo = Get-GatewayLogInfo -ProjectRoot $ProjectRoot
+            Write-Report ($logInfo | Format-List | Out-String -Width 4096)
+        } catch {
+            Write-Report $_.Exception.Message
+            Write-Report 'Fallback: inspecting project default log directory; custom configured paths may differ.'
+            $logInfo = [pscustomobject]@{directory=(Join-Path $ProjectRoot '.runtime\logs'); filename='neurobridge.log'}
+        }
+        $files = @(Get-ChildItem -LiteralPath $logInfo.directory -File -ErrorAction Stop |
+            Where-Object { $_.Name.StartsWith($logInfo.filename, [StringComparison]::OrdinalIgnoreCase) -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+            Sort-Object LastWriteTimeUtc -Descending)
+        Write-Report '=== Runtime file inventory: latest 20, UTC modification time ==='
+        Write-Report ('Matching file count: ' + $files.Count)
+        Write-Report ($files | Select-Object -First 20 FullName,Length,CreationTimeUtc,LastWriteTimeUtc | Format-List | Out-String -Width 4096)
+        $active = @($files | Where-Object { $_.Name -eq $logInfo.filename })
+        if ($active.Count -eq 0) { Write-Report 'Active runtime log is missing.' }
+        # Always include the active file, even if archived files appear newer.
+        $archives = @($files | Where-Object { $_.Name -ne $logInfo.filename -and $_.Extension -ne '.gz' } | Select-Object -First 2)
+        foreach ($file in @($active) + @($archives)) {
+            try {
+                Write-Report ("`r`n=== Runtime log tail: " + $file.FullName + ' (last 300 lines) ===')
+                Write-Report ((Get-Content -LiteralPath $file.FullName -Tail 300 -Encoding UTF8 -ErrorAction Stop) -join "`r`n")
+            } catch { Write-Report ('Runtime log read failed: ' + $_.Exception.Message) }
+        }
+    } catch { Write-Report ('Runtime logging diagnosis failed: ' + $_.Exception.Message) }
     Write-Host "`r`nReport saved: $report" -ForegroundColor Cyan
     Write-Host 'Review process command lines for secrets before sharing this report. No configuration or recording files were copied.'
     return $exitCode

@@ -56,6 +56,20 @@ function Get-CimInstance {
     if ($ClassName -ne 'Win32_Process') { throw 'unexpected query' }
     return [pscustomobject]@{Name='python.exe'; ProcessId=123; ParentProcessId=100; ExecutablePath='fixture-python'; CommandLine='fixture-command'}
 }
+$logDirectory = Join-Path $root 'custom logs'
+New-Item -ItemType Directory -Path $logDirectory | Out-Null
+function Get-GatewayLogInfo {
+    param($ProjectRoot)
+    return [pscustomobject]@{directory=$logDirectory; filename='custom.log'; level='INFO'}
+}
+$activeLog = Join-Path $logDirectory 'custom.log'
+Set-Content -LiteralPath $activeLog -Value 'ACTIVE_RUNTIME_EVIDENCE' -Encoding UTF8
+(Get-Item -LiteralPath $activeLog).LastWriteTimeUtc = [DateTime]::UtcNow.AddDays(-2)
+foreach ($number in 1..3) {
+    $archive = Join-Path $logDirectory ('custom.log.' + $number)
+    Set-Content -LiteralPath $archive -Value ('ARCHIVE_EVIDENCE_' + $number) -Encoding UTF8
+    (Get-Item -LiteralPath $archive).LastWriteTimeUtc = [DateTime]::UtcNow.AddMinutes(-$number)
+}
 function Expect-Rejected {
     $before = $script:starts
     $rejected = $false
@@ -86,9 +100,10 @@ if ((Invoke-ServiceDiagnosis $root) -ne 0) { throw 'successful start failed' }
 $reports = @(Get-ChildItem -LiteralPath (Join-Path $root '.runtime\diagnostics') -Filter '*.txt')
 if ($reports.Count -ne 2) { throw 'reports overwritten or missing' }
 $text = ($reports | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 }) -join "`n"
-foreach ($expected in @('Before start', 'After start attempt', 'fixture-command', 'synthetic start failure')) {
+foreach ($expected in @('Before start', 'After start attempt', 'fixture-command', 'synthetic start failure', 'ACTIVE_RUNTIME_EVIDENCE', 'ARCHIVE_EVIDENCE_1', 'ARCHIVE_EVIDENCE_2', 'LastWriteTimeUtc')) {
     if (-not $text.Contains($expected)) { throw ('missing evidence: ' + $expected) }
 }
+if ($text.Contains('ARCHIVE_EVIDENCE_3')) { throw 'unbounded archive tails' }
 ''', encoding='utf-8-sig')
             result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
                                      '-File', str(harness)], capture_output=True, timeout=30)
@@ -113,6 +128,21 @@ class WindowsLauncherTests(unittest.TestCase):
         path.write_text(original, encoding='utf-8')
         self.assertEqual(helper.create_config(self.root).read_text(encoding='utf-8'), original)
         self.assertEqual(helper.validate_config(path).serial.device, 'COM12')
+
+    def test_logging_info_uses_effective_custom_path_without_exporting_config(self):
+        import json
+        path = helper.create_config(self.root)
+        text = path.read_text(encoding='utf-8')
+        text = text.replace('filename = "neurobridge.log"', 'filename = "custom.log"')
+        text = text.replace(json.dumps(str(self.root / '.runtime/logs')), '"relative-logs"')
+        path.write_text(text + '\n# private=DO_NOT_EXPORT\n', encoding='utf-8')
+        result = helper.logging_info(self.root)
+        self.assertEqual(result['directory'], str((self.root / 'relative-logs').resolve()))
+        self.assertEqual(result['filename'], 'custom.log')
+        self.assertEqual(result['level'], 'INFO')
+        self.assertEqual(result['metricsIntervalSeconds'], 10)
+        self.assertNotIn('DO_NOT_EXPORT', json.dumps(result))
+        self.assertEqual(len(result['configSha256']), 64)
 
     def test_reject_invalid_existing_policy_without_rewriting(self):
         path = helper.create_config(self.root)
