@@ -1418,3 +1418,15 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户反馈 USB 反复连接/断开但运行日志显示为昨天，原报告仅含旧服务宿主错误，缺少当前采集证据；本次改善内部诊断，不据旧日志猜测串口根因，不修改设备行为或已发布及预发布协议。Windows 真实故障报告与目标机复测仍待收集。"
+
+
+[[change_records]]
+id = "2026-09-10-windows-diagnosis-service-enum-binding"
+date = "2026-09-10"
+scope = "gateway_windows_service_diagnosis_ci"
+summary = "修复诊断脚本对 Get-Service 隐式加载 .NET 服务枚举类型的依赖：WaitForStatus 改用 Running 字符串由真实服务方法绑定枚举，模拟流程验证等待状态和 45 秒超时。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户反馈 Actions 34460720291 失败；日志确认模拟 Get-Service 不加载 System.ServiceProcess，显式枚举引用触发 TypeNotFound。本次保持服务启停语义和北向协议不变，不将 CI 问题当作目标机串口反复断连的根因。"

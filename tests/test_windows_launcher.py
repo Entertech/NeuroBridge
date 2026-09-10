@@ -45,7 +45,10 @@ function Start-Service {
 function Get-Service {
     param($Name)
     $controller = New-Object PSObject
-    $controller | Add-Member ScriptMethod WaitForStatus { param($state, $timeout) }
+    $controller | Add-Member ScriptMethod WaitForStatus {
+        param($state, $timeout)
+        if ($state -ne 'Running' -or $timeout.TotalSeconds -ne 45) { throw 'incorrect service wait contract' }
+    }
     return $controller
 }
 function Stop-Process { throw 'must not stop processes' }

@@ -34,7 +34,9 @@ function Start-ProjectServiceIfStopped {
     }
     Start-Service -Name NeuroBridgeProject -ErrorAction Stop
     $controller = Get-Service -Name NeuroBridgeProject
-    $controller.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Running, [TimeSpan]::FromSeconds(45))
+    # Let the real ServiceController method bind the enum argument. An explicit
+    # type literal depends on Get-Service having loaded its assembly first.
+    $controller.WaitForStatus('Running', [TimeSpan]::FromSeconds(45))
     return 'Service reached Running. Check the capture page and runtime logs to verify data acquisition.'
 }
 
