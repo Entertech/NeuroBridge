@@ -15,6 +15,86 @@ from windows import gateway_helper as helper
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@unittest.skipUnless(sys.platform == 'win32', 'Windows PowerShell 5.1 diagnostic workflow')
+class ServiceDiagnosisTests(unittest.TestCase):
+    def test_service_diagnosis_handles_states_and_preserves_processes(self):
+        with tempfile.TemporaryDirectory(prefix='gateway diagnosis ') as directory:
+            root = Path(directory) / '中文 project'
+            (root / 'windows').mkdir(parents=True)
+            script = root / 'windows/diagnose-service.ps1'
+            shutil.copy2(ROOT / 'windows/diagnose-service.ps1', script)
+            harness = root / 'exercise.ps1'
+            harness.write_text(r'''
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'windows\diagnose-service.ps1')
+$root = $PSScriptRoot
+$script:starts = 0
+$script:fail = $false
+$script:service = [pscustomobject]@{
+    State = 'Stopped'; StartName = 'LocalSystem'; ProcessId = 0
+    PathName = ('"C:\Python\python.exe" -I -S -u "' + (Join-Path $root 'windows\project_service.py') + '" host')
+}
+function Get-GatewayServiceSnapshot { return $script:service }
+function Start-Service {
+    param($Name, $ErrorAction)
+    if ($Name -ne 'NeuroBridgeProject') { throw 'wrong service' }
+    $script:starts++
+    if ($script:fail) { throw 'synthetic start failure' }
+    $script:service.State = 'Running'
+}
+function Get-Service {
+    param($Name)
+    $controller = New-Object PSObject
+    $controller | Add-Member ScriptMethod WaitForStatus { param($state, $timeout) }
+    return $controller
+}
+function Stop-Process { throw 'must not stop processes' }
+function Stop-Service { throw 'must not stop service' }
+function Remove-Item { throw 'must not delete lock/files' }
+function Get-CimInstance {
+    param($ClassName)
+    if ($ClassName -ne 'Win32_Process') { throw 'unexpected query' }
+    return [pscustomobject]@{Name='python.exe'; ProcessId=123; ParentProcessId=100; ExecutablePath='fixture-python'; CommandLine='fixture-command'}
+}
+function Expect-Rejected {
+    $before = $script:starts
+    $rejected = $false
+    try { Start-ProjectServiceIfStopped $root | Out-Null } catch { $rejected = $true }
+    if (-not $rejected -or $script:starts -ne $before) { throw 'unsafe service start' }
+}
+Start-ProjectServiceIfStopped $root | Out-Null
+Start-ProjectServiceIfStopped $root | Out-Null
+if ($script:starts -ne 1) { throw 'running service was restarted' }
+$script:service.State = 'Start Pending'
+Expect-Rejected
+$script:service.State = 'Stopped'
+$original = $script:service.PathName
+$script:service.PathName = 'another project'
+Expect-Rejected
+$script:service.PathName = $original
+$script:service.StartName = 'another account'
+Expect-Rejected
+$script:service.StartName = 'LocalSystem'
+$saved = $script:service
+$script:service = $null
+Expect-Rejected
+$script:service = $saved
+$script:fail = $true
+if ((Invoke-ServiceDiagnosis $root) -ne 1) { throw 'start failure hidden' }
+$script:fail = $false
+if ((Invoke-ServiceDiagnosis $root) -ne 0) { throw 'successful start failed' }
+$reports = @(Get-ChildItem -LiteralPath (Join-Path $root '.runtime\diagnostics') -Filter '*.txt')
+if ($reports.Count -ne 2) { throw 'reports overwritten or missing' }
+$text = ($reports | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 }) -join "`n"
+foreach ($expected in @('Before start', 'After start attempt', 'fixture-command', 'synthetic start failure')) {
+    if (-not $text.Contains($expected)) { throw ('missing evidence: ' + $expected) }
+}
+''', encoding='utf-8-sig')
+            result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                                     '-File', str(harness)], capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 class WindowsLauncherTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='gateway space ')

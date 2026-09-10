@@ -2,6 +2,10 @@
 
 ## 一键入口
 
+服务启动失败时，双击 `windows\diagnose-service.cmd`，在 UAC 提示中允许管理员权限。脚本列出服务状态、PID/父 PID、Python 路径与命令行，尝试启动本项目已停止的 `NeuroBridgeProject`，并保存启动前后诊断及最近 200 行服务宿主日志到 `.runtime\diagnostics\windows-service-diagnosis-<UTC时间>-<唯一标识>.txt`。把该报告提供给开发人员即可继续排查；分享前检查命令行中是否含其他程序的敏感参数。
+
+已运行的服务不会被重启，启动/停止中的服务只提示稍后再试，同名服务指向其他目录或账户时拒绝操作。脚本不安装服务、不结束进程、不删除锁、不修改自启配置，也不上传报告。发现前台网关占用时，先在该窗口按 `Ctrl+C` 正常退出，再双击诊断脚本；服务达到 Running 只表示启动成功，采集仍需在页面与运行日志中核对。CMD 与同目录的 `diagnose-service.ps1` 须留在完整项目中，不依赖项目 Python 环境执行诊断。
+
 在完整项目中双击 `windows\neurobridge-windows-bootstrap.cmd` 即可自动准备并启动，无需输入菜单数字。也可在项目根目录的 PowerShell 运行：
 
 ```powershell
