@@ -191,7 +191,8 @@ function connect() {
   }
   socket.addEventListener("open", () => {
     setConnectionState("on", "已连接");
-    appendLog("system", "SYSTEM", "WebSocket 已建立。建议先发送 getStatus。" );
+    appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。" );
+    sendRequest("getStatus", {});
   });
   socket.addEventListener("message", (event) => {
     try {
@@ -255,5 +256,8 @@ elements.copyLogButton.addEventListener("click", async () => {
 
 refreshSubscriptionSelect();
 appendLog("system", "SYSTEM", window.NEUROBRIDGE_B_CLIENT_ENDPOINT
-  ? `B 端联调台已就绪；已使用本机采集服务地址 ${elements.endpoint.value}，不会发送任何保活帧。`
-  : "B 端联调台已就绪；不会发送任何保活帧。");
+  ? `网关联调台已就绪；已使用本机服务地址 ${elements.endpoint.value}，不会发送任何保活帧。`
+  : "网关联调台已就绪；不会发送任何保活帧。");
+if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
+  connect();
+}

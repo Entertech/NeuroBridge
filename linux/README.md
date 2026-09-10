@@ -1,6 +1,14 @@
-# Ubuntu 网关部署与运行教程
+# Linux 网关部署与运行教程
 
-本目录保存 Ubuntu x86_64 网关的部署专属内容：
+银河麒麟 V10 新设备的首选入口只有一条命令：
+
+```bash
+bash linux/neurobridge-kylin-bootstrap.sh
+```
+
+`linux/neurobridge-kylin-bootstrap.sh` 是完整项目的日常启动入口，启动时绝不运行 `git fetch` 或 `git pull`。通常只需输入 `1`，助手会跳过已完成步骤并默认安装或复用 `neurobridge.service`，立即启动且设为开机自启；已配置好时可输入 `2`，同样遵循已保存的自启偏好。只有菜单 `9` 中显式选择非自启后，日常入口才以前台方式运行；重新启用会恢复默认自启。服务仍以当前桌面用户运行项目内配置、算法和数据。菜单 `3` 仅用于网络可用时主动更新，不会被普通启动自动选择。无法拉取的旧设备由开发机运行 `./tools/build-kylin-offline-update.sh`，只传输生成的 `neurobridge-kylin-offline-update.run`，目标机执行一次后会自动打开菜单。保持耳机 USB 已连接即可，正常检测不要求拔插。完整现场流程见[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
+
+本目录同时保存 Ubuntu x86_64 部署及银河麒麟项目运行脚本：
 
 - `update-ubuntu.sh`：目标机一键部署入口；只使用当前源码目录，不执行 Git 或网络操作。
 - `prepare-ubuntu24.04-environment.sh`：一次性联网环境准备，安装系统包与锁定的 Python 运行依赖；完成后可断网。
@@ -8,13 +16,24 @@
 - `setup-ssh-operations.sh`：一键 SSH 运维配置入口；快速模式读取现场 TXT，缺少的字段才交互询问。
 - `../config/ssh-operations.example.txt`：快速模式模板；实际 `ssh-operations.txt` 被 Git 忽略，可按现场要求保存明文密码。
 - `collect-ubuntu-build-diagnostics.sh`：收集编译日志、工具版本和 CMake 诊断，不包含现场配置或原始数据。
+- `collect-kylin-runtime-diagnostics.sh`：供 N100/N150 银河麒麟 V10 现场离线采集系统、服务、journal、USB/TTY、网络、依赖和应用日志；它是诊断工具，不是麒麟安装器。
+- `neurobridge-kylin-bootstrap.sh`：完整项目的无网络日常启动入口；只处理必要权限并打开数字菜单，不更新源码。
+- `../tools/build-kylin-offline-update.sh`：开发机生成单个 `.run` 离线更新文件；内嵌已提交分支的 Git bundle 和 SHA-256，目标机只从本地 bundle 快进，不访问远端。
+- `setup-kylin-gateway.sh`：银河麒麟 V10 项目一键上手、权限恢复、更新、配置、启动与诊断菜单；以普通用户运行，只在必要步骤调用 `sudo`，Git 更新永远不使用 `sudo`。
+- `setup-kylin-autostart.sh`：为当前银河麒麟项目安装、查看或停用 `neurobridge.service`；项目默认自启，`disable` 会在 `.runtime/config/kylin-autostart.conf` 记录显式非自启偏好，`enable` 恢复自启。systemd 在开机时以当前桌面用户运行项目启动器，异常退出后 3 秒重试，不把网关进程提升为 root。
+- `setup-kylin-python.sh`：银河麒麟 V10 项目 Python 环境一键初始化；系统仅有 Python 3.8 时自动准备经 SHA-256 锁定的项目内 Python 3.11，再选择离线 `wheelhouse` 或当前网络，所有运行时、缓存、临时文件和日志保存在项目内。
+- `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口一键识别；默认直接检查已连接设备，无需拔插，并保存 USB/TTY/驱动快照；仅在显式 `--plug-cycle` 时监控拔插过程和超时；旧版 `lsusb` 不支持 `-nn` 时自动回退。
+- `setup-kylin-serial.sh`：银河麒麟 x86_64 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务；项目启动脚本会处理账号已入组但当前会话权限尚未刷新的情况。
+- `setup-kylin-algorithm.sh`：在银河麒麟 V10 x86_64 本机使用项目内锁定 CMake 3.31.6、Eigen 3.3.7 和锁定源码构建算法 bridge 到 `.runtime/algorithm/`；在线自动下载 CMake，离线从忽略提交的 `algorithm-packages/` 读取，进程自检成功后才原子启用配置。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。
 
-本文用于在一台**Ubuntu 24.04 LTS x86_64** 主机上部署 NeuroBridge。首期部署目标是 N100/N150 等 x86_64 小主机；不要在 ARM、Windows、macOS 或非 systemd 环境上使用这些脚本。目标机可匿名从 GitHub 公开 HTTPS 地址获取本仓库源码，无需登录；源码到位后，所有部署、bridge 构建和运行步骤均不访问互联网。网关和 B 端主机必须只接入双方确认的专用有线网络，不能暴露到公网、无线网络或不受控局域网。
+本文用于 Ubuntu 24.04 LTS x86_64 兼容/回归环境；正式银河麒麟部署见内部麒麟手册。当前默认 `local_browser` 策略让网页、WebSocket 和下载仅监听 `127.0.0.1`，不需要独立 B 端主机或数据专用网线。旧 `wired_b_side` 策略仍保留，但只能使用双方确认的隔离有线网络。
 
-> 文中的 `192.168.88.10`、`192.168.88.20`、端口和网卡名只是示例。安装前必须由双方确认实际静态 IP、子网掩码、WebSocket 端口、下载端口和网卡名；不要把示例值直接用于现场。
+银河麒麟分步脚本仍保留给故障恢复：`setup-kylin-python.sh`、`diagnose-kylin-usb-serial.sh`、`setup-kylin-serial.sh`、`setup-kylin-algorithm.sh` 和 `start-kylin-gateway.sh`。只有排查物理枚举过程时才使用诊断脚本的 `--plug-cycle --timeout 60`。串口模式先回写握手 ACK 并等待设备的独立 `01` 校验结果；等待窗口内的完整周期握手会被重新 ACK，不会因首个 `AA` 立即失败。校验通过后才准备本地算法；启动脚本不允许以关闭算法或项目外 bridge 绕过无响应 `E1` 的发送门禁。
+
+> 默认本机地址固定使用 `127.0.0.1`。文中的 `192.168.88.10`、`192.168.88.20` 和网卡名仅用于兼容有线策略，切换前必须确认现场参数。
 
 ## 1. 安装前准备
 
@@ -23,7 +42,7 @@
 - Ubuntu **24.04 LTS** x86_64，使用 systemd 启动；安装账户具有 `sudo` 权限。
 - 已审查的 NeuroBridge 源码版本（建议固定到已确认的 tag 或 commit），以及可连接头环的已验证蓝牙 5.x 适配器（仅实时采集需要）。可直接匿名获取：`git clone https://github.com/Entertech/NeuroBridge.git`。
 - 可联网时先运行一次 `./linux/prepare-ubuntu24.04-environment.sh`，它会安装 `python3`、`rsync`、CMake、C++17 编译器、Eigen3、BlueZ、dnsmasq，并创建 `/opt/neurobridge/venv`、安装锁定的 Python 运行依赖。完成后即可断开互联网；安装器只验证这些前提，绝不调用 APT、PyPI 或其他下载服务。
-- 网关与 B 端的专用有线链路。先确定网关地址、B 端地址、掩码、端口和网卡名。
+- 本机浏览器场景无需数据专用网线；只有选择 `wired_b_side` 时才准备网关/B 端地址、掩码、端口和网卡名。
 - 若要使用录播，准备好录制数据目录及要回放的 `recordingId`；若要使用算法，先完成该 Ubuntu 主机上的真实数据 POC。算法默认启用，但 POC 前可暂时设为 `false`。
 - 若要使用 SSH 运维，确认运维账户名、至少 6 位数字的密码、运维主机固定 IP/CIDR，以及网关用于运维的私有静态 IP。快速模式允许把明文密码保存在 Git 忽略且权限为 `600` 的现场 TXT 中，但不得写入现场文档、命令历史、日志或版本库。数字密码正式部署仅适用于专用网线直连和固定来源 IP 的封闭现场；短时局域网验证必须限制为受控网络和单机 `/32` 来源，禁止把 SSH 接入公网、无线网或不受控局域网。
 
@@ -59,7 +78,11 @@ cd NeuroBridge
 
 脚本成功后可断开互联网；后续使用 `./linux/update-ubuntu.sh` 即可完成安装、更新和 bridge 重建。
 
-## 3. 专用有线网络的默认自动配置
+## 3. 访问策略与兼容有线网络
+
+首次安装默认使用 `local_browser`：安装器读取配置后跳过 Netplan 专线变更，网页通过 `http://127.0.0.1:8080/` 加载，WebSocket 使用 `ws://127.0.0.1:8765/neurobridge/v1/ws`。网页服务校验 Host，WebSocket 校验固定 Origin。
+
+以下专用网络内容只适用于显式切换到 `wired_b_side` 的旧方案。
 
 安装脚本会从 `/etc/neurobridge/gateway.toml` 读取网关地址并自动写入独立的 `/etc/netplan/99-neurobridge-b-side.yaml`，随后执行 `netplan apply`。这一操作不需要网线已连接、DHCP、DNS 或任何局域网；Netplan 配置会在下次开机继续生效。
 
@@ -224,14 +247,16 @@ sudoedit /etc/neurobridge/gateway.toml
 
 | 配置项 | 首次部署要求 |
 | --- | --- |
-| `[server] host` | 与第 3 步中网关专用网卡的静态 IP 完全一致。 |
+| `[access] mode` | 默认 `local_browser`；只有恢复独立 B 端时改为 `wired_b_side`。 |
+| `[local_ui]` | 本机模式启用并固定 `127.0.0.1:8080`；旧有线模式必须关闭。 |
+| `[server] host` | 本机模式固定 `127.0.0.1`；旧有线模式填写专用网卡静态 IP。 |
 | `[server] port`、`path` | 填写双方确认的固定 WebSocket 端口和路径。 |
-| `[network] mode` | 通常选 `static`；安装器会自动配置默认的专用有线地址。只有 B 端程序能读取 DHCP 默认网关、且现场明确要自动分配地址时才选 `dhcp`。 |
+| `[network] mode` | 本机模式保持 `static` 且不填写接口/子网；旧有线模式才配置静态或 DHCP。 |
 | `[ble] enabled` | 无头环/冒烟验证时保持 `false`；完成该 Ubuntu 主机的真实头环 POC 后才改为 `true`，同时确认扫描匹配字段。 |
 | `[recording] directory` | 保持默认的 `/var/lib/neurobridge/recordings`，除非已按权限和容量要求另行配置。 |
 | `[recording] subject_id` | 填写演示或采集使用的受试者标识；无值可留空。 |
-| `[recording] replay_recording_id` | 可选：填写一个存在且非空的录制会话 ID 以固定回放目标；留空、填写已删除 ID 或空会话时，离线录播自动选择该目录中最新的非空历史会话。 |
-| `[download]` | 仅在专用有线网络确有导出需求时启用；`host` 必须是网关静态 IP，端口由双方确认。 |
+| `[recording] replay_recording_id` | 仅兼容支持录播的非串口策略可选填写；银河麒麟耳机 `data_source.type="serial"` 必须留空，串口离线不会回放历史会话。 |
+| `[download]` | 本机模式绑定 `127.0.0.1`；旧有线模式绑定批准的私网地址。 |
 | `[algorithm] enabled` | 默认 `true`。安装器已提供 bridge，无需填写路径；需要仅采集原始数据或维护时才改为 `false`。 |
 
 配置语法和权限可先由服务账户验证：
@@ -261,13 +286,13 @@ sudo journalctl -u neurobridge.service -n 100 --no-pager
 sudo ss -lntp
 ```
 
-从 B 端主机使用已确认的 WebSocket 地址连接，并在握手中提供子协议 `neurobridge.v1`。连接后先调用 `getStatus`，再调用 `getLatest` 或 `subscribe`；断线重连后必须重新订阅，不能复用旧 `subscriptionId`。可用仓库的 [B 端联调网页](../web/b-client-test/README.md) 做人工验证。
+默认在同机浏览器访问 `http://127.0.0.1:8080/`，页面自动连接回环 WebSocket 并提供 `neurobridge.v1` 子协议。连接后先调用 `getStatus`，再调用 `getLatest` 或 `subscribe`；断线重连后重新订阅。旧有线策略才从独立 B 端连接批准的私网地址。
 
-首次无头环冒烟验证可保持 `[ble].enabled = false`，此时 `getStatus` 应显示未连接；只要 `[recording].directory` 下存在非空历史会话，离线 `getLatest` 或 `subscribe` 就会自动选择最新会话并产生 `mode="replay"` 数据。若填写有效的 `replay_recording_id`，则该会话优先。实时采集验收还应覆盖头环连接、数据到达、断线重连和服务重启后的恢复。
+兼容 BLE 策略的无头环冒烟验证可保持 `[ble].enabled = false`，此时 `getStatus` 应显示未连接并按兼容策略验证录播；当前银河麒麟耳机 `data_source.type="serial"` 不适用该回放流程，离线 `getLatest` 或 `subscribe` 必须返回 `409 STREAM_NOT_AVAILABLE_REASON`。实时采集验收还应覆盖耳机串口连接、数据到达、断线重连和服务重启后的恢复。
 
-如果 `[download].enabled = true`，可从专用有线网络的 B 端访问 `http://<网关IP>:<下载端口><下载路径>` 查看已结束会话的下载索引。该接口没有 TLS 或应用层认证，绝不能暴露到公共或不受控网络。
+如果 `[download].enabled = true`，本机浏览器访问 `http://127.0.0.1:<下载端口><下载路径>`；旧有线策略才从专网 B 端访问私网地址。该接口没有 TLS 或应用层认证。
 
-## 7. 静态地址与 DHCP 模式
+## 7. 兼容有线策略的静态地址与 DHCP 模式
 
 `[network].mode` 将地址分配与采集/录播业务隔离，可在两种模式间切换：
 
@@ -324,8 +349,8 @@ git pull --ff-only
 | 日志出现无法绑定地址 | 用 `ip -br addr` 检查专用网卡；`[server].host` 必须是该主机实际拥有的私有或回环 IP，不能填写 DNS 名称、通配地址或 B 端地址。 |
 | B 端无法建立 WebSocket | 确认网线、两端 IP/掩码、专用网卡防火墙、端口和 `path`；握手必须提供 `neurobridge.v1` 子协议。连接恢复后先 `getStatus`，再重新订阅。 |
 | `neurobridge-dhcp.service` 显示未运行 | 在 `static` 模式下这是预期行为：其 `ExecCondition` 会跳过 DHCP 服务。只有配置为 `dhcp` 并填写完整 DHCP 参数后才应运行。 |
-| 未收到实时数据 | 确认 `[ble].enabled = true`、蓝牙适配器可见、设备名称/UUID 与已确认 profile 一致。通过网关日志查看扫描或连接失败原因；不要仅凭服务进程存活判断头环已连接。 |
-| 离线时没有录播数据 | 检查 `[recording].directory` 是否指向存放历史会话的目录，并确认其中至少有一个非空会话；网关会自动选择最新会话。若填写了 `replay_recording_id`，该会话无效时会回退到自动选择。 |
+| 未收到实时数据 | 先从启动日志确认 `transport=serial` 或 `bluetooth`。串口检查候选/握手、ACK 后的 `01`、无响应 `0xE1` 是否写入、有效帧超时和累计/区间丢包；BLE 检查 `[ble].enabled`、控制器、名称/UUID。不要仅凭服务进程存活或串口有字节判断头环已连接。 |
+| 兼容录播策略离线时没有录播数据 | 检查 `[recording].directory` 是否指向存放历史会话的目录，并确认其中至少有一个非空会话；该排障项不适用于当前银河麒麟耳机串口策略，串口离线应检查设备枚举、权限、占用和验证日志。 |
 | 下载接口不可用 | 确认 `[download].enabled = true`、监听 IP/端口与防火墙配置一致；只有已结束的录制会话能导出。 |
 
 如果 `update-ubuntu.sh` 在编译 bridge 时失败，先不要反复修改依赖或安装额外库。运行下面命令并将生成的压缩包上传给开发人员；包内只有 CMake/build 日志、系统与工具版本、当前源码 revision 和最近的服务日志，不包含 `gateway.toml`、录播或原始 BLE 数据：
@@ -336,4 +361,6 @@ sudo ./linux/collect-ubuntu-build-diagnostics.sh
 
 使用 `sudo` 运行时，生成的压缩包会归发起该命令的登录用户所有，权限为仅该用户可读写（`0600`），可直接上传或复制；不会归 root 锁定。
 
-部署或修改设备接入、算法、网络依赖后，至少重新验证实时采集、录播、头环断线重连、B 端不可达与恢复五个场景。所有日志、配置和录播数据均应仅保留在受控环境中。
+N100/N150 改装银河麒麟 V10 后出现运行、驱动或 USB 串口问题时，使用 `sudo ./linux/collect-kylin-runtime-diagnostics.sh --journal-lines 10000` 生成完整现场诊断包。默认保存到项目 `.runtime/diagnostics/`，详细命令见[麒麟 V10 USB 串口耳机配置与启动手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md#8-一键导出完整诊断包)。
+
+部署或修改设备接入、算法、网络依赖后，至少重新验证实时采集、录播、头环断线重连、浏览器/客户端断开与恢复五个场景。默认 `local_browser` 验证同机浏览器；`wired_b_side` 才验证独立 B 端和专网恢复。所有日志、配置和录播数据均应仅保留在受控环境中。

@@ -1,0 +1,90 @@
+config_schema_version = 1
+profile = "windows_headset_local"
+
+[server]
+host = "127.0.0.1"
+port = 8765
+path = "/neurobridge/v1/ws"
+
+[access]
+mode = "local_browser"
+
+[local_ui]
+enabled = true
+host = "127.0.0.1"
+port = 8080
+
+[network]
+mode = "static"
+
+[data_source]
+type = "serial"
+window_interval_ms = 600
+stale_after_ms = 1800
+
+[serial]
+device = "auto"
+candidate_types = ["COM"]
+baud_rate = 115200
+# Legacy key: observation of an already-running stream, not an ACK handshake.
+handshake_timeout_ms = 1000
+# Legacy key: write timeout only; E1/E0 have no response.
+command_response_timeout_ms = 1000
+# E1 first-frame wait and ongoing valid-frame timeout.
+data_timeout_seconds = 5
+reconnect_delay_seconds = 3
+stats_interval_seconds = 10
+max_buffer_bytes = 65536
+dtr = false
+rts = false
+
+[recording]
+# Optional protected transport trace; stop retaining whole chunks at the session budget.
+transport_trace_enabled = false
+transport_trace_max_bytes = 1048576
+directory = "C:\\ProgramData\\NeuroBridge\\recordings"
+subject_id = ""
+replay_recording_id = ""
+replay_speed = 1.0
+
+[download]
+enabled = true
+host = "127.0.0.1"
+port = 8766
+path = "/downloads"
+
+# Size archives use UTC timestamps and unique suffixes; active filename stays fixed.
+[logging]
+rotation_mode = "size"
+max_bytes = 10485760
+backup_count = 14
+directory = "C:\\ProgramData\\NeuroBridge\\logs"
+filename = "neurobridge.log"
+level = "INFO"
+
+[algorithm]
+enabled = true
+command = ["C:\\Program Files\\NeuroBridge\\runtime\\neurobridge_affective_bridge.exe"]
+request_timeout_ms = 2000
+
+[storage]
+warning_threshold_bytes = 5368709120
+critical_threshold_bytes = 1073741824
+segment_duration_seconds = 600
+segment_max_bytes = 268435456
+writer_queue_size = 1024
+recovery_margin_bytes = 1073741824
+recovery_checks = 3
+fsync_interval_records = 64
+session_retention_days = 30
+auto_cleanup_enabled = false
+
+# Initial bounds; tune after target-machine observation, not delivery guarantees.
+[pipeline]
+source_queue_size = 64
+source_enqueue_timeout_ms = 50
+algorithm_queue_size = 8
+persistence_timeout_ms = 100
+shutdown_timeout_ms = 5000
+send_timeout_ms = 5000
+metrics_interval_seconds = 10

@@ -15,12 +15,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import signal
 import threading
-import time
 from typing import Any
 from urllib.parse import urlparse
 
-from neurobridge.ble.flowtime import FlowtimeAdapter
-from neurobridge.business.gateway import Gateway
+from neurobridge.bootstrap import build_container
 from neurobridge.config import GatewayConfig, load
 from neurobridge.northbound.websocket import create_server
 
@@ -58,48 +56,14 @@ class LogBuffer(logging.Handler):
 
 class CaptureController:
     def __init__(self, config: GatewayConfig) -> None:
-        self.gateway = Gateway(config)
-        self.connection_error: str | None = None
-        self.packet_log_bucket: int | None = None
-        self.packet_log_summary: dict[str, dict[str, Any]] = {}
+        self.container = build_container(config)
+        self.gateway = self.container.gateway
         self.gateway.window_observer = self.log_algorithm_output
-        self.adapter = FlowtimeAdapter(config.ble, self.receive_packet, self.update_status, self.gateway.on_device_ready, self.update_connection_error)
+        self.adapter = self.container.device_adapter
         self.server: Any | None = None
         self.adapter_task: asyncio.Task[None] | None = None
         self.started = False
         self.lock = asyncio.Lock()
-
-    async def update_status(self, name: str, value: object) -> None:
-        if name == "connectionState" and value == "connected":
-            self.connection_error = None
-        await self.gateway.update_status(name, value)
-
-    async def update_connection_error(self, error: str) -> None:
-        self.connection_error = error
-
-    async def receive_packet(self, characteristic: str, value: bytes) -> None:
-        """Forward a packet while adding a rate-limited, non-complete UI log.
-
-        The POC UI may show that data is arriving, but it must not retain full
-        physiological raw bytes in a browser-visible log.
-        """
-        self._summarize_packet(characteristic, value)
-        await self.gateway.receive_packet(characteristic, value)
-
-    def _summarize_packet(self, characteristic: str, value: bytes) -> None:
-        bucket = int(time.time() * 1000) // 600
-        if self.packet_log_bucket is not None and bucket != self.packet_log_bucket:
-            fields = []
-            for stream, summary in sorted(self.packet_log_summary.items()):
-                fields.append(f"{stream}: {summary['count']} packets × {summary['bytes']} B, preview={summary['preview']}")
-            if fields:
-                LOG.info("Received headband data (600 ms): %s", "; ".join(fields))
-            self.packet_log_summary.clear()
-        self.packet_log_bucket = bucket
-        summary = self.packet_log_summary.setdefault(characteristic, {"count": 0, "bytes": len(value), "preview": value[:8].hex(" ") or "empty"})
-        summary["count"] += 1
-        summary["bytes"] = len(value)
-        summary["preview"] = value[:8].hex(" ") or "empty"
 
     async def log_algorithm_output(self, _window: object, algorithm: dict | None, reasons: list[str], valid: bool) -> None:
         """Expose a POC-only summary of bridge output without exposing raw bytes."""
@@ -127,7 +91,7 @@ class CaptureController:
             if self.started:
                 return self.snapshot()
             await self.gateway.start()
-            self.server = await create_server(self.gateway)
+            self.server = await create_server(self.gateway, self.container.northbound_controller)
             self.adapter_task = asyncio.create_task(self.adapter.run(), name="flowtime-adapter")
             self.started = True
             LOG.info("Capture requested: scanning for the configured Flowtime headband")
@@ -170,7 +134,7 @@ class CaptureController:
         return {
             "captureRunning": self.started,
             "recordingId": self.gateway.store.recording_id,
-            "connectionError": self.connection_error,
+            "connectionError": self.gateway.connection_error,
             "exportRecordingId": export_recording_id,
             "exportUrl": "/api/recordings/current/download" if export_recording_id else None,
             "websocketUrl": f"ws://{self.gateway.config.server.host}:{self.gateway.config.server.port}{self.gateway.config.server.path}",
@@ -325,7 +289,11 @@ async def run(args: argparse.Namespace) -> None:
     httpd = ThreadingHTTPServer((args.ui_host, args.ui_port), handler_factory(controller, loop, logs))
     http_thread = threading.Thread(target=httpd.serve_forever, name="mac-poc-http", daemon=True)
     http_thread.start()
-    LOG.info("Open http://%s:%s/ to start local headband capture", args.ui_host, args.ui_port)
+    # The shared capture page is now a service-independent static log viewer.
+    # Keep this legacy BLE POC usable by starting capture with the process
+    # instead of relying on a page-side POST request.
+    await controller.start()
+    LOG.info("macOS headband capture started; offline log viewer=http://%s:%s/", args.ui_host, args.ui_port)
     stopped = asyncio.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(signum, stopped.set)

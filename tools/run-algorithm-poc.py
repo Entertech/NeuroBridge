@@ -96,7 +96,7 @@ def invoke_bridge(command: list[str], windows: dict[int, dict[str, list[dict[str
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate Ubuntu algorithm bridge transport with a completed, consented recording.")
+    parser = argparse.ArgumentParser(description="Validate Linux algorithm bridge transport with a completed, consented recording.")
     parser.add_argument("--recording-dir", type=Path, required=True)
     parser.add_argument("--recording-id", required=True)
     parser.add_argument("--bridge", type=Path, required=True)

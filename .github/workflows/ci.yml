@@ -32,6 +32,52 @@ permissions:
   contents: read
 
 jobs:
+  windows-launcher:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+      - run: python -m pip install -r requirements.lock
+      - name: Validate Windows PowerShell 5.1 syntax
+        shell: powershell
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          foreach ($script in @('setup-windows-gateway.ps1', 'diagnose-service.ps1')) {
+            [System.Management.Automation.Language.Parser]::ParseFile("$PWD/windows/$script", [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+          }
+      - run: python -m unittest discover -s tests -p test_windows_launcher.py -v
+      - run: python -m unittest discover -s tests -p test_serial_startup.py -v
+      - run: python -m unittest discover -s tests -p test_windows_algorithm_build.py -v
+      - name: Verify recording rotation and recovery on Windows
+        run: python -m unittest discover -s tests -p test_recording_rotation.py -v
+      - name: Verify timestamped log rotation on Windows
+        run: python -m unittest discover -s tests -p test_operational_logging.py -k TimestampedLogRotationTests -v
+      - name: Build the Windows x64 algorithm with the double-click toolchain
+        run: |
+          python windows/gateway_helper.py config
+          python windows/algorithm_build.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python windows/algorithm_build.py --offline
+      - name: Verify Windows project service lifecycle
+        run: python -m unittest discover -s tests -p test_windows_project_service.py -v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-algorithm-x64-${{ github.sha }}
+          path: .runtime/algorithm/neurobridge_affective_bridge.*
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: windows-algorithm-build-log-${{ github.sha }}
+          path: .runtime/logs/windows-algorithm-build*.log
+          retention-days: 14
+
   unit-and-websocket:
     runs-on: ubuntu-latest
     steps:
@@ -43,6 +89,10 @@ jobs:
       - run: python -m pip install -r requirements.lock
       - run: python -m pip install --no-deps -e .
       - run: python -m unittest discover -s tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node tests/capture_connection_order.cjs
       - run: python -m compileall -q neurobridge
       - run: bash tools/check-external-protocol.sh
       - name: Detect unpublished external documents
@@ -98,3 +148,30 @@ jobs:
           path: artifacts/
           if-no-files-found: error
           retention-days: 90
+
+  product-candidates:
+    name: Unsigned ${{ matrix.platform }} product candidate
+    needs: unit-and-websocket
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: kylin
+            runner: ubuntu-latest
+          - platform: windows
+            runner: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build unsigned candidate and metadata
+        run: python tools/build-product-candidate.py --platform ${{ matrix.platform }} --output-dir artifacts --require-clean
+      - name: Upload unsigned candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: neurobridge-${{ matrix.platform }}-unsigned-candidate
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30

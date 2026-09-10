@@ -1,0 +1,21 @@
+[Unit]
+Description=NeuroBridge Kylin USB serial gateway
+After=local-fs.target
+
+[Service]
+Type=simple
+User=neurobridge
+Group=neurobridge
+WorkingDirectory=/opt/neurobridge
+ExecStart=/opt/neurobridge/runtime/bin/python -m neurobridge --config /etc/neurobridge/gateway.toml
+Restart=always
+RestartSec=3
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/neurobridge /var/log/neurobridge
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,79 @@
+config_schema_version = 1
+profile = "ubuntu_headband_wired"
+
+[server]
+host = "192.168.88.1"
+port = 8765
+path = "/neurobridge/v1/ws"
+
+[access]
+mode = "wired_b_side"
+
+[local_ui]
+enabled = false
+host = "127.0.0.1"
+port = 8080
+
+[network]
+mode = "static"
+interface = "enp1s0"
+subnet_cidr = "192.168.88.0/24"
+
+[data_source]
+type = "bluetooth"
+window_interval_ms = 600
+stale_after_ms = 1800
+
+[ble]
+enabled = true
+device_name = "Flowtime Headband"
+model_nbr_uuid = "0000ff10-1212-abcd-1523-785feabcd123"
+scan_timeout_seconds = 5
+reconnect_delay_seconds = 3
+
+[recording]
+# Optional protected transport trace; stop retaining whole chunks at the session budget.
+transport_trace_enabled = false
+transport_trace_max_bytes = 1048576
+directory = "/var/lib/neurobridge/recordings"
+subject_id = ""
+replay_recording_id = ""
+replay_speed = 1.0
+
+[download]
+enabled = true
+host = "192.168.88.1"
+port = 8766
+path = "/downloads"
+
+[logging]
+rotation_mode = "external"
+directory = "/var/log/neurobridge"
+filename = "neurobridge.log"
+level = "INFO"
+
+[algorithm]
+enabled = true
+request_timeout_ms = 2000
+
+[storage]
+warning_threshold_bytes = 5368709120
+critical_threshold_bytes = 1073741824
+segment_duration_seconds = 600
+segment_max_bytes = 268435456
+writer_queue_size = 1024
+recovery_margin_bytes = 1073741824
+recovery_checks = 3
+fsync_interval_records = 64
+session_retention_days = 30
+auto_cleanup_enabled = false
+
+# Initial bounds; tune after target-machine observation, not delivery guarantees.
+[pipeline]
+source_queue_size = 64
+source_enqueue_timeout_ms = 50
+algorithm_queue_size = 8
+persistence_timeout_ms = 100
+shutdown_timeout_ms = 5000
+send_timeout_ms = 5000
+metrics_interval_seconds = 10
