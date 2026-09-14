@@ -201,7 +201,7 @@ check_git_lock() {
 }
 
 repair_and_update() {
-  local before_revision after_revision
+  local before_revision after_revision update_context=${1:-menu}
   repair_project_permissions || return 1
   check_git_lock || return 1
   before_revision=$(git -C "$root_dir" rev-parse HEAD 2>/dev/null) || {
@@ -222,6 +222,13 @@ repair_and_update() {
       run_step "停止更新前的网关进程" sudo systemctl stop neurobridge.service || return 1
       log_message "旧网关已停止，后续准备流程将启动新代码。"
     fi
+    log_message "更新后的助手代码不会继续使用旧进程，正在重新载入最新菜单。"
+    if [[ $update_context == start ]]; then
+      export NEUROBRIDGE_RESUME_START=1
+    else
+      export NEUROBRIDGE_RELOADED_MENU=1
+    fi
+    exec bash "$root_dir/linux/setup-kylin-gateway.sh"
   fi
   [[ $before_revision == "$after_revision" ]] && log_message "代码已经是最新版本。"
 }
@@ -415,7 +422,7 @@ prepare_and_start() {
   local serial_result
   ensure_runtime_writable || return 1
   log_message "一键启动前先以普通用户执行 fast-forward 更新；更新失败不会停止已有网关。"
-  repair_and_update || return 1
+  repair_and_update start || return 1
   if python_environment_ready; then
     log_message "Python 环境已就绪，跳过重复安装。"
   else
@@ -478,6 +485,12 @@ EOF
 validate_project_root
 init_log || true
 
+if [[ ${NEUROBRIDGE_RESUME_START:-0} == 1 ]]; then
+  unset NEUROBRIDGE_RESUME_START
+  prepare_and_start || true
+  exit 0
+fi
+
 while true; do
   show_menu
   printf '请输入选项 [0-9]: '
@@ -493,7 +506,7 @@ while true; do
       show_menu_action 2 "./linux/start-kylin-gateway.sh"
       ;;
     3)
-      repair_and_update
+      repair_and_update menu
       ;;
     4)
       check_current_serial
