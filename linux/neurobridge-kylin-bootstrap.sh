@@ -15,6 +15,7 @@ else
   project_dir=$script_dir
 fi
 assistant="$project_dir/linux/setup-kylin-gateway.sh"
+gateway_start="$project_dir/linux/start-kylin-gateway.sh"
 bootstrap_log=
 
 usage() {
@@ -49,6 +50,19 @@ ask_yes_no() {
       [Nn][Oo]|[Nn]) return 1 ;;
       *) printf '请输入 yes 或 no。\n' ;;
     esac
+  done
+}
+
+repair_launcher_permissions() {
+  local launcher
+  for launcher in "$assistant" "$gateway_start"; do
+    [[ -f $launcher && ! -L $launcher ]] || fail "启动脚本缺失或不安全：$launcher"
+    if [[ ! -x $launcher ]]; then
+      printf '启动脚本缺少执行权限，正在修复：%s\n' "$launcher"
+      if ! chmod u+x -- "$launcher" 2>/dev/null; then
+        sudo chmod u+x -- "$launcher" || fail "无法修复启动脚本执行权限：$launcher"
+      fi
+    fi
   done
 }
 
@@ -97,6 +111,7 @@ printf 'gitPermissionChecked=false\n'
 if [[ ! -f $assistant ]]; then
   fail "当前项目缺少 linux/setup-kylin-gateway.sh；启动入口不会自动执行 Git。请把开发机生成的 neurobridge-kylin-offline-update.run 传到项目根目录，执行 bash neurobridge-kylin-offline-update.run，更新完成后会自动打开菜单。"
 fi
+repair_launcher_permissions
 
 printf '正在打开 NeuroBridge 银河麒麟数字菜单……\n'
 # Bootstrap logging ends here; the menu owns its setup logs and Python owns
