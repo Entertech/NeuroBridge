@@ -19,7 +19,7 @@ Galaxy Kylin project assistant. It provides a numeric menu for:
   5. Regenerate the project serial configuration
   6. Build, verify, and enable the local algorithm
   7. Export complete diagnostics
-  8. Show recent logs
+  8. Check gateway service and capture page
   9. Manage boot autostart
 
 Run it as the normal desktop user, not with sudo. The assistant requests sudo
@@ -351,6 +351,38 @@ show_recent_logs() {
   tail -n 200 -- "$latest"
 }
 
+check_gateway_capture() {
+  local exec_start http_code
+  log_message "网关一键检查开始。"
+  if command -v systemctl >/dev/null 2>&1; then
+    run_step "检查网关服务状态" sudo systemctl status neurobridge.service --no-pager -l || true
+    exec_start=$(sudo systemctl show neurobridge.service -p ExecStart --value 2>/dev/null || true)
+    log_message "ExecStart=$exec_start"
+    if [[ $exec_start == *'start-kylin-gateway.sh' && $exec_start != */bin/bash* ]]; then
+      log_message "WARNING: 当前服务仍直接执行启动脚本；请返回菜单输入 1 重新安装服务单元。"
+    fi
+    run_step "查看网关最近启动日志" \
+      sudo journalctl -u neurobridge.service -n 80 --no-pager -o short-iso-precise || true
+  else
+    log_message "systemctl 不可用，无法检查服务状态。"
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    run_step "检查 8080/8765/8766 监听端口" \
+      sh -c 'ss -lnt 2>/dev/null | grep -E "127\\.0\\.0\\.1:(8080|8765|8766)([[:space:]]|$)" || true'
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    http_code=$(curl --connect-timeout 2 --max-time 5 -sS -o /dev/null -w '%{http_code}' \
+      http://127.0.0.1:8080/capture/ 2>/dev/null || true)
+    [[ -n $http_code ]] || http_code=000
+    log_message "captureHttpStatus=$http_code url=http://127.0.0.1:8080/capture/"
+    [[ $http_code == 2* || $http_code == 3* ]] || \
+      log_message "WARNING: capture 页面未返回 2xx/3xx；请根据上面的服务日志处理。"
+  else
+    log_message "curl 不可用，无法检查 capture 页面。"
+  fi
+  log_message "网关一键检查结束。"
+}
+
 manage_autostart() {
   local autostart_choice
   cat <<'EOF'
@@ -437,7 +469,7 @@ NeuroBridge 银河麒麟一键助手
   5. 重新生成 USB 串口配置
   6. 修复/重新构建本地算法
   7. 导出完整诊断包
-  8. 查看最近日志
+  8. 一键检查网关服务与 capture 页面
   9. 配置自启/非自启
   0. 退出
 EOF
@@ -493,7 +525,7 @@ while true; do
       export_diagnostics || true
       log_message "诊断包位于 .runtime/diagnostics/，可直接传给开发人员。"
       ;;
-    8) show_recent_logs || true ;;
+    8) check_gateway_capture || true ;;
     9) manage_autostart || true ;;
     0)
       log_message "助手已退出。"

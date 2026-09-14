@@ -266,7 +266,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("4. 检查当前 USB/串口（无需拔插）", menu_result.stdout)
         self.assertIn("6. 修复/重新构建本地算法", menu_result.stdout)
         self.assertIn("7. 导出完整诊断包", menu_result.stdout)
-        self.assertIn("8. 查看最近日志", menu_result.stdout)
+        self.assertIn("8. 一键检查网关服务与 capture 页面", menu_result.stdout)
         self.assertIn("9. 配置自启/非自启", menu_result.stdout)
         self.assertIn("请输入选项 [0-9]", menu_result.stdout)
 
