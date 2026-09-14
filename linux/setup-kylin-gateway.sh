@@ -359,7 +359,9 @@ show_recent_logs() {
 }
 
 check_gateway_capture() {
-  local exec_start http_code
+  local exec_start http_code check_log="$runtime_dir/logs/gateway-capture-check.log"
+  : >"$check_log" 2>/dev/null || true
+  log_message "gatewayCaptureCheckLog=$check_log"
   log_message "网关一键检查开始。"
   if command -v systemctl >/dev/null 2>&1; then
     run_step "检查网关服务状态" sudo systemctl status neurobridge.service --no-pager -l || true
@@ -386,6 +388,10 @@ check_gateway_capture() {
       log_message "WARNING: capture 页面未返回 2xx/3xx；请根据上面的服务日志处理。"
   else
     log_message "curl 不可用，无法检查 capture 页面。"
+  fi
+  if [[ -n $setup_log && -f $setup_log ]]; then
+    cp -f -- "$setup_log" "$check_log" 2>/dev/null || true
+    chmod 0600 "$check_log" 2>/dev/null || true
   fi
   log_message "网关一键检查结束。"
 }
@@ -536,7 +542,7 @@ while true; do
       ;;
     7)
       export_diagnostics || true
-      log_message "诊断包位于 .runtime/diagnostics/，可直接传给开发人员。"
+      log_message "诊断包位于 .runtime/logs/diagnostics/，已压缩为单个 ZIP，可直接传给开发人员。"
       ;;
     8) check_gateway_capture || true ;;
     9) manage_autostart || true ;;

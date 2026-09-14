@@ -5,7 +5,7 @@
 set -u -o pipefail
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
-default_output_dir="$root_dir/.runtime/diagnostics"
+default_output_dir="$root_dir/.runtime/logs/diagnostics"
 
 usage() {
   cat <<'EOF'
@@ -15,8 +15,8 @@ Options:
   --plug-cycle        Observe an explicit unplug/plug cycle instead of checking
                       devices that are already connected
   --timeout SECONDS   Plug-cycle wait, 5-600 seconds (default: 60)
-  --output-dir DIR    Absolute directory below project .runtime/diagnostics
-                      (default: project .runtime/diagnostics)
+  --output-dir DIR    Absolute directory below project .runtime/logs/diagnostics
+                      (default: project .runtime/logs/diagnostics)
   --no-prompt         Plug-cycle compatibility mode without waiting for Enter
   -h, --help          Show this help
 

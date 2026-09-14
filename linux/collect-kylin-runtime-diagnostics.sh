@@ -6,19 +6,19 @@
 set -u -o pipefail
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
-default_output_dir="$root_dir/.runtime/diagnostics"
+default_output_dir="$root_dir/.runtime/logs/diagnostics"
 
 usage() {
   cat <<'EOF'
 Usage: sudo ./linux/collect-kylin-runtime-diagnostics.sh [options]
 
 Options:
-  --output-dir DIR       Absolute directory below project .runtime/diagnostics
-                         (default: project .runtime/diagnostics)
+  --output-dir DIR       Absolute directory below project .runtime/logs/diagnostics
+                         (default: project .runtime/logs/diagnostics)
   --journal-lines N      Maximum lines per service/kernel journal (default: 5000)
   -h, --help             Show this help
 
-The command creates a .tar.gz archive and a matching .sha256 file. The archive
+The command creates a .zip archive and a matching .sha256 file. The archive
 contains operational and system metadata but no gateway configuration contents,
 recordings, raw EEG/HR data, passwords, tokens, or private keys.
 EOF
@@ -76,7 +76,7 @@ install -d -o "$archive_uid" -g "$archive_gid" -m 0750 \
 [[ -w $output_dir ]] || fail "Output directory is not writable: $output_dir"
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
-archive_name="neurobridge-kylin-runtime-diagnostics-${stamp}-$$.tar.gz"
+archive_name="neurobridge-kylin-runtime-diagnostics-${stamp}-$$.zip"
 archive_path="$output_dir/$archive_name"
 checksum_path="$archive_path.sha256"
 [[ ! -e $archive_path && ! -e $checksum_path ]] || fail "Refusing to overwrite an existing diagnostic bundle"
@@ -156,7 +156,7 @@ EOF
   printf 'collector=%s\n' "${BASH_SOURCE[0]}"
   printf 'collectorRoot=%s\n' "$root_dir"
   printf 'journalLines=%s\n' "$journal_lines"
-  printf 'archiveFormat=tar.gz\n'
+  printf 'archiveFormat=zip\n'
   printf 'configContentsCollected=false\n'
   printf 'recordingsCollected=false\n'
   printf 'processEnvironmentCollected=false\n'
@@ -458,7 +458,8 @@ else
   warn "python3 is unavailable; final credential-pattern scrub was skipped"
 fi
 
-if ! tar -C "$work_dir" -czf "$archive_path" .; then
+command -v zip >/dev/null 2>&1 || fail "Required command is unavailable: zip"
+if ! (cd "$work_dir" && zip -q -r "$archive_path" .); then
   rm -f -- "$archive_path"
   fail "Could not create diagnostic archive"
 fi
