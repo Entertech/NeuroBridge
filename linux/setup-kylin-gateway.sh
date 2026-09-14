@@ -377,6 +377,7 @@ show_recent_logs() {
 
 check_gateway_capture() {
   local exec_start http_code check_log="$runtime_dir/logs/gateway-capture-check.log"
+  local python_path="$root_dir/.venv/bin/python"
   : >"$check_log" 2>/dev/null || true
   log_message "gatewayCaptureCheckLog=$check_log"
   log_message "网关一键检查开始。"
@@ -405,6 +406,30 @@ check_gateway_capture() {
       log_message "WARNING: capture 页面未返回 2xx/3xx；请根据上面的服务日志处理。"
   else
     log_message "curl 不可用，无法检查 capture 页面。"
+  fi
+  log_message "开始启动链路诊断（菜单 8 自动执行）。"
+  if command -v systemctl >/dev/null 2>&1; then
+    run_step "停止反复重启的网关服务" sudo systemctl stop neurobridge.service || true
+  fi
+  if [[ -x $python_path ]]; then
+    run_step "检查项目 Python 执行权限" "$python_path" --version || true
+  else
+    log_message "项目 Python 不存在或不可执行：$python_path"
+  fi
+  if [[ -x $runtime_dir/algorithm/neurobridge_affective_bridge ]]; then
+    run_step "检查算法桥接程序执行权限" \
+      "$runtime_dir/algorithm/neurobridge_affective_bridge" --help || true
+  else
+    log_message "算法桥接程序不存在或不可执行：$runtime_dir/algorithm/neurobridge_affective_bridge"
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    run_step "跟踪启动脚本（最多 15 秒）" \
+      timeout 15s bash -x "$root_dir/linux/start-kylin-gateway.sh" || true
+  else
+    log_message "timeout 不可用，跳过启动脚本跟踪。"
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    run_step "恢复网关服务" sudo systemctl start neurobridge.service || true
   fi
   if [[ -n $setup_log && -f $setup_log ]]; then
     cp -f -- "$setup_log" "$check_log" 2>/dev/null || true
