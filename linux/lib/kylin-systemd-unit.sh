@@ -66,6 +66,9 @@ StartLimitBurst=10
 Type=simple
 User=$service_user
 Group=$service_group
+# USB serial devices on Kylin are managed by dialout. Declaring it here keeps
+# the systemd service from attempting an sg re-exec under KYSEC.
+SupplementaryGroups=dialout
 WorkingDirectory=$working_directory
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1

@@ -390,6 +390,7 @@ class DeploymentTests(unittest.TestCase):
             self.assertIn("# Managed by NeuroBridge Galaxy Kylin project autostart", unit)
             self.assertIn(f"User={service_user}", unit)
             self.assertIn(f"Group={service_group}", unit)
+            self.assertIn("SupplementaryGroups=dialout", unit)
             self.assertIn(f"WorkingDirectory={project_root}", unit)
             self.assertNotIn(f'WorkingDirectory="{project_root}"', unit)
             self.assertIn(f'ExecStart=/bin/bash "{start_script}"', unit)
