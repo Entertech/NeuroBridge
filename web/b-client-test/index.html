@@ -127,10 +127,21 @@
         </aside>
       </div>
 
+      <section class="visuals" aria-label="实时信号可视化">
+        <article class="card chart-card">
+          <div class="chart-heading"><div><p class="section-index">04</p><h2>脑电波形</h2><p>实时 EEG 窗口（支持单通道或左右通道数据）。</p></div><span id="waveformMeta" class="chart-meta">等待数据</span></div>
+          <canvas id="waveformCanvas" aria-label="脑电波形图"></canvas>
+        </article>
+        <article class="card chart-card">
+          <div class="chart-heading"><div><p class="section-index">05</p><h2>频谱能量</h2><p>各频段相对能量，随算法结果更新。</p></div><span id="spectrumMeta" class="chart-meta">等待数据</span></div>
+          <canvas id="spectrumCanvas" aria-label="脑电频谱图"></canvas>
+        </article>
+      </section>
+
       <section class="card log-card" aria-labelledby="logTitle">
         <div class="log-header">
           <div class="section-heading">
-            <p class="section-index">04</p>
+            <p class="section-index">06</p>
             <div>
               <h2 id="logTitle">协议日志</h2>
               <p>显示连接状态、发送请求和接收帧。原始字节只显示长度，不展开 Base64 内容。</p>
