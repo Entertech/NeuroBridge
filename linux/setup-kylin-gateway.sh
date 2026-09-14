@@ -277,8 +277,25 @@ start_gateway() {
 }
 
 export_diagnostics() {
+  local latest_archive
   run_step "导出完整诊断包" \
     sudo "$root_dir/linux/collect-kylin-runtime-diagnostics.sh" --journal-lines 10000
+  latest_archive=$(find "$runtime_dir/logs/diagnostics" -maxdepth 1 -type f -name '*.zip' \
+    -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
+  if [[ -n $latest_archive && -f $latest_archive ]]; then
+    log_message "diagnosticsZip=$latest_archive"
+    if command -v xdg-open >/dev/null 2>&1; then
+      xdg-open "$latest_archive" >/dev/null 2>&1 &
+      log_message "已打开诊断 ZIP：$latest_archive"
+    elif command -v gio >/dev/null 2>&1; then
+      gio open "$latest_archive" >/dev/null 2>&1 &
+      log_message "已打开诊断 ZIP：$latest_archive"
+    else
+      log_message "未找到桌面打开命令，请手动打开：$latest_archive"
+    fi
+  else
+    log_message "未找到新生成的 ZIP；请检查 .runtime/logs/diagnostics/。"
+  fi
 }
 
 python_environment_ready() {
