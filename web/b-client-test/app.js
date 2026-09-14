@@ -157,9 +157,18 @@ function drawSpectrum(canvas, bands) {
   if (!canvas) return; const [ctx,w,h] = fitCanvas(canvas); ctx.clearRect(0,0,w,h); const vals=spectrumBands.map(k=>Number(bands[k])||0), max=Math.max(...vals,1), gap=8, bw=(w-gap*(vals.length+1))/vals.length;
   vals.forEach((v,i)=>{const bh=v/max*(h-42), x=gap+i*(bw+gap); ctx.fillStyle="#8f7bea"; ctx.fillRect(x,h-22-bh,bw,bh); ctx.fillStyle="#aebbd0"; ctx.font="11px system-ui"; ctx.textAlign="center"; ctx.fillText(spectrumBands[i],x+bw/2,h-7)});
 }
+function isAllFf(values) {
+  if (!Array.isArray(values) || values.length === 0) return false;
+  return values.every((value) => value === 255 || value === -1 || (typeof value === "string" && /^f+$/i.test(value.replace(/[\s:]/g, ""))));
+}
 function updateVisuals(data) {
   const payload=(data?.result?.payload || data?.payload || {}), eeg=payload.algorithm?.eeg || {}, wave=eeg.wave || {};
   const channel = Array.isArray(wave.single) ? "single" : Array.isArray(wave.left) ? "left" : Array.isArray(wave.right) ? "right" : null;
+  const unworn = isAllFf(wave.single) || isAllFf(wave.left) || isAllFf(wave.right);
+  if (unworn) {
+    elements.wearValue.textContent = "未佩戴";
+    elements.latestSummary.textContent = "脑波窗口数据全为 FF，判定为未佩戴状态。";
+  }
   if (channel) { waveformState.values=wave[channel].slice(-1200); waveformState.channel=channel; elements.waveformMeta.textContent=`${channel} · ${waveformState.values.length} 点`; }
   if (eeg.bandPower) { waveformState.bandPower=eeg.bandPower; elements.spectrumMeta.textContent="已更新"; }
   if (channel || eeg.bandPower) drawCharts();
