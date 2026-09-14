@@ -7,7 +7,17 @@ from ...application.gateway import STREAM_NOT_AVAILABLE_REASON, REPLAY_NOT_AVAIL
 
 
 class GatewayWireCodec:
-    envelope = staticmethod(envelope)
+    @staticmethod
+    def envelope(code: int, data: dict[str, object], message: str = "OK") -> dict[str, object]:
+        """Build an envelope and annotate all-FF EEG windows as unworn."""
+        payload = data.get("payload") if isinstance(data, dict) else None
+        eeg = payload.get("algorithm", {}).get("eeg", {}) if isinstance(payload, dict) else {}
+        wave = eeg.get("wave", {}) if isinstance(eeg, dict) else {}
+        channels = [wave.get(name) for name in ("single", "left", "right") if isinstance(wave, dict)]
+        all_ff = any(isinstance(values, list) and values and all(value in (255, -1, "FF", "ff") for value in values) for values in channels)
+        if all_ff and message == "OK":
+            message = "未佩戴：脑波数据全为 FF"
+        return envelope(code, data, message)
 
     def filtered_payload(self, raw: dict, algorithm_payload: dict | None, streams: frozenset[str]) -> dict:
         payload: dict = {}
