@@ -69,7 +69,9 @@ Group=$service_group
 WorkingDirectory=$working_directory
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=$quoted_start
+# Kylin KYSEC may deny direct execution of scripts from a user checkout
+# (status=126). Launch through the system Bash interpreter instead.
+ExecStart=/bin/bash $quoted_start
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=20

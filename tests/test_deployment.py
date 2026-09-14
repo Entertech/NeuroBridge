@@ -393,7 +393,7 @@ class DeploymentTests(unittest.TestCase):
             self.assertIn(f"Group={service_group}", unit)
             self.assertIn(f"WorkingDirectory={project_root}", unit)
             self.assertNotIn(f'WorkingDirectory="{project_root}"', unit)
-            self.assertIn(f'ExecStart="{start_script}"', unit)
+            self.assertIn(f'ExecStart=/bin/bash "{start_script}"', unit)
             self.assertIn("Restart=on-failure", unit)
             self.assertIn("RestartSec=3", unit)
             self.assertIn("Environment=PYTHONDONTWRITEBYTECODE=1", unit)
