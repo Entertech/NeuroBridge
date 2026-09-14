@@ -42,7 +42,10 @@ class PipelineConfig:
     source_queue_size: int = 64
     source_enqueue_timeout_ms: int = 50
     algorithm_queue_size: int = 8
-    persistence_timeout_ms: int = 100
+    # Windows flush/fsync can exceed a 100 ms application wait even when the
+    # bounded recording queue is healthy. Keep confirmation below shutdown
+    # timeout, but long enough to avoid counting normal disk latency as a gap.
+    persistence_timeout_ms: int = 1000
     shutdown_timeout_ms: int = 5000
     send_timeout_ms: int = 5000
     metrics_interval_seconds: int = 10

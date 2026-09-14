@@ -51,7 +51,7 @@ class ApplicationService:
         clock_ms: Callable[[], int] | None = None,
         control: DeviceControl | None = None,
         algorithm_queue_size: int = 8,
-        persistence_timeout_ms: int = 100,
+        persistence_timeout_ms: int = 1000,
         shutdown_timeout_ms: int = 5000,
     ) -> None:
         self.device_protocol = device_protocol
