@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Network-free startup entry for a complete NeuroBridge checkout on Galaxy
 # Kylin. Older checkouts must first receive the generated one-file offline
-# update runner; startup itself never fetches or pulls source code.
+# update runner; the one-click menu updates the checked-out source before startup.
 set -u -o pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
@@ -25,7 +25,7 @@ Run this file from linux/ in a complete NeuroBridge checkout as the normal
 desktop user. It verifies the project runtime directory and opens the numeric
 gateway menu. Daily startup does not inspect or change Git ownership.
 
-Startup never runs git fetch or git pull. To update an old/offline computer,
+The one-click startup menu may run a fast-forward git pull. To update an old/offline computer,
 generate neurobridge-kylin-offline-update.run on a development computer,
 transfer that single file to the project root, and run it once.
 
@@ -91,7 +91,7 @@ touch "$bootstrap_log" || fail "无法创建引导日志。"
 chmod 0600 "$bootstrap_log" 2>/dev/null || true
 exec 3>&1 4>&2
 exec > >(tee -a "$bootstrap_log") 2>&1
-printf 'project=%s\nlog=%s\nsourceUpdateAttempted=false\n' "$project_dir" "$bootstrap_log"
+printf 'project=%s\nlog=%s\nsourceUpdateHandledByMenu=true\n' "$project_dir" "$bootstrap_log"
 printf 'gitPermissionChecked=false\n'
 
 if [[ ! -f $assistant ]]; then

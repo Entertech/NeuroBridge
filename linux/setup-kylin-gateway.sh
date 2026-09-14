@@ -217,12 +217,13 @@ repair_and_update() {
   after_revision=$(git -C "$root_dir" rev-parse HEAD 2>/dev/null) || return 1
   if [[ $before_revision != "$after_revision" ]]; then
     log_message "代码已从 $before_revision 更新到 $after_revision。"
-    log_message "为避免继续运行更新前的脚本，本助手现在退出。"
-    show_next "bash linux/neurobridge-kylin-bootstrap.sh"
-    return 20
+    if command -v systemctl >/dev/null 2>&1 \
+      && systemctl is-active --quiet neurobridge.service 2>/dev/null; then
+      run_step "停止更新前的网关进程" sudo systemctl stop neurobridge.service || return 1
+      log_message "旧网关已停止，后续准备流程将启动新代码。"
+    fi
   fi
-  log_message "代码已经是最新版本。"
-  log_message "代码已是最新版本：返回菜单输入 1 一键准备并启动，或输入 2 直接启动。"
+  [[ $before_revision == "$after_revision" ]] && log_message "代码已经是最新版本。"
 }
 
 check_current_serial() {
@@ -381,7 +382,8 @@ EOF
 prepare_and_start() {
   local serial_result
   ensure_runtime_writable || return 1
-  log_message "日常启动只使用已有代码，不检查或修改 Git 写权限；需要更新代码时选择菜单 3。"
+  log_message "一键启动前先以普通用户执行 fast-forward 更新；更新失败不会停止已有网关。"
+  repair_and_update || return 1
   if python_environment_ready; then
     log_message "Python 环境已就绪，跳过重复安装。"
   else
@@ -460,8 +462,6 @@ while true; do
       ;;
     3)
       repair_and_update
-      result=$?
-      (( result == 20 )) && exit 0
       ;;
     4)
       check_current_serial
