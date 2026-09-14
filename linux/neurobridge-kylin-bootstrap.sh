@@ -56,11 +56,14 @@ ask_yes_no() {
 repair_launcher_permissions() {
   local launcher
   for launcher in "$assistant" "$gateway_start"; do
-    [[ -f $launcher && ! -L $launcher ]] || fail "启动脚本缺失或不安全：$launcher"
+    [[ -f $launcher && ! -L $launcher ]] || {
+      [[ $launcher == "$gateway_start" ]] && continue
+      fail "启动脚本缺失或不安全：$launcher"
+    }
     if [[ ! -x $launcher ]]; then
       printf '启动脚本缺少执行权限，正在修复：%s\n' "$launcher"
       if ! chmod u+x -- "$launcher" 2>/dev/null; then
-        sudo chmod u+x -- "$launcher" || fail "无法修复启动脚本执行权限：$launcher"
+        printf 'WARNING: 无法修复启动脚本执行权限，将继续用 bash 解释器启动：%s\n' "$launcher" >&2
       fi
     fi
   done

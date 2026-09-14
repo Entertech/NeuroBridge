@@ -33,7 +33,7 @@ class DeploymentTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
-        self.assertIn("Startup never runs git fetch or git pull", help_result.stdout)
+        self.assertIn("one-click startup menu may run a fast-forward git pull", help_result.stdout)
         self.assertIn("Do not run with sudo", help_result.stdout)
 
         menu_result = subprocess.run(
@@ -58,7 +58,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('sudo chown -R --no-dereference "$current_uid:$current_gid" "$runtime_dir"', script)
         self.assertIn("Daily startup does not inspect or change Git ownership", script)
         self.assertIn("gitPermissionChecked=false", script)
-        self.assertIn("sourceUpdateAttempted=false", script)
+        self.assertIn("sourceUpdateHandledByMenu=true", script)
         self.assertIn("启动入口不会自动执行 Git", script)
         self.assertNotIn('git -C "$project_dir" fetch', script)
         self.assertNotIn('git -C "$project_dir" checkout', script)
@@ -287,14 +287,13 @@ class DeploymentTests(unittest.TestCase):
         prepare_source = script.split("prepare_and_start() {", 1)[1].split("\n}\n\nshow_menu()", 1)[0]
         self.assertNotIn("repair_project_permissions", prepare_source)
         self.assertIn("ensure_runtime_writable", prepare_source)
-        self.assertIn("日常启动只使用已有代码，不检查或修改 Git 写权限", prepare_source)
+        self.assertIn("一键启动前先以普通用户执行 fast-forward 更新", prepare_source)
 
         self.assertIn('git -C "$root_dir" pull --ff-only', script)
         self.assertNotIn('sudo git -C "$root_dir" pull', script)
         self.assertNotIn('run_step "以普通用户更新代码" sudo', script)
-        self.assertIn("为避免继续运行更新前的脚本，本助手现在退出", script)
-        self.assertIn('(( result == 20 )) && exit 0', script)
-        self.assertIn('show_next "bash linux/neurobridge-kylin-bootstrap.sh"', script)
+        self.assertIn("更新后的助手代码不会继续使用旧进程", script)
+        self.assertIn("NEUROBRIDGE_RESUME_START", script)
         self.assertIn('sudo "$root_dir/linux/diagnose-kylin-usb-serial.sh"', script)
         self.assertIn("检查当前 USB/串口（无需拔插）", script)
         self.assertIn("--plug-cycle --timeout 60", script)

@@ -131,7 +131,7 @@ class OperationalLoggingTests(unittest.TestCase):
             self.assertIn("runtime-stdout", result.stdout)
             self.assertIn("runtime-stderr", result.stderr)
             logged = next((project / ".runtime/logs").glob("kylin-bootstrap-*.log")).read_text()
-            self.assertIn("sourceUpdateAttempted=false", logged)
+            self.assertIn("sourceUpdateHandledByMenu=true", logged)
             self.assertNotIn("runtime-stdout", logged)
             self.assertNotIn("runtime-stderr", logged)
 
