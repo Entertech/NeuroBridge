@@ -34,6 +34,7 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.gateway.start()
         self.server = await create_server(self.gateway)
         self.url = f"ws://127.0.0.1:{self.port}/neurobridge/v1/ws"
+        self.origin = "http://127.0.0.1:8080"
 
     async def asyncTearDown(self) -> None:
         self.server.close()
@@ -45,11 +46,11 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         for offered in (None, ["other.v1"]):
             with self.subTest(offered=offered):
                 with self.assertRaises(websockets.exceptions.InvalidStatusCode) as error:
-                    await websockets.connect(self.url, subprotocols=offered)
+                    await websockets.connect(self.url, subprotocols=offered, origin=self.origin)
                 self.assertEqual(error.exception.status_code, 426)
 
     async def test_status_request_uses_negotiated_subprotocol_and_contract_envelope(self) -> None:
-        async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None) as client:
+        async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None, origin=self.origin) as client:
             self.assertEqual(client.subprotocol, SUBPROTOCOL)
             await client.send(json.dumps({"protocolVersion": "1.0", "messageType": "request", "requestId": "status-1", "action": "getStatus", "params": {}}))
             response = json.loads(await client.recv())
@@ -58,8 +59,15 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response["data"]["result"]["gatewayBootId"], self.gateway.boot_id)
 
     async def test_binary_frame_is_rejected(self) -> None:
-        async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None) as client:
+        async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None, origin=self.origin) as client:
             await client.send(b"not-json")
             with self.assertRaises(websockets.exceptions.ConnectionClosedError) as error:
                 await client.recv()
             self.assertEqual(error.exception.code, 1003)
+
+    async def test_local_browser_strategy_rejects_missing_or_unapproved_origins(self) -> None:
+        for origin in (None, "http://localhost:8080", "https://example.com"):
+            with self.subTest(origin=origin):
+                with self.assertRaises(websockets.exceptions.InvalidStatusCode) as error:
+                    await websockets.connect(self.url, subprotocols=[SUBPROTOCOL], origin=origin)
+                self.assertEqual(error.exception.status_code, 403)

@@ -39,14 +39,19 @@ def _deep_merge(target: dict, update: dict) -> None:
 class RecordingStore:
     """Persist raw packets and independent algorithm metric events per session."""
 
-    def __init__(self, root: Path, capture_package_pdf: Path | None = None) -> None:
+    def __init__(self, root: Path, capture_package_pdf: Path | None = None, *, create_directories: bool = True) -> None:
         self.root = root
-        self.root.mkdir(parents=True, exist_ok=True)
-        # Retain these legacy directories so pre-v1.0 recordings remain replayable.
-        (root / "raw").mkdir(exist_ok=True)
-        (root / "algorithm").mkdir(exist_ok=True)
-        (root / "sessions").mkdir(exist_ok=True)
-        (root / "exports").mkdir(exist_ok=True)
+        if create_directories:
+            self.root.mkdir(parents=True, exist_ok=True)
+            # Retain these legacy directories so pre-v1.0 recordings remain replayable.
+            (root / "raw").mkdir(exist_ok=True)
+            (root / "algorithm").mkdir(exist_ok=True)
+            (root / "sessions").mkdir(exist_ok=True)
+            (root / "exports").mkdir(exist_ok=True)
+            # Internal device-boundary records are deliberately outside sessions:
+            # they are not part of the locked capture-package export or replay
+            # contract, but remain correlated by recording/session ID.
+            (root / "internal-device").mkdir(mode=0o700, exist_ok=True)
         self.recording_id: str | None = None
         self.last_recording_id: str | None = None
         self._sequence: dict[str, int] = {}
@@ -107,6 +112,27 @@ class RecordingStore:
                 "invalidReasons": [] if valid else [f"{stream.upper()}_PACKET_LENGTH_INVALID"],
             },
         )
+
+    def save_device_packet(self, *, transport: str, channel: str, received_at_ms: int, value: bytes) -> None:
+        """Persist adapter-boundary bytes without changing the public archive."""
+
+        if not self.recording_id:
+            return
+        directory = self.root / "internal-device" / self.recording_id
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = directory / "packets.jsonl"
+        path.touch(mode=0o600, exist_ok=True)
+        row = {
+            "sessionId": self.recording_id,
+            "transport": transport,
+            "channel": channel,
+            "receivedAtMs": received_at_ms,
+            "byteLength": len(value),
+            "encoding": "base64",
+            "bytesBase64": base64.b64encode(value).decode("ascii"),
+        }
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(row, separators=(",", ":"), ensure_ascii=False) + "\n")
 
     def save_algorithm_events(self, *, algorithm: dict, computed_at_ms: int, eeg_source: dict | None, hr_source: dict | None, valid: bool, invalid_reasons: list[str]) -> None:
         if not self.recording_id:
@@ -319,8 +345,13 @@ class RecordingStore:
 
     def _write_manifest(self, recording_id: str, documentation_pdf: Path | None = None) -> dict:
         session = self._session_dir(recording_id)
+        manifest_path = session / "manifest.json"
+        try:
+            existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing_manifest = {}
         files = []
-        for path in sorted(session.rglob("*.jsonl")):
+        for path in self._public_files(session):
             lines = path.read_text(encoding="utf-8").splitlines()
             timestamps = []
             for line in lines:
@@ -341,6 +372,12 @@ class RecordingStore:
             "startedAtMs": self._session_started_at_ms.get(recording_id),
             "files": files,
         }
+        # The segmented recording adapter owns this crash-recovery metadata.
+        # Preserve it when the compatibility export manifest is refreshed.
+        if isinstance(existing_manifest.get("segments"), list):
+            manifest["segments"] = existing_manifest["segments"]
+        if isinstance(existing_manifest.get("endedAtMs"), int):
+            manifest["endedAtMs"] = existing_manifest["endedAtMs"]
         if documentation_pdf is not None:
             manifest["documentation"] = {
                 "path": documentation_pdf.name,
@@ -348,8 +385,16 @@ class RecordingStore:
                 "version": CAPTURE_PACKAGE_DOCUMENT_VERSION,
                 "sha256": sha256(documentation_pdf.read_bytes()).hexdigest(),
             }
-        (session / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return manifest
+
+    @staticmethod
+    def _public_files(session: Path) -> list[Path]:
+        """Allow only files described by the released capture-package contract."""
+        candidates = [session / "raw" / f"{stream}.jsonl" for stream in {**RAW_STREAMS, **LEGACY_REPLAY_STREAMS}]
+        candidates += [session / "algorithm" / f"{metric}.jsonl" for metric in ALGORITHM_FILES]
+        return sorted(path for path in candidates if path.is_file() and not path.is_symlink()
+                      and path.resolve().is_relative_to(session.resolve()))
 
     def _export_documentation_pdf(self) -> Path:
         """Return the published capture-package PDF, rebuilding it when needed."""
@@ -386,9 +431,8 @@ class RecordingStore:
         target = self.root / "exports" / f"neurobridge-{recording_id}.zip"
         temporary = target.with_suffix(".zip.tmp")
         with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in sorted(session.rglob("*")):
-                if path.is_file():
-                    archive.write(path, arcname=f"{session.name}/{path.relative_to(session)}")
+            for path in [session / "manifest.json", *self._public_files(session)]:
+                archive.write(path, arcname=f"{session.name}/{path.relative_to(session)}")
             archive.write(documentation_pdf, arcname=f"{session.name}/{documentation_pdf.name}")
         temporary.replace(target)
         return target

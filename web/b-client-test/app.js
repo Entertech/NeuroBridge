@@ -5,6 +5,8 @@ const SUBPROTOCOL = "neurobridge.v1";
 let socket = null;
 let subscriptions = new Map();
 let logEntries = [];
+const waveformState = { values: [], channel: "single" };
+const spectrumBands = ["delta", "theta", "alpha", "lowBeta", "highBeta", "beta", "gamma"];
 
 const elements = {
   endpoint: document.querySelector("#endpoint"),
@@ -30,6 +32,10 @@ const elements = {
   subjectValue: document.querySelector("#subjectValue"),
   timestampValue: document.querySelector("#timestampValue"),
   latestSummary: document.querySelector("#latestSummary"),
+  waveformCanvas: document.querySelector("#waveformCanvas"),
+  spectrumCanvas: document.querySelector("#spectrumCanvas"),
+  waveformMeta: document.querySelector("#waveformMeta"),
+  spectrumMeta: document.querySelector("#spectrumMeta"),
 };
 
 if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
@@ -132,10 +138,46 @@ function updateSnapshot(data) {
   if (messages.length) elements.latestSummary.textContent = messages.join(" · ");
 }
 
+function drawCharts() {
+  drawWaveform(elements.waveformCanvas, waveformState.values);
+  drawSpectrum(elements.spectrumCanvas, waveformState.bandPower || {});
+}
+function fitCanvas(canvas) {
+  const ratio = window.devicePixelRatio || 1, rect = canvas.getBoundingClientRect();
+  canvas.width = Math.max(1, rect.width * ratio); canvas.height = Math.max(1, rect.height * ratio);
+  const ctx = canvas.getContext("2d"); ctx.setTransform(ratio, 0, 0, ratio, 0, 0); return [ctx, rect.width, rect.height];
+}
+function drawWaveform(canvas, values) {
+  if (!canvas) return; const [ctx,w,h] = fitCanvas(canvas); ctx.clearRect(0,0,w,h);
+  ctx.strokeStyle = "rgba(91,127,162,.3)"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,h/2); ctx.lineTo(w,h/2); ctx.stroke();
+  if (!values.length) return; const min=Math.min(...values), max=Math.max(...values), span=max-min||1;
+  ctx.strokeStyle="#5fd1e8"; ctx.lineWidth=1.6; ctx.beginPath(); values.forEach((v,i)=>{const x=i/(values.length-1||1)*w,y=h-((v-min)/span)*h*.82-h*.09;i?ctx.lineTo(x,y):ctx.moveTo(x,y)}); ctx.stroke();
+}
+function drawSpectrum(canvas, bands) {
+  if (!canvas) return; const [ctx,w,h] = fitCanvas(canvas); ctx.clearRect(0,0,w,h); const vals=spectrumBands.map(k=>Number(bands[k])||0), max=Math.max(...vals,1), gap=8, bw=(w-gap*(vals.length+1))/vals.length;
+  vals.forEach((v,i)=>{const bh=v/max*(h-42), x=gap+i*(bw+gap); ctx.fillStyle="#8f7bea"; ctx.fillRect(x,h-22-bh,bw,bh); ctx.fillStyle="#aebbd0"; ctx.font="11px system-ui"; ctx.textAlign="center"; ctx.fillText(spectrumBands[i],x+bw/2,h-7)});
+}
+function isAllFf(values) {
+  if (!Array.isArray(values) || values.length === 0) return false;
+  return values.every((value) => value === 255 || value === -1 || (typeof value === "string" && /^f+$/i.test(value.replace(/[\s:]/g, ""))));
+}
+function updateVisuals(data) {
+  const payload=(data?.result?.payload || data?.payload || {}), eeg=payload.algorithm?.eeg || {}, wave=eeg.wave || {};
+  const channel = Array.isArray(wave.single) ? "single" : Array.isArray(wave.left) ? "left" : Array.isArray(wave.right) ? "right" : null;
+  const unworn = isAllFf(wave.single) || isAllFf(wave.left) || isAllFf(wave.right);
+  if (unworn) {
+    elements.wearValue.textContent = "未佩戴";
+    elements.latestSummary.textContent = "脑波窗口数据全为 FF，判定为未佩戴状态。";
+  }
+  if (channel) { waveformState.values=wave[channel].slice(-1200); waveformState.channel=channel; elements.waveformMeta.textContent=`${channel} · ${waveformState.values.length} 点`; }
+  if (eeg.bandPower) { waveformState.bandPower=eeg.bandPower; elements.spectrumMeta.textContent="已更新"; }
+  if (channel || eeg.bandPower) drawCharts();
+}
 function handleGatewayMessage(message) {
   if (!message || typeof message !== "object") return;
   const data = message.data;
   updateSnapshot(data);
+  updateVisuals(data);
 
   if (message.code !== 200) {
     appendLog("error", `← ${message.code ?? "ERR"}`, message);
@@ -191,7 +233,8 @@ function connect() {
   }
   socket.addEventListener("open", () => {
     setConnectionState("on", "已连接");
-    appendLog("system", "SYSTEM", "WebSocket 已建立。建议先发送 getStatus。" );
+    appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。" );
+    sendRequest("getStatus", {});
   });
   socket.addEventListener("message", (event) => {
     try {
@@ -255,5 +298,11 @@ elements.copyLogButton.addEventListener("click", async () => {
 
 refreshSubscriptionSelect();
 appendLog("system", "SYSTEM", window.NEUROBRIDGE_B_CLIENT_ENDPOINT
-  ? `B 端联调台已就绪；已使用本机采集服务地址 ${elements.endpoint.value}，不会发送任何保活帧。`
-  : "B 端联调台已就绪；不会发送任何保活帧。");
+  ? `网关联调台已就绪；已使用本机服务地址 ${elements.endpoint.value}，不会发送任何保活帧。`
+  : "网关联调台已就绪；不会发送任何保活帧。");
+if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
+  connect();
+}
+
+window.addEventListener("resize", drawCharts);
+drawCharts();

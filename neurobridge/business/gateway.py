@@ -2,156 +2,199 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-import json
 import logging
-import time
 import uuid
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from ..algorithm.runner import AlgorithmRunner
+from ..adapters.storage import SegmentedRecordingRepository
+from ..application.snapshots import InMemoryLatestSnapshotStore
 from ..config import GatewayConfig
+from ..device.packet import DevicePacket
 from ..ble.packets import DataWindow, WindowAssembler
-from ..versioning import NORTHBOUND_PROTOCOL_VERSION
+from ..domain.algorithm import AlgorithmResult
+from ..domain.result import WindowResult
+from ..domain.signal import ParsedSignal, ParsedSignalBatch
+from ..ports.recording import PersistenceRecord
 from .recording import RecordingStore
 
+from ..application.gateway import GatewayApplication, ClientSession, Subscription, ProtocolError, now_ms, safe_log_text, REPLAY_NOT_AVAILABLE_REASON, STREAM_NOT_AVAILABLE_REASON
+from ..adapters.northbound.protocol import project_window, envelope
+from ..adapters.northbound.codec import GatewayWireCodec
+from ..versioning import NORTHBOUND_PROTOCOL_VERSION as PROTOCOL_VERSION
+from ..adapters.northbound.controller import NorthboundController
+
 LOG = logging.getLogger(__name__)
-PROTOCOL_VERSION = NORTHBOUND_PROTOCOL_VERSION
-STREAMS = frozenset({"eeg", "hr", "eeg.raw", "hr.raw", "status"})
-# These identifiers are part of the locked v0.2 B-side contract.  Keep them
-# stable until a later, explicitly published protocol version replaces them.
-REPLAY_NOT_AVAILABLE_REASON = "REPLAY_NOT_AVAILA设备"
-STREAM_NOT_AVAILABLE_REASON = "STREAM_NOT_AVAILA设备"
-REPLAY_DELIVERY_QUEUE_SIZE = 16
-# A recording containing one event has no source timestamp gap to pace a
-# restart. Yield briefly at the cycle boundary so it cannot become a busy loop.
-REPLAY_CYCLE_MIN_PAUSE_SECONDS = 0.001
 
 
-def now_ms() -> int:
-    return int(time.time() * 1000)
+class Gateway(GatewayApplication):
+    """Compatibility facade for pre-RawChunk in-process callers and fixtures."""
 
-
-def envelope(code: int, data: dict, message: str = "OK") -> dict:
-    return {"protocolVersion": PROTOCOL_VERSION, "code": code, "data": data, "message": message}
-
-
-class ProtocolError(Exception):
-    def __init__(self, code: int, reason: str, message: str, retryable: bool = False, details: dict | None = None) -> None:
-        self.code, self.reason, self.message, self.retryable, self.details = code, reason, message, retryable, details or {}
-
-
-@dataclass(eq=False)
-class Subscription:
-    id: str
-    streams: frozenset[str]
-    include_invalid: bool
-    send: Any
-    replay_outbox: asyncio.Queue[dict] = field(default_factory=lambda: asyncio.Queue(maxsize=REPLAY_DELIVERY_QUEUE_SIZE))
-    replay_delivery_task: asyncio.Task | None = None
-
-
-@dataclass(eq=False)
-class ClientSession:
-    subscriptions: dict[str, Subscription] = field(default_factory=dict)
-
-
-class Gateway:
     def __init__(self, config: GatewayConfig) -> None:
-        self.config = config
-        self.boot_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:4]}"
+        super().__init__(
+            config, store=RecordingStore(config.recording.directory),
+            algorithm=AlgorithmRunner(config.algorithm),
+            snapshots=InMemoryLatestSnapshotStore(),
+            recording_factory=lambda: SegmentedRecordingRepository(
+                config.recording.directory,
+                queue_size=config.storage.writer_queue_size,
+                **{key: value for key, value in vars(config.storage).items() if key != "writer_queue_size"},
+            ),
+            supports_replay=config.data_source.type == "bluetooth",
+            project_window=project_window, wire=GatewayWireCodec(),
+            live_connection_states=frozenset({"validated" if config.data_source.type == "serial" else "connected"}),
+            initial_connection_state="not_connected" if config.data_source.type == "serial" else "disconnected",
+        )
+        self.log = LOG
         self.assembler = WindowAssembler()
-        self.store = RecordingStore(config.recording.directory)
-        self.algorithm = AlgorithmRunner(config.algorithm)
-        self.status: dict[str, Any] = {"connectionState": "disconnected", "wearState": "unknown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
-        # This is deliberately an operational-only field: the released B-side
-        # status contract is unchanged.  Linux operators can inspect it in the
-        # durable gateway log, matching the failure detail shown by the macOS
-        # POC control page.
-        self.connection_error: str | None = None
-        self.sessions: set[Any] = set()
-        self.latest_algorithm: dict | None = None
-        self.latest_algorithm_timestamp: int | None = None
-        self.window_observer: Callable[[DataWindow, dict | None, list[str], bool], Awaitable[None]] | None = None
-        self._window_flush_task: asyncio.Task | None = None
-        self._window_flush_deadline_ms: int | None = None
-        self._replay_task: asyncio.Task | None = None
-        self._active_replay_recording_id: str | None = None
-        self._replay_algorithm: dict | None = None
-        self._replay_algorithm_timestamp: int | None = None
 
-    @property
-    def live(self) -> bool:
-        return self.status["connectionState"] == "connected"
+    async def handle(self, session: ClientSession, raw: str, send: Any) -> None:
+        await NorthboundController(self).handle(session, raw, send)
 
-    @property
-    def replay_available(self) -> bool:
-        return self.replay_recording_id is not None
-
-    @property
-    def replay_recording_id(self) -> str | None:
-        return self._active_replay_recording_id or self.store.replay_recording_id(self.config.recording.replay_recording_id)
-
-    def mode(self) -> str:
-        return "live" if self.live else "replay"
-
-    async def start(self) -> None:
-        # The local algorithm is session scoped and must be initialized only after
-        # a Flowtime connection has subscribed all notifications and started capture.
-        self.status["algorithmState"] = "unavailable"
-        LOG.info("Gateway started: bootId=%s recordingDirectory=%s networkMode=%s", self.boot_id, self.config.recording.directory, self.config.network.mode)
+    parse_request = staticmethod(NorthboundController.parse_request)
 
     async def stop(self) -> None:
         await self._cancel_window_flush()
-        await self._stop_replay()
-        await self.algorithm.stop()
-        self.store.stop()
-        LOG.info("Gateway stopped: bootId=%s", self.boot_id)
-
-    async def on_device_ready(self) -> None:
-        """Start a fresh local algorithm session before publishing connected state."""
-        await self.algorithm.initialize()
-        self.status["algorithmState"] = "ready" if self.algorithm.available else ("error" if self.algorithm.error else "unavailable")
-        if self.status["algorithmState"] == "error":
-            LOG.error("Device capture initialized: algorithmState=error reason=%s", self.algorithm.error)
-        else:
-            LOG.info("Device capture initialized: algorithmState=%s", self.status["algorithmState"])
+        await super().stop()
 
     async def update_status(self, name: str, value: object) -> None:
-        previous = self.status.get(name)
-        self.status[name] = value
-        if name == "connectionState" and value == "connected" and previous != "connected":
-            self.connection_error = None
-            await self._stop_replay()
-            recording_id = self.store.start(now_ms())
-            LOG.info("Headband connected; recording started: recordingId=%s", recording_id)
-        if name == "connectionState" and value == "disconnected" and previous != "disconnected":
+        if name == "connectionState" and value == "disconnected" and self.status.get(name) != value:
             await self._cancel_window_flush()
             last = self.assembler.flush()
             if last:
                 await self.publish_window(last)
-            await self.algorithm.stop()
-            self.status["algorithmState"] = "unavailable"
-            self.store.stop()
-            LOG.info("Headband disconnected; recording stopped")
-        if previous != value:
-            if name != "connectionState":
-                LOG.info("Gateway status changed: %s=%s", name, value)
-            await self.broadcast_status()
+        await super().update_status(name, value)
 
-    async def update_connection_error(self, error: str) -> None:
-        """Record the latest BLE setup failure for Linux operational diagnosis.
+    async def publish_window_result(self, result: WindowResult) -> None:
+        # Legacy export fixtures still use metric files. Production composition
+        # persists each window only once via RecordingRepository.
+        raw, refs, signals = project_window(result)
+        if self.config.data_source.type == "bluetooth":
+            for stream, items in signals.items():
+                for item in items:
+                    self.store.save_raw_packet(stream=stream, received_at_ms=item.received_at_ms,
+                        window_start_ms=result.batch.window_start_ms, window_end_ms=result.batch.window_end_ms, value=item.samples)
+        if result.algorithm_result.metrics:
+            self.store.save_algorithm_events(algorithm=dict(result.algorithm_result.metrics),
+                computed_at_ms=result.completed_at_ms, eeg_source=refs["eeg"], hr_source=refs["hr"],
+                valid=result.valid, invalid_reasons=list(result.algorithm_result.invalid_reasons))
+        await super().publish_window_result(result)
 
-        ``FlowtimeAdapter`` retries internally, so surfacing the exception here
-        must not terminate the gateway or alter the published northbound schema.
-        """
-        self.connection_error = error
-        LOG.warning("Headband connection attempt failed: %s", error)
+    async def on_device_ready(self, *, already_prepared: bool = False) -> bool:
+        """Prepare a fresh local algorithm session and report whether it is usable."""
+        LOG.info(
+            "Local algorithm preparation started: transport=%s algorithmEnabled=%s",
+            self.config.data_source.type,
+            self.config.algorithm.enabled,
+        )
+        try:
+            if not already_prepared:
+                await self.algorithm.initialize()
+        except Exception as exc:
+            await self.update_status("algorithmState", "error")
+            LOG.exception(
+                "Local algorithm preparation failed: transport=%s algorithmState=error "
+                "errorType=%s reason=%s",
+                self.config.data_source.type,
+                type(exc).__name__,
+                safe_log_text(exc),
+            )
+            return False
+        algorithm_state = "ready" if self.algorithm.available else ("error" if self.algorithm.error else "unavailable")
+        await self.update_status("algorithmState", algorithm_state)
+        if algorithm_state == "ready":
+            LOG.info("Local algorithm preparation succeeded: transport=%s algorithmState=ready", self.config.data_source.type)
+            return True
+        reason = self.algorithm.error or (
+            "algorithm_disabled_by_configuration"
+            if not self.config.algorithm.enabled
+            else "algorithm_process_not_available"
+        )
+        LOG.error(
+            "Local algorithm preparation failed: transport=%s algorithmState=%s reason=%s",
+            self.config.data_source.type,
+            algorithm_state,
+            safe_log_text(reason),
+        )
+        return False
 
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
-        received_at_ms = now_ms()
+        """Compatibility entry point for tests and older in-process callers."""
+
+        await self.receive_device_packet(DevicePacket(self.config.data_source.type, characteristic, bytes(value), now_ms()))
+
+    async def receive_device_packet(self, packet: DevicePacket) -> None:
+        """Consume the transport-neutral event emitted by a selected adapter."""
+
+        if packet.transport == "serial" and self.status["connectionState"] != "validated":
+            LOG.warning(
+                "Serial device packet blocked before validation success: connectionState=%s channel=%s bytes=%s",
+                self.status["connectionState"],
+                packet.channel,
+                len(packet.value),
+            )
+            return
+
+        characteristic = packet.channel
+        value = packet.value
+        received_at_ms = packet.received_at_ms
+        self.store.save_device_packet(
+            transport=packet.transport,
+            channel=characteristic,
+            received_at_ms=received_at_ms,
+            value=value,
+        )
+        if (
+            self.recording_repository is not None
+            and self.store.recording_id
+            and (characteristic == "serial.frame" or packet.transport == "bluetooth")
+        ):
+            receipt = self.recording_repository.try_append(
+                PersistenceRecord(
+                    1,
+                    self.store.recording_id,
+                    "raw.device_frame",
+                    received_at_ms,
+                    f"raw-{uuid.uuid4().hex}",
+                    {
+                        "transport": packet.transport,
+                        "channel": characteristic,
+                        "rawBytes": value,
+                    },
+                )
+            )
+            if not receipt.accepted:
+                self.status["storageState"] = self.recording_repository.storage_status().state.value
+                LOG.error(
+                    "Raw device frame was not accepted by persistence: recordingId=%s reason=%s",
+                    self.store.recording_id,
+                    receipt.reason,
+                )
         raw_stream = {"ff31": "eeg", "ff51": "hr"}.get(characteristic)
+        if raw_stream is None:
+            if characteristic not in {"ff32", "serial.frame"}:
+                LOG.warning(
+                    "Ignoring unsupported device channel: transport=%s channel=%s bytes=%s",
+                    packet.transport,
+                    characteristic,
+                    len(value),
+                )
+            return
+        self._capture_stats[f"{raw_stream}Packets"] = int(self._capture_stats[f"{raw_stream}Packets"] or 0) + 1
+        self._capture_stats[f"{raw_stream}Bytes"] = int(self._capture_stats[f"{raw_stream}Bytes"] or 0) + len(value)
+        if self._capture_stats["firstPacketAtMs"] is None:
+            self._capture_stats["firstPacketAtMs"] = received_at_ms
+        self._capture_stats["lastDataAtMs"] = received_at_ms
+        expected_bytes = {"eeg": 20, "hr": 1}[raw_stream]
+        if len(value) != expected_bytes:
+            self._capture_stats["invalidPacketLengths"] = int(self._capture_stats["invalidPacketLengths"] or 0) + 1
+            LOG.warning(
+                "Device packet length invalid: channel=%s bytes=%s expectedBytes=%s invalidPacketLengths=%s",
+                characteristic,
+                len(value),
+                expected_bytes,
+                self._capture_stats["invalidPacketLengths"],
+            )
         if raw_stream:
             window_start_ms = received_at_ms - received_at_ms % self.assembler.interval_ms
             self.store.save_raw_packet(
@@ -199,6 +242,7 @@ class Gateway:
                 await task
 
     async def publish_window(self, window: DataWindow) -> None:
+        self._capture_stats["windows"] = int(self._capture_stats["windows"] or 0) + 1
         raw = window.raw_payload()
         reasons = list(window.reasons)
         algorithm_payload, algorithm_reasons = await self.algorithm.evaluate(window)
@@ -208,7 +252,51 @@ class Gateway:
         if self.algorithm.available:
             reasons.extend(algorithm_reasons)
         valid = not reasons
-        if algorithm_payload:
+        batch_id = f"batch-{uuid.uuid4().hex}"
+        persistence_guaranteed = True
+        if self.recording_repository is not None and self.store.recording_id:
+            parsed_receipt = self.recording_repository.try_append(
+                PersistenceRecord(
+                    1,
+                    self.store.recording_id,
+                    "parsed.signal_batch",
+                    window.end_ms,
+                    batch_id,
+                    {
+                        "batchId": batch_id,
+                        "windowStartMs": window.start_ms,
+                        "windowEndMs": window.end_ms,
+                        "eegPacketCount": len(window.eeg),
+                        "hrPacketCount": len(window.hr),
+                        "valid": valid,
+                        "invalidReasons": reasons,
+                    },
+                )
+            )
+            parsed_receipt = await self.recording_repository.confirm(parsed_receipt)
+            persistence_guaranteed = parsed_receipt.persistence_guaranteed
+        if not valid:
+            self._capture_stats["invalidWindows"] = int(self._capture_stats["invalidWindows"] or 0) + 1
+        LOG.debug(
+            "Capture window processed: recordingId=%s startMs=%s endMs=%s eegPackets=%s hrPackets=%s "
+            "valid=%s invalidReasons=%s algorithmState=%s clients=%s subscriptions=%s",
+            self.store.recording_id,
+            window.start_ms,
+            window.end_ms,
+            len(window.eeg),
+            len(window.hr),
+            valid,
+            ",".join(reasons) if reasons else "none",
+            self.status.get("algorithmState"),
+            len(self.sessions),
+            sum(len(session.subscriptions) for session in self.sessions),
+        )
+        now = now_ms()
+        last_summary = int(self._capture_stats["lastSummaryAtMs"] or 0)
+        if now - last_summary >= 10_000:
+            self._capture_stats["lastSummaryAtMs"] = now
+            self._log_capture_summary("periodic")
+        if algorithm_payload and self.config.data_source.type == "bluetooth":
             self.store.save_algorithm_events(
                 algorithm=algorithm_payload,
                 computed_at_ms=now_ms(),
@@ -219,6 +307,87 @@ class Gateway:
             )
             if valid:
                 self.latest_algorithm, self.latest_algorithm_timestamp = algorithm_payload, window.end_ms
+        if self.recording_repository is not None and self.store.recording_id:
+            algorithm_receipt = self.recording_repository.try_append(
+                PersistenceRecord(
+                    1,
+                    self.store.recording_id,
+                    "algorithm.result",
+                    now_ms(),
+                    batch_id,
+                    {
+                        "batchId": batch_id,
+                        "metrics": algorithm_payload or {},
+                        "valid": valid,
+                        "invalidReasons": reasons,
+                    },
+                )
+            )
+            algorithm_receipt = await self.recording_repository.confirm(algorithm_receipt)
+            persistence_guaranteed = persistence_guaranteed and algorithm_receipt.persistence_guaranteed
+            storage_status = self.recording_repository.storage_status()
+            self.status["storageState"] = storage_status.state.value
+            self.status["persistenceGuaranteed"] = persistence_guaranteed
+            if not persistence_guaranteed:
+                LOG.error(
+                    "Window persistence is not guaranteed: recordingId=%s batchId=%s storageState=%s",
+                    self.store.recording_id,
+                    batch_id,
+                    storage_status.state.value,
+                )
+        recording_session_id = self.store.recording_id or "unrecorded"
+        snapshot_signals: list[ParsedSignal] = []
+        for signal_type, packets, expected_bytes in (
+            ("eeg", window.eeg, 20),
+            ("hr", window.hr, 1),
+        ):
+            if not packets:
+                continue
+            signal_reasons = tuple(
+                dict.fromkeys(
+                    f"{signal_type.upper()}_PACKET_LENGTH_INVALID"
+                    for packet in packets
+                    if len(packet.value) != expected_bytes
+                )
+            )
+            snapshot_signals.append(
+                ParsedSignal(
+                    signal_type,
+                    b"".join(packet.value for packet in packets),
+                    "bytes",
+                    None,
+                    {"packet_bytes": expected_bytes, "packet_count": len(packets)},
+                    (),
+                    window.end_ms,
+                    not signal_reasons,
+                    signal_reasons,
+                )
+            )
+        snapshot_batch = ParsedSignalBatch(
+            batch_id,
+            "headset_rev181" if self.config.data_source.type == "serial" else "headband_ble",
+            "legacy-connection-session",
+            recording_session_id,
+            window.start_ms,
+            window.end_ms,
+            tuple(snapshot_signals),
+            (),
+            valid,
+            tuple(reasons),
+        )
+        completed_at_ms = now_ms()
+        snapshot_algorithm = AlgorithmResult(
+            batch_id,
+            None,
+            completed_at_ms,
+            completed_at_ms,
+            algorithm_payload or {},
+            valid,
+            tuple(reasons),
+        )
+        self.latest_snapshot.replace(
+            WindowResult(snapshot_batch, snapshot_algorithm, "live", completed_at_ms, persistence_guaranteed)
+        )
         if self.window_observer:
             try:
                 await self.window_observer(window, algorithm_payload, reasons, valid)
@@ -231,303 +400,11 @@ class Gateway:
                     continue
                 if not valid:
                     payload["invalidReasons"] = reasons
-                await subscription.send(envelope(200, self.event_data("data", subscription.id, window.end_ms, "live", valid, payload)))
-
-    def filtered_payload(self, raw: dict, algorithm_payload: dict | None, streams: frozenset[str]) -> dict:
-        payload: dict = {}
-        if "eeg.raw" in streams and "eegRaw" in raw:
-            payload["eegRaw"] = raw["eegRaw"]
-        if "hr.raw" in streams and "hrRaw" in raw:
-            payload["hrRaw"] = raw["hrRaw"]
-        if algorithm_payload:
-            algorithm: dict = {}
-            if "eeg" in streams:
-                algorithm.update({key: value for key, value in algorithm_payload.items() if key not in {"hr", "pressure", "coherence", "arousal"}})
-            if "hr" in streams:
-                algorithm.update({key: value for key, value in algorithm_payload.items() if key in {"hr", "pressure", "coherence", "arousal"}})
-            if algorithm:
-                payload["algorithm"] = algorithm
-        return payload
-
-    def event_data(self, event: str, subscription_id: str | None, timestamp_ms: int, mode: str, valid: bool, payload: dict) -> dict:
-        data = {"event": event, "gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": mode, "timestampMs": timestamp_ms, "valid": valid, "payload": payload}
-        if subscription_id:
-            data["subscriptionId"] = subscription_id
-        return data
-
-    def status_result(self) -> dict:
-        return {"gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": self.mode(), **self.status, "availableStreams": sorted(self.available_streams()), "serverTimeMs": now_ms()}
-
-    def available_streams(self) -> set[str]:
-        available = {"status"}
-        if self.live or self.replay_available:
-            available.update({"eeg.raw", "hr.raw"})
-        if self.algorithm.available:
-            available.update({"eeg", "hr"})
-        recording_id = self.replay_recording_id
-        if not self.live and recording_id:
-            for event in self.store.events(recording_id):
-                algorithm = event["payload"].get("algorithm", {})
-                if any(key in algorithm for key in ("eeg", "sleep", "relaxation", "pleasure", "attention", "flow")):
-                    available.add("eeg")
-                if any(key in algorithm for key in ("hr", "pressure", "coherence", "arousal")):
-                    available.add("hr")
-        return available
-
-    async def broadcast_status(self) -> None:
-        for session in tuple(self.sessions):
-            for subscription in tuple(session.subscriptions.values()):
-                if "status" in subscription.streams:
-                    payload = {"status": {name: self.status[name] for name in ("connectionState", "wearState", "batteryPercent", "signalQuality")}}
-                    await subscription.send(envelope(200, self.event_data("status", subscription.id, now_ms(), self.mode(), True, payload)))
-
-    def error(self, request_id: str | None, error: ProtocolError) -> dict:
-        data = {"reason": error.reason, "retryable": error.retryable, "details": error.details}
-        if request_id:
-            data["requestId"] = request_id
-        return envelope(error.code, data, error.message)
-
-    def parse_request(self, raw: str) -> dict:
-        try:
-            request = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ProtocolError(400, "INVALID_REQUEST", "Request is not valid JSON.") from exc
-        if not isinstance(request, dict) or set(request) != {"protocolVersion", "messageType", "requestId", "action", "params"}:
-            raise ProtocolError(400, "INVALID_REQUEST", "Request root fields are invalid.")
-        if request["protocolVersion"] != PROTOCOL_VERSION:
-            raise ProtocolError(505, "UNSUPPORTED_VERSION", "Protocol version is not supported.")
-        if request["messageType"] != "request" or not isinstance(request["requestId"], str) or not isinstance(request["params"], dict):
-            raise ProtocolError(400, "INVALID_REQUEST", "Request fields are invalid.")
-        return request
-
-    async def handle(self, session: ClientSession, raw: str, send: Any) -> None:
-        # The WebSocket adapter registers sessions on connect.  Keeping this
-        # here as well makes the gateway API safe for other adapters and tests.
-        self.sessions.add(session)
-        request_id: str | None = None
-        try:
-            request = self.parse_request(raw)
-            request_id, action, params = request["requestId"], request["action"], request["params"]
-            start_replay_after_response = False
-            if action == "getStatus":
-                self.validate_params(params, set())
-                result = self.status_result()
-            elif action == "getLatest":
-                self.validate_params(params, {"streams"})
-                result = self.get_latest(session, params, start_replay=False)
-                start_replay_after_response = not self.live and self.replay_available
-            elif action == "subscribe":
-                self.validate_params(params, {"streams", "includeInvalid"})
-                result = await self.subscribe(session, params, send, start_replay=False)
-                start_replay_after_response = not self.live and self.replay_available
-            elif action == "unsubscribe":
-                self.validate_params(params, {"subscriptionId"})
-                result = await self.unsubscribe(session, params)
-            else:
-                raise ProtocolError(400, "INVALID_REQUEST", "Unknown action.", details={"action": action})
-            await send(envelope(200, {"requestId": request_id, "action": action, "result": result}))
-            if start_replay_after_response:
-                self._start_replay_if_needed()
-        except ProtocolError as error:
-            await send(self.error(request_id, error))
-        except Exception:
-            LOG.exception("Request handling failed")
-            await send(self.error(request_id, ProtocolError(500, "INTERNAL_ERROR", "Gateway request failed.", True)))
-
-    def get_latest(self, session: ClientSession, params: dict, *, start_replay: bool = True) -> dict:
-        streams = params.get("streams", ["eeg", "hr"])
-        self.validate_streams(streams, allowed={"eeg", "hr"})
-        if not self.live and not self.replay_available:
-            raise ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "No replay data is available.", True)
-        unavailable = set(streams) - self.available_streams()
-        if unavailable:
-            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
-        algorithm, timestamp = self.latest_algorithm, self.latest_algorithm_timestamp
-        if not self.live and self.replay_available:
-            if start_replay:
-                self._start_replay_if_needed()
-            algorithm, timestamp = self.latest_replay_algorithm()
-        if not algorithm or timestamp is None:
-            return {"mode": self.mode(), "timestampMs": now_ms(), "valid": False, "payload": {}}
-        return {"mode": self.mode(), "timestampMs": timestamp, "valid": True, "payload": self.filtered_payload({}, algorithm, frozenset(streams))}
-
-    def validate_streams(self, streams: object, allowed: set[str] | None = None, require: bool = True) -> list[str]:
-        if not isinstance(streams, list) or (require and not streams) or any(not isinstance(item, str) for item in streams):
-            raise ProtocolError(400, "INVALID_REQUEST", "params.streams must be a non-empty string array.")
-        unique = list(dict.fromkeys(streams))
-        invalid = set(unique) - (allowed or STREAMS)
-        if invalid:
-            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(invalid)})
-        return unique
-
-    def latest_replay_algorithm(self) -> tuple[dict | None, int | None]:
-        """Use the gateway's active replay cursor, or the latest valid result before it advances."""
-        if self._replay_algorithm is not None and self._replay_algorithm_timestamp is not None:
-            return self._replay_algorithm, self._replay_algorithm_timestamp
-        recording_id = self.replay_recording_id
-        if not recording_id:
-            return None, None
-        for item in reversed(self.store.events(recording_id)):
-            algorithm = item["payload"].get("algorithm")
-            if item["valid"] and algorithm:
-                return algorithm, item["timestampMs"]
-        return None, None
-
-    @staticmethod
-    def validate_params(params: dict, allowed: set[str]) -> None:
-        unknown = set(params) - allowed
-        if unknown:
-            raise ProtocolError(400, "INVALID_REQUEST", "Request contains unsupported params.", details={"params": sorted(unknown)})
-
-    async def subscribe(self, session: ClientSession, params: dict, send: Any, *, start_replay: bool = True) -> dict:
-        streams = self.validate_streams(params.get("streams"))
-        include_invalid = params.get("includeInvalid", False)
-        if not isinstance(include_invalid, bool):
-            raise ProtocolError(400, "INVALID_REQUEST", "params.includeInvalid must be boolean.")
-        if len(session.subscriptions) >= 4:
-            raise ProtocolError(429, "RATE_LIMITED", "Subscription limit exceeded.", True)
-        already_subscribed = set().union(*(item.streams for item in session.subscriptions.values())) if session.subscriptions else set()
-        duplicate_streams = set(streams) & already_subscribed
-        if duplicate_streams:
-            raise ProtocolError(429, "RATE_LIMITED", "A stream is already subscribed on this connection.", True, {"streams": sorted(duplicate_streams)})
-        if not self.live and not self.replay_available:
-            raise ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "No replay data is available.", True)
-        unavailable = set(streams) - self.available_streams()
-        if unavailable:
-            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
-        subscription = Subscription(f"sub-{uuid.uuid4().hex}", frozenset(streams), include_invalid, send)
-        self.sessions.add(session)
-        session.subscriptions[subscription.id] = subscription
-        subscription.replay_delivery_task = asyncio.create_task(self._deliver_replay(session, subscription))
-        if start_replay and not self.live:
-            self._start_replay_if_needed()
-        return {"subscriptionId": subscription.id, "streams": streams, "mode": self.mode(), "intervalMs": 600}
-
-    async def unsubscribe(self, session: ClientSession, params: dict) -> dict:
-        subscription_id = params.get("subscriptionId")
-        if not isinstance(subscription_id, str):
-            raise ProtocolError(400, "INVALID_REQUEST", "params.subscriptionId is required.")
-        subscription = session.subscriptions.get(subscription_id)
-        if not subscription:
-            raise ProtocolError(404, "SUBSCRIPTION_NOT_FOUND", "Subscription does not exist.")
-        await self._remove_subscription(session, subscription)
-        return {"subscriptionId": subscription_id}
-
-    def _start_replay_if_needed(self) -> None:
-        """Start one replay clock for the gateway after the first B-side data request."""
-        if not self.sessions or self.live or (self._replay_task and not self._replay_task.done()):
-            return
-        recording_id = self.store.replay_recording_id(self.config.recording.replay_recording_id)
-        if not recording_id:
-            return
-        self._reset_replay_progress()
-        self._active_replay_recording_id = recording_id
-        self._replay_task = asyncio.create_task(self._replay())
-        LOG.info("Replay started: recordingId=%s", recording_id)
-
-    async def _stop_replay(self) -> None:
-        task, self._replay_task = self._replay_task, None
-        self._reset_replay_progress()
-        self._active_replay_recording_id = None
-        if task and not task.done() and task is not asyncio.current_task():
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-            LOG.info("Replay stopped")
-
-    def _reset_replay_progress(self) -> None:
-        self._replay_algorithm = None
-        self._replay_algorithm_timestamp = None
-
-    def _replay_should_continue(self) -> bool:
-        return not self.live and bool(self.sessions)
-
-    def _subscription_entries(self) -> tuple[tuple[ClientSession, Subscription], ...]:
-        return tuple((session, subscription) for session in tuple(self.sessions) for subscription in tuple(session.subscriptions.values()))
-
-    def _queue_replay_message(self, session: ClientSession, subscription: Subscription, message: dict) -> None:
-        """Do not let a slow or failed client stall the single replay clock."""
-        if session.subscriptions.get(subscription.id) is not subscription:
-            return
-        try:
-            subscription.replay_outbox.put_nowait(message)
-        except asyncio.QueueFull:
-            LOG.warning("Replay subscriber backlog exceeded limit; dropping subscriptionId=%s", subscription.id)
-            if subscription.replay_delivery_task:
-                subscription.replay_delivery_task.cancel()
-
-    async def _deliver_replay(self, session: ClientSession, subscription: Subscription) -> None:
-        try:
-            while True:
-                message = await subscription.replay_outbox.get()
-                await subscription.send(message)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            LOG.warning("Replay subscriber delivery failed; dropping subscriptionId=%s", subscription.id, exc_info=True)
-        finally:
-            if session.subscriptions.get(subscription.id) is subscription:
-                session.subscriptions.pop(subscription.id, None)
-
-    async def _remove_subscription(self, session: ClientSession, subscription: Subscription) -> None:
-        if session.subscriptions.get(subscription.id) is subscription:
-            session.subscriptions.pop(subscription.id, None)
-        task = subscription.replay_delivery_task
-        if task and not task.done() and task is not asyncio.current_task():
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-
-    async def _replay(self) -> None:
-        recording_id = self._active_replay_recording_id
-        if not recording_id:
-            return
-        events = self.store.events(recording_id)
-        try:
-            if not events:
-                LOG.warning("Replay recording contains no events: recordingId=%s", recording_id)
-                return
-            cycle = 0
-            while self._replay_should_continue():
-                cycle += 1
-                previous: int | None = None
-                self._reset_replay_progress()
-                for item in events:
-                    if not self._replay_should_continue():
-                        return
-                    if previous is not None:
-                        await asyncio.sleep(max(0, item["timestampMs"] - previous) / 1000 / self.config.recording.replay_speed)
-                    if not self._replay_should_continue():
-                        return
-                    previous = item["timestampMs"]
-                    if item["valid"] and "algorithm" in item["payload"]:
-                        self._replay_algorithm = item["payload"]["algorithm"]
-                        self._replay_algorithm_timestamp = item["timestampMs"]
-                    for session, subscription in self._subscription_entries():
-                        payload = self.filtered_payload(item["payload"], item["payload"].get("algorithm"), subscription.streams)
-                        if not payload or (not item["valid"] and not subscription.include_invalid):
-                            continue
-                        if not item["valid"]:
-                            payload["invalidReasons"] = item["invalidReasons"]
-                        self._queue_replay_message(session, subscription, envelope(200, self.event_data("data", subscription.id, item["timestampMs"], "replay", item["valid"], payload)))
-                if not self._replay_should_continue():
-                    return
-                ended = {"event": "replayEnded", "gatewayBootId": self.boot_id, "subjectId": self.config.recording.subject_id, "mode": "replay", "timestampMs": previous or now_ms(), "valid": True, "payload": {}, "recordingId": recording_id, "endedAtMs": now_ms()}
-                for session, subscription in self._subscription_entries():
-                    self._queue_replay_message(session, subscription, envelope(200, ended))
-                LOG.info("Replay cycle ended; restarting: recordingId=%s cycle=%s", recording_id, cycle)
-                await asyncio.sleep(REPLAY_CYCLE_MIN_PAUSE_SECONDS)
-        except asyncio.CancelledError:
-            return
-        finally:
-            if self._replay_task is asyncio.current_task():
-                self._replay_task = None
-            self._reset_replay_progress()
-            self._active_replay_recording_id = None
-
-    async def close_session(self, session: ClientSession) -> None:
-        for subscription in tuple(session.subscriptions.values()):
-            await self._remove_subscription(session, subscription)
-        self.sessions.discard(session)
-        if not self.sessions:
-            await self._stop_replay()
+                self._queue_live_message(
+                    session,
+                    subscription,
+                    envelope(200, self.event_data("data", subscription.id, window.end_ms, "live", valid, payload)),
+                )
+        # Let ready send tasks run without awaiting client I/O. A slow client
+        # remains isolated behind its single latest-value slot.
+        await asyncio.sleep(0)

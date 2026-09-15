@@ -2,7 +2,7 @@
 
 此目录用于在 Ubuntu 网关到货前，以 macOS 和现有头环验证真实 BLE 原始通知、600 ms 分窗、录制和北向录播。它不是 Ubuntu 部署验证，也不能代替目标机上的 BlueZ、蓝牙芯片或 systemd 验收。
 
-采集控制台和 B 端联调页是跨平台静态网页，源码位于仓库根目录的 `web/capture/` 与 `web/b-client-test/`；此目录只保留 macOS 专属的启动、蓝牙和算法桥接代码。
+USB 串口日志检查页和 B 端联调页的静态资源位于仓库根目录的 `web/capture/` 与 `web/b-client-test/`；此目录只保留 macOS 专属的启动、蓝牙和算法桥接代码。`web/capture/` 不再调用 macOS POC API，旧 BLE POC 由进程启动后自动开始采集。
 
 仅在已获得受试者授权的受控环境采集。原始人体数据不得提交、发到聊天或接入公共网络。
 
@@ -14,11 +14,11 @@
 ./mac/start-poc.command
 ```
 
-它会准备兼容的本机环境、保留已有的本机配置、启动服务并自动打开采集网页。关闭启动器所在终端窗口或按 `Ctrl-C` 会停止采集。若启动失败，终端会给出 `/tmp/neurobridge-headband-poc/poc-server.log`，可直接提供该文件用于排查。首次运行若提示找不到 `uv`，先执行 `brew install uv` 后重试。
+它会准备兼容的本机环境、保留已有的本机配置并启动采集进程；采集不再依赖网页发起。自动打开的页面是可选择本地日志的静态检查页。关闭启动器所在终端窗口或按 `Ctrl-C` 会停止采集。若启动失败，终端会给出 `/tmp/neurobridge-headband-poc/poc-server.log`，可直接用静态页面读取或提供该文件用于排查。首次运行若提示找不到 `uv`，先执行 `brew install uv` 后重试。
 
-同一台 Mac 只允许一个采集实例。重复双击时，启动器会打开已有控制台而不打断当前采集；若 `8090` 被其他程序占用，会在启动前明确提示。
+同一台 Mac 只允许一个采集实例。重复双击时，启动器不会打断当前采集；若 `8090` 被其他程序占用，会在启动前明确提示。
 
-采集过程中可在网页点击“一键保存 ZIP”。导出包把原始 EEG、原始心率和每类算法指标分别保存，并带有清单和校验和；文件字段见 [头环数据采集包格式说明 v0.1](../doc/tech/对外/头环数据采集包格式说明/头环数据采集包格式说明_v0.1.md)。
+旧 BLE POC 的录制仍由进程写入配置的录制目录；静态日志检查页不控制采集，也不提供 ZIP 导出。文件字段见 [头环数据采集包格式说明 v0.1](../doc/tech/对外/头环数据采集包格式说明/头环数据采集包格式说明_v0.1.md)。
 
 ## 一键停止
 
@@ -64,7 +64,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 /tmp/neurobridge-mac-venv/bin/python mac/poc_server.py --config /tmp/neurobridge-gateway.capture.toml
 ```
 
-浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载会立即发起本机扫描；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51` 与电量通知，随后向 `FF21` 写入 `0x05` 启动采集。模板默认不启动算法 bridge，直到真实录制数据已验证其输入分组。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
+进程启动后会立即发起本机扫描，不依赖浏览器操作；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51` 与电量通知，随后向 `FF21` 写入 `0x05` 启动采集。浏览器打开 `http://127.0.0.1:8090/` 时看到的是静态日志检查页。模板默认不启动算法 bridge，直到真实录制数据已验证其输入分组。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
 
 成功连接后的记录会保存到 `/tmp/neurobridge-headband-poc/sessions/rec-.../`，其中原始 EEG、原始心率和各算法指标分别位于 `raw/`、`algorithm/` 子目录。目录名中的 `rec-...` 是后续录播所需的 recording ID。请只记录 ID，不要复制 JSONL 中的 Base64 原始字节。
 
@@ -87,13 +87,13 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 
 ## 4. 用真实录制验证录播和 B 端
 
-打开采集控制台中的“打开 B 端订阅页”。它会连接同一进程提供的 `ws://127.0.0.1:8765/neurobridge/v1/ws`；实时采集中订阅 `eeg.raw`/`hr.raw`，并验证 `getStatus`、`unsubscribe`。录播时才将 `/tmp/neurobridge-gateway.capture.toml` 中的 `ble.enabled` 改为 `false`，在 `recording.replay_recording_id` 写入已采集的 `rec-...`，保持同一 `recording.directory` 后重启 POC；随后验证 `replayEnded`。这只验证本地环回，不应替代专用有线网络联调。
+单独打开仓库中的 `web/b-client-test/index.html`，配置后连接同一进程提供的 `ws://127.0.0.1:8765/neurobridge/v1/ws`；实时采集中订阅 `eeg.raw`/`hr.raw`，并验证 `getStatus`、`unsubscribe`。录播时才将 `/tmp/neurobridge-gateway.capture.toml` 中的 `ble.enabled` 改为 `false`，在 `recording.replay_recording_id` 写入已采集的 `rec-...`，保持同一 `recording.directory` 后重启 POC；随后验证 `replayEnded`。这只验证本地环回，不应替代专用有线网络联调。
 
 ## 算法 bridge 的当前边界
 
 `start-poc.command` 会先运行 `build-algorithm-bridge.command`，从锁定的 AffectiveCloud C++ SDK 和 NumCpp 2.11.0 构建本机 bridge；产物仅位于 `/tmp/neurobridge-affective-runtime/affective_bridge`。它将每个完整窗口的原始字节不经重排地交给 SDK 的双通道 EEG 与心率入口，并返回现有算法数据结构中的脑波、频段、睡眠、注意力/放松度/愉悦度/心流、心率/HRV、压力、和谐度和激活度。采集页的“算法输出”会显示这些标量和频段；为避免在浏览器日志中保留第二份生理时序，页面日志不会显示处理后的波形数组。
 
-本机已完成 C++ SDK 的构建和合成输入烟雾测试，证明 bridge 调用链和输出字段可用；**这不等于真实头环算法结果已验收。** SDK 在预热、信号质量不佳或尚未形成结果时可能输出 `0`，不能把单个窗口的数值当作有效性结论。Ubuntu x86_64 构建、真实 Flowtime 原始字节对比、字段范围/单位/延迟确认以及现场验收仍未完成；macOS POC 模板默认关闭算法，可按 POC 需要显式启用。
+本机已完成 C++ SDK 的构建和合成输入烟雾测试，证明 bridge 调用链和输出字段可用；**这不等于真实头环算法结果已验收。** SDK 在预热、信号质量不佳或尚未形成结果时可能输出 `0`，不能把单个窗口的数值当作有效性结论。Ubuntu x86_64 构建、真实 Flowtime 原始字节对比、字段范围/单位/延迟确认以及现场验收仍未完成；macOS POC 模板默认关闭算法，可按 POC 需要显式启用，结果从运行日志和录制文件检查，不由 `web/capture/` 展示。
 
 ## POC 结束时应保存的非敏感结果
 
