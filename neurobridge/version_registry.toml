@@ -4,6 +4,16 @@
 [application]
 version = "0.1.0"
 
+# Platform delivery versions. Keep these independent from the shared Python
+# package version so Windows and Galaxy Kylin installers can advance separately.
+[platform_releases.windows]
+version = "0.0.1"
+build = 1
+
+[platform_releases.kylin]
+version = "0.0.1"
+build = 1
+
 [northbound_wire_protocol]
 version = "1.0"
 
