@@ -417,8 +417,13 @@ check_gateway_capture() {
     log_message "项目 Python 不存在或不可执行：$python_path"
   fi
   if [[ -x $runtime_dir/algorithm/neurobridge_affective_bridge ]]; then
-    run_step "检查算法桥接程序执行权限" \
-      "$runtime_dir/algorithm/neurobridge_affective_bridge" --help || true
+    if command -v timeout >/dev/null 2>&1; then
+      run_step "检查算法桥接程序执行权限（最多 5 秒）" \
+        sh -c 'timeout 5s "$1" --help </dev/null; code=$?; [[ $code -eq 124 ]] && printf "bridgeHelpTimeout=true\\n"; exit $code' \
+        sh "$runtime_dir/algorithm/neurobridge_affective_bridge" || true
+    else
+      log_message "timeout 不可用，跳过算法桥接程序执行检查。"
+    fi
   else
     log_message "算法桥接程序不存在或不可执行：$runtime_dir/algorithm/neurobridge_affective_bridge"
   fi
@@ -431,11 +436,11 @@ check_gateway_capture() {
   if command -v systemctl >/dev/null 2>&1; then
     run_step "恢复网关服务" sudo systemctl start neurobridge.service || true
   fi
+  log_message "网关一键检查结束。"
   if [[ -n $setup_log && -f $setup_log ]]; then
     cp -f -- "$setup_log" "$check_log" 2>/dev/null || true
     chmod 0600 "$check_log" 2>/dev/null || true
   fi
-  log_message "网关一键检查结束。"
 }
 
 manage_autostart() {
