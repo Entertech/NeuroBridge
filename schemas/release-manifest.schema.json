@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Entertech/NeuroBridge/schemas/release-manifest.schema.json",
-  "title": "NeuroBridge release manifest",
+  "title": "NeuroBridge immutable pre-publication release manifest",
+  "description": "Generated only after both platforms meet the minimum package gate and the aggregate ZIP is closed. Failed and blocked targets are recorded in coverage.targetResults. Publication is recorded separately by release-receipt.json.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -28,10 +29,7 @@
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     },
     "wireProtocolVersion": { "type": "string", "minLength": 1 },
-    "releaseStatus": {
-      "type": "string",
-      "enum": ["source-only", "candidate", "published", "failed", "blocked"]
-    },
+    "releaseStatus": { "const": "candidate" },
     "trigger": {
       "type": "string",
       "enum": ["pull_request", "push_master", "manual_retry"]
@@ -63,7 +61,7 @@
       "additionalProperties": false,
       "required": ["requireAllMatrixTargets", "windows", "kylin"],
       "properties": {
-        "requireAllMatrixTargets": { "const": true },
+        "requireAllMatrixTargets": { "const": false },
         "windows": { "$ref": "#/$defs/coveragePlatform" },
         "kylin": { "$ref": "#/$defs/coveragePlatform" }
       }
@@ -71,6 +69,7 @@
     "platformArchives": {
       "type": "array",
       "minItems": 2,
+      "maxItems": 2,
       "items": { "$ref": "#/$defs/platformArchive" }
     },
     "aggregateArchive": { "$ref": "#/$defs/archive" },
@@ -123,18 +122,34 @@
       "properties": {
         "fileName": { "type": "string", "minLength": 1 },
         "sha256": { "$ref": "#/$defs/sha256" },
-        "status": { "type": "string", "enum": ["candidate", "published", "failed", "blocked"] },
+        "status": { "const": "candidate" },
         "packageCount": { "type": "integer", "minimum": 1 }
       }
     },
     "coveragePlatform": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["expectedTargets", "expectedFormats", "expectedPackageCount"],
+      "required": ["expectedTargets", "expectedFormats", "expectedPackageCount", "builtPackageCount", "targetResults"],
       "properties": {
         "expectedTargets": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
         "expectedFormats": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
-        "expectedPackageCount": { "type": "integer", "minimum": 1 }
+        "expectedPackageCount": { "type": "integer", "minimum": 1 },
+        "builtPackageCount": { "type": "integer", "minimum": 1 },
+        "targetResults": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["targetId", "status", "reason"],
+            "properties": {
+              "targetId": { "type": "string", "minLength": 1 },
+              "status": { "type": "string", "enum": ["source-only", "candidate", "failed", "blocked"] },
+              "reason": { "type": "string" },
+              "validationLog": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
       }
     },
     "package": {
@@ -147,7 +162,7 @@
         "edition": { "type": "string", "enum": ["server", "desktop", "none"] },
         "architecture": { "type": "string", "enum": ["x86", "x86_64", "arm64", "loongarch64", "mips64el", "sw64"] },
         "format": { "type": "string", "enum": ["exe", "msi", "deb", "rpm"] },
-        "status": { "type": "string", "enum": ["source-only", "candidate", "published", "failed", "blocked"] },
+        "status": { "const": "candidate" },
         "fileName": { "type": "string", "minLength": 1 },
         "sha256": { "$ref": "#/$defs/sha256" },
         "validation": { "type": "string", "enum": ["pending", "passed", "failed", "blocked"] },
@@ -186,7 +201,7 @@
         "platform": { "type": "string", "enum": ["windows", "kylin"] },
         "fileName": { "type": "string", "minLength": 1 },
         "sha256": { "$ref": "#/$defs/sha256" },
-        "status": { "type": "string", "enum": ["candidate", "published", "failed", "blocked"] },
+        "status": { "const": "candidate" },
         "packageCount": { "type": "integer", "minimum": 1 },
         "packages": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/package" } }
       }

@@ -4,7 +4,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于 M1 验收范围。
 
-发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。每次 `master` 合入触发构建；全部矩阵包、两个平台 ZIP、总 ZIP、清单和日志校验成功后创建 tag，再创建 GitHub Release。当前不启用签名或公证，真机验证结果通过发布日志持续补充。
+发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。应用版本递增的 `master` 合入尝试全部 32 个包目标；Windows 和麒麟各至少一个合格包、两个平台 ZIP、总 ZIP、清单和日志本地校验成功后创建 tag，再创建 draft GitHub Release，资产复验后公开。版本不变的合入记录跳过发布，未完成目标逐项列明。产品版本统一取版本台账的 `[application].version`；旧平台版本字段不参与新发布。当前不启用签名或公证，真机验证结果通过独立补充附件持续记录。
 
 ## 可运行网关与部署
 
@@ -81,10 +81,10 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 | 场景 | 入口 | 当前状态 |
 | --- | --- | --- |
-| 银河麒麟 V10 x86_64 网关 | [`linux/neurobridge-kylin-bootstrap.sh`](linux/neurobridge-kylin-bootstrap.sh) | 软件版本 `0.0.1`，build `1`；菜单 `1` 完成项目内配置并默认安装/启动 systemd 开机自启服务；菜单 `9` 可查看状态或显式配置为非自启。 |
+| 银河麒麟 V10 x86_64 网关 | [`linux/neurobridge-kylin-bootstrap.sh`](linux/neurobridge-kylin-bootstrap.sh) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。菜单 `1` 完成项目内配置并默认安装/启动 systemd 开机自启服务；菜单 `9` 可查看状态或显式配置为非自启。 |
 | Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 固定 BLE 头环与旧 B 端专网 Profile；源码入口已统一，仍需 M2 实机回归。 |
 | macOS 历史 POC | [`mac/start-poc.command`](mac/start-poc.command) | 已接入统一 Bootstrap/BLE Profile，不属于当前 M1 验收。 |
-| Windows 网关 | [`windows/README.md`](windows/README.md)；[一键操作教程](doc/tech/麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐) | 软件版本 `0.0.1`，build `1`；双击 `windows/neurobridge-windows-bootstrap.cmd` 自动准备配置、构建自检算法，首次管理员授权后安装开机自启服务并打开本机页面；可在菜单关闭自启。用户已确认上述 Windows x64 实机运行成功，新增开机自启仍待实机重启验证。串口发现与算法准备并行，直接 E1 后以合法帧验证；真实耳机新流程复测待完成。Windows 7 运行时、专项验收和签名发布仍待完成。 |
+| Windows 网关 | [`windows/README.md`](windows/README.md)；[一键操作教程](doc/tech/麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。双击 `windows/neurobridge-windows-bootstrap.cmd` 自动准备配置、构建自检算法，首次管理员授权后安装开机自启服务并打开本机页面；可在菜单关闭自启。用户已确认上述 Windows x64 实机运行成功，新增开机自启仍待实机重启验证。串口发现与算法准备并行，直接 E1 后以合法帧验证；真实耳机新流程复测待完成。Windows 7 独立兼容运行时和专项验收仍待完成；签名不属于当前发布门禁。 |
 | 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；明确区分实时耳机连接与 `live`/`replay` 数据来源，原始数据区与解析数据区固定上下排列。 |
 | 本机可视化/兼容 B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 默认由网关在回环地址提供；兼容模式仍可作为独立 B 端联调页。 |
 

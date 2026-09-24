@@ -934,9 +934,10 @@ flowchart TD
     PKG2 --> T
     T --> ZIP1[生成 Windows ZIP 与 Kylin ZIP]
     ZIP1 --> ZIP2[生成唯一总 ZIP、manifest 和验证日志]
-    ZIP2 --> UPLOAD[上传总 ZIP、manifest 和日志]
-    UPLOAD --> TAG[创建 v<applicationVersion> 注释 tag]
-    TAG --> RELEASE[创建 GitHub Release 并上传唯一总 ZIP]
+    ZIP2 --> VERIFY[本地复验总 ZIP、manifest 和日志]
+    VERIFY --> TAG[创建 v<applicationVersion> 注释 tag]
+    TAG --> RELEASE[创建 draft Release 并上传唯一总 ZIP]
+    RELEASE --> PUBLIC[远端复验并公开 Release]
 ```
 
 正式产物命名读取版本台账中的应用版本，不在 Workflow 维护第二份版本：
@@ -946,7 +947,9 @@ neurobridge-kylin-v<applicationVersion>-<edition>-<architecture>.<deb|rpm>
 neurobridge-windows-v<applicationVersion>-<windowsVersion>-<architecture>.<msi|exe>
 ```
 
-每个产物同时生成文件 SHA-256、SBOM、许可证、符合 `schemas/release-manifest.schema.json` 的 `release-manifest.json` 和测试摘要。PR 只生成候选包；`master` 合入后的发布流程在所有矩阵目标和上传校验通过后创建 tag，再创建 GitHub Release。
+每个产物同时生成文件 SHA-256、SBOM、许可证、符合 `schemas/release-manifest.schema.json` 的包外 `release-manifest.json` 和测试摘要。PR 只生成候选包；`master` 合入后的发布流程在应用版本递增、两平台各至少一个合格包和本地校验通过后创建 tag，再创建 draft GitHub Release，远端复验后公开。应用版本未递增则记录跳过，不重发同版本。公开回执按 `schemas/release-receipt.schema.json` 另存，不回写总 ZIP。
+
+本次发布尝试全部 32 个矩阵目标；Windows 和麒麟各有至少一个合格安装包即可生成唯一总 ZIP，其余组合逐项记录 `blocked`、`failed` 或 `candidate`。构建环境、Windows 7 SP1/Python 3.8.10 独立通道、WiX v7、draft Release 幂等恢复，以及统一应用版本的具体决策，以[发布工作流 PRD](../../product/发布工作流%20PRD.md#72-本次确定的构建与发布方案)和 `release/release_matrix.toml` 为准。
 
 干净机测试覆盖离线安装、启动/停止/重启、回环监听、模拟设备冒烟、升级保留配置和数据、重复安装、卸载默认保留业务数据、摘要验证，以及耳机离线和存在历史录制时仍不 replay。真机验证日志作为后续补充输入，暂不回写已生成包的摘要。
 

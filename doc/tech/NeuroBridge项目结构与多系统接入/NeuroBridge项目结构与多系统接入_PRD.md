@@ -72,9 +72,9 @@ macOS 和 Ubuntu 使用既有隔离 B 端专网拓扑，不提供本机浏览器
 
 | 阶段 | 交付范围 | 完成判定 |
 |---|---|---|
-| M1 当前交付 | 银河麒麟 V10 服务器版/桌面版、五类架构、USB 串口耳机、本机页面、耳机禁用录播、DEB/RPM 双格式 | 各矩阵组合完成对应安装包和日志门禁；真机未覆盖组合保持 `candidate` |
+| M1 当前交付 | 银河麒麟 V10 服务器版/桌面版、五类架构、USB 串口耳机、本机页面、耳机禁用录播、DEB/RPM 双格式 | 每个组合保留独立目标及日志；未完成组合保持 `blocked` 或 `candidate`，不能写成已验收 |
 | M2 兼容链路重构 | macOS/Ubuntu、BLE 头环、旧 B 端专网、头环实时与录播 | 两个平台分别完成 Source/Parser/Profile 迁移、旧 B 端专网回归和 24 小时长稳 |
-| M3 Windows 矩阵 | Windows 7/10/11、x86/x86_64、USB COM 耳机、本机页面、EXE/MSI 双格式 | 各矩阵组合完成 COM、服务、24 小时长稳和安装包日志验收；真机未覆盖组合保持 `candidate` |
+| M3 Windows 矩阵 | Windows 7/10/11、x86/x86_64、USB COM 耳机、本机页面、EXE/MSI 双格式 | 每个组合保留独立目标及日志；未完成组合保持 `blocked` 或 `candidate`，不能写成已验收 |
 
 后续阶段的目录和接口可以在 M1 建立扩展点，但不得把“已设计”或“已有兼容代码”写成该平台已经交付。每个阶段只用本阶段目标系统的实机结果完成验收，不能用其他系统替代。
 
@@ -825,7 +825,7 @@ Unix Epoch 毫秒用于持久化和北向合同；进程内排序、阶段耗时
 #### Windows
 
 - Windows 7/10/11 的 x86/x86_64 均属于本次支持矩阵；安装程序校验 Windows 版本、架构、管理员权限和可用空间。当前不校验包签名；完整性使用 SHA-256 清单校验；
-- Windows 7 的 Service Pack、系统补丁、系统根证书及可用浏览器基线由真机验证日志补充；不满足已锁定基线时安装必须给出可诊断错误；
+- Windows 7 最低基线为 SP1，使用独立 Python 3.8.10 兼容通道；系统补丁、VC/UCRT、根证书及可用浏览器由真机验证日志补充。当前代码要求 Python ≥3.11，在完成 3.8 兼容移植前 Windows 7 目标保持 `blocked`；
 - 网关运行时、C++ 编译工具链、算法 SDK、安装器和 Windows Service 实现必须确认仍支持已锁定的 Windows 7 基线；
 - 安装后注册 Windows Service，并以最小权限账户运行；
 - 使用 Windows COM 端口发现后端接入耳机，不依赖 Linux TTY/sysfs；
@@ -852,7 +852,7 @@ neurobridge-windows-v<applicationVersion>-<windowsVersion>-<architecture>.<msi|e
 - 第三方许可证清单；
 - 自动化测试报告和安装验证摘要。
 
-`release-manifest.json` 必须符合 `schemas/release-manifest.schema.json`，记录应用版本、北向报文版本、目标系统、发行版、CPU 架构、格式、源码 commit、构建时间、构建环境标识、算法 SDK/依赖版本、安装包文件名、大小和 SHA-256、平台 ZIP、总 ZIP、验证日志、tag 和 GitHub Release 状态。构建清单不得包含密码、令牌、签名私钥路径或人体数据。
+包外 `release-manifest.json` 必须符合 `schemas/release-manifest.schema.json`，记录应用版本、北向报文版本、目标系统、发行版、CPU 架构、格式、源码 commit、构建时间、构建环境标识、算法 SDK/依赖版本、安装包文件名、大小和 SHA-256、平台 ZIP、总 ZIP 和验证日志。公开后的实际 tag/Release 状态由 `release-receipt.json` 记录。构建清单不得包含密码、令牌、签名私钥路径或人体数据。
 
 ### 9.5 Workflow 触发与职责
 
@@ -861,10 +861,10 @@ neurobridge-windows-v<applicationVersion>-<windowsVersion>-<architecture>.<msi|e
 | 触发方式 | 目的 | 允许产物 |
 |---|---|---|
 | Pull Request | 验证源码、接口边界和打包可重复性 | 未签名候选包、测试报告；不得发布正式版本 |
-| `master` 合入 | 构建全部矩阵、执行自动安装回归并生成两个平台 ZIP 和唯一总 ZIP | 发布候选包、清单和日志；全部前置校验通过后创建 tag 和 GitHub Release |
+| `master` 合入 | 应用版本递增时尝试全部 32 个目标并记录逐项结果；两平台各至少一个合格包时生成两个平台 ZIP 和唯一总 ZIP；版本未递增则记录跳过 | 成功包与 ZIP 本地校验通过后创建 tag、draft GitHub Release；资产上传复验后公开，缺口在说明中列示 |
 | 手动重试 | 对失败运行使用同一 commit 重跑 | 仅在校验通过后更新对应候选/正式发布记录 |
 
-当前正式发布暂不需要签名或人工签名审批。发布流程在总 ZIP、清单和日志上传成功后创建 `v<applicationVersion>` 注释 tag，再创建 GitHub Release；任一矩阵目标缺失或校验失败均不创建 tag/Release。
+当前正式发布暂不需要签名或人工签名审批。应用版本递增时，发布流程在 Windows 和麒麟各至少一个合格包、总 ZIP、清单和日志构建校验成功后创建 `v<applicationVersion>` 注释 tag，再创建 draft GitHub Release；资产上传复验成功后公开，失败时按发布工作流 PRD 原地恢复。版本未递增则跳过同版本发布。其他目标失败或受阻时逐项记录，不伪装成已覆盖。
 
 ### 9.6 Workflow 打包主流程
 
@@ -892,9 +892,10 @@ flowchart TD
     T --> U{安装验收是否通过}
     U -->|否| X
     U -->|是| Z[生成平台 ZIP 和唯一总 ZIP]
-    Z --> H[上传总 ZIP、manifest 和验证日志]
-    H -->|成功| T[创建 v<applicationVersion> 注释 tag]
-    T --> P[创建 GitHub Release 并上传唯一总 ZIP]
+    Z --> H[本地复验总 ZIP、manifest 和日志]
+    H -->|成功| TAG[创建 v<applicationVersion> 注释 tag]
+    TAG --> P[创建 draft Release 并上传唯一总 ZIP]
+    P --> Q[远端复验并公开 Release]
 ```
 
 候选包与正式包必须使用不同的发布状态和摘要。当前无签名门禁，SHA-256 在包生成完成后计算；`release-manifest.json` 必须引用最终文件，并在总 ZIP 上传前完成复验。后续启用签名时再增加签名后摘要和受保护凭据阶段。
@@ -952,7 +953,7 @@ flowchart TD
 
 1. 银河麒麟目标镜像、真实耳机、真实算法数据、拔插/重连、systemd 安装升级和 24 小时长稳验收；
 2. macOS/Ubuntu 真实 BLE、旧 B 端隔离专网、录播与各平台 24 小时回归；
-3. Windows 7 Service Pack、SHA-2 补丁、可运行 Python/冻结运行时、签名证书与安装器技术锁定，以及 COM/服务/安装/24 小时实机验收；
+3. Windows 7 SP1 的 Python 3.8.10 兼容移植、VC/UCRT 与补丁检查、WiX v7 MSI/Burn EXE，以及 COM/服务/安装/24 小时实机验收；当前不启用签名；
 4. 提供各平台完整离线运行时并按最终目标镜像生成原生候选包，执行干净机安装、升级、回滚和卸载；
 5. `data.storage`、`persistenceGuaranteed` 和 507 语义的下一版对外协议发布。当前没有更新对外文档授权，代码仍通过兼容过滤保持已发布 v0.2 不变；
 6. 自动清理正式启用、签名与正式发布审批。默认仍关闭清理，普通 CI 只生成明确标记为 unsigned 的候选包。
@@ -1089,7 +1090,7 @@ flowchart TD
 
 - 银河麒麟服务器版/桌面版及五类架构均生成 DEB/RPM，并在对应目标环境完成离线安装、启动、升级和卸载日志验收；
 - Windows 7/10/11 的 x86/x86_64 均生成 MSI/EXE，并在对应目标环境完成 COM、服务、安装、升级、卸载和 24 小时日志验收；
-- PR 只生成候选包；`master` 合入后触发发布，全部 32 个包目标、两个平台 ZIP、唯一总 ZIP、清单和日志上传成功后创建 `v<applicationVersion>` 注释 tag，再创建 GitHub Release；
+- PR 只生成候选包；`master` 合入后尝试全部 32 个目标，两个平台各至少一个合格包且平台 ZIP、唯一总 ZIP、清单和日志本地校验成功后创建 `v<applicationVersion>` 注释 tag，再创建 draft GitHub Release，资产上传复验后公开；
 - 当前不需要签名、公证或签名审批；Artifact 同时包含安装包、SHA-256、SBOM、许可证、manifest 和测试摘要；
 - 安装后的应用版本、北向报文版本、算法依赖和源码 commit 与 manifest 一致；
 - 安装包内不含 `.git`、人体数据、现场日志、凭据或未锁定依赖；
@@ -1122,7 +1123,7 @@ flowchart TD
 | DEC-007 | 已确认 | 默认 warning/critical 阈值为 5 GiB/1 GiB；自动清理开关默认关闭，开启后按已结束会话由旧到新整体清理 | 已确认 |
 | DEC-008 | 待确认 | 延迟、CPU、内存、队列、发送超时和丢弃率阈值 | 首轮 24 小时日志评审后 |
 | DEC-009 | 部分确认 | 发布矩阵已确认覆盖麒麟服务器版/桌面版及 x86_64、ARM64、LoongArch64、MIPS64el、SW64，且每个组合交付 DEB/RPM 双格式；各组合正式 ISO/ABI、包管理器行为、安装和系统配置路径由真机日志补齐 | 首轮五架构/双发行版真机验证前 |
-| DEC-010 | 部分确认 | 已确认 Windows 7/10/11、x86/x86_64 全矩阵，交付未签名 EXE/MSI；Windows 7 Service Pack、补丁、Python/服务运行时、浏览器基线由真机日志补齐 | Windows 矩阵真机验证前 |
+| DEC-010 | 部分确认 | 已确认 Windows 7/10/11、x86/x86_64 全矩阵，交付未签名 EXE/MSI；Windows 7 最低 SP1，独立 Python 3.8.10 兼容通道和 WiX v7 MSI/Burn EXE 已选定，补丁、服务运行时及浏览器由真机日志补齐 | Windows 矩阵真机验证前 |
 | DEC-011 | 部分确认 | 耳机公共解析模型将序列号与 18 字节 EEG 分开，算法 SDK 仍使用 `frame[4:24]` 20 字节专用投影；采样率、每 600 ms 样本数、触发条件、结果单位和有效范围待真实数据确认 | 各设备算法验收前 |
 | DEC-012 | 待确认 | 可由现场调整的配置字段白名单、日志采样周期和保留周期 | M1 部署前 |
 | DEC-013 | 已确认 | RawDataSource 唯一持有底层传输会话；DeviceControl 绑定 `connectionSessionId`，断线后拒绝旧会话控制 | 已确认 |
@@ -1131,8 +1132,8 @@ flowchart TD
 | DEC-016 | 已确认 | 持久化默认每 10 分钟或 256 MiB 分段，使用 `.partial` + fsync + 原子重命名 + manifest，启动时恢复完整 JSONL 记录 | 已确认 |
 | DEC-017 | 已确认 | NeuroBridge 以本机后台服务运行；最终 24 小时长稳必须使用安装布局或候选包，正式签名和 Workflow 可后置 | 已确认 |
 | DEC-018 | 待确认 | 用于合同测试的脱敏真实串口数据、握手记录、预期解析结果和预期算法结果基线 | M1 真实数据算法验收前 |
-| DEC-019 | 已确认 | `master` 合入后自动触发发布；全部 32 个包目标、两个平台 ZIP、唯一总 ZIP、清单和日志上传成功后创建 `v<applicationVersion>` 注释 tag，再创建 GitHub Release；当前不启用签名或公证 | 已确认 |
-| DEC-020 | 已确认 | `release-manifest.json` 使用 `schemas/release-manifest.schema.json` 的 1.0 Schema；状态枚举为 `source-only`、`candidate`、`published`、`failed`、`blocked`；真机验证字段初始为 `pending`，后续由日志补齐 | 已确认 |
+| DEC-019 | 已确认 | `master` 合入后自动触发发布；尝试全部 32 个目标，两个平台各至少一个合格包、平台 ZIP、唯一总 ZIP、清单和日志本地校验成功后创建 `v<applicationVersion>` 注释 tag，再创建 draft GitHub Release，资产上传复验后公开；缺口逐项记录，当前不启用签名或公证 | 已确认 |
+| DEC-020 | 已确认 | `release-manifest.json` 使用 `schemas/release-manifest.schema.json` 的 1.0 Schema；公开后的 `published` 状态由 `release-receipt.json` 记录；真机验证字段初始为 `pending`，后续由日志补齐 | 已确认 |
 
 每条待确认项必须补充负责人、确认日期、依据链接和影响的文档/测试；负责人尚未指定时统一记录为“待指定”，不得隐含分配给开发人员。达到“最迟确认阶段”仍未确认时，对应实现或发布保持阻塞，不得在源码中自行假设。
 

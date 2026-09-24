@@ -3,7 +3,7 @@
 schema_version = 1
 default_branch = "master"
 manifest_schema = "schemas/release-manifest.schema.json"
-require_all_matrix_targets = true
+require_all_matrix_targets = false
 minimum_packages_per_platform = 1
 
 [windows]
@@ -11,6 +11,13 @@ versions = ["7", "10", "11"]
 architectures = ["x86", "x86_64"]
 formats = ["exe", "msi"]
 expected_package_count = 12
+installer_tool = "wix-toolset-with-burn"
+installer_tool_major = 7
+windows_7_baseline = "SP1"
+windows_7_browser_baseline = "Edge 109"
+windows_7_python = "3.8.10"
+windows_10_11_python_line = "3.11"
+windows_7_requires_compatibility_port = true
 
 [kylin]
 editions = ["server", "desktop"]
@@ -27,8 +34,25 @@ file_name_pattern = "neurobridge-v<applicationVersion>-<buildDate>.zip"
 trigger = "push_master"
 tag_pattern = "v<applicationVersion>"
 github_release_required = true
+github_release_starts_as_draft = true
+release_receipt_schema = "schemas/release-receipt.schema.json"
+existing_tag_policy = "same_commit_only"
+published_asset_policy = "exact_match_or_fail"
 signing = "disabled"
 actions_artifact_retention_days = 30
+
+[build]
+windows_coordinator = "windows-2022"
+linux_coordinator = "ubuntu-22.04"
+toolchains = "verified_offline_cache"
+cross_arch_requires_target_verification = true
+missing_verified_input = "blocked"
+
+[versioning]
+public_version_source = "application.version"
+platform_release_fields = "legacy_ignored"
+retry_identity = "github_run_id_and_attempt"
+same_version_master_push = "skip_release"
 
 [validation]
 physical_verification = "pending_until_logs_uploaded"
