@@ -914,7 +914,7 @@ M1、M2、M3 在各自目标平台完成时分别运行 24 小时。首轮用于
 - systemd unit 或 Windows Service 注册；
 - 版本查询、诊断、修复和卸载工具。
 
-银河麒麟首选与最终桌面系统镜像包管理器匹配的原生包，兼容备选为批准的自包含离线 `.run`。Windows 首选签名 MSI，备选签名 EXE。最终格式必须通过目标机确认，不能从“银河麒麟 V10”名称推断 RPM 或 DEB。
+本次发布矩阵覆盖银河麒麟服务器版/桌面版的五类架构，并为每个组合同时生成 DEB 与 RPM；目标机的包管理器差异记录在验证日志。Windows 覆盖 Windows 7/10/11 的 x86/x86_64，并生成未签名 MSI 与 EXE。当前不启用签名或公证。
 
 ### 22.2 打包流水线
 
@@ -926,30 +926,29 @@ flowchart TD
     D --> E{全部通过}
     E -->|否| X[终止]
     E -->|是| M[平台构建矩阵]
-    M --> K[银河麒麟兼容环境构建]
-    M --> W[Windows x86_64 构建]
-    K --> PKG1[组装原生包或离线 .run]
-    W --> PKG2[组装 MSI/EXE]
+    M --> K[银河麒麟服务器/桌面 × 五架构构建]
+    M --> W[Windows 7/10/11 × x86/x86_64 构建]
+    K --> PKG1[组装 DEB 与 RPM]
+    W --> PKG2[组装 MSI 与 EXE]
     PKG1 --> T[干净机安装/升级/卸载测试]
     PKG2 --> T
-    T --> R{正式发布获批}
-    R -->|否| CAND[未签名内部候选 Artifact]
-    R -->|是| SIGN[受保护环境签名]
-    SIGN --> VERIFY[签名复验]
-    VERIFY --> META[生成最终 SHA-256、SBOM、许可证和 manifest]
-    META --> RELEASE[发布正式 Artifact 与记录]
+    T --> ZIP1[生成 Windows ZIP 与 Kylin ZIP]
+    ZIP1 --> ZIP2[生成唯一总 ZIP、manifest 和验证日志]
+    ZIP2 --> UPLOAD[上传总 ZIP、manifest 和日志]
+    UPLOAD --> TAG[创建 v<applicationVersion> 注释 tag]
+    TAG --> RELEASE[创建 GitHub Release 并上传唯一总 ZIP]
 ```
 
 正式产物命名读取版本台账中的应用版本，不在 Workflow 维护第二份版本：
 
 ```text
-neurobridge-kylin-v<applicationVersion>-x86_64.<ext>
-neurobridge-windows-v<applicationVersion>-x86_64.msi
+neurobridge-kylin-v<applicationVersion>-<edition>-<architecture>.<deb|rpm>
+neurobridge-windows-v<applicationVersion>-<windowsVersion>-<architecture>.<msi|exe>
 ```
 
-每个产物同时生成最终文件 SHA-256、SBOM、许可证、`release-manifest.json` 和测试摘要。正式 SHA-256 必须在签名后生成；PR 和普通主分支构建不能访问正式签名凭据。
+每个产物同时生成文件 SHA-256、SBOM、许可证、符合 `schemas/release-manifest.schema.json` 的 `release-manifest.json` 和测试摘要。PR 只生成候选包；`master` 合入后的发布流程在所有矩阵目标和上传校验通过后创建 tag，再创建 GitHub Release。
 
-干净机测试覆盖离线安装、启动/停止/重启、回环监听、模拟设备冒烟、升级保留配置和数据、重复安装、卸载默认保留业务数据、签名/摘要验证，以及耳机离线和存在历史录制时仍不 replay。
+干净机测试覆盖离线安装、启动/停止/重启、回环监听、模拟设备冒烟、升级保留配置和数据、重复安装、卸载默认保留业务数据、摘要验证，以及耳机离线和存在历史录制时仍不 replay。真机验证日志作为后续补充输入，暂不回写已生成包的摘要。
 
 ## 23. 实施前门禁与未决项
 
@@ -1007,8 +1006,8 @@ neurobridge-windows-v<applicationVersion>-x86_64.msi
 - 银河麒麟目标机真实耳机、算法真实数据、拔插/恢复、systemd 候选安装/升级/卸载和 24 小时长稳；
 - 存储状态新北向字段及 507 语义的对外版本发布；本轮未获得更新对外文档授权，因此只保留内部状态和日志，不改变 v0.2 包络；
 - M2 的 macOS/Ubuntu 真实 BLE、专网、录播和 24 小时回归；源码入口迁移已完成；
-- M3 的 Windows 7 运行时/补丁/签名基线、COM 与 Service 实机、正式安装包和 24 小时验收；当前仅为跨平台源码和 unsigned 候选骨架；
-- 银河麒麟最终 ISO/SHA-256 和包管理器尚未锁定；当前通用候选归档不能冒充最终 RPM/DEB 等原生包，且必须提供目标机离线运行时后才可安装；
+- M3 的 Windows 7 运行时/补丁、COM 与 Service 实机、正式安装包和 24 小时验收；签名暂不属于当前发布门禁；
+- 银河麒麟五架构/双发行版的最终 ISO/SHA-256、ABI、包管理器行为和离线运行时仍需由真机验证日志补齐；当前候选归档不能冒充已完成现场验收；
 - 自动清理的正式启用仍受运维文档、现场保留策略与破坏性场景验收门禁约束，默认保持关闭。
 
 ## 26. 2026-09-08 审查补齐

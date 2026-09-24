@@ -1,8 +1,10 @@
 # NeuroBridge
 
-NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。当前交付目标是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机。网关核心负责串口采集、数据与算法处理、北向协议适配、录播和运行维护。
+NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。运行时首个现场验证基线仍是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机；发布工作流承诺覆盖银河麒麟服务器版/桌面版五架构和 Windows 7/10/11 的 x86/x86_64 全矩阵。网关核心负责串口采集、数据与算法处理、北向协议适配、录播和运行维护。
 
 统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于 M1 验收范围。
+
+发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。每次 `master` 合入触发构建；全部矩阵包、两个平台 ZIP、总 ZIP、清单和日志校验成功后创建 tag，再创建 GitHub Release。当前不启用签名或公证，真机验证结果通过发布日志持续补充。
 
 ## 可运行网关与部署
 

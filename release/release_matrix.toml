@@ -1,0 +1,36 @@
+# Release coverage is intentionally explicit and offline. Do not discover or
+# shrink this matrix from the target host during a workflow run.
+schema_version = 1
+default_branch = "master"
+manifest_schema = "schemas/release-manifest.schema.json"
+require_all_matrix_targets = true
+minimum_packages_per_platform = 1
+
+[windows]
+versions = ["7", "10", "11"]
+architectures = ["x86", "x86_64"]
+formats = ["exe", "msi"]
+expected_package_count = 12
+
+[kylin]
+editions = ["server", "desktop"]
+architectures = ["x86_64", "arm64", "loongarch64", "mips64el", "sw64"]
+formats = ["deb", "rpm"]
+expected_package_count = 20
+
+[aggregate]
+expected_package_count = 32
+platform_archives = ["windows", "kylin"]
+file_name_pattern = "neurobridge-v<applicationVersion>-<buildDate>.zip"
+
+[release]
+trigger = "push_master"
+tag_pattern = "v<applicationVersion>"
+github_release_required = true
+signing = "disabled"
+actions_artifact_retention_days = 30
+
+[validation]
+physical_verification = "pending_until_logs_uploaded"
+log_directory = "validation/release"
+required_log_types = ["build", "package", "install", "upgrade", "uninstall", "service", "offline", "replay_guard"]
