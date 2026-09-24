@@ -181,7 +181,9 @@ def add_zip_entry(bundle: zipfile.ZipFile, path: Path, name: str, timestamp: tup
         shutil.copyfileobj(source, destination, 1024 * 1024)
 
 
-def assemble(results_root: Path, output: Path) -> dict[str, object]:
+def assemble(results_root: Path, output: Path, trigger: str = "push_master") -> dict[str, object]:
+    if trigger not in {"pull_request", "push_master"}:
+        raise ValueError(f"invalid release trigger: {trigger}")
     targets = matrix()
     commit = run("git", "rev-parse", "HEAD")
     commit_at = datetime.fromtimestamp(int(run("git", "show", "-s", "--format=%ct", "HEAD")), timezone.utc)
@@ -244,7 +246,7 @@ def assemble(results_root: Path, output: Path) -> dict[str, object]:
         if bundle.testzip() is not None or set(bundle.namelist()) != {"build-manifest.json", "release-logs.jsonl", *(item["fileName"] for item in platform_archives)}:
             raise ValueError("aggregate ZIP verification failed")
     references = list({json.dumps(ref, sort_keys=True): ref for item in results if item["status"] == "candidate" for ref in item["sourceReferences"]}.values())
-    manifest = {"schemaVersion": "1.0", "manifestType": "neurobridge.release", "applicationVersion": version, "wireProtocolVersion": tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["northbound_wire_protocol"]["version"], "releaseStatus": "candidate", "trigger": "push_master", "git": {"commit": commit, "ref": "refs/heads/master", "dirty": bool(run("git", "status", "--porcelain", "--untracked-files=no"))}, "build": {"startedAt": built_times[0].isoformat(), "finishedAt": built_times[-1].isoformat(), "offline": True, "workflowRunId": os.environ.get("GITHUB_RUN_ID", "local"), "runner": os.environ.get("RUNNER_IMAGE", sys.platform)}, "coverage": coverage, "platformArchives": platform_archives, "aggregateArchive": {"fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": sum(counts.values())}, "release": {"tagStatus": "pending", "githubReleaseStatus": "pending"}, "validation": {"status": "pending", "automated": "passed", "physicalVerification": "pending", "logFiles": [release_log.name] + [entry["validationLog"] for item in platform_archives for entry in item["packages"]]}, "sourceReferences": references}
+    manifest = {"schemaVersion": "1.0", "manifestType": "neurobridge.release", "applicationVersion": version, "wireProtocolVersion": tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["northbound_wire_protocol"]["version"], "releaseStatus": "candidate", "trigger": trigger, "git": {"commit": commit, "ref": os.environ.get("GITHUB_REF", "refs/heads/master"), "dirty": bool(run("git", "status", "--porcelain", "--untracked-files=no"))}, "build": {"startedAt": built_times[0].isoformat(), "finishedAt": built_times[-1].isoformat(), "offline": True, "workflowRunId": os.environ.get("GITHUB_RUN_ID", "local"), "runner": os.environ.get("RUNNER_IMAGE", sys.platform)}, "coverage": coverage, "platformArchives": platform_archives, "aggregateArchive": {"fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": sum(counts.values())}, "release": {"tagStatus": "pending", "githubReleaseStatus": "pending"}, "validation": {"status": "pending", "automated": "passed", "physicalVerification": "pending", "logFiles": [release_log.name] + [entry["validationLog"] for item in platform_archives for entry in item["packages"]]}, "sourceReferences": references}
     save_json(output / "release-manifest.json", manifest)
     (output / f"{archive.name}.sha256").write_text(f"{sha256(archive)}  {archive.name}\n", encoding="utf-8")
     log("aggregate_verified", archive=archive.name, sha256=sha256(archive), packages=sum(counts.values()))
@@ -266,6 +268,7 @@ def main() -> int:
     aggregate = commands.add_parser("aggregate")
     aggregate.add_argument("--results-root", type=Path, required=True)
     aggregate.add_argument("--output", type=Path, required=True)
+    aggregate.add_argument("--trigger", choices=("pull_request", "push_master"), default="push_master")
     args = parser.parse_args()
     try:
         if args.command == "plan":
@@ -280,7 +283,7 @@ def main() -> int:
         elif args.command == "target":
             target_result(args.target, args.input_root, args.output_root)
         else:
-            assemble(args.results_root, args.output)
+            assemble(args.results_root, args.output, args.trigger)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         log("release_error", command=args.command, reason=str(error))
         return 1

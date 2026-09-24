@@ -188,6 +188,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -230,6 +231,8 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -239,6 +242,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT_RUN_ID: ${{ vars.NEUROBRIDGE_RELEASE_INPUT_RUN_ID }}
           TARGET_ID: ${{ matrix.id }}
+          EXPECTED_SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_BRANCH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || 'master' }}
         run: |
           mkdir -p "$RUNNER_TEMP/release-inputs/$TARGET_ID"
           mkdir -p "artifacts/targets/$TARGET_ID"
@@ -246,16 +251,16 @@ jobs:
             printf '%s\n' 'blocked: NEUROBRIDGE_RELEASE_INPUT_RUN_ID is unset' > "artifacts/targets/$TARGET_ID/input-fetch.log"
           else
             if gh run view "$INPUT_RUN_ID" --json headSha,headBranch,conclusion > "$RUNNER_TEMP/release-input-run.json" 2> "artifacts/targets/$TARGET_ID/input-fetch.log" && \
-              python -c 'import json,os,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("headSha")==os.environ["GITHUB_SHA"] and d.get("headBranch")=="master" and d.get("conclusion")=="success" else 1)' "$RUNNER_TEMP/release-input-run.json"; then
+              python -c 'import json,os,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("headSha")==os.environ["EXPECTED_SOURCE_SHA"] and d.get("headBranch")==os.environ["EXPECTED_BRANCH"] and d.get("conclusion")=="success" else 1)' "$RUNNER_TEMP/release-input-run.json"; then
               if gh run download "$INPUT_RUN_ID" --name "neurobridge-input-$TARGET_ID" --dir "$RUNNER_TEMP/release-inputs/$TARGET_ID" >> "artifacts/targets/$TARGET_ID/input-fetch.log" 2>&1; then
-                printf '%s\n' 'offline input retrieval completed from successful master run at this commit' >> "artifacts/targets/$TARGET_ID/input-fetch.log"
+                printf '%s\n' 'offline input retrieval completed from successful run at this source commit' >> "artifacts/targets/$TARGET_ID/input-fetch.log"
               else
                 printf '%s\n' 'blocked: approved offline input artifact unavailable' >> "artifacts/targets/$TARGET_ID/input-fetch.log"
                 [[ -n "$RUNNER_TEMP" && -n "$TARGET_ID" ]]
                 rm -rf -- "$RUNNER_TEMP/release-inputs/$TARGET_ID"
               fi
             else
-              printf '%s\n' 'blocked: input run is unavailable or does not match successful master commit' >> "artifacts/targets/$TARGET_ID/input-fetch.log"
+              printf '%s\n' 'blocked: input run is unavailable or does not match successful source commit and branch' >> "artifacts/targets/$TARGET_ID/input-fetch.log"
             fi
           fi
       - name: Verify target package and write result log
@@ -277,10 +282,12 @@ jobs:
   release-aggregate:
     name: Verify packages and assemble one release ZIP
     needs: [release-plan, release-targets]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.release-plan.outputs.should_release == 'true'
+    if: needs.release-plan.outputs.should_release == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -290,7 +297,9 @@ jobs:
           path: artifacts/targets
           merge-multiple: true
       - name: Check all target results and produce verified ZIP
-        run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release
+        env:
+          RELEASE_TRIGGER: ${{ github.event_name == 'pull_request' && 'pull_request' || 'push_master' }}
+        run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER"
       - uses: actions/upload-artifact@v4
         with:
           name: verified-release-${{ github.sha }}
