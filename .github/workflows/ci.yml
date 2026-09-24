@@ -175,3 +175,159 @@ jobs:
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
+
+  release-plan:
+    name: Release version gate and 32-target plan
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-22.04
+    outputs:
+      should_release: ${{ steps.plan.outputs.should_release }}
+      version: ${{ steps.plan.outputs.version }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate application version and plan targets
+        id: plan
+        env:
+          RELEASE_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python tools/release_pipeline.py gate --base "$RELEASE_BASE" --output "$RUNNER_TEMP/release-gate.json"
+          python tools/release_pipeline.py plan --output "$RUNNER_TEMP/release-matrix.json" > "$RUNNER_TEMP/release-matrix.log"
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          from pathlib import Path
+          directory = Path(os.environ['RUNNER_TEMP'])
+          gate = json.loads((directory / 'release-gate.json').read_text())
+          matrix = json.loads((directory / 'release-matrix.json').read_text())
+          print('should_release=' + str(gate['shouldRelease']).lower())
+          print('version=' + gate['applicationVersion'])
+          print('matrix=' + json.dumps(matrix, separators=(',', ':')))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-plan-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/release-gate.json
+            ${{ runner.temp }}/release-matrix.json
+          if-no-files-found: error
+          retention-days: 30
+
+  release-targets:
+    name: Release target ${{ matrix.id }}
+    needs: [release-plan, unit-and-websocket, windows-launcher]
+    if: needs.release-plan.outputs.should_release == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.release-plan.outputs.matrix) }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Retrieve approved offline target input
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_RUN_ID: ${{ vars.NEUROBRIDGE_RELEASE_INPUT_RUN_ID }}
+          TARGET_ID: ${{ matrix.id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-inputs/$TARGET_ID"
+          mkdir -p "artifacts/targets/$TARGET_ID"
+          if [[ -z "$INPUT_RUN_ID" ]]; then
+            printf '%s\n' 'blocked: NEUROBRIDGE_RELEASE_INPUT_RUN_ID is unset' > "artifacts/targets/$TARGET_ID/input-fetch.log"
+          else
+            if gh run view "$INPUT_RUN_ID" --json headSha,headBranch,conclusion > "$RUNNER_TEMP/release-input-run.json" 2> "artifacts/targets/$TARGET_ID/input-fetch.log" && \
+              python -c 'import json,os,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("headSha")==os.environ["GITHUB_SHA"] and d.get("headBranch")=="master" and d.get("conclusion")=="success" else 1)' "$RUNNER_TEMP/release-input-run.json"; then
+              if gh run download "$INPUT_RUN_ID" --name "neurobridge-input-$TARGET_ID" --dir "$RUNNER_TEMP/release-inputs/$TARGET_ID" >> "artifacts/targets/$TARGET_ID/input-fetch.log" 2>&1; then
+                printf '%s\n' 'offline input retrieval completed from successful master run at this commit' >> "artifacts/targets/$TARGET_ID/input-fetch.log"
+              else
+                printf '%s\n' 'blocked: approved offline input artifact unavailable' >> "artifacts/targets/$TARGET_ID/input-fetch.log"
+                [[ -n "$RUNNER_TEMP" && -n "$TARGET_ID" ]]
+                rm -rf -- "$RUNNER_TEMP/release-inputs/$TARGET_ID"
+              fi
+            else
+              printf '%s\n' 'blocked: input run is unavailable or does not match successful master commit' >> "artifacts/targets/$TARGET_ID/input-fetch.log"
+            fi
+          fi
+      - name: Verify target package and write result log
+        shell: bash
+        env:
+          TARGET_ID: ${{ matrix.id }}
+        run: |
+          python tools/release_pipeline.py target \
+            --target "$TARGET_ID" \
+            --input-root "$RUNNER_TEMP/release-inputs" \
+            --output-root artifacts/targets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-target-${{ matrix.id }}
+          path: artifacts/targets/
+          if-no-files-found: error
+          retention-days: 30
+
+  release-aggregate:
+    name: Verify packages and assemble one release ZIP
+    needs: [release-plan, release-targets]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.release-plan.outputs.should_release == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-target-*
+          path: artifacts/targets
+          merge-multiple: true
+      - name: Check all target results and produce verified ZIP
+        run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-release-${{ github.sha }}
+          path: artifacts/release/
+          if-no-files-found: error
+          retention-days: 30
+
+  release-publish:
+    name: Publish verified release
+    needs: [release-plan, release-aggregate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.release-aggregate.result == 'success'
+    runs-on: ubuntu-22.04
+    concurrency:
+      group: release-${{ github.repository }}-${{ needs.release-plan.outputs.version }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-release-${{ github.sha }}
+          path: artifacts/release
+      - name: Create immutable tag, draft Release and verify public assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tools.publish_release --dir artifacts/release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-receipt-${{ github.sha }}
+          path: artifacts/release/release-receipt.json
+          if-no-files-found: error
+          retention-days: 30
