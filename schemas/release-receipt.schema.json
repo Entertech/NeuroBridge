@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Entertech/NeuroBridge/schemas/release-receipt.schema.json",
+  "title": "NeuroBridge published release receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "applicationVersion",
+    "sourceCommit",
+    "tag",
+    "githubReleaseUrl",
+    "aggregateArchiveFileName",
+    "aggregateArchiveSha256",
+    "publishedAt",
+    "status"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "applicationVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "sourceCommit": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+    "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "githubReleaseUrl": { "type": "string", "format": "uri" },
+    "aggregateArchiveFileName": { "type": "string", "pattern": "^neurobridge-v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]{8}\\.zip$" },
+    "aggregateArchiveSha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+    "publishedAt": { "type": "string", "format": "date-time" },
+    "status": { "const": "published" }
+  }
+}

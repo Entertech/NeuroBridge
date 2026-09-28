@@ -2,10 +2,17 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.1.0"
+version = "0.2.0"
 
-# Platform delivery versions. Keep these independent from the shared Python
-# package version so Windows and Galaxy Kylin installers can advance separately.
+[[application_release_changes]]
+from_version = "0.1.0"
+to_version = "0.2.0"
+impact = "minor"
+compatibility = "Release packaging and CI behavior change; gateway wire protocol and existing runtime configuration remain compatible."
+evidence = "Add release matrix planning, version gate, target evidence, immutable archive assembly, GitHub Release publication and diagnostic logs."
+
+# Legacy platform delivery versions retained for old installers. The release
+# workflow uses only [application].version and does not advance these fields.
 [platform_releases.windows]
 version = "0.0.1"
 build = 1
@@ -1452,3 +1459,15 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户反馈 Actions 34460720291 失败；日志确认模拟 Get-Service 不加载 System.ServiceProcess，显式枚举引用触发 TypeNotFound。本次保持服务启停语义和北向协议不变，不将 CI 问题当作目标机串口反复断连的根因。"
+
+
+[[change_records]]
+id = "2026-09-24-release-workflow-gates-and-logs"
+date = "2026-09-24"
+scope = "application_release_workflow"
+summary = "新增应用版本门禁、32 目标发布结果与日志、合格包汇总校验、不可变 tag 和 draft GitHub Release 发布流程；缺少正式安装包输入时阻止发布。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求根据发布工作流 PRD 实施和补充日志；本次仅改变软件构建与发布流程，不改变已发布或预发布北向报文语义。正式安装包输入与多架构真机验收仍待补齐。"
