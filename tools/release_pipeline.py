@@ -181,9 +181,12 @@ def add_zip_entry(bundle: zipfile.ZipFile, path: Path, name: str, timestamp: tup
         shutil.copyfileobj(source, destination, 1024 * 1024)
 
 
-def assemble(results_root: Path, output: Path, trigger: str = "push_master") -> dict[str, object]:
+def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, enforce_minimum: bool | None = None) -> dict[str, object]:
     if trigger not in {"pull_request", "push_master"}:
         raise ValueError(f"invalid release trigger: {trigger}")
+    # PR runs must still emit a diagnostic archive when every native installer is
+    # blocked. Only a master publication enforces one verified package per platform.
+    enforce = trigger == "push_master" if enforce_minimum is None else enforce_minimum
     targets = matrix()
     commit = run("git", "rev-parse", "HEAD")
     commit_at = datetime.fromtimestamp(int(run("git", "show", "-s", "--format=%ct", "HEAD")), timezone.utc)
@@ -198,11 +201,11 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master") -> 
         results.append(result)
     winners = {platform: [item for item in results if item["target"]["platform"] == platform and item["status"] == "candidate"] for platform in ("windows", "kylin")}
     counts = {platform: len(items) for platform, items in winners.items()}
-    log("coverage_gate", totalTargets=len(results), candidatePackages=counts)
-    if any(count < CONFIG["minimum_packages_per_platform"] for count in counts.values()):
+    log("coverage_gate", totalTargets=len(results), candidatePackages=counts, enforceMinimum=enforce)
+    if enforce and any(count < CONFIG["minimum_packages_per_platform"] for count in counts.values()):
         raise ValueError(f"minimum package gate failed: {counts}; each platform requires {CONFIG['minimum_packages_per_platform']}")
     version = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["application"]["version"]
-    built_times = sorted(datetime.fromisoformat(item.get("builtAt", commit_at.isoformat()).replace("Z", "+00:00")).astimezone(timezone.utc) for items in winners.values() for item in items)
+    built_times = sorted(datetime.fromisoformat(item.get("builtAt", commit_at.isoformat()).replace("Z", "+00:00")).astimezone(timezone.utc) for items in winners.values() for item in items) or [commit_at]
     date = built_times[-1].strftime("%Y%m%d")
     zip_stamp = built_times[-1].timetuple()[:6]
     output.mkdir(parents=True, exist_ok=True)

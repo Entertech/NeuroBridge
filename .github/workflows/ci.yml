@@ -282,7 +282,7 @@ jobs:
   release-aggregate:
     name: Verify packages and assemble one release ZIP
     needs: [release-plan, release-targets]
-    if: needs.release-plan.outputs.should_release == 'true'
+    if: always() && needs.release-plan.outputs.should_release == 'true' && needs.release-targets.result == 'success'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -302,7 +302,7 @@ jobs:
         run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER"
       - uses: actions/upload-artifact@v4
         with:
-          name: verified-release-${{ github.sha }}
+          name: verified-release-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           path: artifacts/release/
           if-no-files-found: error
           retention-days: 30

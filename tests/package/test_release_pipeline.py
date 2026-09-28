@@ -54,8 +54,12 @@ class ReleasePipelineTests(unittest.TestCase):
             for target in matrix():
                 save_json(root / "results" / target["id"] / "result.json", {"target": target, "sourceCommit": run("git", "rev-parse", "HEAD"), "status": "blocked", "reason": "no verified input"})
             with self.assertRaisesRegex(ValueError, "minimum package gate failed"):
-                assemble(root / "results", root / "release")
+                assemble(root / "results", root / "release", "push_master")
             self.assertFalse((root / "release").exists())
+            diagnostic = assemble(root / "results", root / "release", "pull_request")
+            self.assertEqual(diagnostic["aggregateArchive"]["packageCount"], 0)
+            self.assertEqual(diagnostic["trigger"], "pull_request")
+            self.assertTrue(next(root.glob("release/neurobridge-*.zip")).is_file())
 
     def test_aggregate_records_gaps_and_checks_candidate_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
