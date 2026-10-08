@@ -24,7 +24,7 @@
 
 离线运行使用 `-Offline`：已有环境不再安装依赖；缺失环境须预先提供完整 Python 3.11 x64（含 venv/pip，可放 `python-runtime\windows\`）及 `wheelhouse\windows\` 下的匹配 wheel。算法未构建时还需在 `algorithm-packages\windows\` 放入 `sdk.lock` 中四个原名 ZIP；已验证的缓存可直接复用。离线参数禁止 winget、网络 pip 安装及算法依赖下载，缺少材料时显示具体文件名。双击入口使用进程级 ExecutionPolicy Bypass；若组织策略禁止脚本，按组织批准方式运行，不修改机器策略。
 
-需要排障菜单时运行 `.\windows\neurobridge-windows-bootstrap.cmd -Action menu`。菜单支持 `1` 一键准备启动、`2` 直接启动、`4` COM 枚举、`5` 创建/校验配置、`6` 算法准备/修复、`7` 诊断摘要、`8` 最近日志、`9` 自启状态、`10` 启用自启并启动、`11` 关闭自启并停止服务、`12` 一键退出（移除服务注册与源码）、`0` 退出。也可用 `-Action start|check|config|algorithm|diagnostics|logs|uninstall|purge` 执行对应动作；`uninstall` 和 `purge` 是破坏性动作，非交互执行需显式加 `-Yes`。除 `prepare` 外不安装运行时，缺少环境时重新双击入口即可准备。没有 COM 时网关仍可启动并等待插入设备；算法不可用、已有进程占用端口或配置错误时不会启动第二个网关。
+需要排障菜单时运行 `.\windows\neurobridge-windows-bootstrap.cmd -Action menu`。菜单支持 `1` 一键准备启动、`2` 直接启动、`4` COM 枚举、`5` 创建/校验配置、`6` 算法准备/修复、`7` 诊断摘要、`8` 最近日志、`9` 自启状态、`10` 启用自启并启动、`11` 关闭自启并停止服务、`12` 一键退出（移除服务注册与源码）、`13` 导出运行日志、`0` 退出。也可用 `-Action start|check|config|algorithm|diagnostics|logs|export-logs|uninstall|purge` 执行对应动作；`uninstall` 和 `purge` 是破坏性动作，非交互执行需显式加 `-Yes`。除 `prepare` 外不安装运行时，缺少环境时重新双击入口即可准备。没有 COM 时网关仍可启动并等待插入设备；算法不可用、已有进程占用端口或配置错误时不会启动第二个网关。
 
 自动化测试覆盖配置保留、路径转义、录播/监听策略拒绝、端口冲突、算法失败与诊断脱敏；Windows CI 另外运行 PowerShell 5.1 语法、进程锁和离线一键流程检查。CI 不替代真实设备或目标机验收。
 
@@ -97,15 +97,57 @@ PowerShell 环境准备、COM 检查、配置、前台启动、日志排障与�
 
 若这台机器装过 `packaging/windows/install.ps1` 的候选安装包，那属于另一条链路：它安装到 `%ProgramFiles%\NeuroBridge`、注册的服务名是 `NeuroBridge`，用该目录自带的 `uninstall.ps1` 移除，与本节的 `NeuroBridgeProject` 互不影响。
 
+## 导出运行日志
+
+菜单 `13`（或 `-Action export-logs`）导出单个带时间戳的 `.zip` 并附 SHA-256。它与菜单 `7` 的诊断摘要不同：`7` 只导出摘要、明确不含日志正文，`13` 导出日志正文本身，且**网关没在运行也能用**。
+
+脚本自动识别部署形态，因此源码部署与 MSI/EXE 安装包部署共用同一个命令：
+
+```powershell
+# 源码部署
+.\windows\export-logs.ps1 -OutputDirectory C:\Temp
+
+# MSI 安装部署
+powershell -ExecutionPolicy Bypass -File 'C:\Program Files\NeuroBridge\windows\export-logs.ps1' -OutputDirectory C:\Temp
+```
+
+归档包含 `manifest.txt`（布局、服务名、生效日志目录、被跳过的内容、文件清单）、`application-logs\`（应用日志）、`service\snapshot.txt`（服务快照）、`service\event-log.txt`（近 7 天应用程序日志中与 NeuroBridge 相关的条目）、`system\ports.txt`（COM 端口清单，用 `-NoSystem` 可跳过）。单个日志超过 `-MaxLogBytes`（默认 32 MiB）时只保留尾部并改名为 `<名字>.tail`。
+
+命令是只读的：不启停服务、不改配置、不删锁、不动录制。它**不包含配置正文、录制数据和凭据**，配置只记录 SHA-256。读取事件日志需要管理员权限，非管理员运行时相应小节会记录为已跳过。
+
+网关自带的 HTTP 导出（`http://127.0.0.1:8766/downloads/logs/neurobridge-logs.zip`）只在网关运行且下载服务启用时可用，且按设计不含事件日志与 COM 端口信息；排障时优先用上面的命令。
+
+## MSI / EXE 安装包部署
+
+源码部署与安装包部署是两套独立形态，服务名和数据位置都不同，不要混用：
+
+| 项目 | 源码部署 | MSI / EXE 安装包 |
+|---|---|---|
+| 服务名 | `NeuroBridgeProject` | `NeuroBridge` |
+| 程序位置 | 源码 checkout | `C:\Program Files\NeuroBridge` |
+| 配置 | `<checkout>\.runtime\config\windows-gateway.toml` | `C:\ProgramData\NeuroBridge\gateway.toml` |
+| 日志 | `<checkout>\.runtime\logs` | `C:\ProgramData\NeuroBridge\logs` |
+| 卸载 | 本文件「一键退出」章节 | 「应用和功能」或 `msiexec /x` |
+
+卸载时服务正在运行不会冲突：WiX 的 `ServiceControl Stop="both" Wait="yes" Remove="uninstall"` 会先停止 `NeuroBridge`、等待其进入 Stopped，再删除文件，最后删除服务注册。服务进程持有 `C:\Program Files\NeuroBridge` 下的文件也不会阻断删除。
+
+服务首次启动时会自建数据目录：创建 `C:\ProgramData\NeuroBridge` 下的 `logs` 和 `recordings`，并在 `gateway.toml` 不存在时从随包模板复制一份。已存在的配置不会被覆盖，重装和卸载都不会丢现场数据。`C:\ProgramData\NeuroBridge` 不归 MSI 所有，卸载后保留，需要彻底清除时手动删除。
+
+安装包部署不要用启动器菜单里的服务动作：那些动作针对源码形态的 `NeuroBridgeProject`。菜单 `13` 与 `export-logs.ps1` 是例外——它按布局自动识别，两种形态都正确。
+
+`packaging\windows\` 下的 `install.ps1` / `uninstall.ps1` 供候选包（`tools/build-product-candidate.py`）使用，**不随 MSI 分发**：MSI 的载荷根目录只有 `windows\`。
+
 本目录包含：
 
-- `gateway.toml.example`：`windows_headset_local`、COM 耳机和 `127.0.0.1` 本机页面配置；
+- `gateway.toml.example`：`windows_headset_local`、COM 耳机和 `127.0.0.1` 本机页面配置；安装包会把它作为 `C:\ProgramData\NeuroBridge\gateway.toml` 的模板；
 - `neurobridge-windows-bootstrap.cmd` / `setup-windows-gateway.ps1`：双击入口和数字菜单；
+- `export-logs.ps1`：导出运行日志，自动识别源码与安装包布局；
+- `diagnose-service.ps1`：只针对源码形态的服务诊断；
 - `gateway_helper.py`：项目配置、启动预检、正常 Bootstrap 调用与不含原始数据的诊断摘要；
 - `algorithm_build.py`：锁定工具下载、源码构建、产物校验和失败保护；
 - `project_service.py`：项目内开机自启服务宿主、注册/启停和偏好保存；
-- `service.py`：基于 pywin32 的 Windows Service 宿主，仍从正常 Bootstrap 启动；
-- `../packaging/windows/`：unsigned 候选安装/卸载 PowerShell 骨架。
+- `service.py`：基于 pywin32 的 Windows Service 宿主，安装包形态下同时负责首次启动时创建 ProgramData 数据目录；
+- `../packaging/windows/`：unsigned 候选安装/卸载 PowerShell 骨架，不随 MSI 分发。
 
 生成可检查的候选包：
 
