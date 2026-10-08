@@ -62,7 +62,7 @@ repo_url=${NEUROBRIDGE_REPO_URL:-https://github.com/Entertech/NeuroBridge.git}
 repo_ref=${NEUROBRIDGE_REPO_REF:-codex/workflow-release-packaging}
 runtime_root=${NEUROBRIDGE_KYLIN_RUNTIME_ROOT:-/opt/neurobridge-release-inputs}
 runner_home=${NEUROBRIDGE_RUNNER_HOME:-"$HOME/actions-runner"}
-runner_version=${NEUROBRIDGE_RUNNER_VERSION:-2.328.0}
+runner_version=${NEUROBRIDGE_RUNNER_VERSION:-2.338.0}
 
 stage_runtime() {
   local source_root=$1
@@ -130,6 +130,11 @@ register_runner() {
   command -v curl >/dev/null 2>&1 || fail "curl is required to download the public runner package."
   command -v tar >/dev/null 2>&1 || fail "tar is required to unpack the runner package."
 
+  if [[ -x $runner_home/svc.sh ]]; then
+    sudo "$runner_home/svc.sh" stop || true
+    sudo "$runner_home/svc.sh" uninstall || true
+  fi
+  rm -rf "$runner_home"
   install -d -m 0755 "$runner_home"
   package="$runner_home/actions-runner.tar.gz"
   url="https://github.com/actions/runner/releases/download/v${runner_version}/actions-runner-linux-${asset_arch}-${runner_version}.tar.gz"
