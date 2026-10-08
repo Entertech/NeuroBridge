@@ -7,7 +7,8 @@ $Runtime = Join-Path $Root "artifacts\windows-runtime"
 $PythonVersion = "3.11.9"
 $PythonSha256 = "009d6bf7e3b2ddca3d784fa09f90fe54336d5b60f0e0f305c37f400bf83cfd3b"
 $EmbedUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
-$GetPipUrl = "https://bootstrap.pypa.io/pip/3.11/get-pip.py"
+$GetPipUrl = "https://bootstrap.pypa.io/get-pip.py"
+$GetPipSha256 = "fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6"
 
 if (Test-Path $Runtime) {
   Remove-Item -Recurse -Force $Runtime
@@ -41,6 +42,10 @@ Set-Content -Path $pth.FullName -Value $lines -Encoding ascii
 $python = Join-Path $Runtime "python.exe"
 $getPip = Join-Path $Runtime "get-pip.py"
 Invoke-WebRequest -Uri $GetPipUrl -OutFile $getPip
+$getPipHash = (Get-FileHash -Algorithm SHA256 -Path $getPip).Hash.ToLowerInvariant()
+if ($getPipHash -ne $GetPipSha256) {
+  throw "get-pip.py SHA-256 mismatch: $getPipHash"
+}
 & $python $getPip --no-warn-script-location
 if ($LASTEXITCODE -ne 0) { throw "pip bootstrap failed: $LASTEXITCODE" }
 & $python -m pip install --no-warn-script-location -r (Join-Path $Root "requirements.lock")
