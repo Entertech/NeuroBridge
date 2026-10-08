@@ -24,7 +24,7 @@
 
 离线运行使用 `-Offline`：已有环境不再安装依赖；缺失环境须预先提供完整 Python 3.11 x64（含 venv/pip，可放 `python-runtime\windows\`）及 `wheelhouse\windows\` 下的匹配 wheel。算法未构建时还需在 `algorithm-packages\windows\` 放入 `sdk.lock` 中四个原名 ZIP；已验证的缓存可直接复用。离线参数禁止 winget、网络 pip 安装及算法依赖下载，缺少材料时显示具体文件名。双击入口使用进程级 ExecutionPolicy Bypass；若组织策略禁止脚本，按组织批准方式运行，不修改机器策略。
 
-需要排障菜单时运行 `.\windows\neurobridge-windows-bootstrap.cmd -Action menu`。菜单支持 `1` 一键准备启动、`2` 直接启动、`4` COM 枚举、`5` 创建/校验配置、`6` 算法准备/修复、`7` 诊断摘要、`8` 最近日志、`9` 自启状态、`10` 启用自启并启动、`11` 关闭自启并停止服务、`0` 退出。也可用 `-Action start|check|config|algorithm|diagnostics|logs` 执行对应动作。除 `prepare` 外不安装运行时，缺少环境时重新双击入口即可准备。没有 COM 时网关仍可启动并等待插入设备；算法不可用、已有进程占用端口或配置错误时不会启动第二个网关。
+需要排障菜单时运行 `.\windows\neurobridge-windows-bootstrap.cmd -Action menu`。菜单支持 `1` 一键准备启动、`2` 直接启动、`4` COM 枚举、`5` 创建/校验配置、`6` 算法准备/修复、`7` 诊断摘要、`8` 最近日志、`9` 自启状态、`10` 启用自启并启动、`11` 关闭自启并停止服务、`12` 一键退出（移除服务注册与源码）、`0` 退出。也可用 `-Action start|check|config|algorithm|diagnostics|logs|uninstall|purge` 执行对应动作；`uninstall` 和 `purge` 是破坏性动作，非交互执行需显式加 `-Yes`。除 `prepare` 外不安装运行时，缺少环境时重新双击入口即可准备。没有 COM 时网关仍可启动并等待插入设备；算法不可用、已有进程占用端口或配置错误时不会启动第二个网关。
 
 自动化测试覆盖配置保留、路径转义、录播/监听策略拒绝、端口冲突、算法失败与诊断脱敏；Windows CI 另外运行 PowerShell 5.1 语法、进程锁和离线一键流程检查。CI 不替代真实设备或目标机验收。
 
@@ -62,9 +62,40 @@ PowerShell 环境准备、COM 检查、配置、前台启动、日志排障与�
 
 服务异常退出后由 Windows 服务管理器等待 3 秒重启。服务启动/退出错误写入 `.runtime\logs\windows-service.log`，管理员设置错误写入 `windows-service-control.log`（两者各 1 MiB，保留 3 份轮转）；运行日志仍由项目配置管理，默认 `.runtime\logs\neurobridge.log`。若宿主导入前就失败，还需查看 Windows 事件查看器的“Windows 日志 → 系统 / 应用程序”。
 
-项目服务与候选安装包的 `NeuroBridge` 服务独立，拒绝覆盖其他项目目录注册的同名服务。迁移或删除项目之前先关闭自启，再由管理员执行 `sc.exe delete NeuroBridgeProject` 移除注册；迁移后核对配置中的绝对路径，重新双击准备。不要让两种服务或前台网关争用相同端口和 COM。
+项目服务与候选安装包的 `NeuroBridge` 服务独立，拒绝覆盖其他项目目录注册的同名服务。迁移或删除项目之前先用下节的一键退出移除 `NeuroBridgeProject` 注册，不要手工 `sc.exe delete`；迁移后核对配置中的绝对路径，重新双击准备。不要让两种服务或前台网关争用相同端口和 COM。
 
 新增自启有单元回归和 Windows CI 服务注册、虚拟环境宿主启动、HTTP 就绪、重复启动复用及启停测试；这次变更的 Windows 原生 CI 尚未执行。此前用户确认的联调成功不包含本次新增服务。目标机仍需验证重启后未登录桌面时服务已启动、USB 拔插恢复、正常停机、异常恢复及有历史录制时仍不回放。
+
+## 一键退出（移除服务注册与源码）
+
+不再需要这台 Windows 网关时，运行入口并输入菜单 `12`，再选择：
+
+```text
+一键退出（移除服务注册与源码）
+  1. 只移除服务注册（保留源码与 .runtime 数据）
+  2. 移除服务注册、备份现场数据并删除整个源码目录
+  0. 返回主菜单
+```
+
+选 `1` 后 `NeuroBridgeProject` 被停止并删除注册，源码目录与 `.runtime` 现场数据原样保留，以后重新双击入口即可再次部署。选 `2` 会先把 `.runtime\config` 与 `.runtime\recordings` 打包成 `%USERPROFILE%\neurobridge-backup-<UTC时间戳>.zip`，再删除整个源码目录；删除前必须在终端输入 `DELETE` 确认，输入其它内容一律取消且不做任何改动。日志不在备份内，需要保留时在删除前另行复制 `.runtime\logs`。
+
+高级人员可直接执行（破坏性动作非交互时须加 `-Yes`）：
+
+```powershell
+.\windows\neurobridge-windows-bootstrap.cmd -Action uninstall -Yes   # 只移除服务注册
+.\windows\neurobridge-windows-bootstrap.cmd -Action purge           # 交互确认后删除源码
+.\windows\neurobridge-windows-bootstrap.cmd -Action purge -Yes      # 非交互执行
+```
+
+顺序不能反过来：服务注册的启动命令行指向源码目录，先手工删源码会留下一个指向不存在路径的服务。`autostart-disable` 只把服务改成手动启动并停止，不删除注册，所以彻底移除必须走本节入口。
+
+脚本的安全边界：只处理注册命令包含**当前**源码目录 `windows\project_service.py`、以 `host` 子命令启动、且账户为 `LocalSystem` 的服务，否则拒绝停止和删除；拒绝删除驱动器根目录、`%SystemRoot%`、`%ProgramFiles%`、`%ProgramData%`、`%USERPROFILE%` 以及不含 `pyproject.toml` 的目录。发现前台网关仍持有 `.runtime\windows-gateway.lock` 时拒绝执行，请先在该窗口按 `Ctrl+C` 正常退出。
+
+这条路径不依赖项目虚拟环境，因此环境已损坏、`python` 或算法缺失时仍可移除服务注册和源码。移除时删除 `.runtime\config\windows-autostart.json`，使自启偏好回到默认值，便于以后重新部署时恢复默认开机自启。
+
+**Windows 特有的一点：** 启动器自己的文件在运行期间被占用，`windows\neurobridge-windows-bootstrap.cmd`（以及通过双击启动时的 PowerShell 宿主）无法被同一个进程删除。脚本会在项目外的临时目录复制一份自身来执行删除，尽量清空目录；如果仍有被占用的文件，会打印 `sourceCheckout=partial`、列出剩余内容，并给出一条可在新 PowerShell 中直接执行的 `Remove-Item` 命令。这不是失败，而是 Windows 文件锁的正常表现——按提示关闭窗口后清理剩余文件即可。
+
+若这台机器装过 `packaging/windows/install.ps1` 的候选安装包，那属于另一条链路：它安装到 `%ProgramFiles%\NeuroBridge`、注册的服务名是 `NeuroBridge`，用该目录自带的 `uninstall.ps1` 移除，与本节的 `NeuroBridgeProject` 互不影响。
 
 本目录包含：
 
