@@ -114,17 +114,38 @@ jobs:
         env:
           RUNTIME_DIR: ${{ vars.NEUROBRIDGE_KYLIN_RUNTIME_ROOT }}/${{ matrix.id }}/runtime
         run: |
-          set -euo pipefail
+          set -uo pipefail
           mkdir -p artifacts/input
+          {
+            printf 'target=%s\n' "${{ matrix.id }}"
+            printf 'runtime_dir=%s\n' "$RUNTIME_DIR"
+            uname -a || true
+            id || true
+            command -v getstatus >/dev/null 2>&1 && getstatus || true
+          } > artifacts/input/diagnostics.log 2>&1
           if [ ! -d "$RUNTIME_DIR" ]; then
             printf '%s\n' "blocked: NEUROBRIDGE_KYLIN_RUNTIME_ROOT does not contain ${{ matrix.id }}/runtime" > artifacts/input/blocked.log
             exit 0
           fi
-          if ! python3 tools/build-native-package.py \
+          # The staged runtime is the only interpreter that satisfies the
+          # repository's Python 3.11 requirement; the system python3 is older.
+          interpreter="$RUNTIME_DIR/bin/python"
+          if [ ! -x "$interpreter" ]; then
+            printf '%s\n' "blocked: ${{ matrix.id }}/runtime does not provide an executable bin/python" > artifacts/input/blocked.log
+            exit 0
+          fi
+          "$interpreter" --version >> artifacts/input/diagnostics.log 2>&1 || true
+          if ! "$interpreter" tools/build-native-package.py \
               --target "${{ matrix.id }}" \
               --runtime-dir "$RUNTIME_DIR" \
-              --output-dir artifacts/input; then
-            printf '%s\n' "blocked: native package build failed for ${{ matrix.id }}" > artifacts/input/blocked.log
+              --output-dir artifacts/input > artifacts/input/build.log 2>&1; then
+            {
+              printf '%s\n' "blocked: native package build failed for ${{ matrix.id }}"
+              tail -n 60 artifacts/input/build.log 2>/dev/null || true
+            } > artifacts/input/blocked.log
+            rm -f artifacts/input/build.log
+          else
+            rm -f artifacts/input/build.log
           fi
       - uses: actions/upload-artifact@v4
         if: always()
