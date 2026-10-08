@@ -104,7 +104,7 @@ def verify_nested_archives(archive: Path, manifest: dict) -> None:
 
 
 def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
-    """Verify the single user-facing ZIP and its architecture sub-ZIPs."""
+    """Verify the single user-facing ZIP and its system/version/architecture ZIPs."""
     with zipfile.ZipFile(archive) as outer:
         if outer.testzip() is not None:
             raise ValueError("release bundle CRC verification failed")
@@ -113,21 +113,45 @@ def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
         required.update(bundle_manifest.get("documents", []))
         required.update(bundle_manifest.get("systemDocuments", []))
         required.update(bundle_manifest.get("validationFiles", []))
-        for item in bundle_manifest.get("architectureArchives", []):
-            path = f"{item['platform']}/{item['fileName']}"
+        for system in bundle_manifest.get("systemArchives", []):
+            path = system["fileName"]
             required.add(path)
             if path not in names:
-                raise ValueError(f"architecture archive missing: {path}")
+                raise ValueError(f"system archive missing: {path}")
             data = outer.read(path)
-            if sha256_bytes(data) != item["sha256"]:
-                raise ValueError(f"architecture archive hash mismatch: {path}")
-            with zipfile.ZipFile(io.BytesIO(data)) as inner:
-                if inner.testzip() is not None:
-                    raise ValueError(f"architecture archive is corrupt: {path}")
-                packages = [name for name in inner.namelist() if name.startswith("packages/") and not name.endswith("/")]
-                if len(packages) != item["packageCount"]:
-                    raise ValueError(f"architecture archive package count mismatch: {path}")
-        if not required.issubset(names):
+            if sha256_bytes(data) != system["sha256"]:
+                raise ValueError(f"system archive hash mismatch: {path}")
+            with zipfile.ZipFile(io.BytesIO(data)) as system_zip:
+                if system_zip.testzip() is not None:
+                    raise ValueError(f"system archive is corrupt: {path}")
+                expected_variants = {variant["fileName"] for variant in system.get("variants", [])}
+                if set(system_zip.namelist()) != expected_variants:
+                    raise ValueError(f"system archive contents mismatch: {path}")
+                for variant in system.get("variants", []):
+                    variant_data = system_zip.read(variant["fileName"])
+                    if sha256_bytes(variant_data) != variant["sha256"]:
+                        raise ValueError(f"variant archive hash mismatch: {variant['fileName']}")
+                    with zipfile.ZipFile(io.BytesIO(variant_data)) as variant_zip:
+                        if variant_zip.testzip() is not None:
+                            raise ValueError(f"variant archive is corrupt: {variant['fileName']}")
+                        expected_architectures = {item["fileName"] for item in variant.get("architectureArchives", [])}
+                        if set(variant_zip.namelist()) != expected_architectures:
+                            raise ValueError(f"variant archive contents mismatch: {variant['fileName']}")
+                        for item in variant.get("architectureArchives", []):
+                            architecture_data = variant_zip.read(item["fileName"])
+                            if sha256_bytes(architecture_data) != item["sha256"]:
+                                raise ValueError(f"architecture archive hash mismatch: {item['fileName']}")
+                            with zipfile.ZipFile(io.BytesIO(architecture_data)) as architecture_zip:
+                                expected_packages = {package["fileName"] for package in item.get("packages", [])} | {"checksums.sha256"}
+                                if set(architecture_zip.namelist()) != expected_packages or architecture_zip.testzip() is not None:
+                                    raise ValueError(f"architecture archive contents/CRC mismatch: {item['fileName']}")
+                                checksums = "\n".join(f"{package['sha256']}  {package['fileName']}" for package in item.get("packages", [])) + "\n"
+                                if architecture_zip.read("checksums.sha256").decode("utf-8") != checksums:
+                                    raise ValueError(f"architecture checksum list mismatch: {item['fileName']}")
+                                for package in item.get("packages", []):
+                                    if sha256_bytes(architecture_zip.read(package["fileName"])) != package["sha256"]:
+                                        raise ValueError(f"package hash mismatch: {package['fileName']}")
+        if not required.issubset(names) or names != required:
             raise ValueError("release bundle is missing documented or metadata entries")
 
 
@@ -144,13 +168,22 @@ def load_bundle_manifest(directory: Path) -> tuple[Path, dict] | None:
         if "metadata/bundle-manifest.json" not in bundle.namelist():
             return None
         raw = json.loads(bundle.read("metadata/bundle-manifest.json"))
+    system_archives = raw.get("systemArchives", [])
+    package_count = sum(
+        item["packageCount"]
+        for system in system_archives
+        for variant in system.get("variants", [])
+        for item in variant.get("architectureArchives", [])
+    )
+    if not system_archives:
+        package_count = sum(item.get("packageCount", 0) for item in raw.get("architectureArchives", []))
     manifest = {
         "applicationVersion": raw["applicationVersion"],
         "releaseStatus": raw["releaseStatus"],
         "trigger": raw["trigger"],
         "git": {"commit": raw["sourceCommit"], "ref": "refs/heads/master", "dirty": False},
         "coverage": raw["coverage"],
-        "aggregateArchive": {"fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": sum(item["packageCount"] for item in raw.get("architectureArchives", []))},
+        "aggregateArchive": {"fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": package_count},
         "bundleManifest": raw,
     }
     return archive, manifest

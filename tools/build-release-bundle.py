@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble the user-facing release bundle from verified package inputs."""
+"""Assemble the user-facing release bundle from verified native packages."""
 
 from __future__ import annotations
 
@@ -13,6 +13,10 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXCLUDED_EXTERNAL_DOCUMENTS = {
+    "头环数据网关 SSH 运维操作指南_v1.0.pdf",
+    "头环数据网关有线网络配置指南_v1.0.pdf",
+}
 
 
 def digest_bytes(value: bytes) -> str:
@@ -47,10 +51,6 @@ def add_bytes(bundle: zipfile.ZipFile, name: str, value: bytes, timestamp: tuple
     bundle.writestr(info, value)
 
 
-def add_file(bundle: zipfile.ZipFile, path: Path, name: str, timestamp: tuple[int, int, int, int, int, int]) -> None:
-    add_bytes(bundle, name, path.read_bytes(), timestamp)
-
-
 def find_one(root: Path, pattern: str) -> Path | None:
     matches = sorted(path for path in root.rglob(pattern) if path.is_file())
     if not matches:
@@ -60,21 +60,8 @@ def find_one(root: Path, pattern: str) -> Path | None:
     return matches[0]
 
 
-def candidate_package(root: Path, platform: str) -> tuple[Path, str] | None:
-    matches = sorted(
-        path for path in root.rglob(f"neurobridge-*-{platform}-*")
-        if path.is_file() and path.suffix in {".zip", ".gz"}
-    )
-    if len(matches) > 1:
-        raise ValueError(f"multiple candidate packages for {platform}: {', '.join(map(str, matches))}")
-    package = matches[0] if matches else None
-    if package is None:
-        return None
-    return package, "x86_64"
-
-
-def collect_native_packages(release_directory: Path, release_manifest: dict) -> tuple[dict[str, list[tuple[str, bytes]]], list[tuple[str, bytes]]]:
-    grouped: dict[str, list[tuple[str, bytes]]] = {}
+def collect_native_packages(release_directory: Path, release_manifest: dict) -> tuple[dict[tuple[str, str, str], list[dict]], list[tuple[str, bytes]]]:
+    grouped: dict[tuple[str, str, str], list[dict]] = {}
     validation: list[tuple[str, bytes]] = []
     for platform_archive in release_manifest.get("platformArchives", []):
         archive_path = release_directory / platform_archive["fileName"]
@@ -85,12 +72,16 @@ def collect_native_packages(release_directory: Path, release_manifest: dict) -> 
                 raise ValueError(f"corrupt platform archive: {archive_path.name}")
             members = set(archive.namelist())
             for package in platform_archive.get("packages", []):
-                architecture = package["architecture"]
+                platform = platform_archive["platform"]
+                family = f"windows-{package['osVersion']}" if platform == "windows" else f"kylin-{package['edition']}"
                 member = f"packages/{package['fileName']}"
                 if member not in members:
                     raise ValueError(f"missing package member {member} in {archive_path.name}")
-                grouped.setdefault(f"{platform_archive['platform']}/{architecture}", []).append(
-                    (package["fileName"], archive.read(member))
+                value = archive.read(member)
+                if digest_bytes(value) != package["sha256"]:
+                    raise ValueError(f"package hash mismatch: {package['fileName']}")
+                grouped.setdefault((platform, family, package["architecture"]), []).append(
+                    {"fileName": package["fileName"], "format": package["format"], "sha256": package["sha256"], "bytes": value}
                 )
                 validation_member = package.get("validationLog")
                 if validation_member and validation_member in members:
@@ -98,24 +89,61 @@ def collect_native_packages(release_directory: Path, release_manifest: dict) -> 
     return grouped, validation
 
 
-def build_architecture_archives(grouped: dict[str, list[tuple[str, bytes]]], timestamp: tuple[int, int, int, int, int, int]) -> tuple[dict[str, bytes], list[dict[str, object]]]:
-    archives: dict[str, bytes] = {}
-    entries: list[dict[str, object]] = []
-    for key in sorted(grouped):
-        platform, architecture = key.split("/", 1)
-        seen: set[str] = set()
-        stream = io.BytesIO()
-        with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
-            for filename, value in sorted(grouped[key]):
-                if filename in seen:
-                    raise ValueError(f"duplicate package in {key}: {filename}")
-                seen.add(filename)
-                add_bytes(archive, f"packages/{filename}", value, timestamp)
-        filename = f"{platform}-{architecture}.zip"
-        data = stream.getvalue()
-        archives[f"{platform}/{filename}"] = data
-        entries.append({"platform": platform, "architecture": architecture, "fileName": filename, "packageCount": len(seen), "sha256": digest_bytes(data)})
-    return archives, entries
+def build_architecture_archive(packages: list[dict], timestamp: tuple[int, int, int, int, int, int]) -> tuple[bytes, dict]:
+    seen: set[str] = set()
+    checksums: list[str] = []
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+        for package in sorted(packages, key=lambda item: item["fileName"]):
+            filename = package["fileName"]
+            safe_name(filename)
+            if PurePosixPath(filename).name != filename or filename in seen:
+                raise ValueError(f"duplicate or unsafe package name: {filename}")
+            seen.add(filename)
+            add_bytes(archive, filename, package["bytes"], timestamp)
+            checksums.append(f"{package['sha256']}  {filename}")
+        add_bytes(archive, "checksums.sha256", ("\n".join(checksums) + "\n").encode(), timestamp)
+    data = stream.getvalue()
+    return data, {
+        "packageCount": len(packages),
+        "packages": [{key: item[key] for key in ("fileName", "format", "sha256")} for item in sorted(packages, key=lambda item: item["fileName"])],
+        "sha256": digest_bytes(data),
+    }
+
+
+def build_system_archives(grouped: dict[tuple[str, str, str], list[dict]], timestamp: tuple[int, int, int, int, int, int]) -> tuple[dict[str, bytes], list[dict]]:
+    files: dict[str, bytes] = {}
+    manifest: list[dict] = []
+    for platform in ("windows", "kylin"):
+        families = sorted({family for item_platform, family, _ in grouped if item_platform == platform})
+        family_archives: list[tuple[str, bytes, dict]] = []
+        for family in families:
+            architectures = sorted(
+                (architecture, packages)
+                for (item_platform, item_family, architecture), packages in grouped.items()
+                if item_platform == platform and item_family == family
+            )
+            arch_entries: list[dict] = []
+            family_stream = io.BytesIO()
+            with zipfile.ZipFile(family_stream, "w", zipfile.ZIP_DEFLATED) as family_zip:
+                for architecture, packages in architectures:
+                    data, entry = build_architecture_archive(packages, timestamp)
+                    filename = f"{family}-{architecture}.zip"
+                    add_bytes(family_zip, filename, data, timestamp)
+                    arch_entries.append({"architecture": architecture, "fileName": filename, **entry})
+            family_data = family_stream.getvalue()
+            family_filename = f"{family}.zip"
+            family_archives.append((family_filename, family_data, {"name": family, "fileName": family_filename, "sha256": digest_bytes(family_data), "architectureArchives": arch_entries}))
+        system_filename = f"{platform}.zip"
+        system_stream = io.BytesIO()
+        with zipfile.ZipFile(system_stream, "w", zipfile.ZIP_DEFLATED) as system_zip:
+            for family_filename, family_data, _ in family_archives:
+                add_bytes(system_zip, family_filename, family_data, timestamp)
+        system_data = system_stream.getvalue()
+        system_path = f"{platform}/{system_filename}"
+        files[system_path] = system_data
+        manifest.append({"platform": platform, "fileName": system_path, "sha256": digest_bytes(system_data), "variants": [entry for _, _, entry in family_archives]})
+    return files, manifest
 
 
 def external_document_entries(documents_root: Path) -> dict[str, bytes]:
@@ -128,23 +156,17 @@ def external_document_entries(documents_root: Path) -> dict[str, bytes]:
             raise ValueError("external document package is corrupt")
         for name in archive.namelist():
             safe_name(name)
-            if name.endswith("/"):
+            if name.endswith("/") or PurePosixPath(name).name in EXCLUDED_EXTERNAL_DOCUMENTS:
                 continue
             result[f"docs/external/{name}"] = archive.read(name)
     return result
 
 
-def build_bundle(release_directory: Path, documents_root: Path, candidates_root: Path, output: Path) -> dict:
-    release_manifest_path = release_directory / "release-manifest.json"
-    release_manifest = json.loads(release_manifest_path.read_text(encoding="utf-8"))
+def build_bundle(release_directory: Path, documents_root: Path, output: Path) -> dict:
+    release_manifest = json.loads((release_directory / "release-manifest.json").read_text(encoding="utf-8"))
     timestamp = zip_timestamp(release_manifest)
     grouped, validation = collect_native_packages(release_directory, release_manifest)
-    for platform in ("windows", "kylin"):
-        candidate = candidate_package(candidates_root / platform, platform)
-        if candidate is not None:
-            package, architecture = candidate
-            grouped.setdefault(f"{platform}/{architecture}", []).append((package.name, package.read_bytes()))
-    architecture_archives, architecture_manifest = build_architecture_archives(grouped, timestamp)
+    system_archives, system_manifest = build_system_archives(grouped, timestamp)
     files: dict[str, bytes] = external_document_entries(documents_root)
     windows_prd = find_one(documents_root, "system-prds/NeuroBridge项目结构与多系统接入_PRD.pdf")
     kylin_prd = find_one(documents_root, "system-prds/银河麒麟V10耳机USB串口接入_PRD.pdf")
@@ -152,22 +174,19 @@ def build_bundle(release_directory: Path, documents_root: Path, candidates_root:
         raise FileNotFoundError("system PRD PDFs are missing")
     files["windows/NeuroBridge项目结构与多系统接入_PRD.pdf"] = windows_prd.read_bytes()
     files["kylin/银河麒麟V10耳机USB串口接入_PRD.pdf"] = kylin_prd.read_bytes()
-    for name, value in architecture_archives.items():
-        files[name] = value
+    files.update(system_archives)
     for name, value in validation:
         files[f"metadata/validation/{name.removeprefix('validation/')}"] = value
     bundle_manifest = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "applicationVersion": release_manifest["applicationVersion"],
         "sourceCommit": release_manifest["git"]["commit"],
         "releaseStatus": release_manifest["releaseStatus"],
         "trigger": release_manifest["trigger"],
         "coverage": release_manifest["coverage"],
-        "architectureArchives": architecture_manifest,
+        "systemArchives": system_manifest,
         "documents": sorted(name for name in files if name.startswith("docs/")),
-        "systemDocuments": sorted(
-            name for name in files if name.startswith(("windows/", "kylin/")) and name.endswith(".pdf")
-        ),
+        "systemDocuments": sorted(name for name in files if name.startswith(("windows/", "kylin/")) and name.endswith(".pdf")),
         "validationFiles": sorted(name for name in files if name.startswith("metadata/validation/")),
     }
     files["metadata/bundle-manifest.json"] = json.dumps(bundle_manifest, ensure_ascii=False, indent=2, sort_keys=True).encode() + b"\n"
@@ -189,11 +208,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--release-dir", required=True, type=Path)
     parser.add_argument("--documents-dir", required=True, type=Path)
-    parser.add_argument("--candidates-dir", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
-        result = build_bundle(args.release_dir, args.documents_dir, args.candidates_dir, args.output)
+        result = build_bundle(args.release_dir, args.documents_dir, args.output)
     except (OSError, KeyError, ValueError, json.JSONDecodeError, zipfile.BadZipFile) as error:
         parser.error(str(error))
     print(json.dumps(result, ensure_ascii=False, indent=2))

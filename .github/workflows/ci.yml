@@ -310,8 +310,8 @@ jobs:
 
   release-aggregate:
     name: Verify packages and assemble one release ZIP
-    needs: [release-plan, release-targets, product-candidates]
-    if: always() && needs.release-plan.outputs.should_release == 'true' && needs.release-targets.result == 'success' && needs.product-candidates.result == 'success'
+    needs: [release-plan, release-targets]
+    if: always() && needs.release-plan.outputs.should_release == 'true' && needs.release-targets.result == 'success'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -329,14 +329,6 @@ jobs:
         with:
           name: external-document-package
           path: artifacts/documents
-      - uses: actions/download-artifact@v4
-        with:
-          name: neurobridge-windows-unsigned-candidate
-          path: artifacts/candidates/windows
-      - uses: actions/download-artifact@v4
-        with:
-          name: neurobridge-kylin-unsigned-candidate
-          path: artifacts/candidates/kylin
       - name: Check all target results and produce verified ZIP
         env:
           RELEASE_TRIGGER: ${{ github.event_name == 'pull_request' && 'pull_request' || 'push_master' }}
@@ -346,7 +338,6 @@ jobs:
           python tools/build-release-bundle.py \
             --release-dir artifacts/release \
             --documents-dir artifacts/documents \
-            --candidates-dir artifacts/candidates \
             --output artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
       - uses: actions/upload-artifact@v4
         with:
