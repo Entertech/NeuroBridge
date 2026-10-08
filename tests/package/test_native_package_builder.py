@@ -46,10 +46,12 @@ class NativePackageBuilderTests(unittest.TestCase):
             stage = root / "stage"
             BUILDER.copy_source(stage, target, runtime)
             source_root = stage / "opt/neurobridge"
-            _, components = BUILDER.wix_directory_tree(source_root, source_root, "INSTALLFOLDER", True)
+            _, components = BUILDER.wix_directory_tree(source_root, source_root, "INSTALLFOLDER")
             service = next(item for item in components if "ServiceInstall" in item)
             self.assertIn('Arguments="&quot;[#SERVICE_SCRIPT]&quot;"', service)
-            self.assertIn('File Id="SERVICE_SCRIPT"', "\n".join(components))
+            rendered = "\n".join(components)
+            self.assertIn('File Id="SERVICE_SCRIPT"', rendered)
+            self.assertNotIn("Win64=", rendered)
             self.assertNotIn("-m windows.service", service)
 
     def test_missing_runtime_is_rejected(self) -> None:

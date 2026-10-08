@@ -126,7 +126,7 @@ def xml_escape(value: str) -> str:
             .replace('"', "&quot;").replace("'", "&apos;"))
 
 
-def wix_directory_tree(root: Path, source_root: Path, install_id: str, win64: bool) -> tuple[list[str], list[str]]:
+def wix_directory_tree(root: Path, source_root: Path, install_id: str) -> tuple[list[str], list[str]]:
     directories: list[str] = []
     components: list[str] = []
 
@@ -143,7 +143,6 @@ def wix_directory_tree(root: Path, source_root: Path, install_id: str, win64: bo
                 file_id = wix_id("F_", relative)
                 if relative == "windows/service.py":
                     file_id = "SERVICE_SCRIPT"
-                attributes = ' Win64="yes"' if win64 else ""
                 service = ""
                 if relative.replace("/", "\\") == r"runtime\python.exe":
                     service = (
@@ -153,7 +152,7 @@ def wix_directory_tree(root: Path, source_root: Path, install_id: str, win64: bo
                         '<ServiceControl Name="NeuroBridge" Start="install" Stop="both" Remove="uninstall" Wait="yes" />'
                     )
                 components.append(
-                    f'<Component Id="{component_id}" Guid="*"{attributes} Directory="{parent_id}">'
+                    f'<Component Id="{component_id}" Guid="*" Directory="{parent_id}">'
                     f'<File Id="{file_id}" Source="{xml_escape(str(item))}" KeyPath="yes" />{service}</Component>'
                 )
 
@@ -166,7 +165,7 @@ def write_wix_msi(stage: Path, target: dict[str, str], output: Path, log: Path) 
         raise RuntimeError("WiX v7 CLI 'wix' is required to build Windows installers")
     source_root = stage / "opt" / "neurobridge"
     install_id = "INSTALLFOLDER"
-    directories, components = wix_directory_tree(source_root, source_root, install_id, target["architecture"] == "x86_64")
+    directories, components = wix_directory_tree(source_root, source_root, install_id)
     standard = "ProgramFiles64Folder" if target["architecture"] == "x86_64" else "ProgramFilesFolder"
     upgrade_code = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge"))
     wix = textwrap.dedent(
