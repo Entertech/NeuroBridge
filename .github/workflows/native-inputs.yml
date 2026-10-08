@@ -94,7 +94,7 @@ jobs:
 
   kylin:
     name: Kylin native input ${{ matrix.id }}
-    if: inputs.platforms == 'all' || (inputs.platforms == 'available' && matrix.architecture == 'x86_64')
+    if: inputs.platforms == 'all' || inputs.platforms == 'available'
     # The runner must be a target-compatible Kylin V10 machine or a runner
     # with the approved cross toolchain and sysroot for this architecture.
     runs-on:
@@ -104,46 +104,70 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # scope is a real matrix axis so it can be filtered before jobs are
+        # created. include entries add one target per selected scope value;
+        # they must not be collapsed into the scope axis itself.
+        scope: ${{ fromJSON(inputs.platforms == 'all' && '["available","full"]' || '["available"]') }}
         include:
-          - id: kylin-server-x86_64-deb
+          - scope: available
+            id: kylin-server-x86_64-deb
             architecture: x86_64
-          - id: kylin-server-x86_64-rpm
+          - scope: available
+            id: kylin-server-x86_64-rpm
             architecture: x86_64
-          - id: kylin-server-arm64-deb
+          - scope: full
+            id: kylin-server-arm64-deb
             architecture: arm64
-          - id: kylin-server-arm64-rpm
+          - scope: full
+            id: kylin-server-arm64-rpm
             architecture: arm64
-          - id: kylin-server-loongarch64-deb
+          - scope: full
+            id: kylin-server-loongarch64-deb
             architecture: loongarch64
-          - id: kylin-server-loongarch64-rpm
+          - scope: full
+            id: kylin-server-loongarch64-rpm
             architecture: loongarch64
-          - id: kylin-server-mips64el-deb
+          - scope: full
+            id: kylin-server-mips64el-deb
             architecture: mips64el
-          - id: kylin-server-mips64el-rpm
+          - scope: full
+            id: kylin-server-mips64el-rpm
             architecture: mips64el
-          - id: kylin-server-sw64-deb
+          - scope: full
+            id: kylin-server-sw64-deb
             architecture: sw64
-          - id: kylin-server-sw64-rpm
+          - scope: full
+            id: kylin-server-sw64-rpm
             architecture: sw64
-          - id: kylin-desktop-x86_64-deb
+          - scope: available
+            id: kylin-desktop-x86_64-deb
             architecture: x86_64
-          - id: kylin-desktop-x86_64-rpm
+          - scope: available
+            id: kylin-desktop-x86_64-rpm
             architecture: x86_64
-          - id: kylin-desktop-arm64-deb
+          - scope: full
+            id: kylin-desktop-arm64-deb
             architecture: arm64
-          - id: kylin-desktop-arm64-rpm
+          - scope: full
+            id: kylin-desktop-arm64-rpm
             architecture: arm64
-          - id: kylin-desktop-loongarch64-deb
+          - scope: full
+            id: kylin-desktop-loongarch64-deb
             architecture: loongarch64
-          - id: kylin-desktop-loongarch64-rpm
+          - scope: full
+            id: kylin-desktop-loongarch64-rpm
             architecture: loongarch64
-          - id: kylin-desktop-mips64el-deb
+          - scope: full
+            id: kylin-desktop-mips64el-deb
             architecture: mips64el
-          - id: kylin-desktop-mips64el-rpm
+          - scope: full
+            id: kylin-desktop-mips64el-rpm
             architecture: mips64el
-          - id: kylin-desktop-sw64-deb
+          - scope: full
+            id: kylin-desktop-sw64-deb
             architecture: sw64
-          - id: kylin-desktop-sw64-rpm
+          - scope: full
+            id: kylin-desktop-sw64-rpm
             architecture: sw64
     steps:
       - uses: actions/checkout@v4
