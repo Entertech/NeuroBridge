@@ -26,6 +26,22 @@ token. Create it on a machine that already has repository administration access:
 
 The current algorithm build supports x86_64 only. Other architectures can
 register a runner, but their runtime must be supplied separately.
+
+KYSEC execution control prompts on every job unless it is relaxed once.
+The runner checks out fresh files under _work for each job, and KYSEC
+treats each new file as untrusted, so an enforcing policy stops the job
+with "KYSEC: 权限不够" and exit 126 before the build script runs. On the
+runner machine, as root:
+
+  getstatus
+  setstatus -f exectl warning
+
+Confirm that "exec control" now reads "warning". Leave file protect,
+process protect, device control and ipt control unchanged, and do not
+switch the machine to softmode: that disables every control. The setting
+persists, so it is not repeated per build. A job that still fails with
+exit 126 after the change was checked out before the policy applied;
+rerun that job.
 EOF
 }
 
