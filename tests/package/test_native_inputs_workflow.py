@@ -51,6 +51,25 @@ def windows_entries() -> dict[str, str]:
     return entries
 
 
+JOB_RE = re.compile(r"^  ([a-z][a-z0-9-]*):\s*$")
+
+
+def job_block(name: str) -> str:
+    """Return the text of one job, so a contract can be asserted per job."""
+    collected: list[str] = []
+    inside = False
+    for line in WORKFLOW.read_text(encoding="utf-8").splitlines():
+        match = JOB_RE.match(line)
+        if match:
+            if inside:
+                break
+            inside = match.group(1) == name
+            continue
+        if inside:
+            collected.append(line)
+    return "\n".join(collected)
+
+
 class NativeInputsWorkflowTests(unittest.TestCase):
     def test_workflow_matrix_matches_the_release_contract(self) -> None:
         declared = {target["id"] for target in matrix() if target["platform"] == "windows"}
@@ -108,6 +127,40 @@ class NativeInputsWorkflowTests(unittest.TestCase):
             "a Windows 7 x86_64 target and a Windows 10 x86 target are blocked by "
             "different causes and must not share one generic sentence",
         )
+
+    def test_every_platform_job_records_an_outcome_per_target(self) -> None:
+        # A target that produces no installer must not leave its reason only
+        # inside a few-hundred-byte artifact: the run page is what people read.
+        for job in ("windows", "kylin"):
+            with self.subTest(job=job):
+                block = job_block(job)
+                self.assertIn("Record the target outcome", block)
+                self.assertIn("status/status-", block)
+                self.assertIn("neurobridge-status-${{ matrix.id }}", block)
+
+    def test_unexpected_failures_are_reported_as_errors_not_notices(self) -> None:
+        # A declared blocker is expected and stays a notice; a build that failed
+        # is a defect and must surface as an error annotation.
+        for job in ("windows", "kylin"):
+            with self.subTest(job=job):
+                block = job_block(job)
+                self.assertIn("::error title=", block)
+                self.assertIn("::notice title=", block)
+
+    def test_kylin_distinguishes_a_missing_runtime_from_a_failed_build(self) -> None:
+        block = job_block("kylin")
+        self.assertIn("grep -q 'native package build failed'", block)
+        self.assertIn("outcome=failed", block)
+        self.assertIn("outcome=blocked", block)
+
+    def test_the_summary_job_always_runs_after_both_platforms(self) -> None:
+        block = job_block("summarize-inputs")
+        self.assertIn("needs: [windows, kylin]", block)
+        self.assertIn("if: always()", block)
+        self.assertIn("tools/render-input-summary.sh", block)
+        # It must only pull the small records, never the packages themselves.
+        self.assertIn("pattern: neurobridge-status-*", block)
+        self.assertNotIn("pattern: neurobridge-input-*", block)
 
 
 if __name__ == "__main__":

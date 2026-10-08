@@ -83,6 +83,7 @@ jobs:
           wix extension add WixToolset.BootstrapperApplications.wixext/7.0.0 --global
           wix --version
       - name: Build native installer from source
+        id: build
         if: matrix.blocked_reason == ''
         shell: powershell
         run: |
@@ -99,12 +100,55 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path artifacts\input | Out-Null
           "blocked: $env:BLOCKED_REASON" | Set-Content artifacts\input\blocked.log
+      # A target that produces no installer must not leave its reason only inside
+      # a few-hundred-byte artifact: the run page is what people actually read.
+      # The record is written as key=value lines so the summarising job can turn
+      # every target into one message without re-downloading the packages.
+      - name: Record the target outcome
+        if: always()
+        shell: powershell
+        env:
+          TARGET_ID: ${{ matrix.id }}
+          DECLARED_BLOCKER: ${{ matrix.blocked_reason }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+        run: |
+          $outcome = 'built'
+          $reason = 'native package produced and validated'
+          if ($env:DECLARED_BLOCKER -ne '') {
+            $outcome = 'blocked'
+            $reason = $env:DECLARED_BLOCKER
+          } elseif ($env:BUILD_OUTCOME -eq 'failure') {
+            $outcome = 'failed'
+            $reason = 'native package build failed'
+          } elseif (-not (Test-Path artifacts\input\verification.json)) {
+            $outcome = 'failed'
+            $reason = 'build did not produce a package'
+          }
+          New-Item -ItemType Directory -Force -Path status | Out-Null
+          $record = "target=$($env:TARGET_ID)`noutcome=$outcome`nreason=$reason`n"
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [IO.File]::WriteAllText((Join-Path $PWD "status/status-$($env:TARGET_ID).txt"), $record, $utf8)
+          Copy-Item "status/status-$($env:TARGET_ID).txt" artifacts\input\status.txt -Force
+          @("#### $($env:TARGET_ID)", "", "- outcome: ``$outcome``", "- reason: $reason", "") |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          if ($outcome -eq 'failed') {
+            Write-Host "::error title=$($env:TARGET_ID)::$reason"
+          } elseif ($outcome -eq 'blocked') {
+            Write-Host "::notice title=$($env:TARGET_ID)::$reason"
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: neurobridge-input-${{ matrix.id }}
           path: artifacts/input/
           if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: neurobridge-status-${{ matrix.id }}
+          path: status/
+          if-no-files-found: warn
           retention-days: 30
 
   kylin:
@@ -188,6 +232,43 @@ jobs:
             journalctl -k -n 80 --no-pager 2>/dev/null | grep -iE 'kysec|denied' || true
           } >> artifacts/input/blocked.log 2>&1
           exit 0
+      # See the Windows job: the reason must be readable on the run page, not
+      # only inside the artifact.  A missing runtime is a declared blocker; a
+      # failed rpmbuild is not, and is reported as such.
+      - name: Record the target outcome
+        if: always()
+        env:
+          TARGET_ID: ${{ matrix.id }}
+        run: |
+          set -uo pipefail
+          outcome=built
+          reason='native package produced and validated'
+          if [ -f artifacts/input/blocked.log ]; then
+            if grep -q 'native package build failed' artifacts/input/blocked.log; then
+              outcome=failed
+              reason=$(grep -m1 'native package build failed' artifacts/input/blocked.log | cut -c1-400)
+            else
+              outcome=blocked
+              reason=$(head -n 1 artifacts/input/blocked.log | cut -c1-400)
+            fi
+          elif [ ! -f artifacts/input/verification.json ]; then
+            outcome=failed
+            reason='build did not produce a package'
+          fi
+          mkdir -p status
+          printf 'target=%s\noutcome=%s\nreason=%s\n' "$TARGET_ID" "$outcome" "$reason" > "status/status-$TARGET_ID.txt"
+          cp "status/status-$TARGET_ID.txt" artifacts/input/status.txt
+          {
+            printf '#### %s\n\n' "$TARGET_ID"
+            printf -- '- outcome: `%s`\n' "$outcome"
+            printf -- '- reason: %s\n\n' "$reason"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$outcome" = failed ]; then
+            printf '::error title=%s::%s\n' "$TARGET_ID" "$reason"
+          elif [ "$outcome" = blocked ]; then
+            printf '::notice title=%s::%s\n' "$TARGET_ID" "$reason"
+          fi
+          exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -195,6 +276,41 @@ jobs:
           path: artifacts/input/
           if-no-files-found: error
           retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: neurobridge-status-${{ matrix.id }}
+          path: status/
+          if-no-files-found: warn
+          retention-days: 30
+
+  summarize-inputs:
+    name: Summarize the release input
+    # Runs even when a platform job fails: the record is most valuable exactly
+    # then.  The per-target records are a few hundred bytes each, so this job
+    # never downloads the packages themselves.
+    needs: [windows, kylin]
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      # The renderer comes from the ref that runs the workflow, not from
+      # source_ref, so the record format always matches the workflow itself.
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: neurobridge-status-*
+          path: statuses
+      - name: Render the run record
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -uo pipefail
+          record=$(tools/render-input-summary.sh statuses)
+          printf '%s\n' "$record" | tee -a "$GITHUB_STEP_SUMMARY"
+          case "$record" in
+            *"【失败】"*) printf '::error title=release input::本次输入存在构建失败的目标，记录见上方\n' ;;
+          esac
 
   publish-input-run:
     name: Record this run as the release input
