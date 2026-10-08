@@ -38,6 +38,20 @@ class NativePackageBuilderTests(unittest.TestCase):
             self.assertTrue((stage / "opt/neurobridge/runtime/bin/python").is_file())
             self.assertTrue((stage / "opt/neurobridge/packaging/neurobridge.service").is_file())
 
+    def test_windows_service_uses_installed_script_path(self) -> None:
+        target = BUILDER.target_for("windows-10-x86_64-msi")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = self.runtime(root, target["id"])
+            stage = root / "stage"
+            BUILDER.copy_source(stage, target, runtime)
+            source_root = stage / "opt/neurobridge"
+            _, components = BUILDER.wix_directory_tree(source_root, source_root, "INSTALLFOLDER", True)
+            service = next(item for item in components if "ServiceInstall" in item)
+            self.assertIn('Arguments="&quot;[#SERVICE_SCRIPT]&quot;"', service)
+            self.assertIn('File Id="SERVICE_SCRIPT"', "\n".join(components))
+            self.assertNotIn("-m windows.service", service)
+
     def test_missing_runtime_is_rejected(self) -> None:
         target = BUILDER.target_for("windows-10-x86_64-msi")
         with tempfile.TemporaryDirectory() as directory:

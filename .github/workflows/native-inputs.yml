@@ -8,6 +8,14 @@ on:
         required: true
         default: master
         type: string
+      platforms:
+        description: "windows 仅构建 Windows 安装包；all 同时排队全部麒麟架构"
+        required: true
+        default: windows
+        type: choice
+        options:
+          - windows
+          - all
 
 permissions:
   contents: read
@@ -46,12 +54,10 @@ jobs:
           architecture: x64
       - name: Prepare the locked Windows runtime
         if: contains(matrix.id, 'x86_64') && !startsWith(matrix.id, 'windows-7-')
-        continue-on-error: true
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-windows-candidate-runtime.ps1
       - name: Install the unsigned WiX build tool
         if: contains(matrix.id, 'x86_64') && !startsWith(matrix.id, 'windows-7-')
-        continue-on-error: true
         shell: powershell
         run: |
           dotnet tool install --global wix --version 7.0.0
@@ -63,16 +69,11 @@ jobs:
         if: contains(matrix.id, 'x86_64') && !startsWith(matrix.id, 'windows-7-')
         shell: powershell
         run: |
-          New-Item -ItemType Directory -Force -Path artifacts\input | Out-Null
-          try {
-            python tools\build-native-package.py `
-              --target "${{ matrix.id }}" `
-              --runtime-dir artifacts\windows-runtime `
-              --output-dir artifacts\input
-            if ($LASTEXITCODE -ne 0) { throw "native package build failed: $LASTEXITCODE" }
-          } catch {
-            "blocked: $($_.Exception.Message)" | Set-Content artifacts\input\blocked.log
-          }
+          python tools\build-native-package.py `
+            --target "${{ matrix.id }}" `
+            --runtime-dir artifacts\windows-runtime `
+            --output-dir artifacts\input
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Record blocked target
         if: ${{ !(contains(matrix.id, 'x86_64') && !startsWith(matrix.id, 'windows-7-')) }}
         shell: powershell
@@ -91,6 +92,7 @@ jobs:
 
   kylin:
     name: Kylin native input ${{ matrix.id }}
+    if: inputs.platforms == 'all'
     # The runner must be a target-compatible Kylin V10 machine or a runner
     # with the approved cross toolchain and sysroot for this architecture.
     runs-on:

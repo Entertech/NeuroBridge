@@ -141,13 +141,15 @@ def wix_directory_tree(root: Path, source_root: Path, install_id: str, win64: bo
                 relative = item.relative_to(source_root).as_posix()
                 component_id = wix_id("C_", relative)
                 file_id = wix_id("F_", relative)
+                if relative == "windows/service.py":
+                    file_id = "SERVICE_SCRIPT"
                 attributes = ' Win64="yes"' if win64 else ""
                 service = ""
                 if relative.replace("/", "\\") == r"runtime\python.exe":
                     service = (
                         '<ServiceInstall Name="NeuroBridge" DisplayName="NeuroBridge Gateway" '
                         'Description="USB serial gateway to loopback WebSocket" Type="ownProcess" '
-                        'Start="auto" ErrorControl="normal" Arguments="-m windows.service" />'
+                        'Start="auto" ErrorControl="normal" Arguments="&quot;[#SERVICE_SCRIPT]&quot;" />'
                         '<ServiceControl Name="NeuroBridge" Start="install" Stop="both" Remove="uninstall" Wait="yes" />'
                     )
                 components.append(
