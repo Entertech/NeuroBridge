@@ -67,6 +67,28 @@ class NativePackageBuilderTests(unittest.TestCase):
         self.assertEqual(reference["url"], "https://github.com/Entertech/NeuroBridge/commit/" + "a" * 40)
         self.assertRegex(reference["sha256"], r"^[0-9a-f]{64}$")
 
+    def test_payloads_ship_the_platform_configuration_template(self) -> None:
+        # The installed service copies this template to its data directory, and
+        # the profile it declares selects the serial source and algorithm path.
+        for target_id, expected in (
+            ("windows-10-x86_64-msi", 'profile = "windows_headset_local"'),
+            ("kylin-server-x86_64-deb", 'profile = "kylin_headset_local"'),
+        ):
+            with self.subTest(target=target_id):
+                target = BUILDER.target_for(target_id)
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    runtime = self.runtime(root, target_id)
+                    stage = root / "stage"
+                    BUILDER.copy_source(stage, target, runtime)
+                    template = (stage / "opt/neurobridge/gateway.toml.example").read_text(encoding="utf-8")
+                    self.assertIn(expected, template)
+                    if target_id.startswith("windows"):
+                        self.assertIn('candidate_types = ["COM"]', template)
+                        self.assertIn(r'directory = "C:\\ProgramData\\NeuroBridge\\logs"', template)
+                        self.assertNotIn("ttyACM", template)
+                        self.assertNotIn("/opt/neurobridge", template)
+
 
 if __name__ == "__main__":
     unittest.main()

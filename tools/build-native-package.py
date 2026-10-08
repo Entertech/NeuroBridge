@@ -90,7 +90,12 @@ def copy_source(stage: Path, target: dict[str, str], runtime: Path) -> None:
         service_dir = payload / "packaging"
         service_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / "packaging/kylin/neurobridge.service", service_dir / "neurobridge.service")
-    shutil.copy2(ROOT / "config/gateway.toml.example", payload / "gateway.toml.example")
+    # The deployed template decides which serial source and algorithm path the
+    # installed service uses, so it must match the platform.  The candidate
+    # builder already picks it this way; shipping the Kylin template to Windows
+    # would select the POSIX serial source and a /opt algorithm binary.
+    template = "config/gateway.toml.example" if target["platform"] == "kylin" else "windows/gateway.toml.example"
+    shutil.copy2(ROOT / template, payload / "gateway.toml.example")
     shutil.copytree(runtime, payload / "runtime", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 
 
