@@ -9,10 +9,12 @@ from hashlib import sha256
 import io
 import json
 from pathlib import Path, PurePosixPath
+import tomllib
 import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+RELEASE_MATRIX = tomllib.loads((ROOT / "release/release_matrix.toml").read_text(encoding="utf-8"))
 EXCLUDED_EXTERNAL_DOCUMENTS = {
     "头环数据网关 SSH 运维操作指南_v1.0.pdf",
     "头环数据网关有线网络配置指南_v1.0.pdf",
@@ -115,14 +117,15 @@ def build_system_archives(grouped: dict[tuple[str, str, str], list[dict]], times
     files: dict[str, bytes] = {}
     manifest: list[dict] = []
     for platform in ("windows", "kylin"):
-        families = sorted({family for item_platform, family, _ in grouped if item_platform == platform})
+        if platform == "windows":
+            families = [f"windows-{version}" for version in RELEASE_MATRIX["windows"]["versions"]]
+            expected_architectures = RELEASE_MATRIX["windows"]["architectures"]
+        else:
+            families = [f"kylin-{edition}" for edition in RELEASE_MATRIX["kylin"]["editions"]]
+            expected_architectures = RELEASE_MATRIX["kylin"]["architectures"]
         family_archives: list[tuple[str, bytes, dict]] = []
         for family in families:
-            architectures = sorted(
-                (architecture, packages)
-                for (item_platform, item_family, architecture), packages in grouped.items()
-                if item_platform == platform and item_family == family
-            )
+            architectures = [(architecture, grouped.get((platform, family, architecture), [])) for architecture in expected_architectures]
             arch_entries: list[dict] = []
             family_stream = io.BytesIO()
             with zipfile.ZipFile(family_stream, "w", zipfile.ZIP_DEFLATED) as family_zip:
