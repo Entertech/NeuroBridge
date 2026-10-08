@@ -299,8 +299,8 @@ jobs:
 
   release-aggregate:
     name: Verify packages and assemble one release ZIP
-    needs: [release-plan, release-targets]
-    if: always() && needs.release-plan.outputs.should_release == 'true' && needs.release-targets.result == 'success'
+    needs: [release-plan, release-targets, product-candidates]
+    if: always() && needs.release-plan.outputs.should_release == 'true' && needs.release-targets.result == 'success' && needs.product-candidates.result == 'success'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -314,14 +314,33 @@ jobs:
           pattern: release-target-*
           path: artifacts/targets
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: external-document-package
+          path: artifacts/documents
+      - uses: actions/download-artifact@v4
+        with:
+          name: neurobridge-windows-unsigned-candidate
+          path: artifacts/candidates/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: neurobridge-kylin-unsigned-candidate
+          path: artifacts/candidates/kylin
       - name: Check all target results and produce verified ZIP
         env:
           RELEASE_TRIGGER: ${{ github.event_name == 'pull_request' && 'pull_request' || 'push_master' }}
         run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER"
+      - name: Assemble one user-facing release bundle
+        run: |
+          python tools/build-release-bundle.py \
+            --release-dir artifacts/release \
+            --documents-dir artifacts/documents \
+            --candidates-dir artifacts/candidates \
+            --output artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
       - uses: actions/upload-artifact@v4
         with:
           name: verified-release-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-          path: artifacts/release/
+          path: artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -352,9 +371,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -m tools.publish_release --dir artifacts/release
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-receipt-${{ github.sha }}
-          path: artifacts/release/release-receipt.json
-          if-no-files-found: error
-          retention-days: 30

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 from hashlib import sha256 as hashlib_sha256
+import io
 import json
 from pathlib import Path
 import shutil
@@ -69,6 +70,10 @@ def verify_asset(tag: str, asset: Path, existing: bool) -> None:
 
 
 def verify_nested_archives(archive: Path, manifest: dict) -> None:
+    with zipfile.ZipFile(archive) as outer:
+        if "metadata/bundle-manifest.json" in outer.namelist():
+            verify_release_bundle(archive, json.loads(outer.read("metadata/bundle-manifest.json")))
+            return
     archives = manifest["platformArchives"]
     if {item["platform"] for item in archives} != {"windows", "kylin"}:
         raise ValueError("release must contain exactly one ZIP per platform")
@@ -98,9 +103,69 @@ def verify_nested_archives(archive: Path, manifest: dict) -> None:
                         raise ValueError(f"package hash mismatch: {item['fileName']}")
 
 
+def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
+    """Verify the single user-facing ZIP and its architecture sub-ZIPs."""
+    with zipfile.ZipFile(archive) as outer:
+        if outer.testzip() is not None:
+            raise ValueError("release bundle CRC verification failed")
+        names = set(outer.namelist())
+        required = {"metadata/bundle-manifest.json", "metadata/build-manifest.json", "metadata/release-logs.jsonl"}
+        required.update(bundle_manifest.get("documents", []))
+        required.update(bundle_manifest.get("validationFiles", []))
+        for item in bundle_manifest.get("architectureArchives", []):
+            path = f"{item['platform']}/{item['fileName']}"
+            required.add(path)
+            if path not in names:
+                raise ValueError(f"architecture archive missing: {path}")
+            data = outer.read(path)
+            if sha256_bytes(data) != item["sha256"]:
+                raise ValueError(f"architecture archive hash mismatch: {path}")
+            with zipfile.ZipFile(io.BytesIO(data)) as inner:
+                if inner.testzip() is not None:
+                    raise ValueError(f"architecture archive is corrupt: {path}")
+                packages = [name for name in inner.namelist() if name.startswith("packages/") and not name.endswith("/")]
+                if len(packages) != item["packageCount"]:
+                    raise ValueError(f"architecture archive package count mismatch: {path}")
+        if not required.issubset(names):
+            raise ValueError("release bundle is missing documented or metadata entries")
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib_sha256(value).hexdigest()
+
+
+def load_bundle_manifest(directory: Path) -> tuple[Path, dict] | None:
+    archives = sorted(path for path in directory.glob("*.zip") if path.is_file())
+    if len(archives) != 1:
+        return None
+    archive = archives[0]
+    with zipfile.ZipFile(archive) as bundle:
+        if "metadata/bundle-manifest.json" not in bundle.namelist():
+            return None
+        raw = json.loads(bundle.read("metadata/bundle-manifest.json"))
+    manifest = {
+        "applicationVersion": raw["applicationVersion"],
+        "releaseStatus": raw["releaseStatus"],
+        "trigger": raw["trigger"],
+        "git": {"commit": raw["sourceCommit"], "ref": "refs/heads/master", "dirty": False},
+        "coverage": raw["coverage"],
+        "aggregateArchive": {"fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": sum(item["packageCount"] for item in raw.get("architectureArchives", []))},
+        "bundleManifest": raw,
+    }
+    return archive, manifest
+
+
 def publish(directory: Path) -> dict:
     manifest_path = directory / "release-manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    bundle_mode = not manifest_path.is_file()
+    if bundle_mode:
+        loaded = load_bundle_manifest(directory)
+        if loaded is None:
+            raise ValueError("release bundle or release-manifest.json is missing")
+        archive, manifest = loaded
+    else:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        archive = directory / manifest["aggregateArchive"]["fileName"]
     version = manifest["applicationVersion"]
     version_tuple(version)
     tag = f"v{version}"
@@ -113,24 +178,29 @@ def publish(directory: Path) -> dict:
         raise ValueError("manifest lacks results for all 32 targets")
     if any(manifest["coverage"][platform]["builtPackageCount"] < 1 for platform in ("windows", "kylin")):
         raise ValueError("minimum per-platform package gate failed")
-    archive = directory / manifest["aggregateArchive"]["fileName"]
     if not archive.is_file() or sha256(archive) != manifest["aggregateArchive"]["sha256"]:
         raise ValueError("aggregate ZIP missing or SHA-256 mismatch")
     verify_nested_archives(archive, manifest)
-    checksums = directory / f"{archive.name}.sha256"
-    if checksums.read_text(encoding="utf-8") != f"{sha256(archive)}  {archive.name}\n":
-        raise ValueError("checksum sidecar differs from aggregate ZIP")
+    if not bundle_mode:
+        checksums = directory / f"{archive.name}.sha256"
+        if checksums.read_text(encoding="utf-8") != f"{sha256(archive)}  {archive.name}\n":
+            raise ValueError("checksum sidecar differs from aggregate ZIP")
     notes = directory / "release-notes.md"
     gaps = [item for platform in ("windows", "kylin") for item in manifest["coverage"][platform]["targetResults"] if item["status"] != "candidate"]
     notes.write_text(f"NeuroBridge {tag}\n\nSource commit: `{commit}`. Unsigned packages; physical verification is pending.\n\n" + "Incomplete targets:\n" + ("\n".join(f"- `{item['targetId']}`: {item['status']} — {item['reason']}" for item in gaps) or "- None") + "\n", encoding="utf-8")
-    release_log = directory / "release-logs.jsonl"
-    if not release_log.is_file() or len(release_log.read_text(encoding="utf-8").splitlines()) != 32:
+    if bundle_mode:
+        with zipfile.ZipFile(archive) as bundle:
+            release_log_text = bundle.read("metadata/release-logs.jsonl").decode("utf-8")
+    else:
+        release_log = directory / "release-logs.jsonl"
+        release_log_text = release_log.read_text(encoding="utf-8") if release_log.is_file() else ""
+    if len(release_log_text.splitlines()) != 32:
         raise ValueError("release logs missing or incomplete")
-    logged = {entry["target"]["id"]: entry["status"] for entry in (json.loads(line) for line in release_log.read_text(encoding="utf-8").splitlines())}
+    logged = {entry["target"]["id"]: entry["status"] for entry in (json.loads(line) for line in release_log_text.splitlines())}
     expected_logged = {item["targetId"]: item["status"] for platform in ("windows", "kylin") for item in manifest["coverage"][platform]["targetResults"]}
     if logged != expected_logged:
         raise ValueError("release logs do not match target coverage")
-    assets = [archive, manifest_path, checksums, release_log]
+    assets = [archive] if bundle_mode else [archive, manifest_path, directory / f"{archive.name}.sha256", directory / "release-logs.jsonl"]
     expected_names = {item.name for item in assets}
     ensure_tag(tag, commit)
     info = ensure_release(tag, notes)
