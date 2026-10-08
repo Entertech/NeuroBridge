@@ -376,7 +376,7 @@ jobs:
 
   release-cleanup:
     name: Keep only the user-facing release artifact
-    needs: [release-plan, release-aggregate, release-publish]
+    needs: [release-plan, release-aggregate, release-publish, product-candidates]
     if: always() && needs.release-aggregate.result == 'success'
     runs-on: ubuntu-22.04
     permissions:
