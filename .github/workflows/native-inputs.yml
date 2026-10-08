@@ -154,3 +154,34 @@ jobs:
           path: artifacts/input/
           if-no-files-found: error
           retention-days: 30
+
+  publish-input-run:
+    name: Record this run as the release input
+    needs: [windows, kylin]
+    # The release aggregation reads vars.NEUROBRIDGE_RELEASE_INPUT_RUN_ID.
+    # Only a run that produced both platform sets may replace it: a partial
+    # build (for example platforms=windows) would silently drop the other
+    # platform from the next release bundle.
+    if: ${{ !cancelled() && needs.windows.result == 'success' && needs.kylin.result == 'success' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: write
+    steps:
+      - name: Point the release aggregation at this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          gh variable set NEUROBRIDGE_RELEASE_INPUT_RUN_ID \
+            --repo "$GITHUB_REPOSITORY" \
+            --body "$GITHUB_RUN_ID"
+          {
+            printf '## Release input run recorded\n\n'
+            printf '`NEUROBRIDGE_RELEASE_INPUT_RUN_ID` = `%s`\n\n' "$GITHUB_RUN_ID"
+            printf -- '- run branch: `%s`\n' "$GITHUB_REF_NAME"
+            printf -- '- run commit: `%s`\n' "$GITHUB_SHA"
+            printf -- '- built source ref: `%s`\n' "$SOURCE_REF"
+            printf '\nThe release aggregation validates the run branch and commit, so a later\n'
+            printf 'release must be built from `%s` to consume these inputs.\n' "$GITHUB_REF_NAME"
+          } >> "$GITHUB_STEP_SUMMARY"
