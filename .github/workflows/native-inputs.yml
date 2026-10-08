@@ -162,6 +162,32 @@ jobs:
           else
             rm -f artifacts/input/build.log
           fi
+      - name: Capture the security state if the build failed
+        if: always()
+        run: |
+          set -uo pipefail
+          [ -f artifacts/input/blocked.log ] || exit 0
+          grep -q 'native package build failed' artifacts/input/blocked.log || exit 0
+          # A failed rpmbuild is reported as "blocked" so the matrix keeps a real
+          # reason per target, which also hides the cause behind a green job.
+          # Record what the security modules were doing at that moment, because
+          # the same machine has produced both a passing and a failing RPM build
+          # with an identical KYSEC setting.
+          {
+            printf '\n--- security state when the build failed\n'
+            command -v getstatus >/dev/null 2>&1 && getstatus 2>&1 || true
+            printf '\n--- rpm temp scripts left behind\n'
+            ls -la /var/tmp/rpm-tmp.* 2>&1 || true
+            for f in /var/tmp/rpm-tmp.*; do
+              [ -e "$f" ] || continue
+              stat -c 'mode=%A (%a) uid=%U size=%s mtime=%y' "$f" 2>&1 || true
+              command -v getfattr >/dev/null 2>&1 && getfattr -d -m - "$f" 2>&1 || true
+            done
+            printf '\n--- kysec records\n'
+            dmesg -T 2>/dev/null | grep -iE 'kysec|ksip' | tail -20 || true
+            journalctl -k -n 80 --no-pager 2>/dev/null | grep -iE 'kysec|denied' || true
+          } >> artifacts/input/blocked.log 2>&1
+          exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:

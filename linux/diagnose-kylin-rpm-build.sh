@@ -12,13 +12,21 @@
 #   * The same machine built both Kylin RPM targets successfully at 16:54 and
 #     failed the same targets at 19:26/19:29 with a byte-for-byte identical
 #     KYSEC state, so the KYSEC *settings* are not the differentiator.
-#   * A minimal spec passes here, so rpmbuild itself and /var/tmp are usable.
-#   * The failure is at the point /bin/sh opens the generated script, not
-#     inside it: the successful run's trace shows a two-command %install.
+#   * The runner is a systemd service that has been up since 15:45, so the same
+#     runner process produced both the success and the failure.
+#   * The generated spec is byte-identical in %install across those two commits;
+#     only %preun/%postun changed, and -bb never runs those.
+#   * The temp script the failing run left behind is readable now, mode 0600,
+#     owned by admain, with no immutable flag, and its content is the ordinary
+#     rpm preamble plus two commands.  So the refusal was a decision taken at
+#     the time, not a property of the file.
+#   * SELinux is disabled and AppArmor is not installed, so KYSEC is the only
+#     module that could have refused it -- and it did stamp security.ksip on
+#     exactly those two files.
 # This script therefore (a) forensically reads the temp scripts that the
-# failing run left behind, and (b) reruns the *real* spec both from this
-# terminal and detached from any graphical session, which is the one
-# difference between a manual build and the CI runner that we can test here.
+# failing run left behind, (b) looks up the security-module log for the window
+# those files bracket, and (c) reruns the *real* spec both from this terminal
+# and detached from any graphical session.
 #
 # The script is read-only with respect to the system.  It writes only under a
 # scratch directory in /tmp, never changes KYSEC, never installs or removes a
@@ -100,6 +108,21 @@ fi
 printf 'current shell: tty=%s XDG_SESSION_TYPE=%s DISPLAY=%s\n' \
   "$(tty 2>/dev/null || echo none)" "${XDG_SESSION_TYPE:-none}" "${DISPLAY:-none}"
 
+# A systemd unit can sandbox the build in ways this terminal never sees.  The
+# leftovers being visible in the host /var/tmp already rules PrivateTmp out,
+# but the rest of the unit is worth recording once.
+runner_unit=$(systemctl list-units --type=service --all --no-legend 2>/dev/null \
+  | awk '/actions\.runner/ {print $1; exit}')
+if [ -n "${runner_unit:-}" ]; then
+  section "runner 服务单元属性"
+  systemctl cat "$runner_unit" 2>/dev/null | sed 's/^/  /' | head -40
+  printf -- '--- 关键属性\n'
+  systemctl show "$runner_unit" \
+    -p PrivateTmp -p PrivateDevices -p ProtectSystem -p ProtectHome \
+    -p NoNewPrivileges -p ReadWritePaths -p InaccessiblePaths -p UMask \
+    -p User -p ExecStart 2>/dev/null | sed 's/^/  /'
+fi
+
 # ------------------------------------------------------------------ forensics
 
 # The failing run left its own %install script on disk.  Reading it now is the
@@ -126,6 +149,65 @@ else
     printf -- '  --- 内容（前 45 行）\n'
     head -n 45 "$f" 2>&1 | sed 's/^/  /'
   done
+fi
+
+# The files are readable now, so the refusal was a decision taken at the time,
+# not a property of the file.  Every LSM records such a decision, so look it up
+# in the window the leftover mtimes bracket.  This is the one piece of evidence
+# that can name the refusing component instead of guessing at it.
+section "失败时刻的安全模块日志"
+if [ "${#leftovers[@]}" -gt 0 ]; then
+  oldest=9999999999
+  newest=0
+  for f in "${leftovers[@]}"; do
+    m=$(stat -c %Y "$f" 2>/dev/null || echo 0)
+    [ "$m" -lt "$oldest" ] && oldest=$m
+    [ "$m" -gt "$newest" ] && newest=$m
+  done
+  t0=$(date -d "@$((oldest - 300))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo '')
+  t1=$(date -d "@$((newest + 300))" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo '')
+  printf '时间窗（由残留脚本 mtime 推出）: %s .. %s\n' "$t0" "$t1"
+  if command -v journalctl >/dev/null 2>&1 && [ -n "$t0" ]; then
+    printf -- '--- journalctl 该窗口内命中 kysec/拒绝 的行\n'
+    journalctl --since "$t0" --until "$t1" --no-pager 2>/dev/null \
+      | grep -iE 'kysec|ksip|权限|denied|refus|拒绝' | head -40 \
+      || echo '  (无匹配)'
+  fi
+  if dmesg -T >/dev/null 2>&1; then
+    printf -- '--- dmesg 中残留的 kysec 记录\n'
+    dmesg -T 2>/dev/null | grep -iE 'kysec|ksip' | tail -20 || echo '  (无匹配)'
+  else
+    printf -- '--- dmesg 需要权限，跳过（可用 sudo dmesg -T | grep -i kysec 单独看）\n'
+  fi
+  printf -- '--- /var/log 下与 kysec 相关的日志文件\n'
+  grep -rli kysec /var/log 2>/dev/null | head -10 || echo '  (无匹配)'
+  for logfile in /var/log/kysec.log /var/log/kysec/kysec.log /var/log/messages /var/log/secure; do
+    [ -f "$logfile" ] || continue
+    printf -- '--- %s 中该窗口附近的行\n' "$logfile"
+    grep -iE 'kysec|ksip' "$logfile" 2>/dev/null | tail -20 || echo '  (无匹配)'
+  done
+else
+  echo '没有残留脚本，无法推出时间窗。'
+fi
+
+# Is security.ksip a "this file was refused" marker, or just a generic label on
+# anything created under this boot?  Comparing a file created here with one the
+# runner created answers it without guessing.
+section "security.ksip 对比"
+if command -v getfattr >/dev/null 2>&1; then
+  printf -- '--- 本终端新建的文件\n'
+  : > "$scratch/ksip-user"
+  getfattr -d -m - "$scratch/ksip-user" 2>&1 | sed 's/^/  /'
+  printf -- '--- runner 检出目录里的文件\n'
+  wf=$(find "$HOME/actions-runner/_work" -maxdepth 3 -type f 2>/dev/null | head -1)
+  if [ -n "$wf" ]; then
+    printf '  %s\n' "$wf"
+    getfattr -d -m - "$wf" 2>&1 | sed 's/^/  /'
+  else
+    echo '  (没找到，跳过)'
+  fi
+else
+  echo 'getfattr 不可用，跳过。'
 fi
 
 # ----------------------------------------------------------------- fixtures
@@ -325,19 +407,33 @@ elif [ "$b_ok" = 0 ]; then
 MSG
 elif [ "$c_ok" = 1 ] && [ "$d_ok" = 1 ]; then
   cat <<'MSG'
-本机三种跑法全部通过：最小 spec、带多行 %preun 的 spec、以及仓库当前代码生成
+本机四种跑法全部通过：最小 spec、带多行 %preun 的 spec、以及仓库当前代码生成
 的真实 spec —— 前台和脱离会话都一样成功。
 
-这说明「这台机器 + 真实 spec」这个组合本身没有问题，失败只在 runner 实际
-运行时才出现。剩下的差别只有两个，按可能性排序：
+配合已知事实，可以排除的东西已经很多了：
+  * 机器、rpmbuild、/var/tmp 可用（TEST A）；
+  * spec 文本无问题，%install 与成功轮逐字节相同（TEST C）；
+  * 会话 / 图形上下文不是触发条件（TEST D）；
+  * 残留脚本内容完全正常：#!/bin/sh + rpm 前导 + 两行命令 + brp-*，且现在可读；
+  * SELinux 已关、AppArmor 未装，唯一的 LSM 是 KYSEC。
 
-  1. 真正的 payload（约 378 MB）参与时才会触发。上面用的是极小 payload。
-     复跑一次 CI（platforms=available）即可判定：若这次 rpm 成功，说明之前
-     那次是瞬时状态；若再次失败，则和 payload 规模相关。
-  2. runner 进程自身的环境（工作目录、umask、cgroup、systemd 服务上下文）
-     与本终端不同。
+剩下的差别只有两个：
+  1. 真正的 payload（约 378 MB）参与时才会触发；
+  2. KYSEC 执行控制当时做了一个「拒绝」的决定 —— 残留文件上的
+     security.ksip 扩展属性说明 KYSEC 确实评估过这两个文件。
 
-请把上面的完整输出发回，尤其是「残留脚本取证」那一段。
+**请重点看上面「失败时刻的安全模块日志」那一段。** 它决定了往哪边修：
+  * 若日志里出现 kysec 的拒绝记录，就是 KYSEC 拦的，改法是让 rpmbuild 不再
+    从 /var/tmp 执行脚本（--define "_tmppath <目录>"），或在 runner 侧放行；
+  * 若日志里干干净净，那就是瞬时状态或 payload 规模相关，直接复跑一次
+    CI（platforms=available）即可判定：这次成功说明是瞬时，再次失败则与
+    payload 或 runner 上下文相关。
+
+另外请回答一个问题：**这次跑 v2 的时候，屏幕上有弹出 KYSEC 的权限框吗？**
+之前 19:26 那次你说弹过框 —— 如果执行控制需要人工点「允许」，而那次没人点，
+就完全能解释「16:54 成功、19:26 失败，中间什么都没改」。
+
+请把完整输出发回，我据此改 tools/build-native-package.py。
 MSG
 elif [ "$c_ok" = 1 ] && [ "$d_ok" = 0 ]; then
   cat <<'MSG'
