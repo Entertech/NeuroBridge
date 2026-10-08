@@ -77,7 +77,15 @@ def source_commit() -> str:
 
 
 def source_dirty() -> bool:
-    return bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=ROOT, text=True).strip())
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
+        cwd=ROOT,
+        text=True,
+    )
+    # These directories are created by the candidate build itself. They must
+    # not make an otherwise clean checkout fail the traceability gate.
+    generated = (".runtime/", "artifacts/")
+    return any(not line[3:].replace("\\", "/").startswith(generated) for line in status.splitlines() if len(line) >= 4)
 
 
 def validate_runtime(platform_name: str, runtime: Path) -> None:
