@@ -13,3 +13,5 @@ recordings/
 *.log
 config/gateway.toml
 config/ssh-operations.txt
+.workbuddy/
+.workbuddy-ai/
