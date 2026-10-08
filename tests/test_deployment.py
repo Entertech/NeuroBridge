@@ -510,6 +510,115 @@ class DeploymentTests(unittest.TestCase):
                 self.assertTrue(project.exists(), f"answer {answer!r} must not delete the checkout")
                 self.assertTrue((project / "pyproject.toml").exists())
 
+    def test_kylin_log_exporter_detects_the_layout_and_bounds_large_logs(self) -> None:
+        """The shipped exporter must serve a checkout and a package alike."""
+        script_path = ROOT / "packaging" / "kylin" / "export-logs.sh"
+        script_source = script_path.read_text(encoding="utf-8")
+        self.assertTrue(os.access(script_path, os.X_OK))
+
+        syntax = subprocess.run(["bash", "-n", str(script_path)], capture_output=True, text=True, check=False)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+        help_result = subprocess.run(
+            ["bash", str(script_path), "--help"], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("--output-dir", help_result.stdout)
+        self.assertIn("--max-log-bytes", help_result.stdout)
+
+        unknown = subprocess.run(
+            ["bash", str(script_path), "--nope"], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(unknown.returncode, 1)
+        self.assertIn("Unknown option", unknown.stderr)
+
+        missing = subprocess.run(
+            ["bash", str(script_path), "--output-dir", "/nonexistent-neurobridge-dir"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("does not exist", missing.stderr)
+
+        with tempfile.TemporaryDirectory() as raw:
+            sandbox = Path(raw)
+            checkout = sandbox / "checkout"
+            (checkout / "packaging" / "kylin").mkdir(parents=True)
+            (checkout / ".runtime" / "config").mkdir(parents=True)
+            (checkout / ".runtime" / "logs").mkdir(parents=True)
+            (checkout / "neurobridge").mkdir(parents=True)
+            (checkout / "out").mkdir()
+            (checkout / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+            # A relative directory in the configuration resolves against the
+            # application root, and must not be collected twice.
+            (checkout / ".runtime" / "config" / "gateway.toml").write_text(
+                '[logging]\ndirectory = ".runtime/logs"\nfilename = "neurobridge.log"\n', encoding="utf-8"
+            )
+            (checkout / "neurobridge" / "version_registry.toml").write_text(
+                '[application]\nversion = "9.9.9"\n', encoding="utf-8"
+            )
+            (checkout / ".runtime" / "logs" / "neurobridge.log").write_text("A" * 4096, encoding="utf-8")
+            (checkout / ".runtime" / "logs" / "setup-kylin-algorithm-1.log").write_text(
+                "small\n", encoding="utf-8"
+            )
+            exporter = checkout / "packaging" / "kylin" / "export-logs.sh"
+            exporter.write_text(script_source, encoding="utf-8")
+            exporter.chmod(0o755)
+
+            result = subprocess.run(
+                ["bash", str(exporter), "--output-dir", str(checkout / "out"),
+                 "--no-system", "--no-journal", "--max-log-bytes", "1024"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            archives = list((checkout / "out").glob("neurobridge-logs-*.tar.gz"))
+            self.assertEqual(len(archives), 1, result.stdout)
+            listing = subprocess.run(
+                ["tar", "-tzf", str(archives[0])], capture_output=True, text=True, check=False
+            )
+            self.assertEqual(listing.returncode, 0, listing.stderr)
+            self.assertIn("./manifest.txt", listing.stdout)
+            self.assertIn("neurobridge.log.tail", listing.stdout)
+            self.assertIn("setup-kylin-algorithm-1.log", listing.stdout)
+
+            manifest = subprocess.run(
+                ["tar", "-xzOf", str(archives[0]), "./manifest.txt"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(manifest.returncode, 0, manifest.stderr)
+            self.assertIn("layout: source", manifest.stdout)
+            self.assertIn("applicationVersion: 9.9.9", manifest.stdout)
+            # One log directory, not the same one collected under two spellings.
+            self.assertEqual(manifest.stdout.count("logDirectories:"), 1)
+            self.assertNotIn("stored=tail", manifest.stdout.split("File inventory:")[0])
+
+            # The oversized file is stored as a bounded tail, the small one whole.
+            tail_entries = [line for line in listing.stdout.splitlines() if line.endswith(".tail")]
+            self.assertEqual(len(tail_entries), 1, listing.stdout)
+            stored = subprocess.run(
+                ["tar", "-xzOf", str(archives[0]), tail_entries[0]],
+                capture_output=True, check=False,
+            )
+            self.assertEqual(len(stored.stdout), 1024, "the tail must be bounded to --max-log-bytes")
+            whole_entries = [
+                line for line in listing.stdout.splitlines() if line.endswith("setup-kylin-algorithm-1.log")
+            ]
+            self.assertEqual(len(whole_entries), 1, listing.stdout)
+            whole = subprocess.run(
+                ["tar", "-xzOf", str(archives[0]), whole_entries[0]],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(whole.stdout, "small\n")
+
+            # Configuration contents and recordings must never be included.
+            self.assertNotIn("gateway.toml", listing.stdout)
+            self.assertNotIn("recordings", listing.stdout)
+            self.assertIn("configSha256", manifest.stdout)
+
     def test_kylin_autostart_runs_project_gateway_as_desktop_user(self) -> None:
         script_path = ROOT / "linux" / "setup-kylin-autostart.sh"
         renderer_path = ROOT / "linux" / "lib" / "kylin-systemd-unit.sh"

@@ -209,5 +209,25 @@ class NativePackageBuilderTests(unittest.TestCase):
                         self.assertNotIn("ttyACM", template)
                         self.assertNotIn("/opt/neurobridge", template)
 
+    def test_payloads_ship_the_log_exporter(self) -> None:
+        # The Kylin payload copies packaging/kylin/ to opt/neurobridge/kylin/,
+        # while the Windows payload ships the windows/ directory as-is.
+        for target_id, relative in (
+            ("kylin-server-x86_64-deb", "opt/neurobridge/kylin/export-logs.sh"),
+            ("windows-10-x86_64-msi", "opt/neurobridge/windows/export-logs.ps1"),
+        ):
+            with self.subTest(target=target_id):
+                target = BUILDER.target_for(target_id)
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    runtime = self.runtime(root, target_id)
+                    stage = root / "stage"
+                    BUILDER.copy_source(stage, target, runtime)
+                    exporter = stage / relative
+                    self.assertTrue(exporter.is_file(), f"{relative} must ship inside {target_id}")
+                    if target_id.startswith("kylin"):
+                        self.assertTrue(os.access(exporter, os.X_OK))
+
+
 if __name__ == "__main__":
     unittest.main()

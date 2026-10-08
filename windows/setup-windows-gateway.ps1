@@ -3,7 +3,7 @@
 param(
     [ValidateSet('menu', 'prepare', 'start', 'check', 'config', 'algorithm', 'logs', 'diagnostics',
                  'autostart-enable', 'autostart-disable', 'autostart-status',
-                 'uninstall', 'purge', 'purge-internal')]
+                 'export-logs', 'uninstall', 'purge', 'purge-internal')]
     [string]$Action = 'prepare',
     [switch]$Offline,
     [switch]$Yes,
@@ -370,6 +370,20 @@ function Invoke-Retire {
     }
 }
 
+function Invoke-LogExport {
+    param([string]$Root)
+    $exportScript = Join-Path $Root 'windows\export-logs.ps1'
+    if (-not (Test-Path -LiteralPath $exportScript -PathType Leaf)) {
+        throw "Missing log exporter: $exportScript"
+    }
+    # The exporter ends with 'exit', so run it in a child process: that keeps it
+    # from terminating this launcher and keeps its output off our pipeline.
+    $hostExe = (Get-Process -Id $PID).Path
+    & $hostExe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $exportScript `
+        -OutputDirectory (Get-Location).ProviderPath | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Log export failed with exit code $LASTEXITCODE" }
+}
+
 try {
     if ($Action -eq 'purge-internal') {
         exit (Remove-ProjectTree -Target $RetireTarget)
@@ -387,6 +401,8 @@ try {
             Write-Host "移除完成：服务注册已删除，源码目录保留在 $projectRoot"
         } elseif ($Action -eq 'purge') {
             Invoke-Purge | Out-Null
+        } elseif ($Action -eq 'export-logs') {
+            Invoke-LogExport -Root $projectRoot
         } else {
             Invoke-Action $Action
         }
@@ -404,9 +420,18 @@ try {
             Write-Host '10. 启用开机自启并启动'
             Write-Host '11. 关闭开机自启并停止服务'
             Write-Host '12. 一键退出（移除服务注册与源码）'
+            Write-Host '13. 导出运行日志（源码/安装包通用）'
             Write-Host '0. 退出'
             $selection = Read-Host '请输入数字'
             if ($selection -eq '0') { break }
+            if ($selection -eq '13') {
+                try { Invoke-LogExport -Root $projectRoot }
+                catch {
+                    Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Host 'No configuration or recording file was modified.'
+                }
+                continue
+            }
             if ($selection -eq '12') {
                 try { if (Invoke-Retire -Root $projectRoot) { break } }
                 catch {

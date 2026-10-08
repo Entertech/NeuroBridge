@@ -284,6 +284,41 @@ class RetireEntryTests(unittest.TestCase):
         self.assertIn('catch [System.InvalidOperationException]', script)
 
 
+class LogExportEntryTests(unittest.TestCase):
+    """Content checks for the log-export entry; run on every platform."""
+
+    def test_the_launcher_exposes_the_exporter_through_a_child_process(self):
+        launcher = (ROOT / 'windows/setup-windows-gateway.ps1').read_text(encoding='utf-8-sig')
+        self.assertIn("'export-logs', 'uninstall', 'purge', 'purge-internal'", launcher)
+        self.assertIn('13. 导出运行日志（源码/安装包通用）', launcher)
+        self.assertIn("if ($selection -eq '13')", launcher)
+        self.assertIn("$Action -eq 'export-logs'", launcher)
+        self.assertIn('function Invoke-LogExport', launcher)
+        self.assertIn("Join-Path $Root 'windows\\export-logs.ps1'", launcher)
+        # The exporter ends with 'exit'. Running it in-process would terminate
+        # the launcher, so it has to be a child process.
+        self.assertIn('(Get-Process -Id $PID).Path', launcher)
+        self.assertIn('-File $exportScript', launcher)
+
+    def test_the_exporter_serves_both_deployment_shapes(self):
+        exporter = (ROOT / 'windows/export-logs.ps1').read_text(encoding='utf-8')
+        # Dot-sourcing loads the operations without producing an archive, which
+        # is how the layout detection is exercised in tests.
+        self.assertIn("if ($MyInvocation.InvocationName -ne '.')", exporter)
+        self.assertIn("ServiceName         = 'NeuroBridge'", exporter)
+        self.assertIn("ServiceName         = 'NeuroBridgeProject'", exporter)
+        self.assertIn('function Resolve-LogDirectory', exporter)
+        # Bounded tails, and an explicit exclusion list rather than a raw copy.
+        self.assertIn('$MaxLogBytes', exporter)
+        self.assertIn('.tail', exporter)
+        self.assertIn('recordings and raw device data', exporter)
+        self.assertIn('configSha256', exporter)
+
+    def test_ci_validates_the_new_exporter(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        self.assertIn("windows/export-logs.ps1", workflow)
+
+
 @unittest.skipUnless(sys.platform == 'win32', 'Windows PowerShell 5.1 retire workflow')
 class RetireWorkflowTests(unittest.TestCase):
     def make_checkout(self, parent: Path) -> Path:
