@@ -146,8 +146,8 @@ def build_bundle(release_directory: Path, documents_root: Path, candidates_root:
             grouped.setdefault(f"{platform}/{architecture}", []).append((package.name, package.read_bytes()))
     architecture_archives, architecture_manifest = build_architecture_archives(grouped, timestamp)
     files: dict[str, bytes] = external_document_entries(documents_root)
-    files["docs/windows/README.md"] = (ROOT / "windows/README.md").read_bytes()
-    files["docs/kylin/README.md"] = (ROOT / "linux/README.md").read_bytes()
+    files["windows/README.md"] = (ROOT / "windows/README.md").read_bytes()
+    files["kylin/README.md"] = (ROOT / "linux/README.md").read_bytes()
     for name, value in architecture_archives.items():
         files[name] = value
     for name, value in validation:

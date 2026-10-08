@@ -64,8 +64,8 @@ class ReleaseBundleTests(unittest.TestCase):
             with zipfile.ZipFile(output) as archive:
                 names = set(archive.namelist())
                 self.assertIn("docs/external/protocol.pdf", names)
-                self.assertIn("docs/windows/README.md", names)
-                self.assertIn("docs/kylin/README.md", names)
+                self.assertIn("windows/README.md", names)
+                self.assertIn("kylin/README.md", names)
                 self.assertIn("windows/windows-x86_64.zip", names)
                 self.assertIn("metadata/bundle-manifest.json", names)
                 nested = zipfile.ZipFile(archive.open("windows/windows-x86_64.zip"))
