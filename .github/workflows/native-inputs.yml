@@ -9,11 +9,12 @@ on:
         default: master
         type: string
       platforms:
-        description: "windows 仅构建 Windows 安装包；all 同时排队全部麒麟架构"
+        description: "available 构建 Windows 和已注册的麒麟 x86_64；windows 仅构建 Windows；all 排队全部麒麟架构"
         required: true
-        default: windows
+        default: available
         type: choice
         options:
+          - available
           - windows
           - all
 
@@ -23,6 +24,7 @@ permissions:
 jobs:
   windows:
     name: Windows native input ${{ matrix.id }}
+    if: inputs.platforms == 'available' || inputs.platforms == 'windows'
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -92,7 +94,7 @@ jobs:
 
   kylin:
     name: Kylin native input ${{ matrix.id }}
-    if: inputs.platforms == 'all'
+    if: inputs.platforms == 'all' || (inputs.platforms == 'available' && matrix.architecture == 'x86_64')
     # The runner must be a target-compatible Kylin V10 machine or a runner
     # with the approved cross toolchain and sysroot for this architecture.
     runs-on:
