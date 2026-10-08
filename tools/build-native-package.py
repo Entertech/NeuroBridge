@@ -178,7 +178,7 @@ def write_wix_msi(stage: Path, target: dict[str, str], output: Path, log: Path) 
         <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
           <Package Name="NeuroBridge" Manufacturer="Entertech" Version="{APPLICATION_VERSION}" UpgradeCode="{upgrade_code}">
             <SummaryInformation Description="NeuroBridge gateway" />
-            <MajorUpgrade DowngradeErrorMessage="A newer NeuroBridge version is already installed." />
+            <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer NeuroBridge version is already installed." />
             <MediaTemplate EmbedCab="yes" />
             <Feature Id="MainFeature" Title="NeuroBridge" Level="1">
               <ComponentGroupRef Id="ApplicationFiles" />
@@ -208,6 +208,7 @@ def write_wix_bundle(msi: Path, output: Path, log: Path) -> None:
     bundle.write_text(textwrap.dedent(f'''\
       <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
         <Bundle Name="NeuroBridge" Version="{APPLICATION_VERSION}" Manufacturer="Entertech" UpgradeCode="{upgrade_code}">
+          <RelatedBundle Action="Upgrade" Id="{upgrade_code}" />
           <BootstrapperApplication>
             <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl="https://github.com/Entertech/NeuroBridge" />
           </BootstrapperApplication>
@@ -243,13 +244,97 @@ def deb_control(target: dict[str, str]) -> str:
     ''')
 
 
+# Shared by the DEB and RPM maintainer scripts.  A source deployment writes the
+# same unit path (/etc/systemd/system/neurobridge.service) as these packages, so
+# a package may only ever stop or delete the unit that it installed itself;
+# anything else belongs to another deployment shape and must be left alone.
+UNIT_OWNERSHIP = """unit=/etc/systemd/system/neurobridge.service
+unit_is_ours() {
+  [ -f "$unit" ] || return 1
+  grep -q -- 'ExecStart=/opt/neurobridge/runtime/bin/python' "$unit" 2>/dev/null
+}"""
+
+REMOVE_HELPER = """remove_our_unit() {
+  unit_is_ours || return 0
+  rm -f "$unit"
+  systemctl daemon-reload 2>/dev/null || true
+}"""
+
+STOP_HELPER = """stop_our_unit() {
+  unit_is_ours || return 0
+  systemctl disable --now neurobridge.service 2>/dev/null || true
+  # Restart=always with RestartSec=3 means a stop that is still in flight can
+  # resurrect the gateway while dpkg/rpm is deleting its payload.
+  attempts=0
+  while [ "$attempts" -lt 10 ] && systemctl is-active --quiet neurobridge.service; do
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+  if systemctl is-active --quiet neurobridge.service; then
+    systemctl kill --signal=SIGTERM neurobridge.service 2>/dev/null || true
+    sleep 2
+  fi
+  systemctl is-active --quiet neurobridge.service && return 1
+  return 0
+}"""
+
+STOP_REFUSAL = """if ! stop_our_unit; then
+  echo "neurobridge.service is still active; refusing to continue so the running" >&2
+  echo "gateway is not removed from under itself. Stop it and retry:" >&2
+  echo "  systemctl stop neurobridge.service" >&2
+  exit 1
+fi"""
+
+
+def indent_block(text: str, spaces: int) -> str:
+    """Indent an embedded shell block so textwrap.dedent still sees one margin."""
+    pad = " " * spaces
+    return "\n".join(pad + line if line.strip() else line for line in text.splitlines())
+
+
+# dpkg calls prerm with "upgrade <new-version>" while the payload being
+# upgraded is still the running service.  Stopping there would take the
+# gateway down for the whole unpack, and a stop that fails its verification
+# would abort the upgrade and leave the old package installed.  The service is
+# only stopped for a real removal; the unit file itself is refreshed by the
+# following package's postinst.
+DEB_UPGRADE_GUARD = """case "${1:-}" in
+  upgrade|failed-upgrade|abort-upgrade) exit 0 ;;
+esac"""
+
+
 def deb_scripts(root: Path, target: dict[str, str]) -> None:
     debian = root / "DEBIAN"
     debian.mkdir()
     (debian / "control").write_text(deb_control(target), encoding="utf-8")
-    (debian / "postinst").write_text("""#!/bin/sh\nset -eu\ngetent group neurobridge >/dev/null 2>&1 || addgroup --system neurobridge || true\nid -u neurobridge >/dev/null 2>&1 || adduser --system --ingroup neurobridge --no-create-home --shell /usr/sbin/nologin neurobridge || true\ninstall -d -o neurobridge -g neurobridge -m 0750 /var/lib/neurobridge/recordings /var/log/neurobridge /etc/neurobridge\n[ -e /etc/neurobridge/gateway.toml ] || install -o root -g neurobridge -m 0640 /opt/neurobridge/gateway.toml.example /etc/neurobridge/gateway.toml\ninstall -m 0644 /opt/neurobridge/packaging/neurobridge.service /etc/systemd/system/neurobridge.service\nsystemctl daemon-reload || true\nsystemctl enable neurobridge.service || true\nexit 0\n""", encoding="utf-8")
-    (debian / "prerm").write_text("#!/bin/sh\nset -u\nsystemctl disable --now neurobridge.service 2>/dev/null || true\nexit 0\n", encoding="utf-8")
-    (debian / "postrm").write_text("#!/bin/sh\nset -u\nif [ \"$1\" = remove ]; then rm -f /etc/systemd/system/neurobridge.service; systemctl daemon-reload || true; fi\nexit 0\n", encoding="utf-8")
+    (debian / "postinst").write_text("""#!/bin/sh
+set -eu
+getent group neurobridge >/dev/null 2>&1 || addgroup --system neurobridge || true
+id -u neurobridge >/dev/null 2>&1 || adduser --system --ingroup neurobridge --no-create-home --shell /usr/sbin/nologin neurobridge || true
+install -d -o neurobridge -g neurobridge -m 0750 /var/lib/neurobridge/recordings /var/log/neurobridge /etc/neurobridge
+[ -e /etc/neurobridge/gateway.toml ] || install -o root -g neurobridge -m 0640 /opt/neurobridge/gateway.toml.example /etc/neurobridge/gateway.toml
+install -m 0644 /opt/neurobridge/packaging/neurobridge.service /etc/systemd/system/neurobridge.service
+systemctl daemon-reload || true
+systemctl enable neurobridge.service || true
+exit 0
+""", encoding="utf-8")
+    (debian / "prerm").write_text(f"""#!/bin/sh
+set -u
+{DEB_UPGRADE_GUARD}
+{UNIT_OWNERSHIP}
+{STOP_HELPER}
+{STOP_REFUSAL}
+exit 0
+""", encoding="utf-8")
+    (debian / "postrm").write_text(f"""#!/bin/sh
+set -u
+{UNIT_OWNERSHIP}
+{REMOVE_HELPER}
+case "${{1:-}}" in
+  remove|purge) remove_our_unit ;;
+esac
+exit 0
+""", encoding="utf-8")
     for item in debian.iterdir():
         item.chmod(0o755 if item.name != "control" else 0o644)
 
@@ -268,6 +353,9 @@ def rpm_spec(target: dict[str, str], topdir: Path) -> Path:
     spec = topdir / "SPECS/neurobridge.spec"
     spec.parent.mkdir(parents=True, exist_ok=True)
     package_name = f"neurobridge-{target['edition']}"
+    preun = indent_block(UNIT_OWNERSHIP + "\n" + STOP_HELPER, 10)
+    refusal = indent_block(STOP_REFUSAL, 10)
+    postun = indent_block(UNIT_OWNERSHIP + "\n" + REMOVE_HELPER, 10)
     spec.write_text(textwrap.dedent(f'''\
         Name: {package_name}
         Version: {APPLICATION_VERSION}
@@ -294,10 +382,19 @@ def rpm_spec(target: dict[str, str], topdir: Path) -> Path:
         systemctl enable neurobridge.service || true
 
         %preun
-        if [ "$1" -eq 0 ]; then systemctl disable --now neurobridge.service 2>/dev/null || true; fi
+        # $1 is 1 while this package is being upgraded and 0 when it is removed.
+        # An upgrade must not stop the service: the new package's %post rewrites
+        # the unit and re-enables it, and systemd restarts the process itself.
+        if [ "$1" -eq 0 ]; then
+{preun}
+{refusal}
+        fi
 
         %postun
-        if [ "$1" -eq 0 ]; then rm -f /etc/systemd/system/neurobridge.service; systemctl daemon-reload || true; fi
+        if [ "$1" -eq 0 ]; then
+{postun}
+          remove_our_unit
+        fi
 
         %files
         /opt/neurobridge
