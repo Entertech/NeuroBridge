@@ -29,10 +29,13 @@ class ReleaseBundleTests(unittest.TestCase):
             candidates = root / "candidates/windows"
             release.mkdir()
             (documents / "document-preview").mkdir(parents=True)
+            (documents / "system-prds").mkdir(parents=True)
             candidates.mkdir(parents=True)
             with zipfile.ZipFile(documents / "neurobridge-external-documents.zip", "w") as archive:
                 archive.writestr("protocol.pdf", b"pdf")
                 archive.writestr("release-manifest.json", b"{}")
+            (documents / "system-prds/NeuroBridge项目结构与多系统接入_PRD.pdf").write_bytes(b"windows prd")
+            (documents / "system-prds/银河麒麟V10耳机USB串口接入_PRD.pdf").write_bytes(b"kylin prd")
             with zipfile.ZipFile(candidates / "neurobridge-0.2.0-windows-x86_64.zip", "w") as archive:
                 archive.writestr("install.ps1", "Write-Host install")
 
@@ -64,8 +67,8 @@ class ReleaseBundleTests(unittest.TestCase):
             with zipfile.ZipFile(output) as archive:
                 names = set(archive.namelist())
                 self.assertIn("docs/external/protocol.pdf", names)
-                self.assertIn("windows/README.md", names)
-                self.assertIn("kylin/README.md", names)
+                self.assertIn("windows/NeuroBridge项目结构与多系统接入_PRD.pdf", names)
+                self.assertIn("kylin/银河麒麟V10耳机USB串口接入_PRD.pdf", names)
                 self.assertIn("windows/windows-x86_64.zip", names)
                 self.assertIn("metadata/bundle-manifest.json", names)
                 nested = zipfile.ZipFile(archive.open("windows/windows-x86_64.zip"))

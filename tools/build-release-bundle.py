@@ -146,8 +146,12 @@ def build_bundle(release_directory: Path, documents_root: Path, candidates_root:
             grouped.setdefault(f"{platform}/{architecture}", []).append((package.name, package.read_bytes()))
     architecture_archives, architecture_manifest = build_architecture_archives(grouped, timestamp)
     files: dict[str, bytes] = external_document_entries(documents_root)
-    files["windows/README.md"] = (ROOT / "windows/README.md").read_bytes()
-    files["kylin/README.md"] = (ROOT / "linux/README.md").read_bytes()
+    windows_prd = find_one(documents_root, "system-prds/NeuroBridge项目结构与多系统接入_PRD.pdf")
+    kylin_prd = find_one(documents_root, "system-prds/银河麒麟V10耳机USB串口接入_PRD.pdf")
+    if windows_prd is None or kylin_prd is None:
+        raise FileNotFoundError("system PRD PDFs are missing")
+    files["windows/NeuroBridge项目结构与多系统接入_PRD.pdf"] = windows_prd.read_bytes()
+    files["kylin/银河麒麟V10耳机USB串口接入_PRD.pdf"] = kylin_prd.read_bytes()
     for name, value in architecture_archives.items():
         files[name] = value
     for name, value in validation:
