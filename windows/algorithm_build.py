@@ -155,10 +155,15 @@ def install_verified(candidate: Path, manifest: dict, destination: Path) -> None
         staged_manifest.unlink(missing_ok=True)
 
 
-def build(root: Path, *, offline: bool = False, force: bool = False) -> Path:
-    config = validate_config(config_path(root))
-    destination = root / '.runtime/algorithm/neurobridge_affective_bridge.exe'
-    if config.algorithm.command != (str(destination),):
+def build(root: Path, *, offline: bool = False, force: bool = False, destination: Path | None = None) -> Path:
+    configured = destination is None
+    if configured:
+        config = validate_config(config_path(root))
+        destination = root / '.runtime/algorithm/neurobridge_affective_bridge.exe'
+    else:
+        destination = Path(destination)
+        config = None
+    if config is not None and config.algorithm.command != (str(destination),):
         # Preserve an explicitly configured external bridge. Never overwrite it.
         if len(config.algorithm.command) != 1:
             raise ValueError('Expected one executable in algorithm.command')
@@ -266,13 +271,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--offline', action='store_true')
     parser.add_argument('--force', action='store_true')
+    parser.add_argument('--output', type=Path, help='Write the verified executable here instead of the project runtime')
     args = parser.parse_args()
     if sys.platform != 'win32':
         parser.error('The native Windows build must run on Windows x64')
     try:
         (ROOT / '.runtime').mkdir(exist_ok=True)
         with instance_lock(ROOT, 'windows-algorithm-build.lock'):
-            build(ROOT, offline=args.offline, force=args.force)
+            build(ROOT, offline=args.offline, force=args.force, destination=args.output)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
         print(f'ERROR: {error}', file=sys.stderr)
         return 1

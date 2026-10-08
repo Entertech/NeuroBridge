@@ -46,8 +46,12 @@ jobs:
         run: |
           $tokens = $null
           $parseErrors = $null
-          foreach ($script in @('setup-windows-gateway.ps1', 'diagnose-service.ps1')) {
-            [System.Management.Automation.Language.Parser]::ParseFile("$PWD/windows/$script", [ref]$tokens, [ref]$parseErrors) | Out-Null
+          foreach ($path in @(
+            (Join-Path $PWD 'windows/setup-windows-gateway.ps1'),
+            (Join-Path $PWD 'windows/diagnose-service.ps1'),
+            (Join-Path $PWD 'tools/prepare-windows-candidate-runtime.ps1')
+          )) {
+            [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null
             if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
           }
       - run: python -m unittest discover -s tests -p test_windows_launcher.py -v
@@ -166,13 +170,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Assemble installable Windows runtime
+        if: matrix.platform == 'windows'
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-windows-candidate-runtime.ps1
       - name: Build unsigned candidate and metadata
-        run: python tools/build-product-candidate.py --platform ${{ matrix.platform }} --output-dir artifacts --require-clean
+        shell: bash
+        run: |
+          runtime_args=()
+          if [[ "${{ matrix.platform }}" == "windows" ]]; then
+            runtime_args=(--runtime-dir artifacts/windows-runtime)
+          fi
+          python tools/build-product-candidate.py --platform ${{ matrix.platform }} --output-dir artifacts --require-clean "${runtime_args[@]}"
       - name: Upload unsigned candidate
         uses: actions/upload-artifact@v4
         with:
           name: neurobridge-${{ matrix.platform }}-unsigned-candidate
-          path: artifacts/
+          path: |
+            artifacts/*.zip
+            artifacts/*.tar.gz
+            artifacts/*.sha256
+            artifacts/*.release-manifest.json
           if-no-files-found: error
           retention-days: 30
 

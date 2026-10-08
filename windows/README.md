@@ -82,6 +82,17 @@ PowerShell 环境准备、COM 检查、配置、前台启动、日志排障与�
 python tools/build-product-candidate.py --platform windows --output-dir artifacts
 ```
 
-没有 `--runtime-dir` 的候选会在 manifest 中记录 `runtimeBundled=false`，只用于结构检查，不能安装。可安装候选的运行时目录必须直接包含 `python.exe` 与 `neurobridge_affective_bridge.exe`；构建器会拒绝缺少任一文件的运行时。正式候选必须在受控 Windows x86_64 runner 注入经过验证的完整离线运行时与算法 bridge。
+没有 `--runtime-dir` 的候选会在 manifest 中记录 `runtimeBundled=false`，只用于结构检查，不能安装。可安装候选的运行时目录必须直接包含 `python.exe` 与 `neurobridge_affective_bridge.exe`；构建器会拒绝缺少任一文件的运行时。
+
+Windows CI 在 `windows-latest` 上执行 `tools/prepare-windows-candidate-runtime.ps1`：校验并解压 Python 3.11.9 官方 embeddable x64 包，启用 `import site`，按 `requirements.lock` 安装依赖，再用锁定工具链编译算法，然后以 `--runtime-dir` 打入 zip。产物 manifest 的 `runtimeBundled` 为 `true`，解压后可由管理员运行 `install.ps1`。该包仍未签名，也不代表目标机验收通过。
+
+安装候选 ZIP 时先完整解压，再在管理员 PowerShell 中执行：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\install.ps1
+```
+
+Actions 中只有 `neurobridge-windows-unsigned-candidate` 是这个可安装 ZIP。`release-target-windows-*` 仅保存原生 MSI/EXE 的离线验收结果；PR 运行若没有配置离线输入，会是 `blocked` 日志，不是安装包。PR 诊断总 ZIP 里的 Windows 平台包也可能为空，不能直接安装。
 
 当前仍不能宣称 Windows 产品已交付。最低目标是 Windows 7 x86_64，但具体 Service Pack、SHA-2 补丁、可运行的 Python/冻结运行时、浏览器、pywin32 兼容版本、安装器技术、代码签名和时间戳服务尚未锁定。至少需要在该最低基线完成 COM 枚举、直接 E1/完整帧验证、E0、拔插重连、服务重启、禁用录播、安装/升级/卸载和 24 小时长稳后，才能进入正式发布。
