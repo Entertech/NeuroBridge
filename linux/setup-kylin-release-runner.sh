@@ -13,19 +13,16 @@ usage() {
   cat <<'EOF'
 Usage:
   ./linux/setup-kylin-release-runner.sh prepare
-  ./linux/setup-kylin-release-runner.sh register --token <one-time-token>
+  ./linux/setup-kylin-release-runner.sh register
 
 prepare clones the public repository (if needed), builds the local runtime,
 and copies it to the four package targets for this machine's architecture.
-It does not log in to GitHub.
 
-register installs the GitHub Actions runner. Create the one-time token on a
-machine that already has repository access:
+register installs the GitHub Actions runner. A public repository can be cloned
+without credentials, but GitHub still requires an authenticated registration
+token. Create it on a machine that already has repository administration access:
 
   gh api --method POST repos/Entertech/NeuroBridge/actions/runners/registration-token --jq .token
-
-The token expires quickly. Copy only that value to this machine; do not copy
-GitHub credentials.
 
 The current algorithm build supports x86_64 only. Other architectures can
 register a runner, but their runtime must be supplied separately.
@@ -123,16 +120,16 @@ prepare_runtime() {
 
 register_runner() {
   require_kylin
-  local token=${1:-} arch asset_arch package url
-  [[ -n $token ]] || fail "A one-time registration token is required."
+  local token=${NEUROBRIDGE_RUNNER_TOKEN:-} arch asset_arch package url
+  [[ -n $token ]] || fail "Set NEUROBRIDGE_RUNNER_TOKEN to a registration token created by an authenticated repository administrator."
   arch=$(machine_arch)
   asset_arch=$(runner_asset_arch "$arch")
   command -v curl >/dev/null 2>&1 || fail "curl is required to download the public runner package."
   command -v tar >/dev/null 2>&1 || fail "tar is required to unpack the runner package."
 
   if [[ -x $runner_home/svc.sh ]]; then
-    sudo "$runner_home/svc.sh" stop || true
-    sudo "$runner_home/svc.sh" uninstall || true
+    sudo --preserve-env=RUNNER_ROOT -C "$runner_home" ./svc.sh stop || true
+    sudo --preserve-env=RUNNER_ROOT -C "$runner_home" ./svc.sh uninstall || true
   fi
   rm -rf "$runner_home"
   install -d -m 0755 "$runner_home"
@@ -147,9 +144,9 @@ register_runner() {
       --token "$token" \
       --name "kylin-v10-$arch" \
       --labels "self-hosted,kylin-v10,$arch"
+    sudo --preserve-env=RUNNER_ROOT ./svc.sh install "$USER"
+    sudo --preserve-env=RUNNER_ROOT ./svc.sh start
   )
-  sudo "$runner_home/svc.sh" install "$USER"
-  sudo "$runner_home/svc.sh" start
   printf 'Runner registered for %s.\n' "$arch"
 }
 
@@ -163,21 +160,8 @@ case $command_name in
     prepare_runtime
     ;;
   register)
-    shift
-    token=
-    while [[ $# -gt 0 ]]; do
-      case $1 in
-        --token)
-          [[ $# -ge 2 ]] || fail "--token requires a value."
-          token=$2
-          shift 2
-          ;;
-        *)
-          fail "Unknown option: $1"
-          ;;
-      esac
-    done
-    register_runner "$token"
+    [[ $# -eq 1 ]] || fail "register does not accept additional arguments."
+    register_runner
     ;;
   *)
     fail "Unknown command: $command_name"
