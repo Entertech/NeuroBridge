@@ -13,6 +13,9 @@ from unittest.mock import patch
 from windows import project_service as service
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 class ServicePolicyTests(unittest.TestCase):
     def test_preference_defaults_and_persists_explicit_opt_out(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -40,6 +43,27 @@ class ServicePolicyTests(unittest.TestCase):
         config[3], config[7] = command, 'other-account'
         with self.assertRaisesRegex(ValueError, 'account'):
             service.verify_owner(config, root, python)
+
+    def test_removal_gate_agrees_with_the_service_command_discriminator(self):
+        """The launcher's retire path cannot call verify_owner.
+
+        It runs without the project virtual environment, so it re-checks the
+        same discriminator in PowerShell: this checkout's project_service.py,
+        the 'host' subcommand and the LocalSystem account. Pin both sides so the
+        two implementations cannot drift apart.
+        """
+        root = Path('project with spaces')
+        python = root / 'python.exe'
+        command = service.service_command(root, python)
+        self.assertIn(str(root / 'windows' / 'project_service.py'), command)
+        self.assertTrue(command.rstrip().endswith(' host'))
+        self.assertEqual(service.SERVICE_NAME, 'NeuroBridgeProject')
+
+        launcher = (ROOT / 'windows/setup-windows-gateway.ps1').read_text(encoding='utf-8-sig')
+        self.assertIn(f"$serviceName = '{service.SERVICE_NAME}'", launcher)
+        self.assertIn("$serviceAccount = 'LocalSystem'", launcher)
+        self.assertIn("Join-Path $Root 'windows\\project_service.py'", launcher)
+        self.assertIn("EndsWith('host'", launcher)
 
 
 class ServiceLifecycleTests(unittest.IsolatedAsyncioTestCase):

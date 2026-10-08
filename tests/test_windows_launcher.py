@@ -249,5 +249,97 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertEqual(path.read_text(encoding='utf-8'), original)
 
 
+class RetireEntryTests(unittest.TestCase):
+    """Content checks for the one-click retire entry; run on every platform."""
+
+    def test_one_click_retire_is_wired_and_guarded(self):
+        script = (ROOT / 'windows/setup-windows-gateway.ps1').read_text(encoding='utf-8-sig')
+        self.assertIn("'uninstall', 'purge', 'purge-internal'", script)
+        self.assertIn('12. 一键退出（移除服务注册与源码）', script)
+        self.assertIn("if ($selection -eq '12')", script)
+        self.assertIn('一键退出（移除服务注册与源码）', script)
+        # Destructive confirmation is a typed word, never a bare yes/no.
+        self.assertIn("Read-Host '确认继续？请输入 DELETE'", script)
+        self.assertIn("if ($answer -ne 'DELETE')", script)
+        # The removal ownership gate mirrors project_service.verify_owner, but has
+        # to work without the project virtual environment.
+        self.assertIn('Assert-ProjectServiceOwnership', script)
+        self.assertIn("Join-Path $Root 'windows\\project_service.py'", script)
+        self.assertIn("$serviceAccount = 'LocalSystem'", script)
+        # Unsafe deletion targets are refused.
+        self.assertIn('拒绝删除驱动器根目录', script)
+        self.assertIn('拒绝删除系统或用户目录', script)
+        self.assertIn("Test-Path -LiteralPath (Join-Path $full 'pyproject.toml')", script)
+        # Deletion runs from a staged copy outside the checkout.
+        self.assertIn('neurobridge-retire-', script)
+        self.assertIn("-Action 'purge-internal' -RetireTarget $projectRoot", script)
+        # A partial delete must never be reported as a clean removal.
+        self.assertIn('sourceCheckout=partial', script)
+        self.assertIn('Remove-Item -LiteralPath', script)
+        # A foreground gateway blocks the purge instead of being killed.
+        self.assertIn('windows-gateway.lock', script)
+        # A service owned by another checkout is skipped with a warning, while a
+        # failure to remove our own service must still abort the purge.
+        self.assertIn('throw [System.InvalidOperationException]::new(', script)
+        self.assertIn('catch [System.InvalidOperationException]', script)
+
+
+@unittest.skipUnless(sys.platform == 'win32', 'Windows PowerShell 5.1 retire workflow')
+class RetireWorkflowTests(unittest.TestCase):
+    def make_checkout(self, parent: Path) -> Path:
+        root = parent / '中文 project'
+        (root / 'windows').mkdir(parents=True)
+        shutil.copy2(ROOT / 'windows/setup-windows-gateway.ps1', root / 'windows/setup-windows-gateway.ps1')
+        shutil.copy2(ROOT / 'windows/gateway_helper.py', root / 'windows/gateway_helper.py')
+        (root / 'pyproject.toml').write_text('# project fixture')
+        (root / '.runtime/config').mkdir(parents=True)
+        (root / '.runtime/recordings').mkdir(parents=True)
+        (root / '.runtime/config/windows-gateway.toml').write_text('profile = "windows_headset_local"\n')
+        (root / '.runtime/recordings/session-1.dat').write_text('RECORDING')
+        return root
+
+    def run_staged_removal(self, *arguments: str):
+        return subprocess.run(['powershell.exe', '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                               '-File', str(ROOT / 'windows/setup-windows-gateway.ps1'), *arguments],
+                              capture_output=True, timeout=180)
+
+    def test_staged_removal_deletes_field_data_and_never_claims_a_partial_delete(self):
+        # purge-internal touches no SCM state, so it needs no elevation.
+        with tempfile.TemporaryDirectory(prefix='retire ') as directory:
+            root = self.make_checkout(Path(directory))
+            result = self.run_staged_removal('-Action', 'purge-internal', '-RetireTarget', str(root))
+            output = (result.stdout + result.stderr).decode('utf-8', errors='replace')
+            # Windows may keep the running launcher files locked, so the launcher
+            # itself can survive. Either outcome is acceptable; what must never
+            # happen is a partial delete reported as a clean removal.
+            self.assertIn(result.returncode, (0, 2), output)
+            if root.exists():
+                self.assertEqual(result.returncode, 2, output)
+                self.assertIn('sourceCheckout=partial', output)
+                self.assertIn('Remove-Item -LiteralPath', output)
+            else:
+                self.assertEqual(result.returncode, 0, output)
+                self.assertIn('sourceCheckout=removed', output)
+            self.assertFalse((root / '.runtime/recordings/session-1.dat').exists(), output)
+
+    def test_staged_removal_refuses_unsafe_targets(self):
+        with tempfile.TemporaryDirectory(prefix='retire guard ') as directory:
+            parent = Path(directory)
+            plain = parent / 'not a checkout'
+            plain.mkdir()
+            cases = (
+                ('missing target', ('-Action', 'purge-internal'), None),
+                ('not a checkout', ('-Action', 'purge-internal', '-RetireTarget', str(plain)), plain),
+                ('drive root', ('-Action', 'purge-internal', '-RetireTarget', parent.anchor), None),
+            )
+            for label, arguments, survivor in cases:
+                with self.subTest(label):
+                    result = self.run_staged_removal(*arguments)
+                    output = (result.stdout + result.stderr).decode('utf-8', errors='replace')
+                    self.assertEqual(result.returncode, 1, output)
+                    if survivor is not None:
+                        self.assertTrue(survivor.exists(), output)
+
+
 if __name__ == '__main__':
     unittest.main()
