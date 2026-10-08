@@ -1,0 +1,171 @@
+name: Build native release inputs
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "源码分支、提交或标签；发布时必须与目标提交一致"
+        required: true
+        default: master
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows native input ${{ matrix.id }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-7-x86-exe
+          - id: windows-7-x86-msi
+          - id: windows-7-x86_64-exe
+          - id: windows-7-x86_64-msi
+          - id: windows-10-x86-exe
+          - id: windows-10-x86-msi
+          - id: windows-10-x86_64-exe
+          - id: windows-10-x86_64-msi
+          - id: windows-11-x86-exe
+          - id: windows-11-x86-msi
+          - id: windows-11-x86_64-exe
+          - id: windows-11-x86_64-msi
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+      - name: Prepare artifact directory
+        shell: powershell
+        run: New-Item -ItemType Directory -Force -Path artifacts\input | Out-Null
+      - uses: actions/setup-python@v5
+        if: contains(matrix.id, 'x86_64') && !startsWith(matrix.id, 'windows-7-')
+        with:
+          python-version: "3.11"
+          architecture: x64
+      - name: Prepare the locked Windows runtime
+        if: contains(matrix.id, 'x86_64') && !startsWith(matrix.id, 'windows-7-')
+        continue-on-error: true
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-windows-candidate-runtime.ps1
+      - name: Install the unsigned WiX build tool
+        if: contains(matrix.id, 'x86_64') && !startsWith(matrix.id, 'windows-7-')
+        continue-on-error: true
+        shell: powershell
+        run: |
+          dotnet tool install --global wix --version 7.0.0
+          "${env:USERPROFILE}\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          wix eula accept wix7
+          wix extension add WixToolset.BootstrapperApplications.wixext/7.0.0 --global
+          wix --version
+      - name: Build native installer from source
+        if: contains(matrix.id, 'x86_64') && !startsWith(matrix.id, 'windows-7-')
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts\input | Out-Null
+          try {
+            python tools\build-native-package.py `
+              --target "${{ matrix.id }}" `
+              --runtime-dir artifacts\windows-runtime `
+              --output-dir artifacts\input
+            if ($LASTEXITCODE -ne 0) { throw "native package build failed: $LASTEXITCODE" }
+          } catch {
+            "blocked: $($_.Exception.Message)" | Set-Content artifacts\input\blocked.log
+          }
+      - name: Record blocked target
+        if: ${{ !(contains(matrix.id, 'x86_64') && !startsWith(matrix.id, 'windows-7-')) }}
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts\input | Out-Null
+          @"
+          blocked: Windows 7 requires the separate Python 3.8 compatibility port and Windows x86 requires a verified x86 runtime; neither is available in the current source build.
+          "@ | Set-Content artifacts\input\blocked.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: neurobridge-input-${{ matrix.id }}
+          path: artifacts/input/
+          if-no-files-found: error
+          retention-days: 30
+
+  kylin:
+    name: Kylin native input ${{ matrix.id }}
+    # The runner must be a target-compatible Kylin V10 machine or a runner
+    # with the approved cross toolchain and sysroot for this architecture.
+    runs-on:
+      - self-hosted
+      - kylin-v10
+      - ${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: kylin-server-x86_64-deb
+            architecture: x86_64
+          - id: kylin-server-x86_64-rpm
+            architecture: x86_64
+          - id: kylin-server-arm64-deb
+            architecture: arm64
+          - id: kylin-server-arm64-rpm
+            architecture: arm64
+          - id: kylin-server-loongarch64-deb
+            architecture: loongarch64
+          - id: kylin-server-loongarch64-rpm
+            architecture: loongarch64
+          - id: kylin-server-mips64el-deb
+            architecture: mips64el
+          - id: kylin-server-mips64el-rpm
+            architecture: mips64el
+          - id: kylin-server-sw64-deb
+            architecture: sw64
+          - id: kylin-server-sw64-rpm
+            architecture: sw64
+          - id: kylin-desktop-x86_64-deb
+            architecture: x86_64
+          - id: kylin-desktop-x86_64-rpm
+            architecture: x86_64
+          - id: kylin-desktop-arm64-deb
+            architecture: arm64
+          - id: kylin-desktop-arm64-rpm
+            architecture: arm64
+          - id: kylin-desktop-loongarch64-deb
+            architecture: loongarch64
+          - id: kylin-desktop-loongarch64-rpm
+            architecture: loongarch64
+          - id: kylin-desktop-mips64el-deb
+            architecture: mips64el
+          - id: kylin-desktop-mips64el-rpm
+            architecture: mips64el
+          - id: kylin-desktop-sw64-deb
+            architecture: sw64
+          - id: kylin-desktop-sw64-rpm
+            architecture: sw64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+      - name: Build the native Kylin installer from source
+        id: build
+        env:
+          RUNTIME_DIR: ${{ vars.NEUROBRIDGE_KYLIN_RUNTIME_ROOT }}/${{ matrix.id }}/runtime
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/input
+          if [ ! -d "$RUNTIME_DIR" ]; then
+            printf '%s\n' "blocked: NEUROBRIDGE_KYLIN_RUNTIME_ROOT does not contain ${{ matrix.id }}/runtime" > artifacts/input/blocked.log
+            exit 0
+          fi
+          if ! python3 tools/build-native-package.py \
+              --target "${{ matrix.id }}" \
+              --runtime-dir "$RUNTIME_DIR" \
+              --output-dir artifacts/input; then
+            printf '%s\n' "blocked: native package build failed for ${{ matrix.id }}" > artifacts/input/blocked.log
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: neurobridge-input-${{ matrix.id }}
+          path: artifacts/input/
+          if-no-files-found: error
+          retention-days: 30

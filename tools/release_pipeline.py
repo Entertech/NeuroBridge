@@ -25,7 +25,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = tomllib.loads((ROOT / "release/release_matrix.toml").read_text(encoding="utf-8"))
 REGISTRY = ROOT / "neurobridge/version_registry.toml"
-PRODUCT_PATHS = ("neurobridge/", "windows/", "linux/", "packaging/", "release/", "tools/build-product-candidate.py", "tools/release_pipeline.py", "tools/publish_release.py", "requirements.lock", "pyproject.toml", ".github/workflows/")
+PRODUCT_PATHS = ("neurobridge/", "windows/", "linux/", "packaging/", "release/", "tools/build-product-candidate.py", "tools/build-native-package.py", "tools/release_pipeline.py", "tools/publish_release.py", "requirements.lock", "pyproject.toml", ".github/workflows/")
 VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 FORMATS = {"exe", "msi", "deb", "rpm"}
 MAGIC = {"exe": b"MZ", "msi": bytes.fromhex("d0cf11e0a1b11ae1"), "deb": b"!<arch>\n", "rpm": bytes.fromhex("edabeedb")}
