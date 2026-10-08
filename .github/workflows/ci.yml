@@ -382,3 +382,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -m tools.publish_release --dir artifacts/release
+
+  release-cleanup:
+    name: Keep only the user-facing release artifact
+    needs: [release-plan, release-aggregate, release-publish]
+    if: always() && needs.release-aggregate.result == 'success'
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Delete intermediate artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_ARTIFACT: verified-release-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          gh api --paginate \
+            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" \
+            --jq '.artifacts[] | [.id, .name] | @tsv' |
+          while IFS=$'\t' read -r artifact_id artifact_name; do
+            if [[ "$artifact_name" != "$KEEP_ARTIFACT" ]]; then
+              gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
+            fi
+          done
