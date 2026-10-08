@@ -111,6 +111,7 @@ def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
         names = set(outer.namelist())
         required = {"metadata/bundle-manifest.json", "metadata/build-manifest.json", "metadata/release-logs.jsonl"}
         required.update(bundle_manifest.get("documents", []))
+        required.update(bundle_manifest.get("systemDocuments", []))
         required.update(bundle_manifest.get("validationFiles", []))
         for item in bundle_manifest.get("architectureArchives", []):
             path = f"{item['platform']}/{item['fileName']}"

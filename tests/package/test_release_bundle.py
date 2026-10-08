@@ -75,6 +75,7 @@ class ReleaseBundleTests(unittest.TestCase):
                 self.assertEqual(nested.namelist(), ["packages/neurobridge-0.2.0-windows-x86_64.zip"])
                 verify_release_bundle(output, json.loads(archive.read("metadata/bundle-manifest.json")))
             self.assertEqual(manifest["architectureArchives"][0]["packageCount"], 1)
+            self.assertEqual(len(manifest["systemDocuments"]), 2)
 
 
 if __name__ == "__main__":

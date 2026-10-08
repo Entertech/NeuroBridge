@@ -165,6 +165,9 @@ def build_bundle(release_directory: Path, documents_root: Path, candidates_root:
         "coverage": release_manifest["coverage"],
         "architectureArchives": architecture_manifest,
         "documents": sorted(name for name in files if name.startswith("docs/")),
+        "systemDocuments": sorted(
+            name for name in files if name.startswith(("windows/", "kylin/")) and name.endswith(".pdf")
+        ),
         "validationFiles": sorted(name for name in files if name.startswith("metadata/validation/")),
     }
     files["metadata/bundle-manifest.json"] = json.dumps(bundle_manifest, ensure_ascii=False, indent=2, sort_keys=True).encode() + b"\n"
