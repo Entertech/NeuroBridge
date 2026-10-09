@@ -54,12 +54,15 @@
 
 ## 3. 工作流与门禁
 
-1. `pull_request -> master`：运行版本门禁、测试和 Windows/麒麟候选包构建，不创建 GitHub Release 或 tag。
-2. PR 合入 `master` 后由 `push -> master` 自动触发发布流程。若应用版本未递增，记录跳过原因而不重发同版本；若版本递增，尝试全部矩阵目标并记录逐项结果；Windows 和麒麟各至少一个可执行且通过自动校验的包时，生成两个平台 ZIP 和唯一总 ZIP。
-3. 两个平台达到最小成功条件，且平台 ZIP、总 ZIP、清单和日志构建并校验通过后，创建指向本次 `master` commit 的注释 tag `v<applicationVersion>`；随后创建 draft GitHub Release，上传唯一总 ZIP、包外清单和验证日志并复验，最后公开 Release。未完成的矩阵组合在 Release 说明中逐项列明；tag 创建后的网络失败按 §7.2 原地恢复，不移动 tag 或覆盖已有正式 Release。
-4. 正式 Artifact 保留 **30 天**，下载权限为**所有能够访问仓库 Actions 的用户**，不做额外权限限制。
-5. 当前版本暂不进行代码签名、安装包签名或公证；清单中的 SHA-256 仅用于完整性校验。后续启用签名时必须新增版本规则和受保护凭据流程。
-6. 任一平台无合格包、成功包的校验值不一致、成功包缺日志或发布资产上传失败时，工作流失败并说明原因。其他矩阵组合失败或来源数据缺失时，记录该组合为 `failed`/`blocked`，不隐藏缺口。
+打包链路与 PR 解耦，由独立的 `Release` workflow 承担；PR 只做校验，不产出任何包。
+
+1. `pull_request -> master`：只运行版本门禁与测试（含对外文档发布状态门禁），**不构建候选包、平台 ZIP 或总 ZIP**，也不创建 GitHub Release 或 tag。
+2. 打包有两个入口，二者之外不触发：(a) PR 合入 `master` 后，`Test` workflow 成功完成时自动触发发布流程——发布仍以测试通过为前提；(b) 在 Actions 上手动触发，对**所选分支的最新提交**打包。手动触发属于非正式构建，只产出候选包，不创建 tag 或 GitHub Release。
+3. 打包触发后，若应用版本未递增，记录跳过原因而不重发同版本；若版本递增，尝试全部矩阵目标并记录逐项结果；Windows 和麒麟各至少一个可执行且通过自动校验的包时，生成两个平台 ZIP 和唯一总 ZIP。
+4. 两个平台达到最小成功条件，且平台 ZIP、总 ZIP、清单和日志构建并校验通过后，创建指向本次 `master` commit 的注释 tag `v<applicationVersion>`；随后创建 draft GitHub Release，上传唯一总 ZIP、包外清单和验证日志并复验，最后公开 Release。未完成的矩阵组合在 Release 说明中逐项列明；tag 创建后的网络失败按 §7.2 原地恢复，不移动 tag 或覆盖已有正式 Release。手动触发的非正式构建不进入本步。
+5. 正式 Artifact 保留 **30 天**，下载权限为**所有能够访问仓库 Actions 的用户**，不做额外权限限制。
+6. 当前版本暂不进行代码签名、安装包签名或公证；清单中的 SHA-256 仅用于完整性校验。后续启用签名时必须新增版本规则和受保护凭据流程。
+7. 任一平台无合格包、成功包的校验值不一致、成功包缺日志或发布资产上传失败时，工作流失败并说明原因。其他矩阵组合失败或来源数据缺失时，记录该组合为 `failed`/`blocked`，不隐藏缺口。
 
 ## 4. 非功能要求
 
@@ -75,7 +78,7 @@
 
 - 业务代码变更且版本不变的 PR 必须失败并提示提升版本。
 - 版本高于 `master` 的 PR 通过，低于 `master` 的 PR 失败并说明回退原因。
-- PR 构建生成 Windows EXE/MSI 和麒麟 V10 DEB/RPM 的候选清单，状态与验证事实一致。
+- PR 只做校验，不产生任何候选包或 ZIP；打包由 `Release` workflow 承担，手动对分支触发时生成该分支最新提交的 Windows EXE/MSI 和麒麟 V10 DEB/RPM 候选清单，状态与验证事实一致。
 - 应用版本递增的 `master` 构建在最低门槛通过时生成带 SHA-256 的包外 `release-manifest.json`、唯一总 ZIP 和 GitHub Release；版本未递增时跳过同版本发布；Actions Artifact 保留 30 天，GitHub Release 作为长期下载入口。
 - Artifact 可在无公网环境按清单校验。
 - 现有单元测试和协议兼容性检查全部通过。
@@ -87,7 +90,7 @@
 - Windows 每个适配组合都尝试生成 EXE 和 MSI；麒麟 V10 每个适配组合都尝试生成 DEB 和 RPM，并分别记录安装、升级和卸载结果。全部 32 个包目标均属于支持矩阵；某目标未形成合格包时必须在清单和 Release 说明中写明状态、原因与后续验证项。
 - “各个版本”专指操作系统版本适配性，不要求回溯构建历史应用版本。
 - 构建、测试、打包和校验默认离线；官网版本信息、依赖和安装源先缓存并校验，正式构建只读取缓存。
-- PR 合入 `master` 后触发发布；包与总 ZIP 校验通过后创建 tag，随后创建 draft GitHub Release，上传和复验成功后公开。Actions Artifact 保留 30 天，GitHub Release 长期保留；当前不做签名或公证。
+- PR 合入 `master` 且 `Test` workflow 通过后触发发布；也可在 Actions 手动触发，对所选分支的最新提交打包（非正式构建，不创建 tag 或 Release）。包与总 ZIP 校验通过后创建 tag，随后创建 draft GitHub Release，上传和复验成功后公开。Actions Artifact 保留 30 天，GitHub Release 长期保留；当前不做签名或公证。
 - Windows 和麒麟支持矩阵以本 PRD 与仓库配置为准；官网新增版本不会自动进入 CI，需人工审阅后更新配置。
 - 先分别生成 `windows-v<version>-<date>.zip` 和 `kylin-v<version>-<date>.zip`，再将两个平台 ZIP、构建清单和验证日志压缩为唯一交付物 `neurobridge-v<version>-<date>.zip`。每个平台 ZIP 至少包含一个可执行且通过自动校验的包才允许进入汇总；32 个目标的未完成项随包透明列示。
 - 总 ZIP 内的构建清单记录 Git commit、构建时间、目标矩阵和包/平台 ZIP 的 SHA-256；总 ZIP 自身的 SHA-256 只能写入包外 `release-manifest.json` 和 `.sha256` 文件，避免文件校验值包含自身。公开 Release 后另生成 `release-receipt.json` 记录实际 tag、Release URL、总 ZIP SHA-256 和 `published` 状态；不回写已上传 ZIP。
@@ -144,5 +147,5 @@
 - Windows 7/10/11、x86/x86_64 的 EXE 与 MSI 产物；
 - 银河麒麟服务器版/桌面版、五类架构的 DEB 与 RPM 产物；
 - 离线优先的官方版本信息、依赖和安装源缓存；
-- PR 候选构建、合入 `master` 后的发布、GitHub Release、tag、30 天 Artifact 保留和统一发布清单；
+- 手动触发的分支候选构建、合入 `master` 且 `Test` 通过后的发布、GitHub Release、tag、30 天 Artifact 保留和统一发布清单；
 - 失败原因、来源 URL、版本、架构、格式和 SHA-256 的可审计记录。
