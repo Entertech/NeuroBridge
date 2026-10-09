@@ -16,6 +16,7 @@ The package does not contain a compiled runtime.  Building it needs only
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import shutil
 import subprocess
@@ -229,7 +230,11 @@ def build(fmt: str, output_dir: Path) -> Path:
     for required in (MANIFEST, FETCH, INSTALL, BUILD):
         if not required.is_file():
             raise ValueError(f"missing bootstrap input: {required.relative_to(ROOT)}")
-    filename = f"neurobridge-bootstrap-{APPLICATION_VERSION}-kylin-v10-x86_64.{fmt}"
+    # The timestamp distinguishes one build from the next.  The version inside
+    # the package stays APPLICATION_VERSION; only the file name carries the
+    # build time, so two builds of the same version cannot be confused.
+    built_at = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    filename = f"neurobridge-bootstrap-{APPLICATION_VERSION}-{built_at}-kylin-v10-x86_64.{fmt}"
     output = output_dir / filename
     with tempfile.TemporaryDirectory(prefix="neurobridge-bootstrap-") as directory:
         work = Path(directory)
