@@ -32,7 +32,8 @@
     "releaseStatus": { "const": "candidate" },
     "trigger": {
       "type": "string",
-      "enum": ["pull_request", "push_master", "manual_retry"]
+      "description": "push_master for the automatic run after the Test workflow succeeds on a push to master; pull_request for a manual dispatch, which is a non-official build that never publishes. Only push_master enforces the minimum-package gate.",
+      "enum": ["pull_request", "push_master"]
     },
     "git": {
       "type": "object",
