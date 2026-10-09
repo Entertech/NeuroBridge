@@ -91,8 +91,15 @@ class BootstrapPackageTests(unittest.TestCase):
             # The compiler and Eigen are declared dependencies so the install
             # builds the runtime itself instead of asking the user to run a script.
             self.assertIn("g++", seen["control"])
-            self.assertIn("libeigen3-dev", seen["control"])
+            # Eigen 3.3.7 is shipped in the package, so the install must not
+            # depend on whichever version the distro's eigen package happens to be.
+            self.assertNotIn("libeigen3-dev", seen["control"])
             self.assertIn("bootstrap-build.sh", seen["postinst"])
+            # A reinstall of the same package version must rebuild when the
+            # runtime is absent.  Gating on "first install" skips that rebuild,
+            # because the package version never changes.
+            self.assertIn("/opt/neurobridge/runtime/bin/python", seen["postinst"])
+            self.assertNotIn('"${2:-}"', seen["postinst"])
             self.assertNotIn("echo", seen["postinst"])
 
     def test_bundled_source_is_enough_to_build_the_runtime(self) -> None:
@@ -116,6 +123,7 @@ class BootstrapPackageTests(unittest.TestCase):
                 "mac/algorithm_bridge/CMakeLists.txt",
                 "mac/algorithm_bridge/affective_bridge.cpp",
                 "packaging/kylin/offline/cmake-3.31.6-linux-x86_64.tar.gz",
+                "packaging/kylin/offline/eigen-3.3.7.tar.gz",
                 "tools/build-kylin-runtime-archive.sh",
                 "config/kylin-runtime-manifest.toml",
                 "config/gateway.toml.example",
@@ -145,6 +153,7 @@ class BootstrapPackageTests(unittest.TestCase):
                 topdir = Path(args[args.index("--define") + 1].split(" ", 1)[1])
                 payload = topdir / "SOURCES/payload"
                 seen["names"] = sorted(item.name for item in payload.iterdir())
+                seen["spec"] = (topdir / "SPECS/neurobridge-bootstrap.spec").read_text(encoding="utf-8")
                 rpm = topdir / "RPMS/x86_64/bootstrap.rpm"
                 rpm.parent.mkdir(parents=True)
                 rpm.write_bytes(bytes.fromhex("edabeedb") + b"\0" * 2048)
@@ -158,6 +167,8 @@ class BootstrapPackageTests(unittest.TestCase):
                 ["bootstrap-build.sh", "bootstrap-install.sh", "fetch-runtime.sh",
                  "kylin-runtime-manifest.toml", "source"],
             )
+            self.assertNotIn("eigen3-devel", seen["spec"])
+            self.assertIn("/opt/neurobridge/runtime/bin/python", seen["spec"])
 
 
 class StageVenvPackagesTests(unittest.TestCase):

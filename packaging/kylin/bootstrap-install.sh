@@ -62,7 +62,33 @@ command -v systemctl >/dev/null 2>&1 || fail "systemctl is required to install t
 
 download_dir=$(mktemp -d /var/tmp/neurobridge-bootstrap.XXXXXX)
 stage=$(mktemp -d /var/tmp/neurobridge-stage.XXXXXX)
-cleanup() { rm -rf -- "$download_dir" "$stage"; }
+# Remember what this machine had before the install changes anything, so a
+# failure can put it back.  The temp dirs are always removed; the installed
+# tree is only restored when this run created it.
+service_was_active=false
+systemctl is-active --quiet neurobridge.service 2>/dev/null && service_was_active=true
+# had_tree distinguishes a fresh install, which a failure must remove, from an
+# upgrade, which a failure must put back.
+had_tree=false
+[[ -d /opt/neurobridge ]] && had_tree=true
+installed_tree=false
+cleanup() {
+  rm -rf -- "$download_dir" "$stage"
+  [[ $installed_tree == true ]] || return 0
+  systemctl stop neurobridge.service >/dev/null 2>&1 || true
+  rm -rf -- /opt/neurobridge /opt/neurobridge.next
+  if [[ $had_tree == true && -d /opt/neurobridge.previous ]]; then
+    mv /opt/neurobridge.previous /opt/neurobridge
+  fi
+  rm -rf -- /opt/neurobridge.previous
+  if [[ $service_was_active == true ]]; then
+    systemctl restart neurobridge.service >/dev/null 2>&1 || true
+  else
+    systemctl disable neurobridge.service >/dev/null 2>&1 || true
+    rm -f -- /etc/systemd/system/neurobridge.service
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+}
 trap cleanup EXIT
 
 fetch_args=(--manifest "$manifest" --destination "$download_dir")
@@ -87,7 +113,6 @@ id -u neurobridge >/dev/null 2>&1 || useradd --system --gid neurobridge --home-d
 
 install -d -o neurobridge -g neurobridge -m 0750 /var/lib/neurobridge/recordings /var/log/neurobridge
 install -d -o root -g neurobridge -m 0750 /etc/neurobridge
-install -d -o root -g root -m 0755 /opt/neurobridge
 
 # Replace the installed tree in one move so a running service never sees a
 # half-written directory.  An existing tree is kept beside it until the new
@@ -101,12 +126,17 @@ install -d -m 0755 /opt/neurobridge.next/packaging
 cp "$stage/packaging/neurobridge.service" /opt/neurobridge.next/packaging/neurobridge.service
 chown -R root:root /opt/neurobridge.next
 
+# The old tree is moved aside before the new one takes its place.  installed_tree
+# is set only once that move has happened, so a failure while staging
+# /opt/neurobridge.next never removes a tree this run did not touch.  After it
+# is set, the cleanup trap puts the previous tree back if the service does not
+# come up.
 if [[ -d /opt/neurobridge ]]; then
   rm -rf -- /opt/neurobridge.previous
   mv /opt/neurobridge /opt/neurobridge.previous
 fi
+installed_tree=true
 mv /opt/neurobridge.next /opt/neurobridge
-rm -rf -- /opt/neurobridge.previous
 
 [[ -e /etc/neurobridge/gateway.toml ]] || install -o root -g neurobridge -m 0640 \
   /opt/neurobridge/gateway.toml.example /etc/neurobridge/gateway.toml
@@ -116,6 +146,13 @@ systemctl daemon-reload
 systemctl enable neurobridge.service
 systemctl restart neurobridge.service
 systemctl is-active --quiet neurobridge.service || fail "neurobridge.service did not stay active after installation."
+
+# The service is running, so the cleanup trap must no longer undo the install.
+# The previous tree was kept until this point so a failed restart could
+# restore it.
+installed_tree=false
+trap - EXIT
+rm -rf -- /opt/neurobridge.previous "$download_dir" "$stage"
 
 printf 'NeuroBridge installed from %s\n' "$archive"
 printf 'Configuration: /etc/neurobridge/gateway.toml (left unchanged if it already existed)\n'

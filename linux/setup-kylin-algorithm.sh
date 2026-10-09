@@ -31,6 +31,11 @@ cmake_archive="cmake-${cmake_version}-linux-x86_64.tar.gz"
 cmake_url="https://github.com/Kitware/CMake/releases/download/v${cmake_version}/${cmake_archive}"
 cmake_sha256="5a1133ff103c71eb5120e2cc3de922733e7d8a26a98ae716397e8676adb367bf"
 cmake_home="$toolchain_dir/cmake-${cmake_version}-linux-x86_64"
+# The locked Eigen for this platform.  The bootstrap package ships this exact
+# archive so the build does not depend on whichever Eigen the distro ships.
+eigen_version_locked="3.3.7"
+eigen_archive="eigen-${eigen_version_locked}.tar.gz"
+eigen_sha256="b6363950528209f9e15bd022819c0b8b4f6cb2c192d629db5e69157bff79df34"
 # The bootstrap package carries the pinned CMake archive under offline/ so the
 # install never downloads it.  A checkout that has its own copy in
 # algorithm-packages/ still takes precedence.  cmake_archive is set above;
@@ -165,7 +170,12 @@ PY
 }
 
 detect_eigen_version() {
-  local macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h world major minor
+  local macros world major minor
+  if [[ -n ${NEUROBRIDGE_EIGEN_PREFIX:-} ]]; then
+    macros=$NEUROBRIDGE_EIGEN_PREFIX/include/eigen3/Eigen/src/Core/util/Macros.h
+  else
+    macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+  fi
   [[ -f $macros ]] || return 1
   world=$(awk '$2 == "EIGEN_WORLD_VERSION" { print $3; exit }' "$macros")
   major=$(awk '$2 == "EIGEN_MAJOR_VERSION" { print $3; exit }' "$macros")
@@ -175,18 +185,24 @@ detect_eigen_version() {
 }
 
 eigen_is_usable() {
-  local detected
-  [[ -d /usr/include/eigen3 ]] || return 1
-  [[ -f /usr/share/eigen3/cmake/Eigen3Config.cmake \
-    || -f /usr/lib/cmake/eigen3/Eigen3Config.cmake \
-    || -f /usr/lib64/cmake/eigen3/Eigen3Config.cmake \
-    || -f /usr/local/share/eigen3/cmake/Eigen3Config.cmake ]] || return 1
+  local detected include_dir
+  if [[ -n ${NEUROBRIDGE_EIGEN_PREFIX:-} ]]; then
+    include_dir=$NEUROBRIDGE_EIGEN_PREFIX/include/eigen3
+    [[ -d $include_dir && -f $NEUROBRIDGE_EIGEN_PREFIX/share/eigen3/cmake/Eigen3Config.cmake ]] || return 1
+  else
+    include_dir=/usr/include/eigen3
+    [[ -d $include_dir ]] || return 1
+    [[ -f /usr/share/eigen3/cmake/Eigen3Config.cmake \
+      || -f /usr/lib/cmake/eigen3/Eigen3Config.cmake \
+      || -f /usr/lib64/cmake/eigen3/Eigen3Config.cmake \
+      || -f /usr/local/share/eigen3/cmake/Eigen3Config.cmake ]] || return 1
+  fi
   detected=$(detect_eigen_version) || return 1
   [[ $detected == "$locked_eigen_version" ]]
 }
 
 system_build_dependencies_ready() {
-  command -v c++ >/dev/null 2>&1 && eigen_is_usable
+  command -v c++ >/dev/null 2>&1 && { eigen_is_usable || [[ -f $package_dir/$eigen_archive ]]; }
 }
 
 install_build_dependencies() {
@@ -205,13 +221,13 @@ install_build_dependencies() {
 }
 
 if ! system_build_dependencies_ready; then
-  echo "System build prerequisites are incomplete. Required: C++17 compiler and Eigen3 ${locked_eigen_version}."
-  # The bootstrap package declares these as install dependencies, so they are
-  # already present here.  Asking, or running the package manager from inside
-  # the install, would either wait for input that never comes or deadlock on
-  # the package manager lock.
+  echo "System build prerequisites are incomplete. Required: a C++17 compiler. Eigen3 ${locked_eigen_version} is taken from the bundled archive when present."
+  # The bootstrap package declares the compiler as an install dependency and
+  # carries the locked Eigen archive, so both are already present here.  Asking,
+  # or running the package manager from inside the install, would either wait
+  # for input that never comes or deadlock on the package manager lock.
   if [[ ${NEUROBRIDGE_BOOTSTRAP:-} == 1 ]]; then
-    fail "Build dependencies are missing. The bootstrap package should have installed a C++17 compiler and Eigen3 ${locked_eigen_version} before this step."
+    fail "Build dependencies are missing. The bootstrap package should have installed a C++17 compiler, and ships Eigen3 ${locked_eigen_version} itself."
   fi
   if ask_yes_no "是否使用银河麒麟当前软件源安装算法构建依赖？"; then
     install_build_dependencies || fail "System dependency installation failed. See: $setup_log"
@@ -221,6 +237,51 @@ if ! system_build_dependencies_ready; then
 fi
 system_build_dependencies_ready || fail \
   "Build dependencies remain unavailable after installation. Expected Eigen3 ${locked_eigen_version}; detected $(detect_eigen_version 2>/dev/null || printf unknown). Configuration was not changed."
+
+# Unpack the locked Eigen next to the build and point the bridge build at it.
+# The archive is the one sdk.lock names for Galaxy Kylin, so a different Eigen
+# from the distro is never consulted when this archive is present.
+prepare_bundled_eigen() {
+  local archive_path="$package_dir/$eigen_archive"
+  [[ -f $archive_path ]] || return 0
+  local actual_sha
+  actual_sha=$(sha256sum "$archive_path" | awk '{print $1}')
+  [[ $actual_sha == "$eigen_sha256" ]] || fail \
+    "Eigen archive SHA-256 mismatch: file=$archive_path expected=$eigen_sha256 actual=$actual_sha"
+  local eigen_home="$toolchain_dir/eigen-${eigen_version_locked}"
+  if [[ ! -f $eigen_home/share/eigen3/cmake/Eigen3Config.cmake ]]; then
+    local extract_dir="$toolchain_dir/.extract-eigen-$$"
+    rm -rf -- "$extract_dir"
+    install -d -m 0750 "$extract_dir"
+    tar -xzf "$archive_path" -C "$extract_dir" || {
+      rm -rf -- "$extract_dir"
+      fail "Eigen archive extraction failed: $archive_path"
+    }
+    [[ -f $extract_dir/eigen-${eigen_version_locked}/Eigen/src/Core/util/Macros.h ]] || {
+      rm -rf -- "$extract_dir"
+      fail "Eigen archive did not contain the expected headers."
+    }
+    # Eigen is header-only.  The layout below is what find_package(Eigen3) and
+    # the version check both look for; no compiler is involved.
+    install -d -m 0750 "$eigen_home/include/eigen3" "$eigen_home/share/eigen3/cmake"
+    mv -- "$extract_dir/eigen-${eigen_version_locked}/Eigen" "$eigen_home/include/eigen3/Eigen"
+    cat >"$eigen_home/share/eigen3/cmake/Eigen3Config.cmake" <<EOF
+set(EIGEN3_FOUND TRUE)
+set(EIGEN3_VERSION_STRING "${eigen_version_locked}")
+set(EIGEN3_INCLUDE_DIR "${eigen_home}/include/eigen3")
+set(EIGEN3_INCLUDE_DIRS "\${EIGEN3_INCLUDE_DIR}")
+if(NOT TARGET Eigen3::Eigen)
+  add_library(Eigen3::Eigen INTERFACE IMPORTED)
+  set_target_properties(Eigen3::Eigen PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "\${EIGEN3_INCLUDE_DIR}")
+endif()
+EOF
+    rm -rf -- "$extract_dir"
+  fi
+  export NEUROBRIDGE_EIGEN_PREFIX="$eigen_home"
+  echo "bundledEigen=${eigen_version_locked}"
+  echo "bundledEigenPrefix=$eigen_home"
+}
 
 prepare_project_cmake() {
   local archive_path="$package_dir/$cmake_archive"
@@ -278,6 +339,7 @@ prepare_project_cmake() {
 }
 
 prepare_project_cmake
+prepare_bundled_eigen
 
 echo "cmake=$(cmake --version | head -n 1)"
 echo "compiler=$(c++ --version | head -n 1)"

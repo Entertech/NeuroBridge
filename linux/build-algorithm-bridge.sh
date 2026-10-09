@@ -42,8 +42,13 @@ except ValueError:
     raise SystemExit(1)
 raise SystemExit(0 if version >= (3, 22) else 1)
 PY
+# A bundled Eigen (NEUROBRIDGE_EIGEN_PREFIX) is searched before the system one.
+# The bootstrap package sets it to the locked 3.3.7 tree, so a different Eigen
+# already installed on the machine cannot be picked up instead.
+eigen_prefix=${NEUROBRIDGE_EIGEN_PREFIX:-}
 eigen_config=
 for candidate in \
+  ${eigen_prefix:+$eigen_prefix/share/eigen3/cmake/Eigen3Config.cmake} \
   /usr/share/eigen3/cmake/Eigen3Config.cmake \
   /usr/lib/cmake/eigen3/Eigen3Config.cmake \
   /usr/lib64/cmake/eigen3/Eigen3Config.cmake \
@@ -53,9 +58,14 @@ for candidate in \
     break
   fi
 done
-[[ -n $eigen_config && -d /usr/include/eigen3 ]] || fail \
+if [[ -n $eigen_prefix ]]; then
+  eigen_include=$eigen_prefix/include/eigen3
+else
+  eigen_include=/usr/include/eigen3
+fi
+[[ -n $eigen_config && -d $eigen_include ]] || fail \
   "Eigen3 headers/CMake configuration are missing. Install the approved Eigen3 development package for $platform."
-eigen_macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+eigen_macros=$eigen_include/Eigen/src/Core/util/Macros.h
 [[ -f $eigen_macros ]] || fail "Eigen3 version header is missing: $eigen_macros"
 eigen_version=$(awk '
   $2 == "EIGEN_WORLD_VERSION" { world=$3 }
@@ -104,7 +114,7 @@ cmake -Wno-dev -S "$repo_root/mac/algorithm_bridge" -B "$build_root/bridge" \
   -DCMAKE_BUILD_TYPE=Release \
   -DAFFECTIVE_SDK_SOURCE_DIR="$sdk_dir" \
   -DNUMCPP_NO_USE_BOOST=ON \
-  -DCMAKE_PREFIX_PATH="/usr;$numcpp_prefix"
+  -DCMAKE_PREFIX_PATH="${eigen_prefix:+$eigen_prefix;}/usr;$numcpp_prefix"
 cmake --build "$build_root/bridge" --parallel 2
 
 install -m 0755 "$build_root/bridge/bin/neurobridge_affective_bridge" "$output_dir/neurobridge_affective_bridge"

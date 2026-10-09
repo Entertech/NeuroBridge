@@ -144,7 +144,7 @@ def deb_control() -> str:
         Priority: optional
         Architecture: {DEB_ARCH}
         Maintainer: Entertech <support@entertech.cn>
-        Depends: ca-certificates, curl, g++, libeigen3-dev, tar
+        Depends: ca-certificates, curl, g++, tar
         Description: NeuroBridge installer that builds or fetches its runtime
          On one Galaxy Kylin machine, builds the runtime from the bundled
          source and installs it.  On every other machine, installs a runtime
@@ -161,13 +161,16 @@ def write_deb_metadata(root: Path) -> None:
     debian = root / "DEBIAN"
     debian.mkdir()
     (debian / "control").write_text(deb_control(), encoding="utf-8")
-    # dpkg passes "configure" on a fresh install and on upgrade.  Building the
-    # runtime takes several minutes and needs the compiler, so it only runs when
-    # the package is first installed; an upgrade keeps the runtime already built.
+    # dpkg passes "configure" both for a fresh install and for an upgrade.
+    # The package version does not change between builds, so "is this an
+    # upgrade" cannot tell a rebuilt package from a repeat install of the same
+    # one.  Build whenever the runtime is not already installed; a machine that
+    # already has the service keeps it.
     (debian / "postinst").write_text(
         "#!/bin/sh\n"
         "set -eu\n"
-        'if [ "${1:-}" = "configure" ] && [ -z "${2:-}" ]; then\n'
+        'if [ "${1:-}" = "configure" ] '
+        '&& [ ! -x /opt/neurobridge/runtime/bin/python ]; then\n'
         "  /usr/lib/neurobridge-bootstrap/bootstrap-build.sh\n"
         "fi\n"
         "exit 0\n",
@@ -200,7 +203,7 @@ def write_rpm(payload: Path, output: Path, work: Path) -> None:
         License: Proprietary
         BuildArch: {RPM_ARCH}
         AutoReqProv: no
-        Requires: ca-certificates, curl, gcc-c++, eigen3-devel, tar
+        Requires: ca-certificates, curl, gcc-c++, tar
 
         %description
         On one Galaxy Kylin machine, builds the runtime from the bundled source
@@ -212,9 +215,10 @@ def write_rpm(payload: Path, output: Path, work: Path) -> None:
         cp -a %{{_sourcedir}}/payload/. %{{buildroot}}/usr/lib/neurobridge-bootstrap/
 
         %post
-        # $1 is 1 on a fresh install and 2 or more on an upgrade.  Only a fresh
-        # install builds the runtime; an upgrade keeps the one already built.
-        if [ "$1" -eq 1 ]; then
+        # The package version does not change between builds, so an upgrade and
+        # a reinstall of the same version look alike.  Build when the runtime
+        # is missing; a machine that already has it keeps it.
+        if [ ! -x /opt/neurobridge/runtime/bin/python ]; then
           /usr/lib/neurobridge-bootstrap/bootstrap-build.sh
         fi
 
