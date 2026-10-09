@@ -6,31 +6,38 @@ name: Kylin bootstrap package
 # need the self-hosted Kylin runner.  The deb is an Actions artifact, not a
 # release asset: installing it is what produces the runtime, on the Kylin
 # machine itself.
+#
+# A pull request never builds it.  The two ways in match release.yml:
+#
+#   * after the "Test" workflow completes successfully on a push to master; and
+#   * a manual dispatch, which builds the latest commit of the chosen branch.
+#
+# `workflow_run` reports the default-branch tip in github.sha, so the checkout
+# uses SOURCE_SHA.  A workflow_run also fires for a failed or hand-dispatched
+# Test run, so the job itself requires a push-triggered success.
 
 on:
-  # workflow_dispatch is only offered once this file is on the default branch,
-  # so the first build of a branch is driven by the push below.
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
+    branches: [master]
   workflow_dispatch:
-  push:
-    branches: [codex/kylin-bootstrap-installer]
-    paths:
-      - ".github/workflows/kylin-bootstrap.yml"
-      - "tools/build-kylin-bootstrap-package.py"
-      - "packaging/kylin/**"
-      - "linux/**"
-      - "neurobridge/**"
-      - "third_party/**"
-      - "config/**"
 
 permissions:
   contents: read
 
+env:
+  SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
 jobs:
   deb:
     name: Build the Kylin bootstrap deb
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
