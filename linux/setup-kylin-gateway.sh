@@ -21,6 +21,8 @@ Galaxy Kylin project assistant. It provides a numeric menu for:
   7. Export complete diagnostics
   8. Check gateway service and capture page
   9. Manage boot autostart
+ 10. Retire this deployment: stop the service, and optionally delete the
+     source checkout after archiving the .runtime field data
 
 Run it as the normal desktop user, not with sudo. The assistant requests sudo
 only for the exact steps that need system permissions. Git is always run as
@@ -471,6 +473,52 @@ EOF
   esac
 }
 
+retire_project() {
+  local retire_choice result uninstall_script="$root_dir/linux/uninstall-kylin-project.sh"
+  retire_removed_source=false
+  if [[ ! -x $uninstall_script ]]; then
+    log_message "缺少卸载脚本：$uninstall_script"
+    log_message "请先更新源码；也可手工执行："
+    log_message "  sudo systemctl disable --now neurobridge.service"
+    log_message "  sudo rm -f /etc/systemd/system/neurobridge.service"
+    log_message "  sudo systemctl daemon-reload"
+    return 1
+  fi
+  cat <<'EOF'
+
+一键退出（移除开机自启与源码）
+  1. 只停服务并移除 systemd 单元（保留源码与 .runtime 数据）
+  2. 停服务、备份现场数据并删除整个源码目录
+  0. 返回主菜单
+EOF
+  printf '请输入选项 [0-2]: '
+  IFS= read -r retire_choice || return 0
+  log_message "retireSelected=$retire_choice"
+  case $retire_choice in
+    1)
+      # Interactive destructive step: run the helper directly so its own
+      # confirmation prompts stay on the terminal, then log the result.
+      log_message "== 停服务并移除 systemd 单元 =="
+      "$uninstall_script" uninstall
+      result=$?
+      log_message "result=$result step=停服务并移除 systemd 单元"
+      return "$result"
+      ;;
+    2)
+      log_message "== 停服务、备份现场数据并删除源码目录 =="
+      "$uninstall_script" purge
+      result=$?
+      log_message "result=$result step=删除源码目录"
+      if (( result == 0 )) && [[ ! -e $root_dir/pyproject.toml ]]; then
+        retire_removed_source=true
+      fi
+      return "$result"
+      ;;
+    0) return 0 ;;
+    *) log_message "无效选项，请输入 0 到 2。"; return 1 ;;
+  esac
+}
+
 prepare_and_start() {
   local serial_result
   ensure_runtime_writable || return 1
@@ -531,6 +579,7 @@ NeuroBridge 银河麒麟一键助手
   7. 导出完整诊断包
   8. 一键检查网关服务与 capture 页面
   9. 配置自启/非自启
+ 10. 一键退出（停服务并移除源码）
   0. 退出
 EOF
 }
@@ -546,7 +595,7 @@ fi
 
 while true; do
   show_menu
-  printf '请输入选项 [0-9]: '
+  printf '请输入选项 [0-10]: '
   IFS= read -r choice || {
     log_message "输入结束，助手退出。"
     exit 0
@@ -593,10 +642,17 @@ while true; do
       ;;
     8) check_gateway_capture || true ;;
     9) manage_autostart || true ;;
+    10)
+      retire_project || true
+      if [[ ${retire_removed_source:-false} == true ]]; then
+        log_message "源码目录已删除，助手退出。"
+        exit 0
+      fi
+      ;;
     0)
       log_message "助手已退出。"
       exit 0
       ;;
-    *) printf '无效选项，请输入 0 到 9。\n' ;;
+    *) printf '无效选项，请输入 0 到 10。\n' ;;
   esac
 done

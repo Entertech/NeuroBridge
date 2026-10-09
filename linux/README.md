@@ -6,7 +6,7 @@
 bash linux/neurobridge-kylin-bootstrap.sh
 ```
 
-`linux/neurobridge-kylin-bootstrap.sh` 是完整项目的一键入口。选择 `1` 时，助手先检查权限并以普通用户执行 fast-forward 更新，更新后停止旧网关，再继续准备环境、串口、算法并启动新版本 `neurobridge.service`；更新失败不会停止已有服务。已配置好时也可输入 `2` 直接启动，菜单 `3` 可单独更新源码。只有菜单 `9` 中显式选择非自启后，日常入口才以前台方式运行；重新启用会恢复默认自启。服务仍以当前桌面用户运行项目内配置、算法和数据。无法联网的旧设备由开发机运行 `./tools/build-kylin-offline-update.sh`，只传输生成的 `neurobridge-kylin-offline-update.run`，目标机执行一次后会自动打开菜单。保持耳机 USB 已连接即可，正常检测不要求拔插。完整现场流程见[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
+`linux/neurobridge-kylin-bootstrap.sh` 是完整项目的一键入口。选择 `1` 时，助手先检查权限并以普通用户执行 fast-forward 更新，更新后停止旧网关，再继续准备环境、串口、算法并启动新版本 `neurobridge.service`；更新失败不会停止已有服务。已配置好时也可输入 `2` 直接启动，菜单 `3` 可单独更新源码。只有菜单 `9` 中显式选择非自启后，日常入口才以前台方式运行；重新启用会恢复默认自启。需要拆除这套源码部署时用菜单 `10` 一键退出：先停服务并移除 systemd 单元，可选择备份现场数据后删除整个源码目录。服务仍以当前桌面用户运行项目内配置、算法和数据。无法联网的旧设备由开发机运行 `./tools/build-kylin-offline-update.sh`，只传输生成的 `neurobridge-kylin-offline-update.run`，目标机执行一次后会自动打开菜单。保持耳机 USB 已连接即可，正常检测不要求拔插。完整现场流程见[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
 
 本目录同时保存 Ubuntu x86_64 部署及银河麒麟项目运行脚本：
 
@@ -20,7 +20,8 @@ bash linux/neurobridge-kylin-bootstrap.sh
 - `neurobridge-kylin-bootstrap.sh`：完整项目的一键启动入口；菜单 1 会先更新源码，再准备并启动网关。
 - `../tools/build-kylin-offline-update.sh`：开发机生成单个 `.run` 离线更新文件；内嵌已提交分支的 Git bundle 和 SHA-256，目标机只从本地 bundle 快进，不访问远端。
 - `setup-kylin-gateway.sh`：银河麒麟 V10 项目一键上手、权限恢复、更新、配置、启动与诊断菜单；以普通用户运行，只在必要步骤调用 `sudo`，Git 更新永远不使用 `sudo`。
-- `setup-kylin-autostart.sh`：为当前银河麒麟项目安装、查看或停用 `neurobridge.service`；项目默认自启，`disable` 会在 `.runtime/config/kylin-autostart.conf` 记录显式非自启偏好，`enable` 恢复自启。systemd 在开机时以当前桌面用户运行项目启动器，异常退出后 3 秒重试，不把网关进程提升为 root。
+- `setup-kylin-autostart.sh`：为当前银河麒麟项目安装、查看或停用 `neurobridge.service`；项目默认自启，`disable` 会在 `.runtime/config/kylin-autostart.conf` 记录显式非自启偏好，`enable` 恢复自启。systemd 在开机时以当前桌面用户运行项目启动器，异常退出后 3 秒重试，不把网关进程提升为 root。它只停用、不删除单元文件，因此彻底拆除请用下面的卸载脚本。
+- `uninstall-kylin-project.sh`：拆除源码部署的一键退出入口，也是助手菜单 `10` 调用的实现。`status` 只读体检；`uninstall` 停止并移除本项目安装的受管 systemd 单元，保留源码与 `.runtime` 数据；`purge` 在此之上先把 `.runtime/config`、`.runtime/recordings` 备份为 `$HOME/neurobridge-backup-<UTC时间戳>.tar.gz`，再删除整个源码目录。它校验单元文件里的托管标记和 `ExecStart` 归属，拒绝停止不是本项目安装的单元，也拒绝删除过浅或系统目录的路径；支持 `--yes`（非交互）、`--no-backup`、`--backup-dir`、`--force`。
 - `setup-kylin-python.sh`：银河麒麟 V10 项目 Python 环境一键初始化；系统仅有 Python 3.8 时自动准备经 SHA-256 锁定的项目内 Python 3.11，再选择离线 `wheelhouse` 或当前网络，所有运行时、缓存、临时文件和日志保存在项目内。
 - `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口一键识别；默认直接检查已连接设备，无需拔插，并保存 USB/TTY/驱动快照；仅在显式 `--plug-cycle` 时监控拔插过程和超时；旧版 `lsusb` 不支持 `-nn` 时自动回退。
 - `setup-kylin-serial.sh`：银河麒麟 x86_64 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务；项目启动脚本会处理账号已入组但当前会话权限尚未刷新的情况。
@@ -364,3 +365,24 @@ sudo ./linux/collect-ubuntu-build-diagnostics.sh
 N100/N150 改装银河麒麟 V10 后出现运行、驱动或 USB 串口问题时，使用 `sudo ./linux/collect-kylin-runtime-diagnostics.sh --journal-lines 10000` 生成完整现场诊断包。默认保存到项目 `.runtime/diagnostics/`，详细命令见[麒麟 V10 USB 串口耳机配置与启动手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md#8-一键导出完整诊断包)。
 
 部署或修改设备接入、算法、网络依赖后，至少重新验证实时采集、录播、头环断线重连、浏览器/客户端断开与恢复五个场景。默认 `local_browser` 验证同机浏览器；`wired_b_side` 才验证独立 B 端和专网恢复。所有日志、配置和录播数据均应仅保留在受控环境中。
+
+## 10. 拆除源码部署（一键退出）
+
+银河麒麟源码模式只往系统里写一个文件 `/etc/systemd/system/neurobridge.service`，其 `ExecStart` 指向当前源码目录的 `linux/start-kylin-gateway.sh`，其余配置、算法、录制和日志都在项目 `.runtime/` 内。因此拆除顺序固定为**先停服务、再删源码**：先删源码会留下一个仍处于 enabled 的单元，每 3 秒重启失败一次。
+
+现场人员用数字菜单即可：运行 `bash linux/neurobridge-kylin-bootstrap.sh`，输入 `10`，再选择只停服务（`1`）或连同源码一起删除（`2`）。删除前必须输入 `DELETE` 确认。
+
+高级人员可直接执行：
+
+```bash
+./linux/uninstall-kylin-project.sh status      # 只读体检，不改动任何东西
+./linux/uninstall-kylin-project.sh uninstall   # 停服务并移除 systemd 单元，保留源码与 .runtime
+./linux/uninstall-kylin-project.sh purge       # 备份现场数据后删除整个源码目录
+./linux/uninstall-kylin-project.sh purge --yes # 非交互执行（无人值守）
+```
+
+`purge` 会先把 `.runtime/config` 与 `.runtime/recordings` 打包到 `$HOME/neurobridge-backup-<UTC时间戳>.tar.gz`（权限 `0600`），日志不在备份内；需要保留日志时在删除前另行复制 `.runtime/logs`。备份失败会中止删除。`--no-backup` 可跳过备份，`--backup-dir DIR` 可改备份目录。
+
+脚本的安全边界：只处理带 `# Managed by NeuroBridge Galaxy Kylin project autostart` 标记、且 `ExecStart` 指向当前源码目录的单元，否则拒绝停止；拒绝删除过浅路径、系统目录、用户主目录和符号链接目标；以普通用户运行，只在 systemd 操作和删除 root 属主文件时调用 `sudo`。仅当受管单元指向的旧源码目录已经不存在时，才需要显式加 `--force`。
+
+`uninstall` 会同时删除项目内 `.runtime/config/kylin-autostart.conf`，使自启偏好回到默认值，便于以后重新部署时恢复默认开机自启。源码模式不会创建 `neurobridge` 系统账户，也不会写 udev 规则或 logrotate 配置；`setup-kylin-serial.sh` 可能把当前用户加入串口组（通常为 `dialout`），不再使用串口时可自行执行 `sudo gpasswd -d $USER dialout` 移除。若系统上曾装过 `packaging/kylin/install.sh` 的安装包版本（`/opt/neurobridge`），那属于另一条链路，使用它自带的 `sudo bash packaging/kylin/uninstall.sh`。

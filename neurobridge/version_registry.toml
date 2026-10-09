@@ -2,10 +2,17 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.1.0"
+version = "0.2.0"
 
-# Platform delivery versions. Keep these independent from the shared Python
-# package version so Windows and Galaxy Kylin installers can advance separately.
+[[application_release_changes]]
+from_version = "0.1.0"
+to_version = "0.2.0"
+impact = "minor"
+compatibility = "Release packaging and CI behavior change; gateway wire protocol and existing runtime configuration remain compatible."
+evidence = "Add release matrix planning, version gate, target evidence, immutable archive assembly, GitHub Release publication and diagnostic logs."
+
+# Legacy platform delivery versions retained for old installers. The release
+# workflow uses only [application].version and does not advance these fields.
 [platform_releases.windows]
 version = "0.0.1"
 build = 1
@@ -37,12 +44,18 @@ based_on_released_version = "0.2"
 [documents.external_northbound]
 current_version = "0.2"
 audience = "b_side"
+# Delivery policy for the user-facing release bundle:
+#   always         -> shipped in docs/external/ for every release
+#   platform_bound -> shipped under <platform>/ only when that platform produced packages
+#   review_only    -> kept in the review ZIP artifact only, never shipped to end users
+delivery = "always"
 title = "头环数据网关北向网络协议"
 
 [documents.external_capture_package]
 version = "0.1"
 status = "published"
 audience = "data_recipient"
+delivery = "always"
 title = "头环数据采集包格式说明"
 markdown_path = "doc/tech/对外/头环数据采集包格式说明/头环数据采集包格式说明_v0.1.md"
 pdf_artifact_name = "头环数据采集包格式说明_v0.1.pdf"
@@ -54,6 +67,7 @@ publication_record = "2026-08-05-public-capture-package-v0.1"
 version = "1.0"
 status = "published"
 audience = "operator"
+delivery = "review_only"
 title = "头环数据网关 SSH 运维操作指南"
 markdown_path = "doc/tech/对外/头环数据网关 SSH 运维操作指南/头环数据网关 SSH 运维操作指南_v1.0.md"
 pdf_artifact_name = "头环数据网关 SSH 运维操作指南_v1.0.pdf"
@@ -67,6 +81,7 @@ reason = "经发布 PR 审核后标记为已发布；版本保持不变，master
 version = "1.0"
 status = "published"
 audience = "operator"
+delivery = "review_only"
 title = "头环数据网关有线网络配置指南"
 markdown_path = "doc/tech/对外/头环数据网关有线网络配置指南/头环数据网关有线网络配置指南_v1.0.md"
 pdf_artifact_name = "头环数据网关有线网络配置指南_v1.0.pdf"
@@ -75,6 +90,21 @@ published_date = "2026-08-10"
 markdown_sha256 = "de2dcbf501d0a0796fffb62b663ecf20e852a260cba092199ef77614947fd490"
 publication_record = "2026-08-10-public-wired-network-operations-v1.0"
 reason = "经发布 PR 审核后标记为已发布；版本保持不变，master CI 将生成正式 PDF ZIP Artifact。"
+
+[documents.external_windows_operations]
+version = "1.0"
+status = "published"
+audience = "b_side"
+delivery = "platform_bound"
+platforms = ["windows"]
+title = "数据网关 Windows 部署与使用指南"
+markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数据网关 Windows 部署与使用指南_v1.0.md"
+pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.0.pdf"
+created_date = "2026-10-09"
+published_date = "2026-10-09"
+markdown_sha256 = "b873106ccb5a7b3e126a2ec1f524d44d0c50ceb5b356f19b500167103a0fd205"
+publication_record = "2026-10-09-public-windows-operations-v1.0"
+reason = "用户明确要求把 Windows 部署与使用说明做成对外文档并纳入对外文档包生成 PDF；该文档只覆盖安装包部署形态下 B 端可观察的服务、端口、本机页面与日志，不含网关内部实现细节。"
 
 [[documents.external_northbound.versions]]
 version = "0.2"
@@ -121,10 +151,30 @@ status = "locked"
 locked_by = "2026-08-10-public-wired-network-operations-v1.0"
 locked_at = "2026-08-10"
 
+[[release_locks]]
+id = "windows-operations-v0.0-to-v1.0"
+scope = "external_windows_operations_document"
+from_version = "0.0"
+to_version = "1.0"
+status = "locked"
+locked_by = "2026-10-09-public-windows-operations-v1.0"
+locked_at = "2026-10-09"
+
 [change_policy]
 external_documents_require_explicit_user_request = true
 default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
+
+[[change_records]]
+id = "2026-10-09-public-windows-operations-v1.0"
+date = "2026-10-09"
+scope = "external_windows_operations_document"
+summary = "发布数据网关 Windows 部署与使用指南。"
+external_document_action = "explicit_user_authorized"
+external_document_version = "1.0"
+change_state = "locked"
+release_lock = "windows-operations-v0.0-to-v1.0"
+reason = "用户明确要求把 Windows 部署与使用说明做成对外文档，并要求在对外文档包中渲染为 PDF；本次只覆盖安装包部署形态下 B 端可观察的服务、端口、本机页面、日志和卸载，不涉及设备接入、算法或北向契约正文。"
 
 [[change_records]]
 id = "2026-09-14-unworn-eeg-message-prerelease"
@@ -1452,3 +1502,37 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户反馈 Actions 34460720291 失败；日志确认模拟 Get-Service 不加载 System.ServiceProcess，显式枚举引用触发 TypeNotFound。本次保持服务启停语义和北向协议不变，不将 CI 问题当作目标机串口反复断连的根因。"
+
+
+[[change_records]]
+id = "2026-09-24-release-workflow-gates-and-logs"
+date = "2026-09-24"
+scope = "application_release_workflow"
+summary = "新增应用版本门禁、32 目标发布结果与日志、合格包汇总校验、不可变 tag 和 draft GitHub Release 发布流程；缺少正式安装包输入时阻止发布。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求根据发布工作流 PRD 实施和补充日志；本次仅改变软件构建与发布流程，不改变已发布或预发布北向报文语义。正式安装包输入与多架构真机验收仍待补齐。"
+
+[[change_records]]
+id = "2026-10-09-pr14-serial-permissions-and-artifact-first-release"
+date = "2026-10-09"
+scope = "native_package_installation_and_release_workflow"
+summary = "修复原生 DEB/RPM 服务账户遗漏 USB TTY 实际所属组授权；发布改为总 ZIP 上传 Actions Artifact 并回下载核对上传前 SHA-256 与内容后再打 tag、公开 Release；发布门禁以带总 ZIP 的正式公开 Release 为成功基线，首次沿版本历史定位，允许孤立 tag/draft 失败后的同提交重试。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确授权修复审查 #3，并确认 #4 以 Actions Artifact 上传及校验成功为打 tag 前提；#5 解释并消除仅凭 tag 判定成功及 HEAD^ 首发误判。仅改变部署授权及 CI 发布行为，不修改应用版本或已锁定、预发布北向协议；模拟回归不替代银河麒麟 V10 x86_64 原生包和真实采集验收，审查 #6 继续暂缓。"
+
+[[change_records]]
+id = "2026-10-09-pr14-runtime-links-and-release-retry-reuse"
+date = "2026-10-09"
+scope = "native_package_runtime_and_release_retry"
+summary = "修复第二轮复审 #3：麒麟原生包两次复制均保留运行时相对符号链接，拒绝包外、绝对及断链，摘要包含链接目标；修复 #4：发布续跑校验并复用此前上传的总 ZIP，避免 PDF 时间元数据造成同名资产摘要冲突，同提交工作流串行。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确授权修复第二轮复审 #3、#4。仅修改 CI 打包与发布重试，不修改应用版本或北向报文；复审 #1、#2 和原审查 #6 未修复。源码回归不替代银河麒麟 V10 x86_64 原生包及真实采集验收。"

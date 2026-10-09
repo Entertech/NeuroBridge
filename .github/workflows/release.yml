@@ -1,0 +1,402 @@
+name: Release
+
+# Packaging is deliberately kept out of the pull-request pipeline: a PR only
+# validates, it never produces a package.  There are exactly two ways in:
+#
+#   * after the "Test" workflow completes successfully on master, so a release
+#     stays gated on the test suite without putting the release jobs back into
+#     ci.yml; and
+#   * a manual dispatch, which packages the latest commit of any branch.
+#
+# `workflow_run` reports the default-branch tip in github.sha, so every
+# reference to the source commit goes through SOURCE_SHA / SOURCE_BRANCH.
+#
+# A workflow_run fires for *every* completion of "Test" — a failed run and a
+# hand-dispatched run included — so release-plan gates on a push-triggered,
+# successful run.  Every other packaging job hangs off release-plan, which
+# propagates that guard (a skipped job yields empty outputs) and keeps a push
+# that needs no release from producing anything.
+on:
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      native_input_run_id:
+        description: "源码原生安装包 Workflow 的 Run ID；未填写时安装包输入记为 blocked"
+        required: false
+        type: string
+      external_document_mode:
+        description: "candidate 仅生成内部候选包；publish 仅允许所有打包源文档已发布并锁定时生成正式 ZIP。"
+        required: false
+        default: publish
+        type: choice
+        options:
+          - publish
+          - candidate
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+
+concurrency:
+  group: release-source-${{ github.repository }}-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  external-documents:
+    name: Build the external document package
+    # Hangs off release-plan, so a failed Test run, a hand-dispatched Test run
+    # and a push that needs no release all skip it without repeating the guard.
+    needs: [release-plan]
+    if: needs.release-plan.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.lock
+      - run: python -m pip install --no-deps -e .
+      - run: bash tools/check-external-protocol.sh
+      - name: Detect unpublished external documents
+        id: external-document-state
+        run: |
+          state="$(python tools/mark-external-documents-published.py --check)"
+          test "$state" = true || test "$state" = false
+          echo "has_unpublished=$state" >> "$GITHUB_OUTPUT"
+      - name: Require publication state before release
+        if: steps.external-document-state.outputs.has_unpublished == 'true' && (github.event_name == 'workflow_run' || inputs.external_document_mode == 'publish')
+        run: |
+          echo "External documents must be promoted and locked before a release package is built." >&2
+          echo "Run: python3 tools/mark-external-documents-published.py --date YYYY-MM-DD" >&2
+          exit 1
+      - name: Install protocol PDF renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
+          fc-cache -f
+          fc-match "Noto Sans CJK SC" | grep -Eqi "Noto.*CJK"
+      - name: Build external document PDF package and page previews
+        env:
+          EXTERNAL_DOCUMENT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.external_document_mode || 'publish' }}
+        run: |
+          mkdir -p artifacts/document-preview "$RUNNER_TEMP/external-document-pdfs"
+          python tools/build-external-document-package.py \
+            --output-dir artifacts \
+            --pdf-dir "$RUNNER_TEMP/external-document-pdfs" \
+            --mode "$EXTERNAL_DOCUMENT_MODE"
+          test -s artifacts/neurobridge-external-documents.zip
+          test -s artifacts/release-manifest.json
+          find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' -print0 | while IFS= read -r -d '' pdf_path; do
+            pdfinfo "$pdf_path"
+            pdffonts "$pdf_path" | grep -Eqi "Noto.*CJK|NotoSansCJK"
+            name=$(basename "$pdf_path" .pdf)
+            pdftoppm -png -r 144 "$pdf_path" "artifacts/document-preview/$name"
+          done
+          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: external-document-package
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  product-candidates:
+    name: Unsigned ${{ matrix.platform }} product candidate
+    needs: [release-plan]
+    if: needs.release-plan.outputs.should_release == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: kylin
+            runner: ubuntu-latest
+          - platform: windows
+            runner: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Assemble installable Windows runtime
+        if: matrix.platform == 'windows'
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-windows-candidate-runtime.ps1
+      - name: Build unsigned candidate and metadata
+        shell: bash
+        run: |
+          runtime_args=()
+          if [[ "${{ matrix.platform }}" == "windows" ]]; then
+            runtime_args=(--runtime-dir artifacts/windows-runtime)
+          fi
+          python tools/build-product-candidate.py --platform ${{ matrix.platform }} --output-dir artifacts --require-clean "${runtime_args[@]}"
+      - name: Upload unsigned candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: neurobridge-${{ matrix.platform }}-unsigned-candidate
+          path: |
+            artifacts/*.zip
+            artifacts/*.tar.gz
+            artifacts/*.sha256
+            artifacts/*.release-manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+  release-plan:
+    name: Release version gate and 32-target plan
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-22.04
+    outputs:
+      should_release: ${{ steps.plan.outputs.should_release }}
+      version: ${{ steps.plan.outputs.version }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate application version and plan targets
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A tag/draft left by a failed attempt is not a successful release.
+          # Before the first public release, inspect the full version history.
+          python tools/release_pipeline.py gate --repository "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/release-gate.json"
+          python tools/release_pipeline.py plan --output "$RUNNER_TEMP/release-matrix.json" > "$RUNNER_TEMP/release-matrix.log"
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          from pathlib import Path
+          directory = Path(os.environ['RUNNER_TEMP'])
+          gate = json.loads((directory / 'release-gate.json').read_text())
+          matrix = json.loads((directory / 'release-matrix.json').read_text())
+          print('should_release=' + str(gate['shouldRelease']).lower())
+          print('version=' + gate['applicationVersion'])
+          print('matrix=' + json.dumps(matrix, separators=(',', ':')))
+          PY
+      - name: Explain a run that needs no release
+        # `success()` matters: a gate failure leaves the output unset, and this
+        # step must not claim "no release needed" on top of that failure.
+        if: success() && steps.plan.outputs.should_release != 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          {
+            printf '## No release needed\n\n'
+            printf '`[application].version` is still `%s`, so nothing was packaged.\n\n' "$VERSION"
+            printf 'A push only produces a package once the application version advances. A change to\n'
+            printf 'shipped files without a bump fails the gate instead of being skipped here.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf '::notice title=release skipped::application version is still %s; nothing was packaged\n' "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-plan-${{ env.SOURCE_SHA }}
+          path: |
+            ${{ runner.temp }}/release-gate.json
+            ${{ runner.temp }}/release-matrix.json
+          if-no-files-found: error
+          retention-days: 30
+
+  release-targets:
+    name: Release target ${{ matrix.id }}
+    needs: [release-plan, external-documents]
+    if: needs.release-plan.outputs.should_release == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.release-plan.outputs.matrix) }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Retrieve approved offline target input
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_RUN_ID: ${{ inputs.native_input_run_id }}
+          TARGET_ID: ${{ matrix.id }}
+          EXPECTED_SOURCE_SHA: ${{ env.SOURCE_SHA }}
+          EXPECTED_BRANCH: ${{ env.SOURCE_BRANCH }}
+        run: |
+          mkdir -p "artifacts/targets/$TARGET_ID"
+          if [[ -z "$INPUT_RUN_ID" ]]; then
+            printf '%s\n' 'blocked: native_input_run_id was not provided; specify it when manually dispatching Release' > "artifacts/targets/$TARGET_ID/input-fetch.log"
+          else
+            if gh run view "$INPUT_RUN_ID" --json headSha,headBranch,conclusion > "$RUNNER_TEMP/release-input-run.json" 2> "artifacts/targets/$TARGET_ID/input-fetch.log" && \
+              python -c 'import json,os,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("headSha")==os.environ["EXPECTED_SOURCE_SHA"] and d.get("headBranch")==os.environ["EXPECTED_BRANCH"] and d.get("conclusion")=="success" else 1)' "$RUNNER_TEMP/release-input-run.json"; then
+              if gh run download "$INPUT_RUN_ID" --name "neurobridge-input-$TARGET_ID" --dir "$RUNNER_TEMP/release-inputs/$TARGET_ID" >> "artifacts/targets/$TARGET_ID/input-fetch.log" 2>&1; then
+                printf '%s\n' 'offline input retrieval completed from successful run at this source commit' >> "artifacts/targets/$TARGET_ID/input-fetch.log"
+              else
+                printf '%s\n' 'blocked: approved offline input artifact unavailable' >> "artifacts/targets/$TARGET_ID/input-fetch.log"
+                [[ -n "$RUNNER_TEMP" && -n "$TARGET_ID" ]]
+                rm -rf -- "$RUNNER_TEMP/release-inputs/$TARGET_ID"
+              fi
+            else
+              printf '%s\n' 'blocked: input run is unavailable or does not match successful source commit and branch' >> "artifacts/targets/$TARGET_ID/input-fetch.log"
+            fi
+          fi
+      - name: Verify target package and write result log
+        shell: bash
+        env:
+          TARGET_ID: ${{ matrix.id }}
+        run: |
+          python tools/release_pipeline.py target \
+            --target "$TARGET_ID" \
+            --input-root "$RUNNER_TEMP/release-inputs" \
+            --output-root artifacts/targets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-target-${{ matrix.id }}
+          path: artifacts/targets/
+          if-no-files-found: error
+          retention-days: 30
+
+  release-aggregate:
+    name: Verify packages and assemble one release ZIP
+    needs: [release-plan, release-targets]
+    if: always() && needs.release-plan.outputs.should_release == 'true' && needs.release-targets.result == 'success'
+    runs-on: ubuntu-22.04
+    outputs:
+      archive_sha256: ${{ steps.bundle.outputs.archive_sha256 }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-target-*
+          path: artifacts/targets
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: external-document-package
+          path: artifacts/documents
+      - name: Check all target results and produce verified ZIP
+        env:
+          # `push_master` is the only trigger that enforces the minimum-package
+          # gate, so a manual branch build is deliberately the relaxed mode.
+          RELEASE_TRIGGER: ${{ github.event_name == 'workflow_run' && 'push_master' || 'pull_request' }}
+        run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER"
+      - name: Assemble one user-facing release bundle
+        id: bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/build-release-bundle.py \
+            --release-dir artifacts/release \
+            --documents-dir artifacts/documents \
+            --output artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
+            python -m tools.publish_release --reuse-bundle artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
+          fi
+          printf 'archive_sha256=%s\n' "$(sha256sum artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: verified-release-${{ env.SOURCE_SHA }}
+          path: artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  release-publish:
+    name: Publish verified release
+    needs: [release-plan, release-aggregate]
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && needs.release-aggregate.result == 'success'
+    runs-on: ubuntu-22.04
+    concurrency:
+      group: release-${{ github.repository }}-${{ needs.release-plan.outputs.version }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.release-aggregate.outputs.artifact_id }}
+          merge-multiple: true
+          path: artifacts/release
+      - name: Verify uploaded Artifact, create tag and publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.release-aggregate.outputs.archive_sha256 }}
+        run: python -m tools.publish_release --dir artifacts/release --expected-sha256 "$EXPECTED_ARCHIVE_SHA256"
+
+  release-cleanup:
+    name: Keep only the user-facing release artifact
+    needs: [release-plan, release-aggregate, release-publish, product-candidates]
+    if: always() && needs.release-aggregate.result == 'success'
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Delete intermediate artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_ARTIFACT: verified-release-${{ env.SOURCE_SHA }}
+        run: |
+          gh api --paginate \
+            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" \
+            --jq '.artifacts[] | [.id, .name] | @tsv' |
+          while IFS=$'\t' read -r artifact_id artifact_name; do
+            if [[ "$artifact_name" != "$KEEP_ARTIFACT" ]]; then
+              gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
+            fi
+          done
+
+  report-skipped:
+    name: Explain why nothing was packaged
+    # Without this the run page is a wall of skipped jobs with no stated reason.
+    if: github.event_name == 'workflow_run' && !(github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report the triggering run
+        env:
+          TEST_RUN_ID: ${{ github.event.workflow_run.id }}
+          TEST_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          TEST_EVENT: ${{ github.event.workflow_run.event }}
+          TEST_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          if [[ "$TEST_CONCLUSION" != "success" ]]; then
+            reason="the triggering Test run concluded $TEST_CONCLUSION"
+          else
+            reason="the triggering Test run was a $TEST_EVENT run rather than a push to master"
+          fi
+          {
+            printf '## No package was built\n\n'
+            printf 'Because %s, every packaging job was skipped.\n\n' "$reason"
+            printf 'Triggering run: [%s](%s)\n' "$TEST_RUN_ID" "$TEST_RUN_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf '::notice title=release skipped::%s; nothing was packaged\n' "$reason"

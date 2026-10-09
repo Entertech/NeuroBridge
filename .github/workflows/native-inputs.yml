@@ -1,0 +1,313 @@
+name: Build native release inputs
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "源码分支、提交或标签；发布时必须与目标提交一致"
+        required: true
+        default: master
+        type: string
+      platforms:
+        description: "available 构建 Windows 和已注册的麒麟 x86_64；windows 仅构建 Windows；all 排队全部麒麟架构"
+        required: true
+        default: available
+        type: choice
+        options:
+          - available
+          - windows
+          - all
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows native input ${{ matrix.id }}
+    if: inputs.platforms == 'available' || inputs.platforms == 'windows'
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Buildable: GitHub-hosted windows-2022 with the locked Python 3.11 x64 runtime.
+          - id: windows-10-x86_64-exe
+            blocked_reason: ""
+          - id: windows-10-x86_64-msi
+            blocked_reason: ""
+          - id: windows-11-x86_64-exe
+            blocked_reason: ""
+          - id: windows-11-x86_64-msi
+            blocked_reason: ""
+          # Blocked. Every declared target still runs and records why it produced no
+          # installer, so the release manifest can report a real reason per target.
+          - id: windows-7-x86_64-exe
+            blocked_reason: "Windows 7 requires the separate Python 3.8 compatibility port because Python 3.9+ dropped Windows 7 support; the current source build only provides the 3.11 runtime"
+          - id: windows-7-x86_64-msi
+            blocked_reason: "Windows 7 requires the separate Python 3.8 compatibility port because Python 3.9+ dropped Windows 7 support; the current source build only provides the 3.11 runtime"
+          - id: windows-7-x86-exe
+            blocked_reason: "Windows 7 requires the separate Python 3.8 compatibility port because Python 3.9+ dropped Windows 7 support, and Windows x86 requires a 32-bit algorithm build chain"
+          - id: windows-7-x86-msi
+            blocked_reason: "Windows 7 requires the separate Python 3.8 compatibility port because Python 3.9+ dropped Windows 7 support, and Windows x86 requires a 32-bit algorithm build chain"
+          - id: windows-10-x86-exe
+            blocked_reason: "Windows x86 requires a 32-bit algorithm build chain; the locked AffectiveCloud-Algorithm-SDK, its windows_x86_64 Eigen pin and the llvm-mingw x86_64 toolchain only produce AMD64 PE binaries, so no 32-bit neurobridge_affective_bridge.exe can be built"
+          - id: windows-10-x86-msi
+            blocked_reason: "Windows x86 requires a 32-bit algorithm build chain; the locked AffectiveCloud-Algorithm-SDK, its windows_x86_64 Eigen pin and the llvm-mingw x86_64 toolchain only produce AMD64 PE binaries, so no 32-bit neurobridge_affective_bridge.exe can be built"
+          - id: windows-11-x86-exe
+            blocked_reason: "Windows x86 requires a 32-bit algorithm build chain; the locked AffectiveCloud-Algorithm-SDK, its windows_x86_64 Eigen pin and the llvm-mingw x86_64 toolchain only produce AMD64 PE binaries, so no 32-bit neurobridge_affective_bridge.exe can be built"
+          - id: windows-11-x86-msi
+            blocked_reason: "Windows x86 requires a 32-bit algorithm build chain; the locked AffectiveCloud-Algorithm-SDK, its windows_x86_64 Eigen pin and the llvm-mingw x86_64 toolchain only produce AMD64 PE binaries, so no 32-bit neurobridge_affective_bridge.exe can be built"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+      - name: Prepare artifact directory
+        shell: powershell
+        run: New-Item -ItemType Directory -Force -Path artifacts\input | Out-Null
+      - uses: actions/setup-python@v5
+        if: matrix.blocked_reason == ''
+        with:
+          python-version: "3.11"
+          architecture: x64
+      - name: Prepare the locked Windows runtime
+        if: matrix.blocked_reason == ''
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-windows-candidate-runtime.ps1
+      - name: Install the unsigned WiX build tool
+        if: matrix.blocked_reason == ''
+        shell: powershell
+        run: |
+          dotnet tool install --global wix --version 7.0.0
+          "${env:USERPROFILE}\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          wix eula accept wix7
+          wix extension add WixToolset.BootstrapperApplications.wixext/7.0.0 --global
+          wix --version
+      - name: Build native installer from source
+        id: build
+        if: matrix.blocked_reason == ''
+        shell: powershell
+        run: |
+          python tools\build-native-package.py `
+            --target "${{ matrix.id }}" `
+            --runtime-dir artifacts\windows-runtime `
+            --output-dir artifacts\input
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Record blocked target
+        if: matrix.blocked_reason != ''
+        shell: powershell
+        env:
+          BLOCKED_REASON: ${{ matrix.blocked_reason }}
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts\input | Out-Null
+          "blocked: $env:BLOCKED_REASON" | Set-Content artifacts\input\blocked.log
+      # A target that produces no installer must not leave its reason only inside
+      # a few-hundred-byte artifact: the run page is what people actually read.
+      # The record is written as key=value lines so the summarising job can turn
+      # every target into one message without re-downloading the packages.
+      - name: Record the target outcome
+        if: always()
+        shell: powershell
+        env:
+          TARGET_ID: ${{ matrix.id }}
+          DECLARED_BLOCKER: ${{ matrix.blocked_reason }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+        run: |
+          $outcome = 'built'
+          $reason = 'native package produced and validated'
+          if ($env:DECLARED_BLOCKER -ne '') {
+            $outcome = 'blocked'
+            $reason = $env:DECLARED_BLOCKER
+          } elseif ($env:BUILD_OUTCOME -eq 'failure') {
+            $outcome = 'failed'
+            $reason = 'native package build failed'
+          } elseif (-not (Test-Path artifacts\input\verification.json)) {
+            $outcome = 'failed'
+            $reason = 'build did not produce a package'
+          }
+          New-Item -ItemType Directory -Force -Path status | Out-Null
+          $record = "target=$($env:TARGET_ID)`noutcome=$outcome`nreason=$reason`n"
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [IO.File]::WriteAllText((Join-Path $PWD "status/status-$($env:TARGET_ID).txt"), $record, $utf8)
+          Copy-Item "status/status-$($env:TARGET_ID).txt" artifacts\input\status.txt -Force
+          @("#### $($env:TARGET_ID)", "", "- outcome: ``$outcome``", "- reason: $reason", "") |
+            Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          if ($outcome -eq 'failed') {
+            Write-Host "::error title=$($env:TARGET_ID)::$reason"
+          } elseif ($outcome -eq 'blocked') {
+            Write-Host "::notice title=$($env:TARGET_ID)::$reason"
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: neurobridge-input-${{ matrix.id }}
+          path: artifacts/input/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: neurobridge-status-${{ matrix.id }}
+          path: status/
+          if-no-files-found: warn
+          retention-days: 30
+
+  kylin:
+    name: Kylin native input ${{ matrix.id }}
+    if: inputs.platforms == 'all' || inputs.platforms == 'available'
+    # The runner must be a target-compatible Kylin V10 machine or a runner
+    # with the approved cross toolchain and sysroot for this architecture.
+    runs-on:
+      - self-hosted
+      - kylin-v10
+      - ${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.platforms == 'all' && '[{"id":"kylin-server-x86_64-deb","architecture":"x86_64"},{"id":"kylin-server-x86_64-rpm","architecture":"x86_64"},{"id":"kylin-desktop-x86_64-deb","architecture":"x86_64"},{"id":"kylin-desktop-x86_64-rpm","architecture":"x86_64"},{"id":"kylin-server-arm64-deb","architecture":"arm64"},{"id":"kylin-server-arm64-rpm","architecture":"arm64"},{"id":"kylin-server-loongarch64-deb","architecture":"loongarch64"},{"id":"kylin-server-loongarch64-rpm","architecture":"loongarch64"},{"id":"kylin-server-mips64el-deb","architecture":"mips64el"},{"id":"kylin-server-mips64el-rpm","architecture":"mips64el"},{"id":"kylin-server-sw64-deb","architecture":"sw64"},{"id":"kylin-server-sw64-rpm","architecture":"sw64"},{"id":"kylin-desktop-arm64-deb","architecture":"arm64"},{"id":"kylin-desktop-arm64-rpm","architecture":"arm64"},{"id":"kylin-desktop-loongarch64-deb","architecture":"loongarch64"},{"id":"kylin-desktop-loongarch64-rpm","architecture":"loongarch64"},{"id":"kylin-desktop-mips64el-deb","architecture":"mips64el"},{"id":"kylin-desktop-mips64el-rpm","architecture":"mips64el"},{"id":"kylin-desktop-sw64-deb","architecture":"sw64"},{"id":"kylin-desktop-sw64-rpm","architecture":"sw64"}]' || '[{"id":"kylin-server-x86_64-deb","architecture":"x86_64"},{"id":"kylin-server-x86_64-rpm","architecture":"x86_64"},{"id":"kylin-desktop-x86_64-deb","architecture":"x86_64"},{"id":"kylin-desktop-x86_64-rpm","architecture":"x86_64"}]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+      - name: Build the native Kylin installer from source
+        id: build
+        env:
+          RUNTIME_DIR: ${{ vars.NEUROBRIDGE_KYLIN_RUNTIME_ROOT }}/${{ matrix.id }}/runtime
+        run: |
+          set -uo pipefail
+          mkdir -p artifacts/input
+          {
+            printf 'target=%s\n' "${{ matrix.id }}"
+            printf 'runtime_dir=%s\n' "$RUNTIME_DIR"
+            uname -a || true
+            id || true
+            command -v getstatus >/dev/null 2>&1 && getstatus || true
+          } > artifacts/input/diagnostics.log 2>&1
+          if [ ! -d "$RUNTIME_DIR" ]; then
+            printf '%s\n' "blocked: NEUROBRIDGE_KYLIN_RUNTIME_ROOT does not contain ${{ matrix.id }}/runtime" > artifacts/input/blocked.log
+            exit 0
+          fi
+          # The staged runtime is the only interpreter that satisfies the
+          # repository's Python 3.11 requirement; the system python3 is older.
+          interpreter="$RUNTIME_DIR/bin/python"
+          if [ ! -x "$interpreter" ]; then
+            printf '%s\n' "blocked: ${{ matrix.id }}/runtime does not provide an executable bin/python" > artifacts/input/blocked.log
+            exit 0
+          fi
+          "$interpreter" --version >> artifacts/input/diagnostics.log 2>&1 || true
+          if ! "$interpreter" tools/build-native-package.py \
+              --target "${{ matrix.id }}" \
+              --runtime-dir "$RUNTIME_DIR" \
+              --output-dir artifacts/input > artifacts/input/build.log 2>&1; then
+            {
+              printf '%s\n' "blocked: native package build failed for ${{ matrix.id }}"
+              tail -n 60 artifacts/input/build.log 2>/dev/null || true
+            } > artifacts/input/blocked.log
+            rm -f artifacts/input/build.log
+          else
+            rm -f artifacts/input/build.log
+          fi
+      - name: Capture the security state if the build failed
+        if: always()
+        run: |
+          set -uo pipefail
+          [ -f artifacts/input/blocked.log ] || exit 0
+          grep -q 'native package build failed' artifacts/input/blocked.log || exit 0
+          # A failed rpmbuild is reported as "blocked" so the matrix keeps a real
+          # reason per target, which also hides the cause behind a green job.
+          # Record what the security modules were doing at that moment, because
+          # the same machine has produced both a passing and a failing RPM build
+          # with an identical KYSEC setting.
+          {
+            printf '\n--- security state when the build failed\n'
+            command -v getstatus >/dev/null 2>&1 && getstatus 2>&1 || true
+            printf '\n--- rpm temp scripts left behind\n'
+            ls -la /var/tmp/rpm-tmp.* 2>&1 || true
+            for f in /var/tmp/rpm-tmp.*; do
+              [ -e "$f" ] || continue
+              stat -c 'mode=%A (%a) uid=%U size=%s mtime=%y' "$f" 2>&1 || true
+              command -v getfattr >/dev/null 2>&1 && getfattr -d -m - "$f" 2>&1 || true
+            done
+            printf '\n--- kysec records\n'
+            dmesg -T 2>/dev/null | grep -iE 'kysec|ksip' | tail -20 || true
+            journalctl -k -n 80 --no-pager 2>/dev/null | grep -iE 'kysec|denied' || true
+          } >> artifacts/input/blocked.log 2>&1
+          exit 0
+      # See the Windows job: the reason must be readable on the run page, not
+      # only inside the artifact.  A missing runtime is a declared blocker; a
+      # failed rpmbuild is not, and is reported as such.
+      - name: Record the target outcome
+        if: always()
+        env:
+          TARGET_ID: ${{ matrix.id }}
+        run: |
+          set -uo pipefail
+          outcome=built
+          reason='native package produced and validated'
+          if [ -f artifacts/input/blocked.log ]; then
+            if grep -q 'native package build failed' artifacts/input/blocked.log; then
+              outcome=failed
+              reason=$(grep -m1 'native package build failed' artifacts/input/blocked.log | cut -c1-400)
+            else
+              outcome=blocked
+              reason=$(head -n 1 artifacts/input/blocked.log | cut -c1-400)
+            fi
+          elif [ ! -f artifacts/input/verification.json ]; then
+            outcome=failed
+            reason='build did not produce a package'
+          fi
+          mkdir -p status
+          printf 'target=%s\noutcome=%s\nreason=%s\n' "$TARGET_ID" "$outcome" "$reason" > "status/status-$TARGET_ID.txt"
+          cp "status/status-$TARGET_ID.txt" artifacts/input/status.txt
+          {
+            printf '#### %s\n\n' "$TARGET_ID"
+            printf -- '- outcome: `%s`\n' "$outcome"
+            printf -- '- reason: %s\n\n' "$reason"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$outcome" = failed ]; then
+            printf '::error title=%s::%s\n' "$TARGET_ID" "$reason"
+          elif [ "$outcome" = blocked ]; then
+            printf '::notice title=%s::%s\n' "$TARGET_ID" "$reason"
+          fi
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: neurobridge-input-${{ matrix.id }}
+          path: artifacts/input/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: neurobridge-status-${{ matrix.id }}
+          path: status/
+          if-no-files-found: warn
+          retention-days: 30
+
+  summarize-inputs:
+    name: Summarize the release input
+    # Runs even when a platform job fails: the record is most valuable exactly
+    # then.  The per-target records are a few hundred bytes each, so this job
+    # never downloads the packages themselves.
+    needs: [windows, kylin]
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      # The renderer comes from the ref that runs the workflow, not from
+      # source_ref, so the record format always matches the workflow itself.
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: neurobridge-status-*
+          path: statuses
+      - name: Render the run record
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -uo pipefail
+          record=$(tools/render-input-summary.sh statuses)
+          printf '%s\n' "$record" | tee -a "$GITHUB_STEP_SUMMARY"
+          case "$record" in
+            *"【失败】"*) printf '::error title=release input::本次输入存在构建失败的目标，记录见上方\n' ;;
+          esac

@@ -25,6 +25,12 @@ PUBLISHABLE_DOCUMENTS = (
         "scope": "external_wired_network_operations_document",
         "summary": "发布头环数据网关有线网络配置指南。",
     },
+    {
+        "key": "external_windows_operations",
+        "slug": "windows-operations",
+        "scope": "external_windows_operations_document",
+        "summary": "发布数据网关 Windows 部署与使用指南。",
+    },
 )
 UNPUBLISHED_STATUS = "状态：未发布（评审稿）"
 PUBLISHED_STATUS = "状态：已发布"
@@ -105,8 +111,8 @@ def promote_external_documents(release_date: str) -> bool:
         registry_text = replace_in_section(
             registry_text,
             spec["key"],
-            'status = "unpublished"\naudience = "operator"',
-            'status = "published"\naudience = "operator"',
+            f'status = "unpublished"\naudience = "{document["audience"]}"',
+            f'status = "published"\naudience = "{document["audience"]}"',
             f"{spec['key']} registry status",
         )
         registry_text = replace_in_section(

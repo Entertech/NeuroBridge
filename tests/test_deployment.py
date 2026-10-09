@@ -268,7 +268,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("7. 导出完整诊断包", menu_result.stdout)
         self.assertIn("8. 一键检查网关服务与 capture 页面", menu_result.stdout)
         self.assertIn("9. 配置自启/非自启", menu_result.stdout)
-        self.assertIn("请输入选项 [0-9]", menu_result.stdout)
+        self.assertIn("10. 一键退出（停服务并移除源码）", menu_result.stdout)
+        self.assertIn("请输入选项 [0-10]", menu_result.stdout)
 
         self.assertIn('[[ ${EUID:-$(id -u)} -ne 0 ]]', script)
         self.assertIn("Run without sudo", script)
@@ -315,6 +316,308 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('"$root_dir/linux/setup-kylin-autostart.sh" enable', script)
         self.assertIn('"$root_dir/linux/setup-kylin-autostart.sh" status', script)
         self.assertIn('"$root_dir/linux/setup-kylin-autostart.sh" disable', script)
+        self.assertIn("一键退出（移除开机自启与源码）", script)
+        self.assertIn('uninstall_script="$root_dir/linux/uninstall-kylin-project.sh"', script)
+        self.assertIn('"$uninstall_script" uninstall', script)
+        self.assertIn('"$uninstall_script" purge', script)
+        self.assertIn("retire_removed_source", script)
+
+    def test_kylin_uninstall_helper_removes_only_its_own_managed_unit(self) -> None:
+        script_path = ROOT / "linux" / "uninstall-kylin-project.sh"
+        script = script_path.read_text(encoding="utf-8")
+        self.assertTrue(os.access(script_path, os.X_OK))
+
+        syntax = subprocess.run(
+            ["bash", "-n", str(script_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+        help_result = subprocess.run(
+            ["bash", str(script_path), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("status", help_result.stdout)
+        self.assertIn("uninstall", help_result.stdout)
+        self.assertIn("purge", help_result.stdout)
+        self.assertIn("Run as the normal desktop user, not with sudo", help_result.stdout)
+
+        no_action = subprocess.run(
+            ["bash", str(script_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(no_action.returncode, 2)
+
+        unknown = subprocess.run(
+            ["bash", str(script_path), "delete"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(unknown.returncode, 1)
+        self.assertIn("Unknown argument", unknown.stderr)
+
+        self.assertIn('unit_path="/etc/systemd/system/$unit_name"', script)
+        self.assertIn("managed_marker=", script)
+        self.assertIn("拒绝停止或删除", script)
+        self.assertIn("的 ExecStart 不指向本项目", script)
+        self.assertIn("Refusing to delete a path this shallow", script)
+        self.assertIn("Refusing to delete a system directory", script)
+        self.assertIn("Refusing to delete the home directory", script)
+        self.assertIn("Refusing to delete through a symlink", script)
+        self.assertIn("--one-file-system", script)
+        self.assertIn("neurobridge-backup-", script)
+        self.assertIn("Run without sudo", script)
+        # The destructive confirmation must be a typed word, not a bare yes/no.
+        self.assertIn('confirm_typed "确认继续？" "DELETE"', script)
+        # Deleting the checkout must happen from a staging copy, never from the
+        # script that is currently executing inside that checkout.
+        self.assertIn("__remove-checkout", script)
+        self.assertIn('exec bash "$staging/self.sh" __remove-checkout', script)
+
+    def test_kylin_uninstall_helper_purges_a_checkout_end_to_end(self) -> None:
+        """Exercise the real purge path in a sandbox with stubbed system tools."""
+        script_source = (ROOT / "linux" / "uninstall-kylin-project.sh").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as raw:
+            sandbox = Path(raw)
+            stub_dir = sandbox / "stub"
+            stub_dir.mkdir()
+            # The sandbox has no systemd and no Galaxy Kylin release file, so the
+            # two host gates are neutralised; everything else stays untouched.
+            patched = script_source
+            for gate in (
+                '[[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."',
+                ". /etc/os-release",
+                '[[ ${ID,,} == kylin ]] || fail "This helper requires Galaxy Kylin; detected ID=${ID:-unknown}."',
+                '[[ $(uname -m) == x86_64 ]] || fail "This deployment requires x86_64; detected $(uname -m)."',
+            ):
+                self.assertIn(gate, patched)
+                patched = patched.replace(gate, ":")
+            self.assertNotIn("/etc/os-release", patched)
+
+            project = sandbox / "project"
+            (project / "linux").mkdir(parents=True)
+            (project / ".git").mkdir()
+            (project / ".runtime" / "config").mkdir(parents=True)
+            (project / ".runtime" / "recordings").mkdir(parents=True)
+            (project / ".runtime" / "logs").mkdir(parents=True)
+            (project / "pyproject.toml").write_text("", encoding="utf-8")
+            (project / "linux" / "start-kylin-gateway.sh").write_text("", encoding="utf-8")
+            (project / ".runtime" / "config" / "gateway.toml").write_text(
+                'data_source.type = "serial"\n', encoding="utf-8"
+            )
+            (project / ".runtime" / "recordings" / "session-1.dat").write_text(
+                "RECORDING", encoding="utf-8"
+            )
+            script_path = project / "linux" / "uninstall-kylin-project.sh"
+            script_path.write_text(patched, encoding="utf-8")
+            script_path.chmod(0o755)
+
+            (stub_dir / "sudo").write_text('#!/bin/sh\nexec "$@"\n', encoding="utf-8")
+            (stub_dir / "systemctl").write_text(
+                '#!/bin/sh\ncase "$1" in cat|is-enabled|is-active) exit 1;; esac\nexit 0\n',
+                encoding="utf-8",
+            )
+            for stub in ("sudo", "systemctl"):
+                (stub_dir / stub).chmod(0o755)
+
+            backup_dir = sandbox / "backup"
+            backup_dir.mkdir()
+            environment = dict(os.environ)
+            environment["PATH"] = f"{stub_dir}{os.pathsep}{environment['PATH']}"
+
+            result = subprocess.run(
+                ["bash", str(script_path), "purge", "--yes", "--backup-dir", str(backup_dir)],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("sourceCheckout=removed", result.stdout)
+            self.assertFalse(project.exists(), "purge must delete the source checkout")
+
+            archives = list(backup_dir.glob("neurobridge-backup-*.tar.gz"))
+            self.assertEqual(len(archives), 1, result.stdout)
+            listing = subprocess.run(
+                ["tar", "-tzf", str(archives[0])],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(listing.returncode, 0, listing.stderr)
+            self.assertIn("config/gateway.toml", listing.stdout)
+            self.assertIn("recordings/session-1.dat", listing.stdout)
+
+            # The staging copy must not survive the run.
+            leftovers = list(Path(tempfile.gettempdir()).glob("neurobridge-purge.*"))
+            self.assertEqual(leftovers, [], f"staging copies left behind: {leftovers}")
+
+    def test_kylin_uninstall_helper_refuses_cancelled_purge(self) -> None:
+        """A wrong typed confirmation must leave the checkout untouched."""
+        script_source = (ROOT / "linux" / "uninstall-kylin-project.sh").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as raw:
+            sandbox = Path(raw)
+            stub_dir = sandbox / "stub"
+            stub_dir.mkdir()
+            patched = script_source
+            for gate in (
+                '[[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."',
+                ". /etc/os-release",
+                '[[ ${ID,,} == kylin ]] || fail "This helper requires Galaxy Kylin; detected ID=${ID:-unknown}."',
+                '[[ $(uname -m) == x86_64 ]] || fail "This deployment requires x86_64; detected $(uname -m)."',
+            ):
+                patched = patched.replace(gate, ":")
+
+            project = sandbox / "project"
+            (project / "linux").mkdir(parents=True)
+            (project / ".git").mkdir()
+            (project / ".runtime" / "config").mkdir(parents=True)
+            (project / "pyproject.toml").write_text("", encoding="utf-8")
+            (project / "linux" / "start-kylin-gateway.sh").write_text("", encoding="utf-8")
+            script_path = project / "linux" / "uninstall-kylin-project.sh"
+            script_path.write_text(patched, encoding="utf-8")
+            script_path.chmod(0o755)
+
+            (stub_dir / "sudo").write_text('#!/bin/sh\nexec "$@"\n', encoding="utf-8")
+            (stub_dir / "systemctl").write_text(
+                '#!/bin/sh\ncase "$1" in cat|is-enabled|is-active) exit 1;; esac\nexit 0\n',
+                encoding="utf-8",
+            )
+            for stub in ("sudo", "systemctl"):
+                (stub_dir / stub).chmod(0o755)
+
+            environment = dict(os.environ)
+            environment["PATH"] = f"{stub_dir}{os.pathsep}{environment['PATH']}"
+
+            for answer in ("no\n", "WRONG\n"):
+                result = subprocess.run(
+                    ["bash", str(script_path), "purge", "--backup-dir", str(sandbox)],
+                    input=answer,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    env=environment,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertTrue(project.exists(), f"answer {answer!r} must not delete the checkout")
+                self.assertTrue((project / "pyproject.toml").exists())
+
+    def test_kylin_log_exporter_detects_the_layout_and_bounds_large_logs(self) -> None:
+        """The shipped exporter must serve a checkout and a package alike."""
+        script_path = ROOT / "packaging" / "kylin" / "export-logs.sh"
+        script_source = script_path.read_text(encoding="utf-8")
+        self.assertTrue(os.access(script_path, os.X_OK))
+
+        syntax = subprocess.run(["bash", "-n", str(script_path)], capture_output=True, text=True, check=False)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+        help_result = subprocess.run(
+            ["bash", str(script_path), "--help"], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("--output-dir", help_result.stdout)
+        self.assertIn("--max-log-bytes", help_result.stdout)
+
+        unknown = subprocess.run(
+            ["bash", str(script_path), "--nope"], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(unknown.returncode, 1)
+        self.assertIn("Unknown option", unknown.stderr)
+
+        missing = subprocess.run(
+            ["bash", str(script_path), "--output-dir", "/nonexistent-neurobridge-dir"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(missing.returncode, 1)
+        self.assertIn("does not exist", missing.stderr)
+
+        with tempfile.TemporaryDirectory() as raw:
+            sandbox = Path(raw)
+            checkout = sandbox / "checkout"
+            (checkout / "packaging" / "kylin").mkdir(parents=True)
+            (checkout / ".runtime" / "config").mkdir(parents=True)
+            (checkout / ".runtime" / "logs").mkdir(parents=True)
+            (checkout / "neurobridge").mkdir(parents=True)
+            (checkout / "out").mkdir()
+            (checkout / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+            # A relative directory in the configuration resolves against the
+            # application root, and must not be collected twice.
+            (checkout / ".runtime" / "config" / "gateway.toml").write_text(
+                '[logging]\ndirectory = ".runtime/logs"\nfilename = "neurobridge.log"\n', encoding="utf-8"
+            )
+            (checkout / "neurobridge" / "version_registry.toml").write_text(
+                '[application]\nversion = "9.9.9"\n', encoding="utf-8"
+            )
+            (checkout / ".runtime" / "logs" / "neurobridge.log").write_text("A" * 4096, encoding="utf-8")
+            (checkout / ".runtime" / "logs" / "setup-kylin-algorithm-1.log").write_text(
+                "small\n", encoding="utf-8"
+            )
+            exporter = checkout / "packaging" / "kylin" / "export-logs.sh"
+            exporter.write_text(script_source, encoding="utf-8")
+            exporter.chmod(0o755)
+
+            result = subprocess.run(
+                ["bash", str(exporter), "--output-dir", str(checkout / "out"),
+                 "--no-system", "--no-journal", "--max-log-bytes", "1024"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            archives = list((checkout / "out").glob("neurobridge-logs-*.tar.gz"))
+            self.assertEqual(len(archives), 1, result.stdout)
+            listing = subprocess.run(
+                ["tar", "-tzf", str(archives[0])], capture_output=True, text=True, check=False
+            )
+            self.assertEqual(listing.returncode, 0, listing.stderr)
+            self.assertIn("./manifest.txt", listing.stdout)
+            self.assertIn("neurobridge.log.tail", listing.stdout)
+            self.assertIn("setup-kylin-algorithm-1.log", listing.stdout)
+
+            manifest = subprocess.run(
+                ["tar", "-xzOf", str(archives[0]), "./manifest.txt"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(manifest.returncode, 0, manifest.stderr)
+            self.assertIn("layout: source", manifest.stdout)
+            self.assertIn("applicationVersion: 9.9.9", manifest.stdout)
+            # One log directory, not the same one collected under two spellings.
+            self.assertEqual(manifest.stdout.count("logDirectories:"), 1)
+            self.assertNotIn("stored=tail", manifest.stdout.split("File inventory:")[0])
+
+            # The oversized file is stored as a bounded tail, the small one whole.
+            tail_entries = [line for line in listing.stdout.splitlines() if line.endswith(".tail")]
+            self.assertEqual(len(tail_entries), 1, listing.stdout)
+            stored = subprocess.run(
+                ["tar", "-xzOf", str(archives[0]), tail_entries[0]],
+                capture_output=True, check=False,
+            )
+            self.assertEqual(len(stored.stdout), 1024, "the tail must be bounded to --max-log-bytes")
+            whole_entries = [
+                line for line in listing.stdout.splitlines() if line.endswith("setup-kylin-algorithm-1.log")
+            ]
+            self.assertEqual(len(whole_entries), 1, listing.stdout)
+            whole = subprocess.run(
+                ["tar", "-xzOf", str(archives[0]), whole_entries[0]],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(whole.stdout, "small\n")
+
+            # Configuration contents and recordings must never be included.
+            self.assertNotIn("gateway.toml", listing.stdout)
+            self.assertNotIn("recordings", listing.stdout)
+            self.assertIn("configSha256", manifest.stdout)
 
     def test_kylin_autostart_runs_project_gateway_as_desktop_user(self) -> None:
         script_path = ROOT / "linux" / "setup-kylin-autostart.sh"

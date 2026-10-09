@@ -1,37 +1,40 @@
 name: Test
 
+# This workflow only validates.  Packaging lives in release.yml, which runs
+# after this workflow succeeds on master or on a manual dispatch, so a pull
+# request never produces a package.
 on:
   pull_request:
     branches: [master]
   push:
     branches: [master]
   workflow_dispatch:
-    inputs:
-      protocol_version:
-        description: "可选：额外生成指定北向协议 PDF，例如 0.2 或 v0.2"
-        required: false
-        type: string
-      protocol_stage:
-        description: "额外北向协议 PDF 的阶段；published 为正式对外版本，prerelease 为内部评审稿"
-        required: false
-        default: published
-        type: choice
-        options:
-          - published
-          - prerelease
-      external_document_mode:
-        description: "candidate 仅生成内部候选包；publish 仅允许所有打包源文档已发布并锁定时生成正式 ZIP。"
-        required: false
-        default: candidate
-        type: choice
-        options:
-          - publish
-          - candidate
 
 permissions:
   contents: read
 
 jobs:
+  version-gate:
+    name: Application version gate
+    # release.yml only runs after a push to master, so the gate has to run here
+    # too, or a PR could merge a shipped-file change with no version bump.  This
+    # is a check, not packaging: it produces no artifact.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          # The gate reads the registry with tomllib, which needs Python 3.11;
+          # this runner's default python3 is older.
+          python-version: '3.11'
+      - name: Require a version bump when shipped files change
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python tools/release_pipeline.py gate --base "$BASE_SHA" --output "$RUNNER_TEMP/release-gate.json"
+
   windows-launcher:
     runs-on: windows-2022
     steps:
@@ -46,8 +49,13 @@ jobs:
         run: |
           $tokens = $null
           $parseErrors = $null
-          foreach ($script in @('setup-windows-gateway.ps1', 'diagnose-service.ps1')) {
-            [System.Management.Automation.Language.Parser]::ParseFile("$PWD/windows/$script", [ref]$tokens, [ref]$parseErrors) | Out-Null
+          foreach ($path in @(
+            (Join-Path $PWD 'windows/setup-windows-gateway.ps1'),
+            (Join-Path $PWD 'windows/diagnose-service.ps1'),
+            (Join-Path $PWD 'windows/export-logs.ps1'),
+            (Join-Path $PWD 'tools/prepare-windows-candidate-runtime.ps1')
+          )) {
+            [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null
             if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
           }
       - run: python -m unittest discover -s tests -p test_windows_launcher.py -v
@@ -107,71 +115,3 @@ jobs:
           echo "External documents must be promoted and locked on this PR branch before it can merge." >&2
           echo "Run: python3 tools/mark-external-documents-published.py --date YYYY-MM-DD" >&2
           exit 1
-      - name: Install protocol PDF renderer
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
-          fc-cache -f
-          fc-match "Noto Sans CJK SC" | grep -Eqi "Noto.*CJK"
-      - name: Build external document PDF package and page previews
-        env:
-          EXTERNAL_DOCUMENT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.external_document_mode || (github.event_name == 'push' && github.ref == 'refs/heads/master' && 'publish') || 'candidate' }}
-          PROTOCOL_VERSION: ${{ inputs.protocol_version }}
-          PROTOCOL_STAGE: ${{ inputs.protocol_stage || 'published' }}
-        run: |
-          mkdir -p artifacts/document-preview "$RUNNER_TEMP/external-document-pdfs"
-          python tools/build-external-document-package.py \
-            --output-dir artifacts \
-            --pdf-dir "$RUNNER_TEMP/external-document-pdfs" \
-            --mode "$EXTERNAL_DOCUMENT_MODE"
-          test -s artifacts/neurobridge-external-documents.zip
-          test -s artifacts/release-manifest.json
-          find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' -print0 | while IFS= read -r -d '' pdf_path; do
-            pdfinfo "$pdf_path"
-            pdffonts "$pdf_path" | grep -Eqi "Noto.*CJK|NotoSansCJK"
-            name=$(basename "$pdf_path" .pdf)
-            pdftoppm -png -r 144 "$pdf_path" "artifacts/document-preview/$name"
-          done
-          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 4
-          test "$(find artifacts/document-preview -type f -name '*.png' | wc -l | tr -d ' ')" -ge 4
-          if [[ -n "$PROTOCOL_VERSION" ]]; then
-            mkdir -p artifacts/requested-protocol
-            python tools/build-external-protocol-artifact.py \
-              --output-dir artifacts/requested-protocol \
-              --stage "$PROTOCOL_STAGE" \
-              --version "$PROTOCOL_VERSION"
-          fi
-      - name: Upload external document ZIP artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: external-document-package
-          path: artifacts/
-          if-no-files-found: error
-          retention-days: 90
-
-  product-candidates:
-    name: Unsigned ${{ matrix.platform }} product candidate
-    needs: unit-and-websocket
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: kylin
-            runner: ubuntu-latest
-          - platform: windows
-            runner: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Build unsigned candidate and metadata
-        run: python tools/build-product-candidate.py --platform ${{ matrix.platform }} --output-dir artifacts --require-clean
-      - name: Upload unsigned candidate
-        uses: actions/upload-artifact@v4
-        with:
-          name: neurobridge-${{ matrix.platform }}-unsigned-candidate
-          path: artifacts/
-          if-no-files-found: error
-          retention-days: 30

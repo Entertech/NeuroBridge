@@ -19,12 +19,43 @@ from external_protocol_registry import (
 )
 
 
+# Gateway implementation details that must never appear in a B-side document.
+FORBIDDEN_IMPLEMENTATION_PATTERNS = (
+    r"蓝牙",
+    r"\bBLE\b",
+    r"\bFlowtime\b",
+    r"\bEnter-Biomodule\b",
+    r"0000ff[0-9a-f-]*",
+    r"\bFF[0-9A-F]{2}\b",
+    r"设备扫描",
+    r"\bRSSI\b",
+    r"连接策略",
+    r"\bJSONL\b",
+)
+
+
 def fail(message: str) -> None:
     raise SystemExit(f"version-registry check failed: {message}")
 
 
 def digest(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
+
+
+DELIVERY_MODES = {"always", "platform_bound", "review_only"}
+
+
+def validate_delivery_policy(section: dict, label: str) -> None:
+    """Reject delivery declarations that would silently misroute a document."""
+    delivery = section.get("delivery")
+    if delivery not in DELIVERY_MODES:
+        fail(f"external {label} document must declare a valid delivery policy")
+    platforms = section.get("platforms", [])
+    if delivery == "platform_bound":
+        if not platforms:
+            fail(f"platform-bound external {label} document must declare at least one platform")
+    elif platforms:
+        fail(f"external {label} document declares platforms without delivery=platform_bound")
 
 
 def validate_published_operations_document(registry: dict, locks: dict, document: dict, scope: str, label: str) -> None:
@@ -53,6 +84,7 @@ def main() -> None:
     capture_package = registry["documents"].get("external_capture_package")
     ssh_operations = registry["documents"].get("external_ssh_operations")
     wired_network_operations = registry["documents"].get("external_wired_network_operations")
+    windows_operations = registry["documents"].get("external_windows_operations")
     wire_version = registry["northbound_wire_protocol"]["version"]
     application_version = registry["application"]["version"]
 
@@ -60,6 +92,15 @@ def main() -> None:
         fail("external document updates must require an explicit user request")
     if policy["default_external_document_action"] != "record_only":
         fail("the default external document action must be record_only")
+    validate_delivery_policy(external_catalog, "northbound")
+    for label, section in (
+        ("capture package", capture_package),
+        ("SSH operations", ssh_operations),
+        ("wired network operations", wired_network_operations),
+        ("Windows operations", windows_operations),
+    ):
+        if section is not None:
+            validate_delivery_policy(section, label)
     if external_catalog["audience"] != "b_side":
         fail("external_northbound must be a B-side document catalog")
     if external_catalog["current_version"] != lifecycle["released_version"]:
@@ -159,6 +200,22 @@ def main() -> None:
             "wired network operations",
         )
 
+    if windows_operations and windows_operations["status"] == "published":
+        validate_published_operations_document(
+            registry,
+            locks,
+            windows_operations,
+            "external_windows_operations_document",
+            "Windows operations",
+        )
+        windows_text = (ROOT / windows_operations["markdown_path"]).read_text(encoding="utf-8")
+        if any(re.search(pattern, windows_text, flags=re.IGNORECASE) for pattern in FORBIDDEN_IMPLEMENTATION_PATTERNS):
+            fail("Windows operations Markdown contains gateway implementation details")
+        # This document describes the Windows delivery path, whose product naming is
+        # the data gateway; the legacy 头环 naming belongs to the retired BLE plan.
+        if "头环" in windows_text:
+            fail("Windows operations Markdown must not use the legacy 头环 product naming")
+
     tracked_pdfs = subprocess.run(
         ["git", "ls-files", "--", "doc/tech/*.pdf"], cwd=ROOT, check=True, capture_output=True, text=True
     ).stdout.strip()
@@ -189,19 +246,7 @@ def main() -> None:
         fail("external Markdown version does not match the version registry")
     if f'日期：{external["published_date"]}' not in markdown_text:
         fail("external Markdown date does not match the version registry")
-    forbidden_patterns = (
-        r"蓝牙",
-        r"\bBLE\b",
-        r"\bFlowtime\b",
-        r"\bEnter-Biomodule\b",
-        r"0000ff[0-9a-f-]*",
-        r"\bFF[0-9A-F]{2}\b",
-        r"设备扫描",
-        r"\bRSSI\b",
-        r"连接策略",
-        r"\bJSONL\b",
-    )
-    if any(re.search(pattern, markdown_text, flags=re.IGNORECASE) for pattern in forbidden_patterns):
+    if any(re.search(pattern, markdown_text, flags=re.IGNORECASE) for pattern in FORBIDDEN_IMPLEMENTATION_PATTERNS):
         fail("external Markdown contains gateway implementation details")
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
