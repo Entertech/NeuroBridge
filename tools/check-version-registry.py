@@ -42,6 +42,22 @@ def digest(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
 
 
+DELIVERY_MODES = {"always", "platform_bound", "review_only"}
+
+
+def validate_delivery_policy(section: dict, label: str) -> None:
+    """Reject delivery declarations that would silently misroute a document."""
+    delivery = section.get("delivery")
+    if delivery not in DELIVERY_MODES:
+        fail(f"external {label} document must declare a valid delivery policy")
+    platforms = section.get("platforms", [])
+    if delivery == "platform_bound":
+        if not platforms:
+            fail(f"platform-bound external {label} document must declare at least one platform")
+    elif platforms:
+        fail(f"external {label} document declares platforms without delivery=platform_bound")
+
+
 def validate_published_operations_document(registry: dict, locks: dict, document: dict, scope: str, label: str) -> None:
     markdown = ROOT / document["markdown_path"]
     required_fields = ("published_date", "markdown_sha256", "publication_record", "pdf_artifact_name")
@@ -76,6 +92,15 @@ def main() -> None:
         fail("external document updates must require an explicit user request")
     if policy["default_external_document_action"] != "record_only":
         fail("the default external document action must be record_only")
+    validate_delivery_policy(external_catalog, "northbound")
+    for label, section in (
+        ("capture package", capture_package),
+        ("SSH operations", ssh_operations),
+        ("wired network operations", wired_network_operations),
+        ("Windows operations", windows_operations),
+    ):
+        if section is not None:
+            validate_delivery_policy(section, label)
     if external_catalog["audience"] != "b_side":
         fail("external_northbound must be a B-side document catalog")
     if external_catalog["current_version"] != lifecycle["released_version"]:

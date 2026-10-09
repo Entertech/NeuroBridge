@@ -37,6 +37,14 @@ class ExternalDocumentPackageTests(unittest.TestCase):
         )
         self.assertEqual([document.version for document in documents], ["0.2", "0.1", "1.0", "1.0", "1.0"])
         self.assertEqual(
+            [document.delivery for document in documents],
+            ["always", "always", "review_only", "review_only", "platform_bound"],
+        )
+        self.assertEqual(
+            [list(document.platforms) for document in documents],
+            [[], [], [], [], ["windows"]],
+        )
+        self.assertEqual(
             [document.pdf_artifact_name for document in documents],
             [
                 "头环数据网关北向网络协议_v0.2.pdf",

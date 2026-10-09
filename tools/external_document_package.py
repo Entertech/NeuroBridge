@@ -19,66 +19,67 @@ WEB_CLIENT_DIRECTORY = ROOT / "web" / "b-client-test"
 WEB_CLIENT_ARCHIVE_DIRECTORY = "b-client-test"
 
 
+DELIVERY_MODES = ("always", "platform_bound", "review_only")
+
+
 @dataclass(frozen=True)
 class ExternalDocument:
     key: str
     title: str
     version: str
     status: str
+    delivery: str
+    platforms: tuple[str, ...]
     markdown_path: str
     pdf_artifact_name: str
 
 
+def _delivery_policy(section: dict, key: str) -> tuple[str, tuple[str, ...]]:
+    """Read the declarative delivery condition that decides where a document ships."""
+    delivery = section.get("delivery")
+    if delivery not in DELIVERY_MODES:
+        raise ValueError(
+            f"External document {key} has unsupported delivery {delivery!r}; "
+            f"expected one of {', '.join(DELIVERY_MODES)}."
+        )
+    platforms = tuple(section.get("platforms", ()))
+    if delivery == "platform_bound":
+        if not platforms:
+            raise ValueError(f"Platform-bound external document {key} must declare at least one platform.")
+    elif platforms:
+        raise ValueError(f"External document {key} declares platforms without delivery=platform_bound.")
+    return delivery, platforms
+
+
+def _make_document(key: str, policy_source: dict, content_source: dict) -> ExternalDocument:
+    delivery, platforms = _delivery_policy(policy_source, key)
+    return ExternalDocument(
+        key=key,
+        title=policy_source["title"],
+        version=content_source["version"],
+        status=content_source["status"],
+        delivery=delivery,
+        platforms=platforms,
+        markdown_path=content_source["markdown_path"],
+        pdf_artifact_name=content_source["pdf_artifact_name"],
+    )
+
+
 def collect_external_documents(registry: dict) -> list[ExternalDocument]:
-    """Return the five current external documents in their delivery order."""
-    northbound_catalog = registry["documents"]["external_northbound"]
-    northbound = select_external_protocol(registry)
-    capture_package = registry["documents"]["external_capture_package"]
-    ssh_operations = registry["documents"]["external_ssh_operations"]
-    wired_network_operations = registry["documents"]["external_wired_network_operations"]
-    windows_operations = registry["documents"]["external_windows_operations"]
-    documents = [
-        ExternalDocument(
-            key="northbound",
-            title=northbound_catalog["title"],
-            version=northbound["version"],
-            status=northbound["status"],
-            markdown_path=northbound["markdown_path"],
-            pdf_artifact_name=northbound["pdf_artifact_name"],
-        ),
-        ExternalDocument(
-            key="capture_package",
-            title=capture_package["title"],
-            version=capture_package["version"],
-            status=capture_package["status"],
-            markdown_path=capture_package["markdown_path"],
-            pdf_artifact_name=capture_package["pdf_artifact_name"],
-        ),
-        ExternalDocument(
-            key="ssh_operations",
-            title=ssh_operations["title"],
-            version=ssh_operations["version"],
-            status=ssh_operations["status"],
-            markdown_path=ssh_operations["markdown_path"],
-            pdf_artifact_name=ssh_operations["pdf_artifact_name"],
-        ),
-        ExternalDocument(
-            key="wired_network_operations",
-            title=wired_network_operations["title"],
-            version=wired_network_operations["version"],
-            status=wired_network_operations["status"],
-            markdown_path=wired_network_operations["markdown_path"],
-            pdf_artifact_name=wired_network_operations["pdf_artifact_name"],
-        ),
-        ExternalDocument(
-            key="windows_operations",
-            title=windows_operations["title"],
-            version=windows_operations["version"],
-            status=windows_operations["status"],
-            markdown_path=windows_operations["markdown_path"],
-            pdf_artifact_name=windows_operations["pdf_artifact_name"],
-        ),
-    ]
+    """Return every registered external document in delivery order.
+
+    Documents are discovered from the registry, so adding one only needs a
+    ``[documents.external_<key>]`` entry carrying a ``delivery`` policy; the section
+    order inside the registry is the delivery order.
+    """
+    sections = registry["documents"]
+    documents = [_make_document("northbound", sections["external_northbound"], select_external_protocol(registry))]
+    for name, section in sections.items():
+        if name == "external_northbound" or not name.startswith("external_"):
+            continue
+        if not isinstance(section, dict) or "markdown_path" not in section:
+            continue
+        documents.append(_make_document(name.removeprefix("external_"), section, section))
     if len({document.pdf_artifact_name for document in documents}) != len(documents):
         raise ValueError("Every external document must have a unique PDF artifact filename.")
     for document in documents:

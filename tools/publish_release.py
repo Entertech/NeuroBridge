@@ -135,7 +135,8 @@ def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
                         if variant_zip.testzip() is not None:
                             raise ValueError(f"variant archive is corrupt: {variant['fileName']}")
                         expected_architectures = {item["fileName"] for item in variant.get("architectureArchives", [])}
-                        if set(variant_zip.namelist()) != expected_architectures:
+                        expected_documents = set(variant.get("documents", []))
+                        if set(variant_zip.namelist()) != expected_architectures | expected_documents:
                             raise ValueError(f"variant archive contents mismatch: {variant['fileName']}")
                         for item in variant.get("architectureArchives", []):
                             architecture_data = variant_zip.read(item["fileName"])

@@ -15,10 +15,9 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_MATRIX = tomllib.loads((ROOT / "release/release_matrix.toml").read_text(encoding="utf-8"))
-EXCLUDED_EXTERNAL_DOCUMENTS = {
-    "头环数据网关 SSH 运维操作指南_v1.0.pdf",
-    "头环数据网关有线网络配置指南_v1.0.pdf",
-}
+MANIFEST_FILENAME = "release-manifest.json"
+# Platforms whose per-version archives must also carry the shipped documents.
+DOCUMENT_BEARING_PLATFORMS = ("windows",)
 
 
 def digest_bytes(value: bytes) -> str:
@@ -113,7 +112,11 @@ def build_architecture_archive(packages: list[dict], timestamp: tuple[int, int, 
     }
 
 
-def build_system_archives(grouped: dict[tuple[str, str, str], list[dict]], timestamp: tuple[int, int, int, int, int, int]) -> tuple[dict[str, bytes], list[dict]]:
+def build_system_archives(
+    grouped: dict[tuple[str, str, str], list[dict]],
+    timestamp: tuple[int, int, int, int, int, int],
+    platform_documents: dict[str, dict[str, bytes]],
+) -> tuple[dict[str, bytes], list[dict]]:
     files: dict[str, bytes] = {}
     manifest: list[dict] = []
     for platform in ("windows", "kylin"):
@@ -127,6 +130,7 @@ def build_system_archives(grouped: dict[tuple[str, str, str], list[dict]], times
         for family in families:
             architectures = [(architecture, grouped.get((platform, family, architecture), [])) for architecture in expected_architectures]
             arch_entries: list[dict] = []
+            family_documents = {f"docs/{name}": payload for name, payload in sorted(platform_documents.get(platform, {}).items())}
             family_stream = io.BytesIO()
             with zipfile.ZipFile(family_stream, "w", zipfile.ZIP_DEFLATED) as family_zip:
                 for architecture, packages in architectures:
@@ -134,9 +138,21 @@ def build_system_archives(grouped: dict[tuple[str, str, str], list[dict]], times
                     filename = f"{family}-{architecture}.zip"
                     add_bytes(family_zip, filename, data, timestamp)
                     arch_entries.append({"architecture": architecture, "fileName": filename, **entry})
+                for document_name, payload in family_documents.items():
+                    add_bytes(family_zip, document_name, payload, timestamp)
             family_data = family_stream.getvalue()
             family_filename = f"{family}.zip"
-            family_archives.append((family_filename, family_data, {"name": family, "fileName": family_filename, "sha256": digest_bytes(family_data), "architectureArchives": arch_entries}))
+            family_archives.append((
+                family_filename,
+                family_data,
+                {
+                    "name": family,
+                    "fileName": family_filename,
+                    "sha256": digest_bytes(family_data),
+                    "architectureArchives": arch_entries,
+                    "documents": sorted(family_documents),
+                },
+            ))
         system_filename = f"{platform}.zip"
         system_stream = io.BytesIO()
         with zipfile.ZipFile(system_stream, "w", zipfile.ZIP_DEFLATED) as system_zip:
@@ -149,19 +165,79 @@ def build_system_archives(grouped: dict[tuple[str, str, str], list[dict]], times
     return files, manifest
 
 
-def external_document_entries(documents_root: Path) -> dict[str, bytes]:
+def collect_bundle_documents(
+    documents_root: Path,
+    available_platforms: set[str],
+) -> tuple[dict[str, bytes], dict[str, dict[str, bytes]]]:
+    """Route each packaged document by its registered delivery condition.
+
+    Returns the top-level bundle files plus, per platform, the documents that belong
+    inside that platform's per-version archives. ``review_only`` documents stay in the
+    review artifact; ``always`` documents ship under ``docs/external/``; a
+    ``platform_bound`` document ships with its platform only when that platform actually
+    produced packages. Platforms listed in ``DOCUMENT_BEARING_PLATFORMS`` receive the
+    document inside every per-version archive instead of a copy at the platform root.
+    """
     package = find_one(documents_root, "neurobridge-external-documents.zip")
     if package is None:
         raise FileNotFoundError("external document package is missing")
-    result: dict[str, bytes] = {}
+    files: dict[str, bytes] = {}
+    platform_documents: dict[str, dict[str, bytes]] = {}
     with zipfile.ZipFile(package) as archive:
         if archive.testzip() is not None:
             raise ValueError("external document package is corrupt")
+        manifest = json.loads(archive.read(MANIFEST_FILENAME).decode("utf-8"))
+        policies = {item["pdf_artifact_name"]: item for item in manifest.get("documents", [])}
         for name in archive.namelist():
             safe_name(name)
-            if name.endswith("/") or PurePosixPath(name).name in EXCLUDED_EXTERNAL_DOCUMENTS:
+            if name.endswith("/"):
                 continue
-            result[f"docs/external/{name}"] = archive.read(name)
+            payload = archive.read(name)
+            policy = policies.get(PurePosixPath(name).name)
+            if policy is None:
+                if name.lower().endswith(".pdf"):
+                    raise ValueError(f"packaged document {name} is not registered in {MANIFEST_FILENAME}")
+                # Non-document attachments: the B-side test page and the manifest itself.
+                files[f"docs/external/{name}"] = payload
+                continue
+            delivery = policy["delivery"]
+            if delivery == "review_only":
+                continue
+            if delivery == "platform_bound":
+                for platform in policy.get("platforms", ()):
+                    if platform not in available_platforms:
+                        continue
+                    if platform in DOCUMENT_BEARING_PLATFORMS:
+                        platform_documents.setdefault(platform, {})[PurePosixPath(name).name] = payload
+                    else:
+                        files[f"{platform}/{name}"] = payload
+                continue
+            files[f"docs/external/{name}"] = payload
+    return files, platform_documents
+
+
+def documents_for_platform_archives(
+    files: dict[str, bytes],
+    platform_documents: dict[str, dict[str, bytes]],
+    available_platforms: set[str],
+) -> dict[str, dict[str, bytes]]:
+    """Return the documents that must travel inside each platform's per-version archives.
+
+    Every archive gets the shared external documents plus whatever documents are bound
+    to that platform, so an operator who unpacks a single version still gets them.
+    """
+    shared = {
+        PurePosixPath(path).name: payload
+        for path, payload in files.items()
+        if path.startswith("docs/external/") and path.endswith(".pdf")
+    }
+    result: dict[str, dict[str, bytes]] = {}
+    for platform in DOCUMENT_BEARING_PLATFORMS:
+        if platform not in available_platforms:
+            continue
+        selected = {**shared, **platform_documents.get(platform, {})}
+        if selected:
+            result[platform] = selected
     return result
 
 
@@ -169,14 +245,10 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
     release_manifest = json.loads((release_directory / "release-manifest.json").read_text(encoding="utf-8"))
     timestamp = zip_timestamp(release_manifest)
     grouped, validation = collect_native_packages(release_directory, release_manifest)
-    system_archives, system_manifest = build_system_archives(grouped, timestamp)
-    files: dict[str, bytes] = external_document_entries(documents_root)
-    windows_prd = find_one(documents_root, "system-prds/NeuroBridge项目结构与多系统接入_PRD.pdf")
-    kylin_prd = find_one(documents_root, "system-prds/银河麒麟V10耳机USB串口接入_PRD.pdf")
-    if windows_prd is None or kylin_prd is None:
-        raise FileNotFoundError("system PRD PDFs are missing")
-    files["windows/NeuroBridge项目结构与多系统接入_PRD.pdf"] = windows_prd.read_bytes()
-    files["kylin/银河麒麟V10耳机USB串口接入_PRD.pdf"] = kylin_prd.read_bytes()
+    available_platforms = {platform for platform, _, _ in grouped}
+    files, bound_documents = collect_bundle_documents(documents_root, available_platforms)
+    platform_documents = documents_for_platform_archives(files, bound_documents, available_platforms)
+    system_archives, system_manifest = build_system_archives(grouped, timestamp, platform_documents)
     files.update(system_archives)
     for name, value in validation:
         files[f"metadata/validation/{name.removeprefix('validation/')}"] = value

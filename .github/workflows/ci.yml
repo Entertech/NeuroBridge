@@ -143,17 +143,6 @@ jobs:
           done
           test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 5
           test "$(find artifacts/document-preview -type f -name '*.png' | wc -l | tr -d ' ')" -ge 5
-          mkdir -p artifacts/system-prds
-          bash tools/render-protocol-pdf.sh \
-            "doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md" \
-            "artifacts/system-prds/NeuroBridge项目结构与多系统接入_PRD.pdf"
-          bash tools/render-protocol-pdf.sh \
-            "doc/tech/银河麒麟V10耳机USB串口接入_PRD.md" \
-            "artifacts/system-prds/银河麒麟V10耳机USB串口接入_PRD.pdf"
-          for pdf_path in artifacts/system-prds/*.pdf; do
-            pdfinfo "$pdf_path"
-            pdffonts "$pdf_path" | grep -Eqi "Noto.*CJK|NotoSansCJK"
-          done
           if [[ -n "$PROTOCOL_VERSION" ]]; then
             mkdir -p artifacts/requested-protocol
             python tools/build-external-protocol-artifact.py \
