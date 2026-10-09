@@ -153,6 +153,13 @@ class NativeInputsWorkflowTests(unittest.TestCase):
         self.assertIn("outcome=failed", block)
         self.assertIn("outcome=blocked", block)
 
+    def test_kylin_prebuilt_inputs_are_not_queued(self) -> None:
+        # The release builds the bootstrap package itself. Queueing these
+        # prebuilt targets again would send four jobs to a runner that has no
+        # runtime tree and then report them as blocked.
+        block = job_block("kylin")
+        self.assertRegex(block, r"(?m)^    if: false$")
+
     def test_the_summary_job_always_runs_after_both_platforms(self) -> None:
         block = job_block("summarize-inputs")
         self.assertIn("needs: [windows, kylin]", block)

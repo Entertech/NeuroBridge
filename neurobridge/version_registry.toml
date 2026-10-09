@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.2.0"
+version = "0.2.1"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -10,6 +10,13 @@ to_version = "0.2.0"
 impact = "minor"
 compatibility = "Release packaging and CI behavior change; gateway wire protocol and existing runtime configuration remain compatible."
 evidence = "Add release matrix planning, version gate, target evidence, immutable archive assembly, GitHub Release publication and diagnostic logs."
+
+[[application_release_changes]]
+from_version = "0.2.0"
+to_version = "0.2.1"
+impact = "patch"
+compatibility = "The Kylin deliverable changes from prebuilt packages to one bootstrap package; gateway wire protocol and existing runtime configuration remain compatible."
+evidence = "Replace the Kylin server/desktop five-architecture DEB/RPM matrix with one Kylin V10 x86_64 bootstrap deb that builds its runtime on the installing machine."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.

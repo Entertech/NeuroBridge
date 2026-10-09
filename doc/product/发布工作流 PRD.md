@@ -37,11 +37,11 @@
 
 ### 2.3 银河麒麟系统 V10 发布包
 
-- 银河麒麟 V10 支持服务器版和桌面版，以及 x86_64、ARM64、LoongArch64、MIPS64el、SW64 五类架构；每个发行版与架构组合均必须尝试建包并记录成功、失败或阻断原因。具体配置见 `release/release_matrix.toml`。
-- 麒麟每个组合同时交付 **DEB** 和 **RPM** 两类包；两类包分别生成对应的安装、升级和卸载元数据。Workflow 不根据目标机在线探测缩减矩阵。
-- 版本和下载来源以麒麟官网或双方确认的官方数据为准，记录来源 URL、抓取时间和校验值。
-- 每个包包含安装/升级、依赖检查、服务启动、回滚说明、版本清单和 SHA-256 校验值。
-- 未完成目标架构现场验证时只能标记为 `candidate`。
+- 银河麒麟当前交付一个 **引导包**（DEB），目标为银河麒麟 V10 x86_64。引导包携带网关源码和离线构建输入，在安装该包的麒麟机器上构建运行时并安装服务，不再按服务器版/桌面版、五种架构和 DEB/RPM 预先构建完整包。具体配置见 `release/release_matrix.toml` 的 `package_kind = "bootstrap"`。
+- 引导包的安装、失败回滚和重装规则随包内脚本交付；Workflow 不根据目标机在线探测改写矩阵。
+- Python 运行时、wheel、CMake 和 Eigen 的版本与校验值随包内离线输入固定，安装阶段不再下载。
+- 包内包含安装说明、版本清单和 SHA-256 校验值。
+- 未完成目标机器现场验证时只能标记为 `candidate`。
 
 ### 2.4 当前流程不包含的历史交付物
 
@@ -51,7 +51,7 @@
 
 ### 2.5 发布清单
 
-达到最低发布门槛的构建生成符合 [`schemas/release-manifest.schema.json`](../../schemas/release-manifest.schema.json) 的包外 `release-manifest.json`，包含应用版本、Git commit、构建时间、触发方式、全部 Windows EXE/MSI 与麒麟 DEB/RPM 目标的版本/架构/格式/状态，以及合格包的文件名/SHA-256、平台 ZIP、总 ZIP、官网来源和验证日志。它在公开 Release 前固定为 `candidate`；公开成功后由独立发布回执记录 `published`，不回写已封包文件。北向协议版本仍可作为软件兼容性元数据记录，但不触发本流程的文档打包。
+达到最低发布门槛的构建生成符合 [`schemas/release-manifest.schema.json`](../../schemas/release-manifest.schema.json) 的包外 `release-manifest.json`，包含应用版本、Git commit、构建时间、触发方式、全部 Windows EXE/MSI 目标与麒麟引导包的版本/架构/格式/状态，以及合格包的文件名/SHA-256、平台 ZIP、总 ZIP、官网来源和验证日志。它在公开 Release 前固定为 `candidate`；公开成功后由独立发布回执记录 `published`，不回写已封包文件。北向协议版本仍可作为软件兼容性元数据记录，但不触发本流程的文档打包。
 
 ## 3. 工作流与门禁
 
@@ -80,21 +80,21 @@
 - 业务代码变更且版本不变的 PR 必须失败并提示提升版本。
 - 版本高于 `master` 的 PR 通过，低于 `master` 的 PR 失败并说明回退原因。
 - 改了交付范围内的文件（含 `doc/tech/对外/` 的对外文档）但未升应用版本的 PR 必须失败；版本未递增时不产出任何发布包，运行页写明原因。
-- PR 只做校验，不产生任何候选包或 ZIP；打包由 `Release` workflow 承担，手动对分支触发时生成该分支最新提交的 Windows EXE/MSI 和麒麟 V10 DEB/RPM 候选清单，状态与验证事实一致。
+- PR 只做校验，不产生任何候选包或 ZIP；打包由 `Release` workflow 承担，手动对分支触发时生成该分支最新提交的 Windows EXE/MSI 和麒麟引导包候选清单，状态与验证事实一致。
 - 应用版本递增的 `master` 构建在最低门槛通过时生成带 SHA-256 的包外 `release-manifest.json`、唯一总 ZIP 和 GitHub Release；版本未递增时跳过同版本发布；Actions Artifact 保留 30 天，GitHub Release 作为长期下载入口。
 - Artifact 可在无公网环境按清单校验。
 - 现有单元测试和协议兼容性检查全部通过。
 
 ## 6. 已确认约束
 
-- 麒麟 V10 当前固定支持服务器版、桌面版，以及 x86_64、ARM64、LoongArch64、MIPS64el、SW64 五类架构；每个组合同时生成 DEB 和 RPM，矩阵写入仓库配置，Workflow 不联网发现版本。
+- 麒麟交付物固定为一个银河麒麟 V10 x86_64 引导包（DEB）。它在安装机器上构建运行时，不按服务器版/桌面版和五种架构预先生成 DEB/RPM；矩阵写入仓库配置，Workflow 不联网发现版本。
 - Windows 适配矩阵固定包含 Windows 7、Windows 10、Windows 11，并分别覆盖 32 位（x86）和 64 位（x86_64）；每个组合单独验证并记录兼容性结果。
-- Windows 每个适配组合都尝试生成 EXE 和 MSI；麒麟 V10 每个适配组合都尝试生成 DEB 和 RPM，并分别记录安装、升级和卸载结果。全部 32 个包目标均属于支持矩阵；某目标未形成合格包时必须在清单和 Release 说明中写明状态、原因与后续验证项。
+- Windows 每个适配组合都尝试生成 EXE 和 MSI；麒麟尝试生成一个引导包，并记录安装与回滚结果。全部 13 个包目标均属于支持矩阵；某目标未形成合格包时必须在清单和 Release 说明中写明状态、原因与后续验证项。
 - “各个版本”专指操作系统版本适配性，不要求回溯构建历史应用版本。
 - 构建、测试、打包和校验默认离线；官网版本信息、依赖和安装源先缓存并校验，正式构建只读取缓存。
 - PR 合入 `master` 且 `Test` workflow 通过后触发发布；也可在 Actions 手动触发，对所选分支的最新提交打包（非正式构建，不创建 tag 或 Release）。包与总 ZIP 校验通过后创建 tag，随后创建 draft GitHub Release，上传和复验成功后公开。Actions Artifact 保留 30 天，GitHub Release 长期保留；当前不做签名或公证。
 - Windows 和麒麟支持矩阵以本 PRD 与仓库配置为准；官网新增版本不会自动进入 CI，需人工审阅后更新配置。
-- 先分别生成 `windows-v<version>-<date>.zip` 和 `kylin-v<version>-<date>.zip`，再将两个平台 ZIP、构建清单和验证日志压缩为唯一交付物 `neurobridge-v<version>-<date>.zip`。每个平台 ZIP 至少包含一个可执行且通过自动校验的包才允许进入汇总；32 个目标的未完成项随包透明列示。
+- 先分别生成 `windows-v<version>-<date>.zip` 和 `kylin-v<version>-<date>.zip`，再将两个平台 ZIP、构建清单和验证日志压缩为唯一交付物 `neurobridge-v<version>-<date>.zip`。麒麟平台 ZIP 只含一个引导包。每个平台 ZIP 至少包含一个可执行且通过自动校验的包才允许进入汇总；13 个目标的未完成项随包透明列示。
 - 总 ZIP 内的构建清单记录 Git commit、构建时间、目标矩阵和包/平台 ZIP 的 SHA-256；总 ZIP 自身的 SHA-256 只能写入包外 `release-manifest.json` 和 `.sha256` 文件，避免文件校验值包含自身。公开 Release 后另生成 `release-receipt.json` 记录实际 tag、Release URL、总 ZIP SHA-256 和 `published` 状态；不回写已上传 ZIP。
 - 构建、下载、缓存或打包步骤失败时自动重试，单个步骤最多 3 次；3 次仍失败则 Workflow 失败并保留明确错误原因。
 - Windows 安装器方案：EXE 提供可独立执行的安装/启动入口，MSI 提供标准 Windows Installer 安装、升级和卸载入口；两者都必须支持静默安装参数、版本检测和卸载。Windows 7、10、11 的 x86/x86_64 组合均需纳入验证。
@@ -103,15 +103,13 @@
 
 ## 7. 麒麟安装包实现建议
 
-为避免等待不明确的官方资料，当前实现采用以下兼容基线，并在每个系统/架构组合上验证：
+当前麒麟交付物是一个引导包，在安装它的银河麒麟 V10 x86_64 机器上完成构建：
 
-- 使用原生工具分别构建 DEB（`dpkg-deb`）和 RPM（`rpmbuild`），不把一种格式改名为另一种格式；服务器版和桌面版的五架构组合均须产出两种格式。
-- 两种包安装相同的网关文件、配置目录、日志目录和 systemd 服务单元；安装、升级、卸载动作保持一致。
-- 安装前探测 `/etc/os-release`、CPU 架构、`systemd`、`dpkg`/`rpm` 和可用磁盘空间；不匹配时返回可读错误并停止，不尝试联网修复。
-- Python 运行时、wheel 依赖和网关资源随包或随离线缓存提供；目标机不依赖公网 APT/YUM 源。
-- 系统库只声明经过矩阵验证的最小依赖；不能确认的发行版差异记录为兼容性结果，不在安装脚本中静默绕过。
-- 包元数据至少包含名称、应用版本、架构、维护脚本、依赖声明、服务启停动作和卸载清理范围；每个组合的安装/升级/卸载日志进入发布清单。
-- 麒麟服务器版和桌面版的官方安装包元数据差异作为矩阵测试结果记录，不把某一发行版或架构的行为推断为全部 V10 组合的行为。
+- 使用 `dpkg-deb` 构建一个 DEB。包内携带网关源码、Python 3.11、wheel、CMake 和 Eigen 3.3.7；安装时在本机编译运行时和算法桥，不再为服务器版/桌面版和五种架构分别预构建。
+- 安装写入配置目录、日志目录、录制目录和 systemd 服务单元。安装失败时撤回本次写入的 `/opt/neurobridge`；已有运行时的机器重装不重复构建。
+- 安装时需要本机的编译器和 `systemd`；不匹配时返回可读错误并停止。包内已经带齐构建输入，不在安装阶段访问公网。
+- 包元数据包含名称、应用版本、架构、安装脚本和依赖声明；安装与回滚结果进入发布清单。
+- 引导包只验证银河麒麟 V10 x86_64。不把这一台机器的结果推断成其他发行版或架构。
 
 ## 7.1 发布状态和验证日志
 
@@ -135,7 +133,7 @@
 
 **重试与幂等：**发布 job 仅授予 `contents: write`，PR job 保持 `contents: read`；同一应用版本串行发布。重跑先检查远端 tag：不存在时在全部本地校验通过后创建；存在且指向同一 commit 时继续；指向不同 commit 时立即失败，绝不移动或删除。Release 不存在则创建 draft，已存在 draft 则只补齐缺失资产并校验同名资产的大小和 SHA-256；已公开且资产完全一致时视为幂等成功，已公开但内容不一致时失败并要求新应用版本。上传失败保留 draft 供同 commit 重试，公开前校验唯一总 ZIP 与包外清单一致。公开成功后生成符合 [`schemas/release-receipt.schema.json`](../../schemas/release-receipt.schema.json) 的回执并保存为 Actions Artifact；不能把 draft 或仅有 tag 记为 `published`。
 
-**版本关系：**正式包名、tag、GitHub Release 和清单统一使用台账 `[application].version`。`[platform_releases.windows]` 与 `[platform_releases.kylin]` 是旧流程元数据，本次 Workflow 不读取、不自动递增，也不作为安装器显示版本；后续迁移清理需单独变更台账。仅某个平台的安装器或依赖变化时仍按应用版本影响规则升级 `[application].version`，全部 32 个目标使用相同应用版本。重跑同一 commit 的 `GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT` 只作为构建追踪号，不改变产品版本。
+**版本关系：**正式包名、tag、GitHub Release 和清单统一使用台账 `[application].version`。`[platform_releases.windows]` 与 `[platform_releases.kylin]` 是旧流程元数据，本次 Workflow 不读取、不自动递增，也不作为安装器显示版本；后续迁移清理需单独变更台账。仅某个平台的安装器或依赖变化时仍按应用版本影响规则升级 `[application].version`，全部 13 个目标使用相同应用版本。重跑同一 commit 的 `GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT` 只作为构建追踪号，不改变产品版本。
 
 **待真机补录：**各麒麟版型的 ISO/SHA-256、包管理器与系统库 ABI，以及 Windows 7 的补丁、浏览器、COM/Service 和算法实际结果，由对应目标机日志补充。未完成对应组合的安装/升级/卸载、24 小时运行与离线无 replay 验证时，其 `physicalVerification` 保持 `pending`，Release 说明必须列出未验证组合，不能写成现场验收通过。
 
@@ -147,7 +145,7 @@
 
 - PR 业务代码变更的应用版本门禁；
 - Windows 7/10/11、x86/x86_64 的 EXE 与 MSI 产物；
-- 银河麒麟服务器版/桌面版、五类架构的 DEB 与 RPM 产物；
+- 银河麒麟 V10 x86_64 引导包（DEB）；安装时在目标机器上构建运行时；
 - 离线优先的官方版本信息、依赖和安装源缓存；
 - 手动触发的分支候选构建、合入 `master` 且 `Test` 通过后的发布、GitHub Release、tag、30 天 Artifact 保留和统一发布清单；
 - 失败原因、来源 URL、版本、架构、格式和 SHA-256 的可审计记录。

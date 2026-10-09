@@ -32,7 +32,7 @@ class NativePackageBuilderTests(unittest.TestCase):
         return runtime
 
     def test_source_payload_is_staged_with_bundled_runtime(self) -> None:
-        target = BUILDER.target_for("kylin-server-x86_64-deb")
+        target = BUILDER.target_from_id("kylin-server-x86_64-deb")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runtime = self.runtime(root, target["id"])
@@ -55,7 +55,7 @@ class NativePackageBuilderTests(unittest.TestCase):
             (prefix / "lib/python3.11/os.py").write_text("stdlib fixture\n")
             (runtime / "bin/python").symlink_to("python-runtime/bin/python")
             (runtime / "bin/neurobridge_affective_bridge").write_bytes(b"bridge fixture")
-            target = BUILDER.target_for("kylin-server-x86_64-rpm")
+            target = BUILDER.target_from_id("kylin-server-x86_64-rpm")
             stage = root / "stage"
             BUILDER.copy_source(stage, target, runtime)
 
@@ -89,7 +89,7 @@ class NativePackageBuilderTests(unittest.TestCase):
                     entry.unlink()
                     entry.symlink_to(target)
                     with self.assertRaisesRegex(ValueError, "runtime.*link"):
-                        BUILDER.copy_source(root / ("stage-" + str(len(target))), BUILDER.target_for("kylin-server-x86_64-deb"), runtime)
+                        BUILDER.copy_source(root / ("stage-" + str(len(target))), BUILDER.target_from_id("kylin-server-x86_64-deb"), runtime)
 
     def test_runtime_fingerprint_includes_the_symlink_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -134,7 +134,7 @@ class NativePackageBuilderTests(unittest.TestCase):
 
     def test_maintainer_scripts_only_act_on_the_unit_the_package_installed(self) -> None:
         """A source deployment owns the same unit path, so the guard is load-bearing."""
-        target = BUILDER.target_for("kylin-server-x86_64-deb")
+        target = BUILDER.target_from_id("kylin-server-x86_64-deb")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stage = root / "stage"
@@ -235,7 +235,7 @@ class NativePackageBuilderTests(unittest.TestCase):
         # Kylin.  The package name is what apt/dnf match on, and prerm must let
         # an upgrade through without stopping the service the new package keeps.
         for edition in ("desktop", "server"):
-            target = BUILDER.target_for(f"kylin-{edition}-x86_64-deb")
+            target = BUILDER.target_from_id(f"kylin-{edition}-x86_64-deb")
             self.assertEqual(BUILDER.deb_control(target).splitlines()[0], f"Package: neurobridge-{edition}")
             self.assertIn(f"Version: {shipped_version}", BUILDER.deb_control(target))
             with tempfile.TemporaryDirectory() as directory:
@@ -256,7 +256,7 @@ class NativePackageBuilderTests(unittest.TestCase):
             ("kylin-server-x86_64-deb", 'profile = "kylin_headset_local"'),
         ):
             with self.subTest(target=target_id):
-                target = BUILDER.target_for(target_id)
+                target = BUILDER.target_from_id(target_id)
                 with tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
                     runtime = self.runtime(root, target_id)
@@ -278,7 +278,7 @@ class NativePackageBuilderTests(unittest.TestCase):
             ("windows-10-x86_64-msi", "opt/neurobridge/windows/export-logs.ps1"),
         ):
             with self.subTest(target=target_id):
-                target = BUILDER.target_for(target_id)
+                target = BUILDER.target_from_id(target_id)
                 with tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
                     runtime = self.runtime(root, target_id)
@@ -304,7 +304,7 @@ class NativePackageBuilderTests(unittest.TestCase):
             for name, groups, fail_usermod, expected_code in cases:
                 with self.subTest(kind=kind, case=name), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
-                    target = BUILDER.target_for(f"kylin-server-x86_64-{kind}")
+                    target = BUILDER.target_from_id(f"kylin-server-x86_64-{kind}")
                     if kind == "deb":
                         BUILDER.deb_scripts(root, target)
                         script = (root / "DEBIAN/postinst").read_text(encoding="utf-8")

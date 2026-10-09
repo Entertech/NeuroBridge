@@ -229,7 +229,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      # The Kylin deliverable is the bootstrap package. It is built here from
+      # the checked-out source and does not consume a prebuilt runtime input.
+      - name: Build the Kylin bootstrap package
+        if: matrix.platform == 'kylin'
+        run: |
+          sudo apt-get update && sudo apt-get install -y dpkg-dev
+          python tools/build-kylin-bootstrap-package.py --format deb --output-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}"
+          python tools/write-kylin-bootstrap-verification.py \
+            --target "${{ matrix.id }}" \
+            --input-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}"
       - name: Retrieve approved offline target input
+        if: matrix.platform != 'kylin'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

@@ -172,7 +172,12 @@ def target_result(target_id: str, input_root: Path, output_root: Path) -> dict[s
                 raise ValueError("package filename, path or format mismatch")
             if package.name == "result.json" or report["validationLog"] == "result.json":
                 raise ValueError("input cannot overwrite target result")
-            if not all(fragment in package.stem.lower() for fragment in (target["platform"], target["architecture"], tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["application"]["version"])):
+            identity = (target["platform"], target["architecture"], tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["application"]["version"])
+            # The bootstrap package names itself with a build timestamp rather
+            # than the matrix target id, so "kylin" stands in for "kylin-v10".
+            if CONFIG["kylin"].get("package_kind") == "bootstrap" and target["platform"] == "kylin":
+                identity = ("kylin", target["architecture"], identity[2])
+            if not all(fragment in package.stem.lower() for fragment in identity):
                 raise ValueError("package filename must identify platform, architecture and application version")
             if report["targetId"] != target_id or report["sourceCommit"] != result["sourceCommit"] or report.get("targetArchitecture") != target["architecture"]:
                 raise ValueError("target ID or source commit mismatch")

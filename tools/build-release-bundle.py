@@ -123,6 +123,11 @@ def build_system_archives(
         if platform == "windows":
             families = [f"windows-{version}" for version in RELEASE_MATRIX["windows"]["versions"]]
             expected_architectures = RELEASE_MATRIX["windows"]["architectures"]
+        elif RELEASE_MATRIX["kylin"].get("package_kind") == "bootstrap":
+            # One bootstrap package installs on the Kylin machine and builds
+            # there, so it is not split by edition and architecture.
+            families = ["kylin-v10"]
+            expected_architectures = RELEASE_MATRIX["kylin"]["architectures"]
         else:
             families = [f"kylin-{edition}" for edition in RELEASE_MATRIX["kylin"]["editions"]]
             expected_architectures = RELEASE_MATRIX["kylin"]["architectures"]

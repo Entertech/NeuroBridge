@@ -9,7 +9,7 @@ on:
         default: master
         type: string
       platforms:
-        description: "available 构建 Windows 和已注册的麒麟 x86_64；windows 仅构建 Windows；all 排队全部麒麟架构"
+        description: "只构建 Windows。麒麟交付物是引导包，由 Release 在 ubuntu runner 上构建，不再从这里取预编译输入"
         required: true
         default: available
         type: choice
@@ -153,7 +153,11 @@ jobs:
 
   kylin:
     name: Kylin native input ${{ matrix.id }}
-    if: inputs.platforms == 'all' || inputs.platforms == 'available'
+    # The release builds the Kylin bootstrap package itself on the Ubuntu
+    # runner. These prebuilt deb/rpm inputs are no longer release inputs, and
+    # the self-hosted runner has no runtime tree for them, so the job does not
+    # run. The matrix below is the old full-package list.
+    if: false
     # The runner must be a target-compatible Kylin V10 machine or a runner
     # with the approved cross toolchain and sysroot for this architecture.
     runs-on:

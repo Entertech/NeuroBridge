@@ -32,9 +32,7 @@ PACKAGE_SPECS = {
         ("11", "none", "x86_64", "exe"),
     ],
     "kylin": [
-        ("V10", "server", "x86_64", "deb"),
-        ("V10", "server", "arm64", "rpm"),
-        ("V10", "desktop", "x86_64", "deb"),
+        ("V10", "v10", "x86_64", "deb"),
     ],
 }
 
@@ -68,8 +66,8 @@ def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> No
     coverage = {
         platform: {
             "builtPackageCount": 1,
-            "expectedFormats": ["exe", "msi"] if platform == "windows" else ["deb", "rpm"],
-            "expectedPackageCount": 12 if platform == "windows" else 20,
+            "expectedFormats": ["exe", "msi"] if platform == "windows" else ["deb"],
+            "expectedPackageCount": 12 if platform == "windows" else 1,
             "expectedTargets": [item["id"] for item in targets if item["platform"] == platform],
             "targetResults": [{"targetId": item["id"], "status": "blocked", "reason": "fixture"} for item in targets if item["platform"] == platform],
         }
@@ -164,12 +162,18 @@ class ReleaseBundleTests(unittest.TestCase):
                 self.assertNotIn(f"kylin/{KYLIN_GUIDE}", names)
                 self.assertNotIn(f"docs/external/{KYLIN_GUIDE}", names)
                 with zipfile.ZipFile(outer.open("kylin/kylin.zip")) as kylin:
-                    self.assertEqual(set(kylin.namelist()), {"kylin-server.zip", "kylin-desktop.zip"})
-                    for edition in ("server", "desktop"):
-                        with zipfile.ZipFile(kylin.open(f"kylin-{edition}.zip")) as family:
-                            self.assertIn(f"docs/{KYLIN_GUIDE}", family.namelist())
-                            self.assertIn("docs/protocol.pdf", family.namelist())
-                            self.assertNotIn(f"docs/{WINDOWS_GUIDE}", family.namelist())
+                    self.assertEqual(set(kylin.namelist()), {"kylin-v10.zip"})
+                    with zipfile.ZipFile(kylin.open("kylin-v10.zip")) as family:
+                        self.assertEqual(
+                            set(family.namelist()),
+                            {"kylin-v10-x86_64.zip", f"docs/{KYLIN_GUIDE}", "docs/protocol.pdf"},
+                        )
+                        self.assertNotIn(f"docs/{WINDOWS_GUIDE}", family.namelist())
+                        with zipfile.ZipFile(family.open("kylin-v10-x86_64.zip")) as package:
+                            self.assertEqual(
+                                set(package.namelist()),
+                                {"neurobridge-0.2.0-kylin-v10-x86_64.deb", "checksums.sha256"},
+                            )
                 verify_release_bundle(output, json.loads(outer.read("metadata/bundle-manifest.json")))
             self.assertEqual(len(manifest["systemArchives"]), 2)
 
@@ -189,10 +193,9 @@ class ReleaseBundleTests(unittest.TestCase):
                 self.assertNotIn(f"windows/{WINDOWS_GUIDE}", names)
                 self.assertNotIn(f"docs/external/{WINDOWS_GUIDE}", names)
                 with zipfile.ZipFile(outer.open("kylin/kylin.zip")) as kylin:
-                    for edition in ("server", "desktop"):
-                        with zipfile.ZipFile(kylin.open(f"kylin-{edition}.zip")) as family:
-                            self.assertIn(f"docs/{KYLIN_GUIDE}", family.namelist())
-                            self.assertNotIn(f"docs/{WINDOWS_GUIDE}", family.namelist())
+                    with zipfile.ZipFile(kylin.open("kylin-v10.zip")) as family:
+                        self.assertIn(f"docs/{KYLIN_GUIDE}", family.namelist())
+                        self.assertNotIn(f"docs/{WINDOWS_GUIDE}", family.namelist())
                 # always documents are unaffected by platform coverage.
                 self.assertIn("docs/external/protocol.pdf", names)
                 verify_release_bundle(output, json.loads(outer.read("metadata/bundle-manifest.json")))

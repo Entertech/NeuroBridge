@@ -16,7 +16,7 @@ from neurobridge.versioning import APPLICATION_VERSION
 class PublishReleaseTests(unittest.TestCase):
     def candidate(self, root: Path, package_suffix: bytes = b"") -> tuple[Path, str]:
         commit = release_pipeline.run("git", "rev-parse", "HEAD")
-        selected = {"windows-10-x86_64-msi", "kylin-server-x86_64-deb"}
+        selected = {"windows-10-x86_64-msi", "kylin-v10-x86_64-deb"}
         for target in release_pipeline.matrix():
             folder = root / "results" / target["id"]
             result = {"target": target, "sourceCommit": commit, "status": "blocked", "reason": "fixture"}

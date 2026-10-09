@@ -19,14 +19,18 @@ windows_7_python = "3.8.10"
 windows_10_11_python_line = "3.11"
 windows_7_requires_compatibility_port = true
 
+# The Kylin deliverable is one bootstrap package. It carries the gateway source
+# and builds the runtime on the machine it is installed on, so the release does
+# not prebuild a package per edition, architecture and format.
 [kylin]
-editions = ["server", "desktop"]
-architectures = ["x86_64", "arm64", "loongarch64", "mips64el", "sw64"]
-formats = ["deb", "rpm"]
-expected_package_count = 20
+editions = ["v10"]
+architectures = ["x86_64"]
+formats = ["deb"]
+expected_package_count = 1
+package_kind = "bootstrap"
 
 [aggregate]
-expected_package_count = 32
+expected_package_count = 13
 platform_archives = ["windows", "kylin"]
 file_name_pattern = "neurobridge-v<applicationVersion>-<buildDate>.zip"
 
