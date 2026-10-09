@@ -25,17 +25,18 @@ root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 runtime_dir="$root_dir/.runtime"
 algorithm_dir="$runtime_dir/algorithm"
 config_path="$runtime_dir/config/gateway.toml"
-# The bootstrap package carries the pinned CMake archive under offline/ so the
-# install never downloads it.  A checkout that has its own copy in
-# algorithm-packages/ still takes precedence.
-package_dir="$root_dir/packaging/kylin/offline"
-[[ -f $package_dir/$cmake_archive ]] || package_dir="$root_dir/algorithm-packages"
 toolchain_dir="$algorithm_dir/toolchain"
 cmake_version="3.31.6"
 cmake_archive="cmake-${cmake_version}-linux-x86_64.tar.gz"
 cmake_url="https://github.com/Kitware/CMake/releases/download/v${cmake_version}/${cmake_archive}"
 cmake_sha256="5a1133ff103c71eb5120e2cc3de922733e7d8a26a98ae716397e8676adb367bf"
 cmake_home="$toolchain_dir/cmake-${cmake_version}-linux-x86_64"
+# The bootstrap package carries the pinned CMake archive under offline/ so the
+# install never downloads it.  A checkout that has its own copy in
+# algorithm-packages/ still takes precedence.  cmake_archive is set above;
+# this script runs under `set -u`, so the test cannot come first.
+package_dir="$root_dir/packaging/kylin/offline"
+[[ -f $package_dir/$cmake_archive ]] || package_dir="$root_dir/algorithm-packages"
 
 usage() {
   cat <<EOF
