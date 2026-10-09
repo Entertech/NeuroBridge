@@ -101,7 +101,7 @@ jobs:
             name=$(basename "$pdf_path" .pdf)
             pdftoppm -png -r 144 "$pdf_path" "artifacts/document-preview/$name"
           done
-          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 5
+          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 6
       - uses: actions/upload-artifact@v4
         with:
           name: external-document-package
