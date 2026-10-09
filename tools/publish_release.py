@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import zipfile
 
-from tools.release_pipeline import ROOT, log, save_json, sha256, version_tuple
+from tools.release_pipeline import ROOT, log, require_digest, save_json, sha256, version_tuple
 
 
 def command(*args: str, allow_missing: bool = False) -> str | None:
@@ -190,7 +190,8 @@ def load_bundle_manifest(directory: Path) -> tuple[Path, dict] | None:
     return archive, manifest
 
 
-def publish(directory: Path) -> dict:
+def publish(directory: Path, expected_sha256: str) -> dict:
+    require_digest(expected_sha256, "uploaded aggregate ZIP digest")
     manifest_path = directory / "release-manifest.json"
     bundle_mode = not manifest_path.is_file()
     if bundle_mode:
@@ -215,7 +216,10 @@ def publish(directory: Path) -> dict:
         raise ValueError("minimum per-platform package gate failed")
     if not archive.is_file() or sha256(archive) != manifest["aggregateArchive"]["sha256"]:
         raise ValueError("aggregate ZIP missing or SHA-256 mismatch")
+    if sha256(archive) != expected_sha256.lower():
+        raise ValueError("downloaded Actions Artifact differs from the ZIP verified before upload")
     verify_nested_archives(archive, manifest)
+    log("uploaded_artifact_verified", name=archive.name, sha256=expected_sha256.lower())
     if not bundle_mode:
         checksums = directory / f"{archive.name}.sha256"
         if checksums.read_text(encoding="utf-8") != f"{sha256(archive)}  {archive.name}\n":
@@ -258,9 +262,10 @@ def publish(directory: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", type=Path, required=True)
+    parser.add_argument("--expected-sha256", required=True, help="ZIP digest computed before Actions Artifact upload")
     args = parser.parse_args()
     try:
-        publish(args.dir)
+        publish(args.dir, args.expected_sha256)
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
         log("publication_failed", reason=str(error))
         return 1

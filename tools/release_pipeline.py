@@ -87,6 +87,40 @@ def version_tuple(value: str) -> tuple[int, int, int]:
     return tuple(map(int, match.groups()))
 
 
+def release_base(repository: str) -> str:
+    """Use public application Releases, never orphan tags or drafts, as state."""
+    pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"))
+    published = []
+    for page in pages:
+        for release in page:
+            tag = release["tag_name"]
+            if release["draft"] or release["prerelease"] or not release.get("published_at"):
+                continue
+            if not tag.startswith("v") or VERSION_RE.fullmatch(tag[1:]) is None:
+                continue
+            if not any((asset["name"] == f"neurobridge-{tag}.zip" or (asset["name"].startswith(f"neurobridge-{tag}-") and asset["name"].endswith(".zip"))) and asset.get("state") == "uploaded" for asset in release.get("assets", [])):
+                continue
+            published.append((version_tuple(tag[1:]), tag))
+    if published:
+        _, tag = max(published)
+        base = run("git", "rev-parse", f"refs/tags/{tag}^{{commit}}")
+        registry = tomllib.loads(run("git", "show", f"{base}:neurobridge/version_registry.toml"))
+        if registry["application"]["version"] != tag[1:]:
+            raise ValueError(f"published Release {tag} differs from its source version")
+        log("release_baseline", source="public_release", tag=tag, commit=base)
+        return base
+    # Before the first public Release, walk version history rather than HEAD^.
+    # A bump may precede several packaging commits or a failed tagged attempt.
+    current = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["application"]["version"]
+    for commit in run("git", "rev-list", "--first-parent", "HEAD", "--", "neurobridge/version_registry.toml").splitlines():
+        registry = tomllib.loads(run("git", "show", f"{commit}:neurobridge/version_registry.toml"))
+        previous = registry.get("application", {}).get("version")
+        if previous is not None and version_tuple(previous) < version_tuple(current):
+            log("release_baseline", source="initial_version_history", commit=commit, version=previous)
+            return commit
+    raise ValueError("no public application Release or earlier application version found; cannot establish the initial release baseline")
+
+
 def gate(base: str) -> dict[str, object]:
     current_registry = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))
     try:
@@ -270,7 +304,9 @@ def main() -> int:
     plan = commands.add_parser("plan")
     plan.add_argument("--output", type=Path)
     check = commands.add_parser("gate")
-    check.add_argument("--base", required=True)
+    baseline = check.add_mutually_exclusive_group(required=True)
+    baseline.add_argument("--base")
+    baseline.add_argument("--repository", help="resolve the baseline from public GitHub Releases")
     check.add_argument("--output", type=Path)
     target = commands.add_parser("target")
     target.add_argument("--target", required=True)
@@ -288,7 +324,7 @@ def main() -> int:
                 save_json(args.output, value)
             print(json.dumps(value, separators=(",", ":")))
         elif args.command == "gate":
-            value = gate(args.base)
+            value = gate(args.base or release_base(args.repository))
             if args.output:
                 save_json(args.output, value)
         elif args.command == "target":

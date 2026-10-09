@@ -176,7 +176,7 @@ class ReleaseVersionGateTests(unittest.TestCase):
         self.assertFalse(result["productChanged"])
         self.assertFalse(result["shouldRelease"])
 
-    def test_advancing_the_application_version_releases(self) -> None:
+    def advance_version(self) -> str:
         registry = self.root / "neurobridge/version_registry.toml"
         text = registry.read_text(encoding="utf-8")
         current = tomllib.loads(text)["application"]["version"]
@@ -188,9 +188,57 @@ class ReleaseVersionGateTests(unittest.TestCase):
         text = text.replace("[[application_release_changes]]", entry + "[[application_release_changes]]", 1)
         registry.write_text(text, encoding="utf-8")
         self.commit("bump the application version")
+        return bumped
+
+    def test_advancing_the_application_version_releases(self) -> None:
+        bumped = self.advance_version()
         result = release_pipeline.gate("HEAD~1")
         self.assertEqual(result["applicationVersion"], bumped)
         self.assertTrue(result["shouldRelease"])
+
+    def public_releases(self, pages: list):
+        real_run = release_pipeline.run
+
+        def run_with_releases(*args: str) -> str:
+            if args[0] == "gh":
+                return json.dumps(pages)
+            return real_run(*args)
+
+        return mock.patch.object(release_pipeline, "run", side_effect=run_with_releases)
+
+    def test_first_release_ignores_failed_tag_and_walks_past_later_commits(self) -> None:
+        base = self.git("rev-parse", "HEAD")
+        self.advance_version()
+        self.git("tag", "-a", "v" + tomllib.loads(release_pipeline.REGISTRY.read_text())["application"]["version"], "-m", "failed attempt")
+        self.shipped_file().write_text("packaging correction\n")
+        self.commit("follow-up after bump")
+        with self.public_releases([[]]):
+            resolved = release_pipeline.release_base("example/repo")
+        self.assertEqual(resolved, base)
+        self.assertTrue(release_pipeline.gate(resolved)["shouldRelease"])
+
+    def test_only_public_releases_with_uploaded_zip_count_as_published(self) -> None:
+        version = tomllib.loads(release_pipeline.REGISTRY.read_text())["application"]["version"]
+        base = self.git("rev-parse", "HEAD")
+        self.git("tag", "-a", "v" + version, "-m", "published")
+        self.advance_version()
+        current = tomllib.loads(release_pipeline.REGISTRY.read_text())["application"]["version"]
+        self.git("tag", "-a", "v" + current, "-m", "failed draft")
+        old = {"tag_name": "v" + version, "draft": False, "prerelease": False, "published_at": "2026-10-01T00:00:00Z", "assets": [{"name": f"neurobridge-v{version}.zip", "state": "uploaded"}]}
+        latest = {**old, "tag_name": "v" + current, "assets": [{"name": f"neurobridge-v{current}.zip", "state": "uploaded"}]}
+        for invalid in ({**latest, "draft": True}, {**latest, "prerelease": True}, {**latest, "assets": []}, {**latest, "published_at": None}):
+            with self.subTest(release=invalid), self.public_releases([[invalid], [old]]):
+                resolved = release_pipeline.release_base("example/repo")
+                self.assertEqual(resolved, base)
+                self.assertTrue(release_pipeline.gate(resolved)["shouldRelease"])
+        with self.public_releases([[latest], [old]]):
+            resolved = release_pipeline.release_base("example/repo")
+            self.assertFalse(release_pipeline.gate(resolved)["shouldRelease"])
+
+    def test_release_lookup_errors_do_not_fall_back_to_tags(self) -> None:
+        with mock.patch.object(release_pipeline, "run", side_effect=subprocess.CalledProcessError(1, "gh")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                release_pipeline.release_base("example/repo")
 
 
 if __name__ == "__main__":

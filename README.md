@@ -4,9 +4,11 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于 M1 验收范围。
 
-发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。应用版本递增的 `master` 合入尝试全部 32 个包目标；Windows 和麒麟各至少一个合格包、两个平台 ZIP、总 ZIP、清单和日志本地校验成功后创建 tag，再创建 draft GitHub Release，资产复验后公开。版本不变的合入记录跳过发布，未完成目标逐项列明。产品版本统一取版本台账的 `[application].version`；旧平台版本字段不参与新发布。当前不启用签名或公证，真机验证结果通过独立补充附件持续记录。
+发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。应用版本递增的 `master` 合入尝试全部 32 个包目标；Windows 和麒麟各至少一个合格包、两个平台 ZIP、总 ZIP、清单和日志本地校验成功后，先上传 Actions Artifact，回下载核对上传前总 ZIP 的 SHA-256 和内容，再创建 tag、draft GitHub Release，资产复验后公开。发布基线取带总 ZIP 的已公开正式应用 Release；孤立 tag 和 draft 不代表发布成功，首次发布沿版本历史寻找递增前基线。版本不变的合入记录跳过发布，未完成目标逐项列明。产品版本统一取版本台账的 `[application].version`；旧平台版本字段不参与新发布。当前不启用签名或公证，真机验证结果通过独立补充附件持续记录。
 
 发布实现及所需的离线安装包输入见[发布工作流技术方案](doc/tech/发布工作流技术方案.md)。当前仓库尚无全部目标的正式安装包构建环境；CI 会把缺失输入记为 `blocked`。PR 仍上传包含全部目标结果的诊断总 ZIP，但不创建 tag 或 GitHub Release。合入 `master` 后，两平台最低门槛未满足时发布失败。源码候选包不算正式安装包。
+
+原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。
 
 原生安装包工作流上传 Artifact 后，手动运行 `Release` 并填写 `native_input_run_id` 选择输入运行；已移除发布输入仓库变量的自动写入与读取。后续自动输入方案接入前，自动 Release 因缺少 Run ID 将输入记为 `blocked`，无法完成发布。
 

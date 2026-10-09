@@ -303,14 +303,40 @@ DEB_UPGRADE_GUARD = """case "${1:-}" in
 esac"""
 
 
+SERIAL_ACCESS = """configure_serial_access() {
+  serial_found=false
+  serial_authorized=false
+  for device in /dev/ttyACM* /dev/ttyUSB*; do
+    [ -c "$device" ] || continue
+    serial_found=true
+    device_group=$(stat -Lc '%G' -- "$device") || return 1
+    [ "$device_group" != root ] || continue
+    getent group "$device_group" >/dev/null 2>&1 || continue
+    if ! usermod -aG "$device_group" neurobridge; then
+      echo "Cannot grant neurobridge access to $device (group $device_group)." >&2
+      return 1
+    fi
+    serial_authorized=true
+  done
+  if [ "$serial_found" = false ]; then
+    echo "No USB serial device found; connect the headset and reinstall this package to grant its device group, then restart neurobridge.service. Installation does not verify capture readiness." >&2
+  elif [ "$serial_authorized" = false ]; then
+    echo "No usable non-root USB serial group found; check device ownership before reinstalling. Refusing to grant the root group." >&2
+    return 1
+  fi
+}
+configure_serial_access || exit 1"""
+
+
 def deb_scripts(root: Path, target: dict[str, str]) -> None:
     debian = root / "DEBIAN"
     debian.mkdir()
     (debian / "control").write_text(deb_control(target), encoding="utf-8")
-    (debian / "postinst").write_text("""#!/bin/sh
+    (debian / "postinst").write_text(f"""#!/bin/sh
 set -eu
 getent group neurobridge >/dev/null 2>&1 || addgroup --system neurobridge || true
 id -u neurobridge >/dev/null 2>&1 || adduser --system --ingroup neurobridge --no-create-home --shell /usr/sbin/nologin neurobridge || true
+{SERIAL_ACCESS}
 install -d -o neurobridge -g neurobridge -m 0750 /var/lib/neurobridge/recordings /var/log/neurobridge /etc/neurobridge
 [ -e /etc/neurobridge/gateway.toml ] || install -o root -g neurobridge -m 0640 /opt/neurobridge/gateway.toml.example /etc/neurobridge/gateway.toml
 install -m 0644 /opt/neurobridge/packaging/neurobridge.service /etc/systemd/system/neurobridge.service
@@ -356,6 +382,7 @@ def rpm_spec(target: dict[str, str], topdir: Path) -> Path:
     preun = indent_block(UNIT_OWNERSHIP + "\n" + STOP_HELPER, 10)
     refusal = indent_block(STOP_REFUSAL, 10)
     postun = indent_block(UNIT_OWNERSHIP + "\n" + REMOVE_HELPER, 10)
+    serial_access = indent_block(SERIAL_ACCESS, 8)
     spec.write_text(textwrap.dedent(f'''\
         Name: {package_name}
         Version: {APPLICATION_VERSION}
@@ -375,6 +402,7 @@ def rpm_spec(target: dict[str, str], topdir: Path) -> Path:
         %post
         getent group neurobridge >/dev/null 2>&1 || groupadd --system neurobridge || true
         id -u neurobridge >/dev/null 2>&1 || useradd --system --gid neurobridge --home-dir /nonexistent --shell /usr/sbin/nologin neurobridge || true
+{serial_access}
         install -d -o neurobridge -g neurobridge -m 0750 /var/lib/neurobridge/recordings /var/log/neurobridge /etc/neurobridge
         test -e /etc/neurobridge/gateway.toml || install -o root -g neurobridge -m 0640 /opt/neurobridge/gateway.toml.example /etc/neurobridge/gateway.toml
         install -m 0644 /opt/neurobridge/packaging/neurobridge.service /etc/systemd/system/neurobridge.service

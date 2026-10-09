@@ -228,6 +228,69 @@ class NativePackageBuilderTests(unittest.TestCase):
                     if target_id.startswith("kylin"):
                         self.assertTrue(os.access(exporter, os.X_OK))
 
+    def test_native_post_install_grants_actual_usb_serial_groups(self) -> None:
+        # Execute both generated scriptlets with character-device fixtures and
+        # mocked system commands; never change accounts or services on this host.
+        cases = (
+            ("attached", ("usb-headset", "serial-users"), False, 0),
+            ("new-account", ("usb-headset",), False, 0),
+            ("no-device", (), False, 0),
+            ("root-only", ("root",), False, 1),
+            ("unknown-group", ("missing",), False, 1),
+            ("usermod-failed", ("usb-headset",), True, 1),
+        )
+        for kind in ("deb", "rpm"):
+            for name, groups, fail_usermod, expected_code in cases:
+                with self.subTest(kind=kind, case=name), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    target = BUILDER.target_for(f"kylin-server-x86_64-{kind}")
+                    if kind == "deb":
+                        BUILDER.deb_scripts(root, target)
+                        script = (root / "DEBIAN/postinst").read_text(encoding="utf-8")
+                    else:
+                        spec = BUILDER.rpm_spec(target, root / "rpm").read_text(encoding="utf-8")
+                        script = spec.split("%post\n", 1)[1].split("%preun\n", 1)[0]
+                    devices = root / "devices"
+                    devices.mkdir()
+                    for index in range(len(groups)):
+                        (devices / f"ttyUSB{index}").symlink_to("/dev/null")
+                    script = script.replace("/dev/tty", str(devices / "tty"))
+                    group_cases = "\n".join(f"*ttyUSB{index}) echo '{group}' ;;" for index, group in enumerate(groups))
+                    trace = root / "trace"
+                    new_account = name == "new-account"
+                    harness = f"""getent() {{ [ "$2" != missing ] && {{ [ "$2" != neurobridge ] || [ '{int(new_account)}' = 0 ]; }}; }}
+id() {{ return {int(new_account)}; }}
+addgroup() {{ echo 'group-created' >> "$TRACE"; }}
+groupadd() {{ echo 'group-created' >> "$TRACE"; }}
+adduser() {{ echo 'account-created' >> "$TRACE"; }}
+useradd() {{ echo 'account-created' >> "$TRACE"; }}
+stat() {{ for value do device=$value; done; case "$device" in
+{group_cases}
+*) return 1 ;; esac; }}
+usermod() {{ echo "usermod $*" >> "$TRACE"; return {int(fail_usermod)}; }}
+install() {{ return 0; }}
+systemctl() {{ echo "systemctl $*" >> "$TRACE"; }}
+"""
+                    result = subprocess.run(["/bin/sh", "-c", harness + script], text=True, capture_output=True, env={**os.environ, "TRACE": str(trace)})
+                    self.assertEqual(result.returncode, expected_code, result.stderr)
+                    calls = trace.read_text().splitlines() if trace.exists() else []
+                    if name == "attached":
+                        for group in groups:
+                            self.assertIn(f"usermod -aG {group} neurobridge", calls)
+                        # Reinstallation is safe: -aG preserves existing groups.
+                        repeated = subprocess.run(["/bin/sh", "-c", harness + script], text=True, capture_output=True, env={**os.environ, "TRACE": str(trace)})
+                        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+                    elif name == "new-account":
+                        grant = f"usermod -aG {groups[0]} neurobridge"
+                        self.assertLess(calls.index("group-created"), calls.index("account-created"))
+                        self.assertLess(calls.index("account-created"), calls.index(grant))
+                    elif name == "no-device":
+                        self.assertIn("connect the headset and reinstall", result.stderr)
+                        self.assertFalse(any(call.startswith("usermod") for call in calls))
+                    if expected_code:
+                        self.assertFalse(any(call.startswith("systemctl") for call in calls))
+                    self.assertNotIn("usermod -aG root neurobridge", calls)
+
 
 if __name__ == "__main__":
     unittest.main()
