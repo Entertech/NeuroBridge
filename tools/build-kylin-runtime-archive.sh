@@ -94,6 +94,15 @@ install -d -m 0755 "$stage/runtime/bin" "$stage/payload" "$stage/packaging"
 cp -a "$python_runtime/." "$stage/runtime/bin/python-runtime/"
 ln -s python-runtime/bin/python3 "$stage/runtime/bin/python"
 install -m 0755 "$bridge" "$stage/runtime/bin/neurobridge_affective_bridge"
+
+# The wheels are installed into .venv, not into the portable interpreter, so the
+# interpreter copied above cannot import serial or websockets on its own.  Copy
+# the installed packages across.  The gateway source is copied separately.
+venv_site=("$source_root"/.venv/lib/python*/site-packages)
+[[ -d ${venv_site[0]} ]] || fail "No installed packages found in .venv. Run linux/setup-kylin-python.sh before building the archive."
+runtime_site=$("$stage/runtime/bin/python" -c 'import site; print([p for p in site.getsitepackages() if p.endswith("site-packages")][0])')
+[[ -n $runtime_site && -d $runtime_site ]] || fail "The staged interpreter has no site-packages directory."
+"$source_root/tools/stage-venv-packages.sh" "${venv_site[0]}" "$runtime_site"
 [[ -x $stage/runtime/bin/python && -x $stage/runtime/bin/neurobridge_affective_bridge ]] \
   || fail "Staged runtime is incomplete."
 

@@ -115,6 +115,7 @@ class BootstrapPackageTests(unittest.TestCase):
                 "linux/build-algorithm-bridge.sh",
                 "mac/algorithm_bridge/CMakeLists.txt",
                 "mac/algorithm_bridge/affective_bridge.cpp",
+                "packaging/kylin/offline/cmake-3.31.6-linux-x86_64.tar.gz",
                 "tools/build-kylin-runtime-archive.sh",
                 "config/kylin-runtime-manifest.toml",
                 "config/gateway.toml.example",
@@ -157,6 +158,34 @@ class BootstrapPackageTests(unittest.TestCase):
                 ["bootstrap-build.sh", "bootstrap-install.sh", "fetch-runtime.sh",
                  "kylin-runtime-manifest.toml", "source"],
             )
+
+
+class StageVenvPackagesTests(unittest.TestCase):
+    def test_wheels_are_copied_and_editable_installs_are_skipped(self) -> None:
+        if not shutil.which("bash"):
+            self.skipTest("bash is required")
+        script = ROOT / "tools/stage-venv-packages.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            venv = root / "venv"
+            runtime = root / "runtime"
+            (venv / "serial").mkdir(parents=True)
+            (venv / "serial/__init__.py").write_text("serial\n")
+            (venv / "websockets").mkdir()
+            (venv / "websockets/__init__.py").write_text("websockets\n")
+            (venv / "__pycache__").mkdir()
+            (venv / "__pycache__/stale.pyc").write_bytes(b"pyc")
+            (venv / "neurobridge-0.1.0.dist-info").write_text("editable: /checkout/neurobridge\n")
+            (venv / "pip.pth").write_text("import pip\n")
+            runtime.mkdir()
+
+            result = subprocess.run(["bash", str(script), str(venv), str(runtime)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((runtime / "serial/__init__.py").read_text(), "serial\n")
+            self.assertTrue((runtime / "websockets/__init__.py").is_file())
+            self.assertFalse((runtime / "__pycache__").exists())
+            self.assertFalse((runtime / "neurobridge-0.1.0.dist-info").exists())
+            self.assertFalse((runtime / "pip.pth").exists())
 
 
 class FetchRuntimeTests(unittest.TestCase):

@@ -25,7 +25,11 @@ root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 runtime_dir="$root_dir/.runtime"
 algorithm_dir="$runtime_dir/algorithm"
 config_path="$runtime_dir/config/gateway.toml"
-package_dir="$root_dir/algorithm-packages"
+# The bootstrap package carries the pinned CMake archive under offline/ so the
+# install never downloads it.  A checkout that has its own copy in
+# algorithm-packages/ still takes precedence.
+package_dir="$root_dir/packaging/kylin/offline"
+[[ -f $package_dir/$cmake_archive ]] || package_dir="$root_dir/algorithm-packages"
 toolchain_dir="$algorithm_dir/toolchain"
 cmake_version="3.31.6"
 cmake_archive="cmake-${cmake_version}-linux-x86_64.tar.gz"

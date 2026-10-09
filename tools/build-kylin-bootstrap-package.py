@@ -104,7 +104,10 @@ def stage_payload(root: Path) -> None:
             raise ValueError(f"bootstrap source is missing: {relative}")
         shutil.copytree(
             origin, source / relative,
-            ignore=shutil.ignore_patterns(*EXCLUDED, "offline"),
+            # The wheelhouse under offline/ is staged at the top of the source
+            # tree, where the setup script looks for it.  The CMake archive stays
+            # here: setup-kylin-algorithm.sh reads it from offline/ directly.
+            ignore=shutil.ignore_patterns(*EXCLUDED, "wheelhouse"),
             dirs_exist_ok=True,
         )
     stage_offline_inputs(source)
