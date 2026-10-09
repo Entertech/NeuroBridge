@@ -8,7 +8,7 @@ fail() {
   exit 1
 }
 
-[[ ${EUID} -ne 0 ]] || fail "Do not build the SDK bridge as root. Use a dedicated POC operator account."
+[[ ${EUID} -ne 0 || ${NEUROBRIDGE_BOOTSTRAP:-} == 1 ]] || fail "Do not build the SDK bridge as root. Use a dedicated POC operator account."
 [[ $(uname -m) == "x86_64" ]] || fail "The first-release algorithm bridge supports Linux x86_64 only."
 [[ -r /etc/os-release ]] || fail "Cannot identify the operating system."
 . /etc/os-release

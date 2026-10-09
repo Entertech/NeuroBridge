@@ -61,11 +61,6 @@ def manifest(sha: str, url: str, file_name: str = "runtime.tar.gz") -> str:
 
 
 class BootstrapPackageTests(unittest.TestCase):
-    def test_build_is_refused_until_an_archive_is_published(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ValueError, "sha256|download URL"):
-                BUILDER.build("deb", Path(directory))
-
     def test_deb_carries_the_manifest_and_scripts_but_no_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -79,20 +74,64 @@ class BootstrapPackageTests(unittest.TestCase):
                 payload = source / "usr/lib/neurobridge-bootstrap"
                 seen["names"] = sorted(item.name for item in payload.iterdir())
                 seen["control"] = (source / "DEBIAN/control").read_text(encoding="utf-8")
+                seen["postinst"] = (source / "DEBIAN/postinst").read_text(encoding="utf-8")
                 Path(args[-1]).write_bytes(b"!<arch>\n" + b"\0" * 2048)
 
-            with mock.patch.object(BUILDER, "manifest_ready", return_value=True), \
-                    mock.patch.object(BUILDER.shutil, "which", return_value="dpkg-deb"), \
+            with mock.patch.object(BUILDER.shutil, "which", return_value="dpkg-deb"), \
                     mock.patch.object(BUILDER, "run", side_effect=dpkg_deb):
                 output = BUILDER.build("deb", root)
 
             self.assertEqual(
                 seen["names"],
-                ["bootstrap-install.sh", "fetch-runtime.sh", "kylin-runtime-manifest.toml"],
+                ["bootstrap-build.sh", "bootstrap-install.sh", "fetch-runtime.sh",
+                 "kylin-runtime-manifest.toml", "source"],
             )
             self.assertGreater(output.stat().st_size, 1024)
             self.assertIn("Architecture: amd64", seen["control"])
-            self.assertNotIn("Depends: python", seen["control"])
+            # The compiler and Eigen are declared dependencies so the install
+            # builds the runtime itself instead of asking the user to run a script.
+            self.assertIn("g++", seen["control"])
+            self.assertIn("libeigen3-dev", seen["control"])
+            self.assertIn("bootstrap-build.sh", seen["postinst"])
+            self.assertNotIn("echo", seen["postinst"])
+
+    def test_bundled_source_is_enough_to_build_the_runtime(self) -> None:
+        """The one Kylin machine builds from the package, so the source it
+        carries has to contain everything the build reads."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            present = {}
+
+            def dpkg_deb(args, **kwargs):
+                bundled = Path(args[args.index("--root-owner-group") + 1]) / "usr/lib/neurobridge-bootstrap/source"
+                # The staging directory is removed when build() returns, so the
+                # check has to happen while dpkg-deb is nominally running.
+                for relative in (
+                "pyproject.toml",
+                "requirements.lock",
+                "sdk.lock",
+                "linux/setup-kylin-python.sh",
+                "linux/setup-kylin-algorithm.sh",
+                "linux/build-algorithm-bridge.sh",
+                "tools/build-kylin-runtime-archive.sh",
+                "config/kylin-runtime-manifest.toml",
+                "config/gateway.toml.example",
+                "packaging/kylin/neurobridge.service",
+                "third_party/NumCpp/CMakeLists.txt",
+                "neurobridge/__init__.py",
+            ):
+                    self.assertTrue((bundled / relative).is_file(), relative)
+                self.assertTrue(any((bundled / "python-runtime").glob("*.tar.gz")))
+                self.assertTrue(any((bundled / "wheelhouse").glob("*.whl")))
+                self.assertFalse((bundled / "runtime").exists())
+                present["checked"] = True
+                Path(args[-1]).write_bytes(b"!<arch>\n" + b"\0" * 2048)
+
+            with mock.patch.object(BUILDER.shutil, "which", return_value="dpkg-deb"), \
+                    mock.patch.object(BUILDER, "run", side_effect=dpkg_deb):
+                BUILDER.build("deb", root)
+
+            self.assertTrue(present.get("checked"))
 
     def test_rpm_build_uses_the_same_payload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -107,14 +146,14 @@ class BootstrapPackageTests(unittest.TestCase):
                 rpm.parent.mkdir(parents=True)
                 rpm.write_bytes(bytes.fromhex("edabeedb") + b"\0" * 2048)
 
-            with mock.patch.object(BUILDER, "manifest_ready", return_value=True), \
-                    mock.patch.object(BUILDER.shutil, "which", return_value="rpmbuild"), \
+            with mock.patch.object(BUILDER.shutil, "which", return_value="rpmbuild"), \
                     mock.patch.object(BUILDER, "run", side_effect=rpmbuild):
                 BUILDER.build("rpm", root)
 
             self.assertEqual(
                 seen["names"],
-                ["bootstrap-install.sh", "fetch-runtime.sh", "kylin-runtime-manifest.toml"],
+                ["bootstrap-build.sh", "bootstrap-install.sh", "fetch-runtime.sh",
+                 "kylin-runtime-manifest.toml", "source"],
             )
 
 
@@ -227,6 +266,11 @@ class BootstrapInstallScriptTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(archive.returncode, 0, archive.stderr)
+        build = subprocess.run(
+            [shell, "-n", str(ROOT / "packaging/kylin/bootstrap-build.sh")],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(build.returncode, 0, build.stderr)
 
 
 if __name__ == "__main__":

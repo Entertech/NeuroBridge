@@ -56,7 +56,9 @@ if [[ ${1:-} == -h || ${1:-} == --help ]]; then
   exit 0
 fi
 [[ $# -eq 0 ]] || fail "Unknown option: $1"
-[[ ${EUID:-$(id -u)} -ne 0 ]] || fail "Run without sudo so project build files belong to the current user."
+# See setup-kylin-python.sh: root is only acceptable for the bootstrap package,
+# which builds in a disposable copy of the tree.
+[[ ${EUID:-$(id -u)} -ne 0 || ${NEUROBRIDGE_BOOTSTRAP:-} == 1 ]] || fail "Run without sudo so project build files belong to the current user."
 [[ -n $root_dir && $root_dir != / && -f $root_dir/pyproject.toml ]] || fail "Invalid NeuroBridge project root: $root_dir"
 for path in "$runtime_dir" "$algorithm_dir"; do
   [[ ! -L $path ]] || fail "$path must be a real project directory, not a symlink."
@@ -199,6 +201,13 @@ install_build_dependencies() {
 
 if ! system_build_dependencies_ready; then
   echo "System build prerequisites are incomplete. Required: C++17 compiler and Eigen3 ${locked_eigen_version}."
+  # The bootstrap package declares these as install dependencies, so they are
+  # already present here.  Asking, or running the package manager from inside
+  # the install, would either wait for input that never comes or deadlock on
+  # the package manager lock.
+  if [[ ${NEUROBRIDGE_BOOTSTRAP:-} == 1 ]]; then
+    fail "Build dependencies are missing. The bootstrap package should have installed a C++17 compiler and Eigen3 ${locked_eigen_version} before this step."
+  fi
   if ask_yes_no "是否使用银河麒麟当前软件源安装算法构建依赖？"; then
     install_build_dependencies || fail "System dependency installation failed. See: $setup_log"
   else

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Produce the runtime archive that every Kylin bootstrap installer consumes.
+# Build the runtime archive once, on a Galaxy Kylin V10 x86_64 machine.
 #
-# This is the one step that has to run on Galaxy Kylin V10 x86_64, because the
-# Python runtime and the algorithm bridge are built for that machine.  It runs
-# the two existing setup scripts, then packs their output into one archive and
-# records the archive digest in the manifest the installer ships with.  No
-# other machine needs a compiler or a checkout of this repository.
+# The source it builds from does not have to be a git checkout.  The bootstrap
+# package carries the same source tree, and on the one Kylin machine that
+# produces the runtime this script is pointed at that tree with --source-root.
+# It runs the two existing setup scripts, packs their output into one archive,
+# and writes a manifest that records the archive digest next to it.  The source
+# tree is never modified, so the copy inside the package stays as it shipped.
 set -euo pipefail
 
 fail() {
@@ -15,11 +16,15 @@ fail() {
 
 usage() {
   cat <<'EOF'
-Usage: tools/build-kylin-runtime-archive.sh [--output-dir <directory>]
+Usage: build-kylin-runtime-archive.sh [--source-root <dir>] [--output-dir <dir>]
 
-Runs on Galaxy Kylin V10 x86_64.  Builds the project Python runtime and the
-algorithm bridge, packs them into one archive, and writes that archive's
-sha256 into config/kylin-runtime-manifest.toml.
+Runs on Galaxy Kylin V10 x86_64.  --source-root is the NeuroBridge tree to
+build from; it defaults to the repository that contains this script.  The
+bootstrap package passes the source tree it carries.
+
+Builds the project Python runtime and the algorithm bridge, packs them into
+one archive under --output-dir, and writes kylin-runtime-manifest.toml beside
+it with the archive sha256 filled in.  The source tree is not modified.
 
 The archive contains, at its top level:
   runtime/                         Python 3.11 and the algorithm bridge
@@ -32,43 +37,51 @@ download their own pinned inputs, or reuse copies already in the tree.
 EOF
 }
 
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
-output_dir=$root_dir/build/kylin-runtime
+script_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+source_root=$script_root
+output_dir=
 
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --source-root) source_root=${2:-}; shift 2 ;;
     --output-dir) output_dir=${2:-}; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) fail "Unknown option: $1" ;;
   esac
 done
 
-[[ ${EUID:-$(id -u)} -ne 0 ]] || fail "Run as the normal desktop user. The setup scripts use sudo only where they need it."
+[[ -n $source_root && -d $source_root && ! -L $source_root ]] || fail "Source root is missing or is a symlink: ${source_root:-<unset>}"
+source_root=$(cd "$source_root" && pwd -P)
+[[ -n $output_dir ]] || output_dir=$source_root/build/kylin-runtime
+
+# Root is only acceptable when the bootstrap package drives the build, because
+# a package install runs as root and has no desktop user to drop to.
+[[ ${EUID:-$(id -u)} -ne 0 || ${NEUROBRIDGE_BOOTSTRAP:-} == 1 ]] || fail "Run as the normal desktop user. The setup scripts use sudo only where they need it."
 [[ $(uname -m) == x86_64 ]] || fail "The runtime archive is built for x86_64; detected $(uname -m)."
 [[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."
 # shellcheck disable=SC1091
 . /etc/os-release
 [[ ${ID,,} == kylin ]] || fail "This archive must be built on Galaxy Kylin; detected ID=${ID:-unknown}."
-[[ -f $root_dir/pyproject.toml ]] || fail "Run this from a NeuroBridge checkout."
+[[ -f $source_root/pyproject.toml && ! -L $source_root/pyproject.toml ]] || fail "Source root is not a NeuroBridge tree: $source_root"
 
-python_runtime=$root_dir/python-runtime/python
-bridge=$root_dir/.runtime/algorithm/neurobridge_affective_bridge
+python_runtime=$source_root/python-runtime/python
+bridge=$source_root/.runtime/algorithm/neurobridge_affective_bridge
 
 [[ -x $python_runtime/bin/python3 && -x $bridge ]] || {
   printf 'Python runtime or algorithm bridge is not built yet; running the existing setup.\n'
-  "$root_dir/linux/setup-kylin-python.sh"
-  install -d -m 0750 "$root_dir/.runtime/config"
-  [[ -f $root_dir/.runtime/config/gateway.toml ]] || cp "$root_dir/config/gateway.toml.example" "$root_dir/.runtime/config/gateway.toml"
-  "$root_dir/linux/setup-kylin-algorithm.sh"
+  "$source_root/linux/setup-kylin-python.sh"
+  install -d -m 0750 "$source_root/.runtime/config"
+  [[ -f $source_root/.runtime/config/gateway.toml ]] || cp "$source_root/config/gateway.toml.example" "$source_root/.runtime/config/gateway.toml"
+  "$source_root/linux/setup-kylin-algorithm.sh"
 }
 [[ -x $python_runtime/bin/python3 ]] || fail "Python runtime was not produced at $python_runtime."
 [[ -x $bridge ]] || fail "Algorithm bridge was not produced at $bridge."
 "$python_runtime/bin/python3" -c 'import sys; assert sys.version_info >= (3, 11)' \
   || fail "The built Python runtime is older than 3.11."
 
-manifest=$root_dir/config/kylin-runtime-manifest.toml
-[[ -f $manifest && ! -L $manifest ]] || fail "Runtime manifest is missing: $manifest"
-file_name=$(awk -F'"' '/^file_name = / { print $2; exit }' "$manifest")
+template=$source_root/config/kylin-runtime-manifest.toml
+[[ -f $template && ! -L $template ]] || fail "Runtime manifest template is missing: $template"
+file_name=$(awk -F'"' '/^file_name = / { print $2; exit }' "$template")
 [[ $file_name =~ ^[A-Za-z0-9._+-]+$ ]] || fail "Manifest file name is not a safe path component: ${file_name:-<empty>}"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/neurobridge-runtime.XXXXXX")
@@ -85,11 +98,11 @@ install -m 0755 "$bridge" "$stage/runtime/bin/neurobridge_affective_bridge"
   || fail "Staged runtime is incomplete."
 
 for name in neurobridge web requirements.lock pyproject.toml sdk.lock config; do
-  [[ -e $root_dir/$name ]] || fail "Payload is missing from the checkout: $name"
-  cp -a "$root_dir/$name" "$stage/payload/$name"
+  [[ -e $source_root/$name ]] || fail "Payload is missing from the source tree: $name"
+  cp -a "$source_root/$name" "$stage/payload/$name"
 done
-cp "$root_dir/config/gateway.toml.example" "$stage/gateway.toml.example"
-cp "$root_dir/packaging/kylin/neurobridge.service" "$stage/packaging/neurobridge.service"
+cp "$source_root/config/gateway.toml.example" "$stage/gateway.toml.example"
+cp "$source_root/packaging/kylin/neurobridge.service" "$stage/packaging/neurobridge.service"
 
 # The archive is only worth publishing if the interpreter it carries can
 # import the gateway it carries.  This is the same check the per-machine
@@ -106,17 +119,16 @@ tar -C "$stage" -czf "$archive" .
 digest=$(sha256sum -- "$archive" | awk '{print $1}')
 [[ $digest =~ ^[0-9a-f]{64}$ ]] || fail "Could not hash the archive."
 
-# Record the digest in place.  The URL is left untouched: publishing the
-# archive and deciding where it is fetched from is a separate step.
-updated=$(mktemp "$work/manifest.XXXXXX")
+# The manifest is written next to the archive, not back into the source tree:
+# the tree shipped inside the bootstrap package must stay unchanged.
+manifest=$output_dir/kylin-runtime-manifest.toml
 awk -v digest="$digest" '
   /^sha256 = / { print "sha256 = \"" digest "\""; next }
   { print }
-' "$manifest" >"$updated"
-grep -q "^sha256 = \"${digest}\"$" "$updated" || fail "Could not record the archive digest in the manifest."
-cp -- "$updated" "$manifest"
+' "$template" >"$manifest"
+grep -q "^sha256 = \"${digest}\"$" "$manifest" || fail "Could not record the archive digest in the manifest."
 
 printf 'archive=%s\n' "$archive"
 printf 'sha256=%s\n' "$digest"
 printf 'manifest=%s\n' "$manifest"
-printf 'The download URL in the manifest is unchanged. Set it to where this archive is published before building the bootstrap installer.\n'
+printf 'The download URL in the manifest is unchanged. Set it to where this archive is published before building the bootstrap installer for other machines.\n'

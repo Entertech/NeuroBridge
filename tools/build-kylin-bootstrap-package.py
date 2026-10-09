@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Build the small Kylin installer that fetches its runtime at install time.
+"""Build the Kylin package that both produces and installs the runtime.
 
-The package this builds contains the manifest, the fetch script and the
-install script.  It does not contain a Python runtime or the algorithm bridge;
-those are produced once by ``tools/build-kylin-runtime-archive.sh`` and arrive
-on each machine through the manifest URL or a local copy of the same archive.
+The package carries two things.  One is the per-machine installer: a manifest,
+the fetch script and the install script, which download the runtime or read a
+local copy of it.  The other is the one-time build: the gateway source, the
+vendored algorithm SDK, the pinned Python archive and wheels, and the setup
+scripts that turn them into a runtime.  On the single Kylin machine that
+produces the runtime, ``bootstrap-build.sh`` runs that build and then installs
+the result on the same machine.  Every other machine only runs the installer.
 
-Building the package needs only ``dpkg-deb`` or ``rpmbuild``.  It does not need
-a Kylin machine, because nothing inside the package is compiled.
+The package does not contain a compiled runtime.  Building it needs only
+``dpkg-deb`` or ``rpmbuild`` and does not need a Kylin machine.
 """
 
 from __future__ import annotations
@@ -31,9 +34,34 @@ from neurobridge.versioning import APPLICATION_VERSION
 MANIFEST = ROOT / "config" / "kylin-runtime-manifest.toml"
 FETCH = ROOT / "packaging" / "kylin" / "fetch-runtime.sh"
 INSTALL = ROOT / "packaging" / "kylin" / "bootstrap-install.sh"
+BUILD = ROOT / "packaging" / "kylin" / "bootstrap-build.sh"
 PAYLOAD_DIR = Path("/usr/lib/neurobridge-bootstrap")
 DEB_ARCH = "amd64"
 RPM_ARCH = "x86_64"
+
+# What the one-time build needs from the repository, copied into the package so
+# the Kylin machine that runs it does not need its own checkout.  Paths are
+# relative to the repository root.
+SOURCE_FILES = (
+    "requirements.lock",
+    "pyproject.toml",
+    "sdk.lock",
+)
+SOURCE_DIRS = (
+    "neurobridge",
+    "web",
+    "config",
+    "linux",
+    "packaging/kylin",
+    "tools",
+    "third_party",
+)
+# The pinned Python archive and wheels live under packaging/kylin/offline,
+# because python-runtime/ and wheelhouse/ are gitignored and a CI checkout does
+# not have them.  The setup scripts read them from the top of the source tree,
+# so they are staged there inside the package.
+OFFLINE_RUNTIME = ROOT / "packaging/kylin/offline"
+EXCLUDED = {".git", "__pycache__", ".pytest_cache", "*.pyc"}
 
 
 def digest(path: Path) -> str:
@@ -50,30 +78,55 @@ def run(args: list[str], cwd: Path) -> None:
         raise RuntimeError(result.stderr.strip() or f"command failed ({result.returncode}): {' '.join(args)}")
 
 
-def manifest_ready() -> bool:
-    """A package may only advertise a download when the manifest names a real archive."""
-    text = MANIFEST.read_text(encoding="utf-8")
-    sha = _quoted(text, "sha256")
-    url = _quoted(text, "url")
-    return len(sha) == 64 and bool(url)
-
-
-def _quoted(text: str, key: str) -> str:
-    for line in text.splitlines():
-        prefix = f'{key} = "'
-        if line.startswith(prefix) and line.endswith('"'):
-            return line[len(prefix):-1]
-    raise ValueError(f"manifest has no quoted '{key}' entry")
-
-
 def stage_payload(root: Path) -> None:
     payload = root / PAYLOAD_DIR.relative_to("/")
     payload.mkdir(parents=True)
     shutil.copy2(MANIFEST, payload / "kylin-runtime-manifest.toml")
-    for script in (FETCH, INSTALL):
+    for script in (FETCH, INSTALL, BUILD):
         destination = payload / script.name
         shutil.copy2(script, destination)
         destination.chmod(0o755)
+    source = payload / "source"
+    for relative in SOURCE_FILES:
+        origin = ROOT / relative
+        if not origin.is_file():
+            raise ValueError(f"bootstrap source is missing: {relative}")
+        destination = source / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(origin, destination)
+    for relative in SOURCE_DIRS:
+        origin = ROOT / relative
+        if not origin.is_dir():
+            raise ValueError(f"bootstrap source is missing: {relative}")
+        shutil.copytree(
+            origin, source / relative,
+            ignore=shutil.ignore_patterns(*EXCLUDED, "offline"),
+            dirs_exist_ok=True,
+        )
+    stage_offline_inputs(source)
+
+
+def stage_offline_inputs(source: Path) -> None:
+    """Place the pinned Python archive and wheels where the setup scripts look.
+
+    The scripts read ``python-runtime/`` and ``wheelhouse/`` at the top of the
+    source tree.  Those directories are gitignored, so the package carries its
+    own copy under ``packaging/kylin/offline`` and this lays it out for them.
+    """
+    runtime_dir = OFFLINE_RUNTIME
+    archives = sorted(runtime_dir.glob("cpython-*.tar.gz"))
+    if len(archives) != 1:
+        raise ValueError(f"expected one pinned Python archive in {runtime_dir}, found {len(archives)}")
+    wheels = sorted((runtime_dir / "wheelhouse").glob("*.whl"))
+    if not wheels:
+        raise ValueError(f"no wheels found in {runtime_dir / 'wheelhouse'}")
+    python_dest = source / "python-runtime"
+    python_dest.mkdir()
+    shutil.copy2(archives[0], python_dest / archives[0].name)
+    wheel_dest = source / "wheelhouse"
+    wheel_dest.mkdir()
+    for wheel in wheels:
+        shutil.copy2(wheel, wheel_dest / wheel.name)
 
 
 def deb_control() -> str:
@@ -84,29 +137,42 @@ def deb_control() -> str:
         Priority: optional
         Architecture: {DEB_ARCH}
         Maintainer: Entertech <support@entertech.cn>
-        Depends: ca-certificates
-        Description: NeuroBridge installer that fetches its runtime
-         Installs the NeuroBridge gateway by downloading, or reading a local
-         copy of, the runtime archive recorded in its manifest.
+        Depends: ca-certificates, curl, g++, libeigen3-dev, tar
+        Description: NeuroBridge installer that builds or fetches its runtime
+         On one Galaxy Kylin machine, builds the runtime from the bundled
+         source and installs it.  On every other machine, installs a runtime
+         archive downloaded or copied from that machine.
     """)
+
+
+def write_deb_metadata(root: Path) -> None:
+    """Write the Debian control files before the package is archived.
+
+    Split out from the ``dpkg-deb`` invocation so the staged tree can be
+    inspected, and so a build can be checked without a Debian toolchain.
+    """
+    debian = root / "DEBIAN"
+    debian.mkdir()
+    (debian / "control").write_text(deb_control(), encoding="utf-8")
+    # dpkg passes "configure" on a fresh install and on upgrade.  Building the
+    # runtime takes several minutes and needs the compiler, so it only runs when
+    # the package is first installed; an upgrade keeps the runtime already built.
+    (debian / "postinst").write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        'if [ "${1:-}" = "configure" ] && [ -z "${2:-}" ]; then\n'
+        "  /usr/lib/neurobridge-bootstrap/bootstrap-build.sh\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (debian / "postinst").chmod(0o755)
 
 
 def write_deb(root: Path, output: Path) -> None:
     if shutil.which("dpkg-deb") is None:
         raise RuntimeError("dpkg-deb is required to build the bootstrap deb")
-    debian = root / "DEBIAN"
-    debian.mkdir()
-    (debian / "control").write_text(deb_control(), encoding="utf-8")
-    (debian / "postinst").write_text(
-        "#!/bin/sh\n"
-        "set -eu\n"
-        'echo "NeuroBridge bootstrap package installed."\n'
-        'echo "Run, as root: /usr/lib/neurobridge-bootstrap/bootstrap-install.sh"\n'
-        'echo "A machine that cannot reach the publish location passes --local-archive <file>."\n'
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    (debian / "postinst").chmod(0o755)
+    write_deb_metadata(root)
     output.parent.mkdir(parents=True, exist_ok=True)
     run(["dpkg-deb", "--build", "--root-owner-group", str(root), str(output)], cwd=root.parent)
 
@@ -123,23 +189,27 @@ def write_rpm(payload: Path, output: Path, work: Path) -> None:
         Name: neurobridge-bootstrap
         Version: {APPLICATION_VERSION}
         Release: 1
-        Summary: NeuroBridge installer that fetches its runtime
+        Summary: NeuroBridge installer that builds or fetches its runtime
         License: Proprietary
         BuildArch: {RPM_ARCH}
         AutoReqProv: no
+        Requires: ca-certificates, curl, gcc-c++, eigen3-devel, tar
 
         %description
-        Installs the NeuroBridge gateway by downloading, or reading a local
-        copy of, the runtime archive recorded in its manifest.
+        On one Galaxy Kylin machine, builds the runtime from the bundled source
+        and installs it.  On every other machine, installs a runtime archive
+        downloaded or copied from that machine.
 
         %install
         mkdir -p %{{buildroot}}/usr/lib/neurobridge-bootstrap
         cp -a %{{_sourcedir}}/payload/. %{{buildroot}}/usr/lib/neurobridge-bootstrap/
 
         %post
-        echo "NeuroBridge bootstrap package installed."
-        echo "Run, as root: /usr/lib/neurobridge-bootstrap/bootstrap-install.sh"
-        echo "A machine that cannot reach the publish location passes --local-archive <file>."
+        # $1 is 1 on a fresh install and 2 or more on an upgrade.  Only a fresh
+        # install builds the runtime; an upgrade keeps the one already built.
+        if [ "$1" -eq 1 ]; then
+          /usr/lib/neurobridge-bootstrap/bootstrap-build.sh
+        fi
 
         %files
         /usr/lib/neurobridge-bootstrap
@@ -153,14 +223,9 @@ def write_rpm(payload: Path, output: Path, work: Path) -> None:
 
 
 def build(fmt: str, output_dir: Path) -> Path:
-    for required in (MANIFEST, FETCH, INSTALL):
+    for required in (MANIFEST, FETCH, INSTALL, BUILD):
         if not required.is_file():
             raise ValueError(f"missing bootstrap input: {required.relative_to(ROOT)}")
-    if not manifest_ready():
-        raise ValueError(
-            "config/kylin-runtime-manifest.toml has no archive sha256 or download URL. "
-            "Build and publish the runtime archive before building the installer."
-        )
     filename = f"neurobridge-bootstrap-{APPLICATION_VERSION}-kylin-v10-x86_64.{fmt}"
     output = output_dir / filename
     with tempfile.TemporaryDirectory(prefix="neurobridge-bootstrap-") as directory:

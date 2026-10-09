@@ -41,7 +41,10 @@ if [[ ${1:-} == -h || ${1:-} == --help ]]; then
   exit 0
 fi
 [[ $# -eq 0 ]] || fail "Unknown option: $1"
-[[ ${EUID:-$(id -u)} -ne 0 ]] || fail "Run without sudo so project files belong to the current user."
+# The bootstrap package runs this as root, on a temporary copy of the source
+# tree that is thrown away after the runtime is installed.  A normal checkout
+# still refuses root so the project files keep the invoking user as owner.
+[[ ${EUID:-$(id -u)} -ne 0 || ${NEUROBRIDGE_BOOTSTRAP:-} == 1 ]] || fail "Run without sudo so project files belong to the current user."
 [[ ! -L $runtime_dir ]] || fail ".runtime must be a real project directory, not a symlink."
 [[ ! -L $venv_dir ]] || fail ".venv must be a real project directory, not a symlink."
 [[ ! -L $wheelhouse_dir ]] || fail "wheelhouse must be a real project directory, not a symlink."

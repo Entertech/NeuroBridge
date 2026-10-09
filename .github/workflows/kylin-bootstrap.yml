@@ -1,0 +1,36 @@
+name: Kylin bootstrap package
+
+# Builds the Kylin bootstrap deb, the package that carries the gateway source
+# and builds its own runtime when installed on Galaxy Kylin.  Nothing in it is
+# compiled, so it builds on a plain Ubuntu runner with dpkg-deb; it does not
+# need the self-hosted Kylin runner.  The deb is an Actions artifact, not a
+# release asset: installing it is what produces the runtime, on the Kylin
+# machine itself.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deb:
+    name: Build the Kylin bootstrap deb
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dpkg-deb
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev
+      - name: Build the bootstrap deb
+        run: python tools/build-kylin-bootstrap-package.py --format deb --output-dir artifacts
+      - name: Record the package digest
+        run: sha256sum artifacts/*.deb | tee artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neurobridge-kylin-bootstrap-deb
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 30

@@ -16,7 +16,7 @@ fail() {
 
 usage() {
   cat <<'EOF'
-Usage: bootstrap-install.sh [--local-archive <file>]
+Usage: bootstrap-install.sh [--local-archive <file>] [--manifest <file>]
 
 Installs NeuroBridge for the current user of this machine.  Run as root.
 
@@ -24,6 +24,10 @@ With no arguments the runtime archive is downloaded from the URL recorded in
 the bundled manifest.  --local-archive installs from a copy of that archive
 already on this machine and does not use the network; use it for a machine
 that cannot reach the publish location.
+
+--manifest names the manifest to verify against.  It defaults to the manifest
+shipped in this package.  The one-time build on a Kylin machine passes the
+manifest it just wrote, whose sha256 matches the archive it just built.
 
 The archive is verified against the manifest sha256 before it is unpacked.
 Configuration, recordings and logs that already exist are kept.
@@ -38,6 +42,7 @@ local_archive=
 while [[ $# -gt 0 ]]; do
   case $1 in
     --local-archive) local_archive=${2:-}; shift 2 ;;
+    --manifest) manifest=${2:-}; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) fail "Unknown option: $1" ;;
   esac
