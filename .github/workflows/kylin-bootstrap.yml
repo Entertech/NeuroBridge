@@ -8,7 +8,19 @@ name: Kylin bootstrap package
 # machine itself.
 
 on:
+  # workflow_dispatch is only offered once this file is on the default branch,
+  # so the first build of a branch is driven by the push below.
   workflow_dispatch:
+  push:
+    branches: [codex/kylin-bootstrap-installer]
+    paths:
+      - ".github/workflows/kylin-bootstrap.yml"
+      - "tools/build-kylin-bootstrap-package.py"
+      - "packaging/kylin/**"
+      - "linux/**"
+      - "neurobridge/**"
+      - "third_party/**"
+      - "config/**"
 
 permissions:
   contents: read
