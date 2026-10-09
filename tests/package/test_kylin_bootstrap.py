@@ -1,0 +1,233 @@
+"""The Kylin bootstrap installer is a small package that fetches its runtime.
+
+The runtime archive is built once on a Kylin machine.  These tests cover the
+half that runs everywhere else: refusing to build a package whose manifest
+points nowhere, and checking that a fetched archive matches the manifest
+whether it was downloaded or copied onto the machine.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import http.server
+import importlib.util
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import tempfile
+import textwrap
+import threading
+import unittest
+from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location(
+    "build_kylin_bootstrap_package", ROOT / "tools/build-kylin-bootstrap-package.py"
+)
+assert SPEC and SPEC.loader
+BUILDER = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(BUILDER)
+
+FETCH = ROOT / "packaging/kylin/fetch-runtime.sh"
+
+
+def _handler(directory: Path) -> type[http.server.BaseHTTPRequestHandler]:
+    """Serve one directory over HTTP without writing access logs to stderr."""
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(directory), **kwargs)
+
+        def log_message(self, format: str, *args) -> None:
+            return
+
+    return Handler
+
+
+def manifest(sha: str, url: str, file_name: str = "runtime.tar.gz") -> str:
+    return textwrap.dedent(f"""\
+        schema_version = 1
+
+        [runtime]
+        application_version = "0.2.0"
+
+        url = "{url}"
+        sha256 = "{sha}"
+        file_name = "{file_name}"
+    """)
+
+
+class BootstrapPackageTests(unittest.TestCase):
+    def test_build_is_refused_until_an_archive_is_published(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "sha256|download URL"):
+                BUILDER.build("deb", Path(directory))
+
+    def test_deb_carries_the_manifest_and_scripts_but_no_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # dpkg-deb runs inside the build's own temporary directory, which
+            # is removed before build() returns, so the payload is recorded
+            # while that directory still exists.
+            seen = {}
+
+            def dpkg_deb(args, **kwargs):
+                source = Path(args[args.index("--root-owner-group") + 1])
+                payload = source / "usr/lib/neurobridge-bootstrap"
+                seen["names"] = sorted(item.name for item in payload.iterdir())
+                seen["control"] = (source / "DEBIAN/control").read_text(encoding="utf-8")
+                Path(args[-1]).write_bytes(b"!<arch>\n" + b"\0" * 2048)
+
+            with mock.patch.object(BUILDER, "manifest_ready", return_value=True), \
+                    mock.patch.object(BUILDER.shutil, "which", return_value="dpkg-deb"), \
+                    mock.patch.object(BUILDER, "run", side_effect=dpkg_deb):
+                output = BUILDER.build("deb", root)
+
+            self.assertEqual(
+                seen["names"],
+                ["bootstrap-install.sh", "fetch-runtime.sh", "kylin-runtime-manifest.toml"],
+            )
+            self.assertGreater(output.stat().st_size, 1024)
+            self.assertIn("Architecture: amd64", seen["control"])
+            self.assertNotIn("Depends: python", seen["control"])
+
+    def test_rpm_build_uses_the_same_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            seen = {}
+
+            def rpmbuild(args, **kwargs):
+                topdir = Path(args[args.index("--define") + 1].split(" ", 1)[1])
+                payload = topdir / "SOURCES/payload"
+                seen["names"] = sorted(item.name for item in payload.iterdir())
+                rpm = topdir / "RPMS/x86_64/bootstrap.rpm"
+                rpm.parent.mkdir(parents=True)
+                rpm.write_bytes(bytes.fromhex("edabeedb") + b"\0" * 2048)
+
+            with mock.patch.object(BUILDER, "manifest_ready", return_value=True), \
+                    mock.patch.object(BUILDER.shutil, "which", return_value="rpmbuild"), \
+                    mock.patch.object(BUILDER, "run", side_effect=rpmbuild):
+                BUILDER.build("rpm", root)
+
+            self.assertEqual(
+                seen["names"],
+                ["bootstrap-install.sh", "fetch-runtime.sh", "kylin-runtime-manifest.toml"],
+            )
+
+
+class FetchRuntimeTests(unittest.TestCase):
+    def write_archive(self, directory: Path, name: str, content: bytes) -> tuple[Path, str]:
+        path = directory / name
+        path.write_bytes(content)
+        return path, hashlib.sha256(content).hexdigest()
+
+    def write_manifest(self, directory: Path, sha: str, url: str, file_name: str) -> Path:
+        path = directory / "manifest.toml"
+        path.write_text(manifest(sha, url, file_name), encoding="utf-8")
+        return path
+
+    def run_fetch(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(FETCH), *args], text=True, capture_output=True, check=False
+        )
+
+    def test_local_archive_is_accepted_only_when_the_digest_matches(self) -> None:
+        shell = shutil.which("bash")
+        sha256sum = shutil.which("sha256sum")
+        if not shell or not sha256sum:
+            self.skipTest("bash and sha256sum are required")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive, sha = self.write_archive(root, "runtime.tar.gz", b"runtime bytes")
+            manifest_path = self.write_manifest(root, sha, "", "runtime.tar.gz")
+            destination = root / "dest"
+
+            accepted = self.run_fetch(
+                "--manifest", str(manifest_path), "--destination", str(destination),
+                "--local-archive", str(archive),
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            fetched = Path(accepted.stdout.strip())
+            self.assertEqual(fetched.read_bytes(), b"runtime bytes")
+
+            (root / "tampered.tar.gz").write_bytes(b"other bytes")
+            rejected = self.run_fetch(
+                "--manifest", str(manifest_path), "--destination", str(root / "dest-bad"),
+                "--local-archive", str(root / "tampered.tar.gz"),
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("sha256 mismatch", rejected.stderr)
+
+    def test_download_is_refused_when_the_manifest_has_no_url(self) -> None:
+        if not shutil.which("bash"):
+            self.skipTest("bash is required")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = self.write_manifest(root, "cd" * 32, "", "runtime.tar.gz")
+            result = self.run_fetch("--manifest", str(manifest_path), "--destination", str(root / "dest"))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("no download URL", result.stderr)
+
+    def test_download_is_discarded_when_the_digest_does_not_match(self) -> None:
+        if not shutil.which("bash") or not shutil.which("sha256sum") or not shutil.which("curl"):
+            self.skipTest("bash, sha256sum and curl are required")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            served = root / "served"
+            served.mkdir()
+            self.write_archive(served, "runtime.tar.gz", b"downloaded bytes")
+            server = http.server.HTTPServer(("127.0.0.1", 0), _handler(served))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = f"http://127.0.0.1:{server.server_address[1]}/runtime.tar.gz"
+                # The server returns real bytes, but the manifest expects a
+                # different digest, so the download must be thrown away.
+                manifest_path = self.write_manifest(root, "ab" * 32, url, "runtime.tar.gz")
+                result = self.run_fetch(
+                    "--manifest", str(manifest_path), "--destination", str(root / "dest")
+                )
+            finally:
+                server.shutdown()
+                server.server_close()
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("sha256 mismatch", result.stderr)
+            self.assertFalse((root / "dest" / "runtime.tar.gz").exists())
+
+    def test_manifest_with_an_unsafe_file_name_is_rejected(self) -> None:
+        if not shutil.which("bash"):
+            self.skipTest("bash is required")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = self.write_manifest(root, "ab" * 32, "", "../runtime.tar.gz")
+            result = self.run_fetch(
+                "--manifest", str(manifest_path), "--destination", str(root / "dest"),
+                "--local-archive", str(root / "missing.tar.gz"),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("not safe", result.stderr)
+
+
+class BootstrapInstallScriptTests(unittest.TestCase):
+    def test_install_script_has_valid_shell_syntax(self) -> None:
+        shell = shutil.which("bash")
+        if not shell:
+            self.skipTest("bash is required")
+        script = ROOT / "packaging/kylin/bootstrap-install.sh"
+        self.assertTrue(script.stat().st_mode & stat.S_IXUSR)
+        result = subprocess.run([shell, "-n", str(script)], capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fetch = subprocess.run([shell, "-n", str(FETCH)], capture_output=True, text=True, check=False)
+        self.assertEqual(fetch.returncode, 0, fetch.stderr)
+        archive = subprocess.run(
+            [shell, "-n", str(ROOT / "tools/build-kylin-runtime-archive.sh")],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(archive.returncode, 0, archive.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
