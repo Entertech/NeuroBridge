@@ -40,6 +40,21 @@ jobs:
         run: python tools/build-kylin-bootstrap-package.py --format deb --output-dir artifacts
       - name: Record the package digest
         run: sha256sum artifacts/*.deb | tee artifacts/SHA256SUMS
+      - name: Check the package carries its source and offline inputs
+        run: |
+          set -eu
+          listing=$(dpkg-deb --contents artifacts/*.deb)
+          for required in \
+            ./usr/lib/neurobridge-bootstrap/bootstrap-build.sh \
+            ./usr/lib/neurobridge-bootstrap/bootstrap-install.sh \
+            ./usr/lib/neurobridge-bootstrap/source/python-runtime/cpython-3.11.16+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz \
+            ./usr/lib/neurobridge-bootstrap/source/wheelhouse/pyserial-3.5-py2.py3-none-any.whl \
+            ./usr/lib/neurobridge-bootstrap/source/linux/setup-kylin-algorithm.sh \
+            ./usr/lib/neurobridge-bootstrap/source/third_party/NumCpp/CMakeLists.txt
+          do
+            printf '%s\n' "$listing" | grep -q "$required" || { echo "missing: $required"; exit 1; }
+          done
+          dpkg-deb --info artifacts/*.deb
       - uses: actions/upload-artifact@v4
         with:
           name: neurobridge-kylin-bootstrap-deb
