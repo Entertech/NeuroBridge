@@ -52,6 +52,9 @@ SOURCE_DIRS = (
     "web",
     "config",
     "linux",
+    # The bridge sources live under mac/ even though the Kylin build compiles
+    # them: linux/build-algorithm-bridge.sh points cmake at mac/algorithm_bridge.
+    "mac/algorithm_bridge",
     "packaging/kylin",
     "tools",
     "third_party",

@@ -113,6 +113,8 @@ class BootstrapPackageTests(unittest.TestCase):
                 "linux/setup-kylin-python.sh",
                 "linux/setup-kylin-algorithm.sh",
                 "linux/build-algorithm-bridge.sh",
+                "mac/algorithm_bridge/CMakeLists.txt",
+                "mac/algorithm_bridge/affective_bridge.cpp",
                 "tools/build-kylin-runtime-archive.sh",
                 "config/kylin-runtime-manifest.toml",
                 "config/gateway.toml.example",

@@ -50,6 +50,8 @@ jobs:
             ./usr/lib/neurobridge-bootstrap/source/python-runtime/cpython-3.11.16+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz \
             ./usr/lib/neurobridge-bootstrap/source/wheelhouse/pyserial-3.5-py2.py3-none-any.whl \
             ./usr/lib/neurobridge-bootstrap/source/linux/setup-kylin-algorithm.sh \
+            ./usr/lib/neurobridge-bootstrap/source/mac/algorithm_bridge/CMakeLists.txt \
+            ./usr/lib/neurobridge-bootstrap/source/mac/algorithm_bridge/affective_bridge.cpp \
             ./usr/lib/neurobridge-bootstrap/source/third_party/NumCpp/CMakeLists.txt
           do
             printf '%s\n' "$listing" | grep -q "$required" || { echo "missing: $required"; exit 1; }
