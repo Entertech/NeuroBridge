@@ -14,6 +14,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -45,9 +46,12 @@ def digest(path: Path) -> str:
 
 def digest_tree(path: Path) -> str:
     value = hashlib.sha256()
-    for item in sorted(item for item in path.rglob("*") if item.is_file()):
+    for item in sorted(item for item in path.rglob("*") if item.is_file() or item.is_symlink()):
         value.update(item.relative_to(path).as_posix().encode("utf-8"))
-        value.update(bytes.fromhex(digest(item)))
+        if item.is_symlink():
+            value.update(b"symlink:" + os.readlink(item).encode("utf-8"))
+        else:
+            value.update(bytes.fromhex(digest(item)))
     return value.hexdigest()
 
 
@@ -96,7 +100,23 @@ def copy_source(stage: Path, target: dict[str, str], runtime: Path) -> None:
     # would select the POSIX serial source and a /opt algorithm binary.
     template = "config/gateway.toml.example" if target["platform"] == "kylin" else "windows/gateway.toml.example"
     shutil.copy2(ROOT / template, payload / "gateway.toml.example")
-    shutil.copytree(runtime, payload / "runtime", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    if target["platform"] == "kylin":
+        validate_runtime_links(runtime)
+    shutil.copytree(runtime, payload / "runtime", symlinks=target["platform"] == "kylin", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+
+def validate_runtime_links(runtime: Path) -> None:
+    root = runtime.resolve()
+    for item in runtime.rglob("*"):
+        if not item.is_symlink():
+            continue
+        link = Path(os.readlink(item))
+        try:
+            resolved = item.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise ValueError(f"runtime contains a broken or cyclic link: {item.relative_to(runtime)}") from error
+        if link.is_absolute() or not resolved.is_relative_to(root):
+            raise ValueError(f"runtime link must be relative and stay inside the bundle: {item.relative_to(runtime)}")
 
 
 def runtime_requirements(target: dict[str, str], runtime: Path) -> None:
@@ -437,7 +457,7 @@ def build_rpm(stage: Path, target: dict[str, str], output: Path, log: Path) -> N
     for name in ("BUILD", "BUILDROOT", "RPMS", "SOURCES", "SPECS", "SRPMS"):
         (topdir / name).mkdir(parents=True, exist_ok=True)
     payload = topdir / "SOURCES/payload"
-    shutil.copytree(stage / "opt/neurobridge", payload)
+    shutil.copytree(stage / "opt/neurobridge", payload, symlinks=True)
     spec = rpm_spec(target, topdir)
     command(["rpmbuild", "-bb", "--target", RPM_ARCH[target["architecture"]], "--define", f"_topdir {topdir}", str(spec)], cwd=stage.parent, log=log)
     candidates = sorted((topdir / "RPMS").rglob("*.rpm"))

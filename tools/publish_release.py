@@ -16,6 +16,8 @@ import zipfile
 
 from tools.release_pipeline import ROOT, log, require_digest, save_json, sha256, version_tuple
 
+ARCHIVE_CHECKPOINT = "<!-- neurobridge-verified-archive\n"
+
 
 def command(*args: str, allow_missing: bool = False) -> str | None:
     result = subprocess.run(args, cwd=ROOT, text=True, capture_output=True)
@@ -42,7 +44,7 @@ def ensure_tag(tag: str, commit: str) -> None:
 
 
 def release_info(tag: str) -> dict | None:
-    raw = command("gh", "release", "view", tag, "--json", "url,isDraft,assets", allow_missing=True)
+    raw = command("gh", "release", "view", tag, "--json", "url,isDraft,assets,body", allow_missing=True)
     return json.loads(raw) if raw else None
 
 
@@ -54,6 +56,10 @@ def ensure_release(tag: str, notes: Path) -> dict:
         if info is None or not info.get("isDraft"):
             raise ValueError("draft Release creation could not be verified")
         log("draft_created", tag=tag, url=info.get("url"))
+    elif info.get("isDraft") and not info.get("assets"):
+        # No uploaded bytes exist yet: a failed first upload can safely register
+        # the newly verified artifact as its checkpoint before trying again.
+        command("gh", "release", "edit", tag, "--notes-file", str(notes))
     return info
 
 
@@ -190,6 +196,68 @@ def load_bundle_manifest(directory: Path) -> tuple[Path, dict] | None:
     return archive, manifest
 
 
+def archive_checkpoint(archive: Path, version: str, commit: str) -> dict:
+    return {"schemaVersion": "1.0", "applicationVersion": version, "sourceCommit": commit, "fileName": archive.name, "sha256": sha256(archive)}
+
+
+def bundle_packages(manifest: dict) -> list[tuple]:
+    return sorted(
+        (system["platform"], variant["name"], architecture["architecture"], package["fileName"], package["format"], package["sha256"])
+        for system in manifest["systemArchives"]
+        for variant in system["variants"]
+        for architecture in variant["architectureArchives"]
+        for package in architecture["packages"]
+    )
+
+
+def reuse_release_bundle(archive: Path) -> bool:
+    """Recover immutable uploaded bytes when PDFs were regenerated on a retry.
+
+    This is read-only on GitHub. The recovered ZIP is uploaded to Actions again
+    and checked by publish() before any tag or Release write occurs.
+    """
+    with zipfile.ZipFile(archive) as bundle:
+        current = json.loads(bundle.read("metadata/bundle-manifest.json"))
+    version = current["applicationVersion"]
+    version_tuple(version)
+    commit = command("git", "rev-parse", "HEAD")
+    if current["sourceCommit"] != commit or current["trigger"] != "push_master":
+        raise ValueError("release retry bundle does not match this source commit and publication trigger")
+    verify_release_bundle(archive, current)
+    tag = f"v{version}"
+    info = release_info(tag)
+    if info is None or not info.get("assets"):
+        log("release_bundle_reuse_skipped", tag=tag, reason="no_uploaded_release_asset")
+        return False
+    if {item["name"] for item in info["assets"]} != {archive.name}:
+        raise ValueError("existing Release assets do not match the single release bundle")
+    body = info.get("body") or ""
+    if body.count(ARCHIVE_CHECKPOINT) != 1:
+        raise ValueError("existing Release asset lacks an unambiguous verified archive checkpoint; refusing replacement")
+    saved_checkpoint = body.split(ARCHIVE_CHECKPOINT, 1)[1]
+    if "\n-->" not in saved_checkpoint:
+        raise ValueError("existing Release archive checkpoint is incomplete")
+    checkpoint = json.loads(saved_checkpoint.split("\n-->", 1)[0])
+    if checkpoint.get("schemaVersion") != "1.0" or checkpoint.get("applicationVersion") != version or checkpoint.get("sourceCommit") != commit or checkpoint.get("fileName") != archive.name:
+        raise ValueError("existing Release checkpoint belongs to another version, commit or filename")
+    require_digest(checkpoint.get("sha256"), "original release bundle digest")
+    with tempfile.TemporaryDirectory(prefix="neurobridge-release-reuse-") as temporary:
+        command("gh", "release", "download", tag, "--pattern", archive.name, "--dir", temporary)
+        downloaded = Path(temporary) / archive.name
+        if not downloaded.is_file() or sha256(downloaded) != checkpoint["sha256"]:
+            raise ValueError("original release bundle differs from its verified archive checkpoint")
+        with zipfile.ZipFile(downloaded) as bundle:
+            previous = json.loads(bundle.read("metadata/bundle-manifest.json"))
+        if any(previous.get(key) != current.get(key) for key in ("sourceCommit", "applicationVersion", "releaseStatus", "trigger", "coverage")) or bundle_packages(previous) != bundle_packages(current):
+            raise ValueError("release retry changed source, package bytes or target results; a new version is required")
+        verify_release_bundle(downloaded, previous)
+        replacement = archive.with_suffix(archive.suffix + ".reuse")
+        shutil.copyfile(downloaded, replacement)
+        replacement.replace(archive)
+    log("release_bundle_reused", tag=tag, sha256=sha256(archive))
+    return True
+
+
 def publish(directory: Path, expected_sha256: str) -> dict:
     require_digest(expected_sha256, "uploaded aggregate ZIP digest")
     manifest_path = directory / "release-manifest.json"
@@ -227,6 +295,8 @@ def publish(directory: Path, expected_sha256: str) -> dict:
     notes = directory / "release-notes.md"
     gaps = [item for platform in ("windows", "kylin") for item in manifest["coverage"][platform]["targetResults"] if item["status"] != "candidate"]
     notes.write_text(f"NeuroBridge {tag}\n\nSource commit: `{commit}`. Unsigned packages; physical verification is pending.\n\n" + "Incomplete targets:\n" + ("\n".join(f"- `{item['targetId']}`: {item['status']} — {item['reason']}" for item in gaps) or "- None") + "\n", encoding="utf-8")
+    with notes.open("a", encoding="utf-8") as output:
+        output.write("\n" + ARCHIVE_CHECKPOINT + json.dumps(archive_checkpoint(archive, version, commit), sort_keys=True) + "\n-->\n")
     if bundle_mode:
         with zipfile.ZipFile(archive) as bundle:
             release_log_text = bundle.read("metadata/release-logs.jsonl").decode("utf-8")
@@ -261,12 +331,19 @@ def publish(directory: Path, expected_sha256: str) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dir", type=Path, required=True)
-    parser.add_argument("--expected-sha256", required=True, help="ZIP digest computed before Actions Artifact upload")
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--dir", type=Path)
+    action.add_argument("--reuse-bundle", type=Path, help="recover an existing verified Release ZIP without GitHub writes")
+    parser.add_argument("--expected-sha256", help="ZIP digest computed before Actions Artifact upload")
     args = parser.parse_args()
+    if args.dir is not None and args.expected_sha256 is None:
+        parser.error("--expected-sha256 is required for publication")
     try:
-        publish(args.dir, args.expected_sha256)
-    except (OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+        if args.reuse_bundle is not None:
+            reuse_release_bundle(args.reuse_bundle)
+        else:
+            publish(args.dir, args.expected_sha256)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError, zipfile.BadZipFile) as error:
         log("publication_failed", reason=str(error))
         return 1
     return 0

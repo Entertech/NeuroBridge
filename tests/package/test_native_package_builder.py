@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 import uuid
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +42,66 @@ class NativePackageBuilderTests(unittest.TestCase):
             self.assertTrue((stage / "opt/neurobridge/neurobridge/__init__.py").is_file())
             self.assertTrue((stage / "opt/neurobridge/runtime/bin/python").is_file())
             self.assertTrue((stage / "opt/neurobridge/packaging/neurobridge.service").is_file())
+
+    def test_kylin_runtime_links_survive_staging_rpm_copy_and_relocation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / "runtime"
+            prefix = runtime / "bin/python-runtime"
+            (prefix / "bin").mkdir(parents=True)
+            (prefix / "lib/python3.11").mkdir(parents=True)
+            (prefix / "bin/python3.11").write_bytes(b"interpreter fixture")
+            (prefix / "bin/python").symlink_to("python3.11")
+            (prefix / "lib/python3.11/os.py").write_text("stdlib fixture\n")
+            (runtime / "bin/python").symlink_to("python-runtime/bin/python")
+            (runtime / "bin/neurobridge_affective_bridge").write_bytes(b"bridge fixture")
+            target = BUILDER.target_for("kylin-server-x86_64-rpm")
+            stage = root / "stage"
+            BUILDER.copy_source(stage, target, runtime)
+
+            def rpmbuild(args, **kwargs):
+                rpm = root / "rpmbuild/RPMS/x86_64/fixture.rpm"
+                rpm.parent.mkdir(parents=True)
+                rpm.write_bytes(b"rpm fixture")
+
+            with mock.patch.object(BUILDER.shutil, "which", return_value="rpmbuild"), mock.patch.object(BUILDER, "command", side_effect=rpmbuild):
+                BUILDER.build_rpm(stage, target, root / "fixture.rpm", root / "build.log")
+            for payload in (stage / "opt/neurobridge", root / "rpmbuild/SOURCES/payload"):
+                with self.subTest(payload=payload):
+                    relocated = payload.with_name(payload.name + "-relocated")
+                    payload.rename(relocated)
+                    entry = relocated / "runtime/bin/python"
+                    self.assertTrue(entry.is_symlink())
+                    self.assertEqual(os.readlink(entry), "python-runtime/bin/python")
+                    self.assertEqual(entry.resolve().read_bytes(), b"interpreter fixture")
+                    library = entry.resolve().parent.parent / "lib/python3.11/os.py"
+                    self.assertEqual(library.read_text(), "stdlib fixture\n")
+
+    def test_kylin_runtime_rejects_external_absolute_and_broken_links(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = self.runtime(root, "kylin-server-x86_64-deb")
+            external = root / "host-only-python"
+            external.write_bytes(b"host interpreter")
+            for target in (str(external), "../../host-only-python", "missing-python", "python"):
+                with self.subTest(target=target):
+                    entry = runtime / "bin/python"
+                    entry.unlink()
+                    entry.symlink_to(target)
+                    with self.assertRaisesRegex(ValueError, "runtime.*link"):
+                        BUILDER.copy_source(root / ("stage-" + str(len(target))), BUILDER.target_for("kylin-server-x86_64-deb"), runtime)
+
+    def test_runtime_fingerprint_includes_the_symlink_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "python-a").write_bytes(b"same bytes")
+            (root / "python-b").write_bytes(b"same bytes")
+            link = root / "python"
+            link.symlink_to("python-a")
+            before = BUILDER.digest_tree(root)
+            link.unlink()
+            link.symlink_to("python-b")
+            self.assertNotEqual(before, BUILDER.digest_tree(root))
 
     def test_windows_service_uses_installed_script_path(self) -> None:
         target = BUILDER.target_for("windows-10-x86_64-msi")

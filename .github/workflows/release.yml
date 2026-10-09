@@ -43,6 +43,10 @@ env:
   SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
   SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
 
+concurrency:
+  group: release-source-${{ github.repository }}-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
 jobs:
   external-documents:
     name: Build the external document package
@@ -299,11 +303,16 @@ jobs:
         run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER"
       - name: Assemble one user-facing release bundle
         id: bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python tools/build-release-bundle.py \
             --release-dir artifacts/release \
             --documents-dir artifacts/documents \
             --output artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
+            python -m tools.publish_release --reuse-bundle artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
+          fi
           printf 'archive_sha256=%s\n' "$(sha256sum artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         id: upload
