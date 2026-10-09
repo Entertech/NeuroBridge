@@ -19,6 +19,21 @@ from external_protocol_registry import (
 )
 
 
+# Gateway implementation details that must never appear in a B-side document.
+FORBIDDEN_IMPLEMENTATION_PATTERNS = (
+    r"蓝牙",
+    r"\bBLE\b",
+    r"\bFlowtime\b",
+    r"\bEnter-Biomodule\b",
+    r"0000ff[0-9a-f-]*",
+    r"\bFF[0-9A-F]{2}\b",
+    r"设备扫描",
+    r"\bRSSI\b",
+    r"连接策略",
+    r"\bJSONL\b",
+)
+
+
 def fail(message: str) -> None:
     raise SystemExit(f"version-registry check failed: {message}")
 
@@ -53,6 +68,7 @@ def main() -> None:
     capture_package = registry["documents"].get("external_capture_package")
     ssh_operations = registry["documents"].get("external_ssh_operations")
     wired_network_operations = registry["documents"].get("external_wired_network_operations")
+    windows_operations = registry["documents"].get("external_windows_operations")
     wire_version = registry["northbound_wire_protocol"]["version"]
     application_version = registry["application"]["version"]
 
@@ -159,6 +175,22 @@ def main() -> None:
             "wired network operations",
         )
 
+    if windows_operations and windows_operations["status"] == "published":
+        validate_published_operations_document(
+            registry,
+            locks,
+            windows_operations,
+            "external_windows_operations_document",
+            "Windows operations",
+        )
+        windows_text = (ROOT / windows_operations["markdown_path"]).read_text(encoding="utf-8")
+        if any(re.search(pattern, windows_text, flags=re.IGNORECASE) for pattern in FORBIDDEN_IMPLEMENTATION_PATTERNS):
+            fail("Windows operations Markdown contains gateway implementation details")
+        # This document describes the Windows delivery path, whose product naming is
+        # the data gateway; the legacy 头环 naming belongs to the retired BLE plan.
+        if "头环" in windows_text:
+            fail("Windows operations Markdown must not use the legacy 头环 product naming")
+
     tracked_pdfs = subprocess.run(
         ["git", "ls-files", "--", "doc/tech/*.pdf"], cwd=ROOT, check=True, capture_output=True, text=True
     ).stdout.strip()
@@ -189,19 +221,7 @@ def main() -> None:
         fail("external Markdown version does not match the version registry")
     if f'日期：{external["published_date"]}' not in markdown_text:
         fail("external Markdown date does not match the version registry")
-    forbidden_patterns = (
-        r"蓝牙",
-        r"\bBLE\b",
-        r"\bFlowtime\b",
-        r"\bEnter-Biomodule\b",
-        r"0000ff[0-9a-f-]*",
-        r"\bFF[0-9A-F]{2}\b",
-        r"设备扫描",
-        r"\bRSSI\b",
-        r"连接策略",
-        r"\bJSONL\b",
-    )
-    if any(re.search(pattern, markdown_text, flags=re.IGNORECASE) for pattern in forbidden_patterns):
+    if any(re.search(pattern, markdown_text, flags=re.IGNORECASE) for pattern in FORBIDDEN_IMPLEMENTATION_PATTERNS):
         fail("external Markdown contains gateway implementation details")
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")

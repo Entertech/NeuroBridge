@@ -83,6 +83,19 @@ markdown_sha256 = "de2dcbf501d0a0796fffb62b663ecf20e852a260cba092199ef77614947fd
 publication_record = "2026-08-10-public-wired-network-operations-v1.0"
 reason = "经发布 PR 审核后标记为已发布；版本保持不变，master CI 将生成正式 PDF ZIP Artifact。"
 
+[documents.external_windows_operations]
+version = "1.0"
+status = "published"
+audience = "b_side"
+title = "数据网关 Windows 部署与使用指南"
+markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数据网关 Windows 部署与使用指南_v1.0.md"
+pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.0.pdf"
+created_date = "2026-10-09"
+published_date = "2026-10-09"
+markdown_sha256 = "b873106ccb5a7b3e126a2ec1f524d44d0c50ceb5b356f19b500167103a0fd205"
+publication_record = "2026-10-09-public-windows-operations-v1.0"
+reason = "用户明确要求把 Windows 部署与使用说明做成对外文档并纳入对外文档包生成 PDF；该文档只覆盖安装包部署形态下 B 端可观察的服务、端口、本机页面与日志，不含网关内部实现细节。"
+
 [[documents.external_northbound.versions]]
 version = "0.2"
 status = "published"
@@ -128,10 +141,30 @@ status = "locked"
 locked_by = "2026-08-10-public-wired-network-operations-v1.0"
 locked_at = "2026-08-10"
 
+[[release_locks]]
+id = "windows-operations-v0.0-to-v1.0"
+scope = "external_windows_operations_document"
+from_version = "0.0"
+to_version = "1.0"
+status = "locked"
+locked_by = "2026-10-09-public-windows-operations-v1.0"
+locked_at = "2026-10-09"
+
 [change_policy]
 external_documents_require_explicit_user_request = true
 default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
+
+[[change_records]]
+id = "2026-10-09-public-windows-operations-v1.0"
+date = "2026-10-09"
+scope = "external_windows_operations_document"
+summary = "发布数据网关 Windows 部署与使用指南。"
+external_document_action = "explicit_user_authorized"
+external_document_version = "1.0"
+change_state = "locked"
+release_lock = "windows-operations-v0.0-to-v1.0"
+reason = "用户明确要求把 Windows 部署与使用说明做成对外文档，并要求在对外文档包中渲染为 PDF；本次只覆盖安装包部署形态下 B 端可观察的服务、端口、本机页面、日志和卸载，不涉及设备接入、算法或北向契约正文。"
 
 [[change_records]]
 id = "2026-09-14-unworn-eeg-message-prerelease"

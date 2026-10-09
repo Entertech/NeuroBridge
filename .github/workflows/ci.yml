@@ -141,8 +141,8 @@ jobs:
             name=$(basename "$pdf_path" .pdf)
             pdftoppm -png -r 144 "$pdf_path" "artifacts/document-preview/$name"
           done
-          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 4
-          test "$(find artifacts/document-preview -type f -name '*.png' | wc -l | tr -d ' ')" -ge 4
+          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 5
+          test "$(find artifacts/document-preview -type f -name '*.png' | wc -l | tr -d ' ')" -ge 5
           mkdir -p artifacts/system-prds
           bash tools/render-protocol-pdf.sh \
             "doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md" \

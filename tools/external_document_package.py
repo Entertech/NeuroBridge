@@ -30,12 +30,13 @@ class ExternalDocument:
 
 
 def collect_external_documents(registry: dict) -> list[ExternalDocument]:
-    """Return the four current external documents in their delivery order."""
+    """Return the five current external documents in their delivery order."""
     northbound_catalog = registry["documents"]["external_northbound"]
     northbound = select_external_protocol(registry)
     capture_package = registry["documents"]["external_capture_package"]
     ssh_operations = registry["documents"]["external_ssh_operations"]
     wired_network_operations = registry["documents"]["external_wired_network_operations"]
+    windows_operations = registry["documents"]["external_windows_operations"]
     documents = [
         ExternalDocument(
             key="northbound",
@@ -68,6 +69,14 @@ def collect_external_documents(registry: dict) -> list[ExternalDocument]:
             status=wired_network_operations["status"],
             markdown_path=wired_network_operations["markdown_path"],
             pdf_artifact_name=wired_network_operations["pdf_artifact_name"],
+        ),
+        ExternalDocument(
+            key="windows_operations",
+            title=windows_operations["title"],
+            version=windows_operations["version"],
+            status=windows_operations["status"],
+            markdown_path=windows_operations["markdown_path"],
+            pdf_artifact_name=windows_operations["pdf_artifact_name"],
         ),
     ]
     if len({document.pdf_artifact_name for document in documents}) != len(documents):
