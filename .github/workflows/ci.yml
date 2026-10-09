@@ -14,6 +14,27 @@ permissions:
   contents: read
 
 jobs:
+  version-gate:
+    name: Application version gate
+    # release.yml only runs after a push to master, so the gate has to run here
+    # too, or a PR could merge a shipped-file change with no version bump.  This
+    # is a check, not packaging: it produces no artifact.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          # The gate reads the registry with tomllib, which needs Python 3.11;
+          # this runner's default python3 is older.
+          python-version: '3.11'
+      - name: Require a version bump when shipped files change
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python tools/release_pipeline.py gate --base "$BASE_SHA" --output "$RUNNER_TEMP/release-gate.json"
+
   windows-launcher:
     runs-on: windows-2022
     steps:

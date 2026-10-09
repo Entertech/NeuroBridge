@@ -25,7 +25,13 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = tomllib.loads((ROOT / "release/release_matrix.toml").read_text(encoding="utf-8"))
 REGISTRY = ROOT / "neurobridge/version_registry.toml"
-PRODUCT_PATHS = ("neurobridge/", "windows/", "linux/", "packaging/", "release/", "tools/build-product-candidate.py", "tools/build-native-package.py", "tools/release_pipeline.py", "tools/publish_release.py", "requirements.lock", "pyproject.toml", ".github/workflows/")
+# A change under these paths makes an application version bump mandatory.  It
+# does not by itself produce a release: gate() decides that by comparing
+# [application].version against the base.  `doc/tech/对外/` is the only
+# documentation path that ships inside the user bundle, so editing a delivered
+# document has to force a bump like any product file; the rest of doc/ stays
+# releasable without one.
+PRODUCT_PATHS = ("neurobridge/", "windows/", "linux/", "packaging/", "release/", "tools/build-product-candidate.py", "tools/build-native-package.py", "tools/release_pipeline.py", "tools/publish_release.py", "requirements.lock", "pyproject.toml", ".github/workflows/", "doc/tech/对外/")
 VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 FORMATS = {"exe", "msi", "deb", "rpm"}
 MAGIC = {"exe": b"MZ", "msi": bytes.fromhex("d0cf11e0a1b11ae1"), "deb": b"!<arch>\n", "rpm": bytes.fromhex("edabeedb")}
@@ -36,7 +42,9 @@ def log(event: str, **data: object) -> None:
 
 
 def run(*args: str) -> str:
-    return subprocess.check_output(args, cwd=ROOT, text=True, stderr=subprocess.PIPE).strip()
+    # git prints paths as raw UTF-8 under -z, and PRODUCT_PATHS contains a
+    # non-ASCII prefix, so decode explicitly instead of trusting the locale.
+    return subprocess.check_output(args, cwd=ROOT, text=True, encoding="utf-8", stderr=subprocess.PIPE).strip()
 
 
 def sha256(path: Path) -> str:

@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
+import tomllib
 import unittest
+from unittest import mock
 
+from tools import release_pipeline
 from tools.release_pipeline import CONFIG, assemble, matrix, run, save_json, sha256, target_result, version_tuple
 from tools.publish_release import verify_nested_archives
 from neurobridge.versioning import APPLICATION_VERSION
@@ -102,6 +107,90 @@ class ReleasePipelineTests(unittest.TestCase):
         for value in ("v1.2.3", "1.2", "01.2.3", "1.2.3-rc1"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 version_tuple(value)
+
+
+class ReleaseVersionGateTests(unittest.TestCase):
+    """Pin how the gate decides that a push has to produce a package.
+
+    The decision compares [application].version only.  The changed-file list is
+    used to *require* a bump, never to trigger a release, so editing
+    PRODUCT_PATHS can silently turn a delivered-document edit into a no-op.
+    Each branch of the decision is exercised against a real throwaway repo.
+    """
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        repo_root = release_pipeline.ROOT
+        for folder in ("neurobridge", "release", "doc/tech/对外", "doc/tech/内部"):
+            (self.root / folder).mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo_root / "neurobridge/version_registry.toml", self.root / "neurobridge/version_registry.toml")
+        shutil.copy2(repo_root / "release/release_matrix.toml", self.root / "release/release_matrix.toml")
+        for patch in (
+            mock.patch.object(release_pipeline, "ROOT", self.root),
+            mock.patch.object(release_pipeline, "REGISTRY", self.root / "neurobridge/version_registry.toml"),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.git("init", "-q", ".")
+        self.git("config", "user.email", "gate@example.invalid")
+        self.git("config", "user.name", "gate")
+        self.shipped_file().write_text("base\n", encoding="utf-8")
+        self.shipped_document().write_text("base\n", encoding="utf-8")
+        self.internal_document().write_text("base\n", encoding="utf-8")
+        self.commit("base")
+
+    def git(self, *arguments: str) -> str:
+        return subprocess.check_output(("git", *arguments), cwd=self.root, text=True, encoding="utf-8").strip()
+
+    def commit(self, message: str) -> None:
+        self.git("add", "-A")
+        self.git("commit", "-qm", message)
+
+    def shipped_file(self) -> Path:
+        return self.root / "neurobridge/gateway.py"
+
+    def shipped_document(self) -> Path:
+        return self.root / "doc/tech/对外/数据网关 Windows 部署与使用指南_v1.0.md"
+
+    def internal_document(self) -> Path:
+        return self.root / "doc/tech/内部/发布工作流技术方案.md"
+
+    def test_a_shipped_file_change_requires_a_version_bump(self) -> None:
+        self.shipped_file().write_text("changed\n", encoding="utf-8")
+        self.commit("shipped file change")
+        with self.assertRaisesRegex(ValueError, "without application version bump"):
+            release_pipeline.gate("HEAD~1")
+
+    def test_a_delivered_document_change_requires_a_version_bump(self) -> None:
+        self.shipped_document().write_text("updated\n", encoding="utf-8")
+        self.commit("delivered document change")
+        with self.assertRaisesRegex(ValueError, "without application version bump"):
+            release_pipeline.gate("HEAD~1")
+
+    def test_an_internal_document_change_needs_no_release(self) -> None:
+        self.internal_document().write_text("updated\n", encoding="utf-8")
+        self.commit("internal document change")
+        result = release_pipeline.gate("HEAD~1")
+        self.assertFalse(result["productChanged"])
+        self.assertFalse(result["shouldRelease"])
+
+    def test_advancing_the_application_version_releases(self) -> None:
+        registry = self.root / "neurobridge/version_registry.toml"
+        text = registry.read_text(encoding="utf-8")
+        current = tomllib.loads(text)["application"]["version"]
+        major, minor, patch = (int(part) for part in current.split("."))
+        bumped = f"{major}.{minor}.{patch + 1}"
+        entry = (f'[[application_release_changes]]\nfrom_version = "{current}"\nto_version = "{bumped}"\n'
+                 'impact = "patch"\ncompatibility = "gate fixture"\nevidence = "gate fixture"\n\n')
+        text = text.replace(f'[application]\nversion = "{current}"', f'[application]\nversion = "{bumped}"', 1)
+        text = text.replace("[[application_release_changes]]", entry + "[[application_release_changes]]", 1)
+        registry.write_text(text, encoding="utf-8")
+        self.commit("bump the application version")
+        result = release_pipeline.gate("HEAD~1")
+        self.assertEqual(result["applicationVersion"], bumped)
+        self.assertTrue(result["shouldRelease"])
 
 
 if __name__ == "__main__":
