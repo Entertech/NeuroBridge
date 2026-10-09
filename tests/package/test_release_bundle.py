@@ -20,6 +20,7 @@ from release_pipeline import matrix, run, save_json
 
 
 WINDOWS_GUIDE = "数据网关 Windows 部署与使用指南_v1.0.pdf"
+KYLIN_GUIDE = "数据网关银河麒麟部署与使用指南_v1.0.pdf"
 SSH_GUIDE = "头环数据网关 SSH 运维操作指南_v1.0.pdf"
 WIRED_GUIDE = "头环数据网关有线网络配置指南_v1.0.pdf"
 
@@ -45,6 +46,7 @@ def write_document_package(documents: Path) -> None:
         "documents": [
             {"pdf_artifact_name": "protocol.pdf", "delivery": "always", "platforms": []},
             {"pdf_artifact_name": WINDOWS_GUIDE, "delivery": "platform_bound", "platforms": ["windows"]},
+            {"pdf_artifact_name": KYLIN_GUIDE, "delivery": "platform_bound", "platforms": ["kylin"]},
             {"pdf_artifact_name": SSH_GUIDE, "delivery": "review_only", "platforms": []},
             {"pdf_artifact_name": WIRED_GUIDE, "delivery": "review_only", "platforms": []},
         ]
@@ -52,6 +54,7 @@ def write_document_package(documents: Path) -> None:
     with zipfile.ZipFile(documents / "neurobridge-external-documents.zip", "w") as archive:
         archive.writestr("protocol.pdf", b"pdf")
         archive.writestr(WINDOWS_GUIDE, b"windows guide")
+        archive.writestr(KYLIN_GUIDE, b"kylin guide")
         archive.writestr(SSH_GUIDE, b"excluded")
         archive.writestr(WIRED_GUIDE, b"excluded")
         archive.writestr("b-client-test/index.html", b"<html></html>")
@@ -157,10 +160,16 @@ class ReleaseBundleTests(unittest.TestCase):
                         )
                         with zipfile.ZipFile(windows_7.open("windows-7-x86.zip")) as x86:
                             self.assertEqual(set(x86.namelist()), {"neurobridge-0.2.0-windows-7-x86.exe", "checksums.sha256"})
+                self.assertEqual({name for name in names if name.startswith("kylin/")}, {"kylin/kylin.zip"})
+                self.assertNotIn(f"kylin/{KYLIN_GUIDE}", names)
+                self.assertNotIn(f"docs/external/{KYLIN_GUIDE}", names)
                 with zipfile.ZipFile(outer.open("kylin/kylin.zip")) as kylin:
                     self.assertEqual(set(kylin.namelist()), {"kylin-server.zip", "kylin-desktop.zip"})
-                    with zipfile.ZipFile(kylin.open("kylin-server.zip")) as kylin_server:
-                        self.assertFalse(any(name.startswith("docs/") for name in kylin_server.namelist()))
+                    for edition in ("server", "desktop"):
+                        with zipfile.ZipFile(kylin.open(f"kylin-{edition}.zip")) as family:
+                            self.assertIn(f"docs/{KYLIN_GUIDE}", family.namelist())
+                            self.assertIn("docs/protocol.pdf", family.namelist())
+                            self.assertNotIn(f"docs/{WINDOWS_GUIDE}", family.namelist())
                 verify_release_bundle(output, json.loads(outer.read("metadata/bundle-manifest.json")))
             self.assertEqual(len(manifest["systemArchives"]), 2)
 
@@ -179,8 +188,32 @@ class ReleaseBundleTests(unittest.TestCase):
                 # The Windows guide must not appear anywhere once Windows produced no packages.
                 self.assertNotIn(f"windows/{WINDOWS_GUIDE}", names)
                 self.assertNotIn(f"docs/external/{WINDOWS_GUIDE}", names)
+                with zipfile.ZipFile(outer.open("kylin/kylin.zip")) as kylin:
+                    for edition in ("server", "desktop"):
+                        with zipfile.ZipFile(kylin.open(f"kylin-{edition}.zip")) as family:
+                            self.assertIn(f"docs/{KYLIN_GUIDE}", family.namelist())
+                            self.assertNotIn(f"docs/{WINDOWS_GUIDE}", family.namelist())
                 # always documents are unaffected by platform coverage.
                 self.assertIn("docs/external/protocol.pdf", names)
+                verify_release_bundle(output, json.loads(outer.read("metadata/bundle-manifest.json")))
+
+    def test_kylin_guide_is_omitted_when_kylin_has_no_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            release = root / "release"
+            documents = root / "documents"
+            write_document_package(documents)
+            write_release_fixture(release, ("windows",))
+
+            output = root / "neurobridge-v0.2.0.zip"
+            build_bundle(release, documents, output)
+            with zipfile.ZipFile(output) as outer:
+                names = set(outer.namelist())
+                self.assertFalse(any(KYLIN_GUIDE in name for name in names))
+                with zipfile.ZipFile(outer.open("windows/windows.zip")) as windows:
+                    with zipfile.ZipFile(windows.open("windows-7.zip")) as family:
+                        self.assertIn(f"docs/{WINDOWS_GUIDE}", family.namelist())
+                        self.assertNotIn(f"docs/{KYLIN_GUIDE}", family.namelist())
                 verify_release_bundle(output, json.loads(outer.read("metadata/bundle-manifest.json")))
 
 

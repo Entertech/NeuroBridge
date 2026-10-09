@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RELEASE_MATRIX = tomllib.loads((ROOT / "release/release_matrix.toml").read_text(encoding="utf-8"))
 MANIFEST_FILENAME = "release-manifest.json"
 # Platforms whose per-version archives must also carry the shipped documents.
-DOCUMENT_BEARING_PLATFORMS = ("windows",)
+DOCUMENT_BEARING_PLATFORMS = ("windows", "kylin")
 
 
 def digest_bytes(value: bytes) -> str:
