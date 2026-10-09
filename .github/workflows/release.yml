@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       native_input_run_id:
-        description: "可选：源码原生安装包 Workflow 的 Run ID；未填写时使用 NEUROBRIDGE_RELEASE_INPUT_RUN_ID"
+        description: "源码原生安装包 Workflow 的 Run ID；未填写时安装包输入记为 blocked"
         required: false
         type: string
       external_document_mode:
@@ -231,14 +231,14 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_RUN_ID: ${{ inputs.native_input_run_id || vars.NEUROBRIDGE_RELEASE_INPUT_RUN_ID }}
+          INPUT_RUN_ID: ${{ inputs.native_input_run_id }}
           TARGET_ID: ${{ matrix.id }}
           EXPECTED_SOURCE_SHA: ${{ env.SOURCE_SHA }}
           EXPECTED_BRANCH: ${{ env.SOURCE_BRANCH }}
         run: |
           mkdir -p "artifacts/targets/$TARGET_ID"
           if [[ -z "$INPUT_RUN_ID" ]]; then
-            printf '%s\n' 'blocked: NEUROBRIDGE_RELEASE_INPUT_RUN_ID is unset' > "artifacts/targets/$TARGET_ID/input-fetch.log"
+            printf '%s\n' 'blocked: native_input_run_id was not provided; specify it when manually dispatching Release' > "artifacts/targets/$TARGET_ID/input-fetch.log"
           else
             if gh run view "$INPUT_RUN_ID" --json headSha,headBranch,conclusion > "$RUNNER_TEMP/release-input-run.json" 2> "artifacts/targets/$TARGET_ID/input-fetch.log" && \
               python -c 'import json,os,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("headSha")==os.environ["EXPECTED_SOURCE_SHA"] and d.get("headBranch")==os.environ["EXPECTED_BRANCH"] and d.get("conclusion")=="success" else 1)' "$RUNNER_TEMP/release-input-run.json"; then
