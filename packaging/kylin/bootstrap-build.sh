@@ -9,6 +9,10 @@
 # this same machine.  No archive has to be published anywhere first.
 set -euo pipefail
 
+if [[ ${NEUROBRIDGE_INSTALL_LOGGED:-0} != 1 && ${1:-} != --help && ${1:-} != -h ]]; then
+  exec bash "$(dirname "${BASH_SOURCE[0]}")/run-logged.sh" "${BASH_SOURCE[0]}" "$@"
+fi
+
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
@@ -56,12 +60,26 @@ output_dir=/var/lib/neurobridge-bootstrap/runtime
 # runs in a copy that is removed afterwards.  The setup scripts allow root only
 # when NEUROBRIDGE_BOOTSTRAP=1, which is set here and nowhere else.
 work=$(mktemp -d /var/tmp/neurobridge-build.XXXXXX)
-cleanup() { rm -rf -- "$work"; }
+cleanup() {
+  status=$?
+  # Setup/CMake logs used to disappear with this disposable build tree.
+  log_dir=/var/log/neurobridge-bootstrap
+  index=0
+  while IFS= read -r file; do
+    index=$((index + 1))
+    tail -c 2097152 "$file" > "$log_dir/build-$(basename "$work")-$index.log" || true
+  done < <(find "$work/source/.runtime" -type f -name '*.log' 2>/dev/null)
+  for old in $(find "$log_dir" -maxdepth 1 -type f -name 'build-*.log' | sort -r | tail -n +41); do rm -f -- "$old"; done
+  rm -rf -- "$work"
+  return "$status"
+}
 trap cleanup EXIT
 
 build_tree=$work/source
+echo 'PHASE prepare-source'
 cp -a "$source_root/." "$build_tree/"
 
+echo 'PHASE build-runtime'
 NEUROBRIDGE_BOOTSTRAP=1 "$build_tree/tools/build-kylin-runtime-archive.sh" \
   --source-root "$build_tree" --output-dir "$work/output"
 
@@ -76,6 +94,7 @@ install -d -m 0755 "$output_dir"
 cp -p -- "$archive" "$output_dir/"
 cp -p -- "$manifest" "$output_dir/"
 
+echo 'PHASE deploy-runtime'
 "$installer" --local-archive "$archive" --manifest "$manifest"
 
 printf 'Runtime built and installed from %s\n' "$output_dir"

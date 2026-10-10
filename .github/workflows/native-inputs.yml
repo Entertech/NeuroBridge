@@ -24,7 +24,7 @@ permissions:
 jobs:
   windows:
     name: Windows native input ${{ matrix.id }}
-    if: inputs.platforms == 'available' || inputs.platforms == 'windows'
+    if: inputs.platforms == 'available' || inputs.platforms == 'windows' || inputs.platforms == 'all'
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -39,24 +39,6 @@ jobs:
             blocked_reason: ""
           - id: windows-11-x86_64-msi
             blocked_reason: ""
-          # Blocked. Every declared target still runs and records why it produced no
-          # installer, so the release manifest can report a real reason per target.
-          - id: windows-7-x86_64-exe
-            blocked_reason: "Windows 7 requires the separate Python 3.8 compatibility port because Python 3.9+ dropped Windows 7 support; the current source build only provides the 3.11 runtime"
-          - id: windows-7-x86_64-msi
-            blocked_reason: "Windows 7 requires the separate Python 3.8 compatibility port because Python 3.9+ dropped Windows 7 support; the current source build only provides the 3.11 runtime"
-          - id: windows-7-x86-exe
-            blocked_reason: "Windows 7 requires the separate Python 3.8 compatibility port because Python 3.9+ dropped Windows 7 support, and Windows x86 requires a 32-bit algorithm build chain"
-          - id: windows-7-x86-msi
-            blocked_reason: "Windows 7 requires the separate Python 3.8 compatibility port because Python 3.9+ dropped Windows 7 support, and Windows x86 requires a 32-bit algorithm build chain"
-          - id: windows-10-x86-exe
-            blocked_reason: "Windows x86 requires a 32-bit algorithm build chain; the locked AffectiveCloud-Algorithm-SDK, its windows_x86_64 Eigen pin and the llvm-mingw x86_64 toolchain only produce AMD64 PE binaries, so no 32-bit neurobridge_affective_bridge.exe can be built"
-          - id: windows-10-x86-msi
-            blocked_reason: "Windows x86 requires a 32-bit algorithm build chain; the locked AffectiveCloud-Algorithm-SDK, its windows_x86_64 Eigen pin and the llvm-mingw x86_64 toolchain only produce AMD64 PE binaries, so no 32-bit neurobridge_affective_bridge.exe can be built"
-          - id: windows-11-x86-exe
-            blocked_reason: "Windows x86 requires a 32-bit algorithm build chain; the locked AffectiveCloud-Algorithm-SDK, its windows_x86_64 Eigen pin and the llvm-mingw x86_64 toolchain only produce AMD64 PE binaries, so no 32-bit neurobridge_affective_bridge.exe can be built"
-          - id: windows-11-x86-msi
-            blocked_reason: "Windows x86 requires a 32-bit algorithm build chain; the locked AffectiveCloud-Algorithm-SDK, its windows_x86_64 Eigen pin and the llvm-mingw x86_64 toolchain only produce AMD64 PE binaries, so no 32-bit neurobridge_affective_bridge.exe can be built"
     steps:
       - uses: actions/checkout@v4
         with:

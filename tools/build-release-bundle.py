@@ -20,6 +20,23 @@ MANIFEST_FILENAME = "release-manifest.json"
 DOCUMENT_BEARING_PLATFORMS = ("windows", "kylin")
 
 
+def delivery_pdf_name(name: str) -> str:
+    # Some Kylin GUI extractors ignore ZIP's UTF-8 flag and decode names as GBK.
+    # ASCII delivery aliases keep the registered PDF bytes/title/version intact.
+    titles = {
+        "头环数据网关北向网络协议": "northbound-protocol",
+        "头环数据采集包格式说明": "capture-package-format",
+        "数据网关银河麒麟部署与使用指南": "kylin-deployment-guide",
+        "数据网关 Windows 部署与使用指南": "windows-deployment-guide",
+    }
+    for title, alias in titles.items():
+        if name.startswith(title + "_v"):
+            return alias + name[len(title):]
+    if not name.isascii():
+        return "document-" + sha256(name.encode("utf-8")).hexdigest()[:16] + ".pdf"
+    return name
+
+
 def digest_bytes(value: bytes) -> str:
     return sha256(value).hexdigest()
 
@@ -74,6 +91,11 @@ def collect_native_packages(release_directory: Path, release_manifest: dict) -> 
             members = set(archive.namelist())
             for package in platform_archive.get("packages", []):
                 platform = platform_archive["platform"]
+                policy = RELEASE_MATRIX[platform]
+                versions = policy["versions"] if platform == "windows" else policy["editions"]
+                version = package["osVersion"] if platform == "windows" else package["edition"]
+                if version not in versions or package["architecture"] not in policy["architectures"] or package["format"] not in policy["formats"]:
+                    raise ValueError(f"unsupported release target: {package['fileName']}")
                 family = f"windows-{package['osVersion']}" if platform == "windows" else f"kylin-{package['edition']}"
                 member = f"packages/{package['fileName']}"
                 if member not in members:
@@ -134,8 +156,12 @@ def build_system_archives(
         family_archives: list[tuple[str, bytes, dict]] = []
         for family in families:
             architectures = [(architecture, grouped.get((platform, family, architecture), [])) for architecture in expected_architectures]
+            architectures = [(architecture, packages) for architecture, packages in architectures if packages]
+            if not architectures:
+                continue
             arch_entries: list[dict] = []
-            family_documents = {f"docs/{name}": payload for name, payload in sorted(platform_documents.get(platform, {}).items())}
+            family_documents = {f"docs/{delivery_pdf_name(name)}": payload for name, payload in sorted(platform_documents.get(platform, {}).items())}
+            support_files = ["install-with-logs.ps1"] if platform == "windows" else []
             family_stream = io.BytesIO()
             with zipfile.ZipFile(family_stream, "w", zipfile.ZIP_DEFLATED) as family_zip:
                 for architecture, packages in architectures:
@@ -145,6 +171,8 @@ def build_system_archives(
                     arch_entries.append({"architecture": architecture, "fileName": filename, **entry})
                 for document_name, payload in family_documents.items():
                     add_bytes(family_zip, document_name, payload, timestamp)
+                if platform == "windows":
+                    add_bytes(family_zip, "install-with-logs.ps1", (ROOT / "packaging/windows/install-with-logs.ps1").read_bytes(), timestamp)
             family_data = family_stream.getvalue()
             family_filename = f"{family}.zip"
             family_archives.append((
@@ -156,6 +184,7 @@ def build_system_archives(
                     "sha256": digest_bytes(family_data),
                     "architectureArchives": arch_entries,
                     "documents": sorted(family_documents),
+                    "supportFiles": support_files,
                 },
             ))
         system_filename = f"{platform}.zip"
@@ -252,7 +281,12 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
     grouped, validation = collect_native_packages(release_directory, release_manifest)
     available_platforms = {platform for platform, _, _ in grouped}
     files, bound_documents = collect_bundle_documents(documents_root, available_platforms)
+    aliases = {PurePosixPath(name).name: delivery_pdf_name(PurePosixPath(name).name) for name in files if name.endswith(".pdf")}
+    for documents in bound_documents.values():
+        aliases.update({name: delivery_pdf_name(name) for name in documents})
     platform_documents = documents_for_platform_archives(files, bound_documents, available_platforms)
+    files = {str(PurePosixPath(name).parent / delivery_pdf_name(PurePosixPath(name).name)) if name.endswith(".pdf") else name: value for name, value in files.items()}
+    files["metadata/document-filenames.json"] = json.dumps(aliases, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
     system_archives, system_manifest = build_system_archives(grouped, timestamp, platform_documents)
     files.update(system_archives)
     for name, value in validation:
@@ -268,6 +302,7 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
         "documents": sorted(name for name in files if name.startswith("docs/")),
         "systemDocuments": sorted(name for name in files if name.startswith(("windows/", "kylin/")) and name.endswith(".pdf")),
         "validationFiles": sorted(name for name in files if name.startswith("metadata/validation/")),
+        "metadataFiles": ["metadata/document-filenames.json"],
     }
     files["metadata/bundle-manifest.json"] = json.dumps(bundle_manifest, ensure_ascii=False, indent=2, sort_keys=True).encode() + b"\n"
     files["metadata/build-manifest.json"] = (release_directory / "build-manifest.json").read_bytes()

@@ -99,6 +99,21 @@ publication_record = "2026-08-10-public-wired-network-operations-v1.0"
 reason = "经发布 PR 审核后标记为已发布；版本保持不变，master CI 将生成正式 PDF ZIP Artifact。"
 
 [documents.external_kylin_operations]
+version = "1.1"
+status = "published"
+audience = "b_side"
+delivery = "platform_bound"
+platforms = ["kylin"]
+title = "数据网关银河麒麟部署与使用指南"
+markdown_path = "doc/tech/对外/数据网关银河麒麟部署与使用指南/数据网关银河麒麟部署与使用指南_v1.1.md"
+pdf_artifact_name = "数据网关银河麒麟部署与使用指南_v1.1.pdf"
+created_date = "2026-10-10"
+published_date = "2026-10-10"
+markdown_sha256 = "06fce1597f41abcca02e3c6016455f91fab0e4e0aa65ef6a6354064e08503c34"
+publication_record = "2026-10-10-public-kylin-operations-v1.1"
+reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已锁定 v1.0。PR 合入后由 CI 生成正式 PDF。"
+
+[[documents.external_kylin_operations.versions]]
 version = "1.0"
 status = "published"
 audience = "b_side"
@@ -113,7 +128,38 @@ markdown_sha256 = "ebbbcf4f156bd0ca45d111ea5b2fd20b82fb32fbbae8ff529848ba4cd73cd
 publication_record = "2026-10-09-public-kylin-operations-v1.0"
 reason = "用户明确要求仿照 Windows 部署与使用指南补充银河麒麟对外文档；该文档只覆盖安装包部署形态下 B 端可观察的服务、端口、本机页面与日志，不含网关内部实现细节。"
 
+[[documents.external_kylin_operations.versions]]
+version = "1.1"
+status = "published"
+audience = "b_side"
+delivery = "platform_bound"
+platforms = ["kylin"]
+title = "数据网关银河麒麟部署与使用指南"
+markdown_path = "doc/tech/对外/数据网关银河麒麟部署与使用指南/数据网关银河麒麟部署与使用指南_v1.1.md"
+pdf_artifact_name = "数据网关银河麒麟部署与使用指南_v1.1.pdf"
+created_date = "2026-10-10"
+published_date = "2026-10-10"
+markdown_sha256 = "06fce1597f41abcca02e3c6016455f91fab0e4e0aa65ef6a6354064e08503c34"
+publication_record = "2026-10-10-public-kylin-operations-v1.1"
+reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已锁定 v1.0。PR 合入后由 CI 生成正式 PDF。"
+
+
 [documents.external_windows_operations]
+version = "1.1"
+status = "published"
+audience = "b_side"
+delivery = "platform_bound"
+platforms = ["windows"]
+title = "数据网关 Windows 部署与使用指南"
+markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数据网关 Windows 部署与使用指南_v1.1.md"
+pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.1.pdf"
+created_date = "2026-10-10"
+published_date = "2026-10-10"
+markdown_sha256 = "0e31839cc6fb6c0a400b312aa01ac23e901bdfd5bff7ab5d614f4f8f0421ae27"
+publication_record = "2026-10-10-public-windows-operations-v1.1"
+reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已锁定 v1.0。PR 合入后由 CI 生成正式 PDF。"
+
+[[documents.external_windows_operations.versions]]
 version = "1.0"
 status = "published"
 audience = "b_side"
@@ -127,6 +173,22 @@ published_date = "2026-10-09"
 markdown_sha256 = "b873106ccb5a7b3e126a2ec1f524d44d0c50ceb5b356f19b500167103a0fd205"
 publication_record = "2026-10-09-public-windows-operations-v1.0"
 reason = "用户明确要求把 Windows 部署与使用说明做成对外文档并纳入对外文档包生成 PDF；该文档只覆盖安装包部署形态下 B 端可观察的服务、端口、本机页面与日志，不含网关内部实现细节。"
+
+[[documents.external_windows_operations.versions]]
+version = "1.1"
+status = "published"
+audience = "b_side"
+delivery = "platform_bound"
+platforms = ["windows"]
+title = "数据网关 Windows 部署与使用指南"
+markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数据网关 Windows 部署与使用指南_v1.1.md"
+pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.1.pdf"
+created_date = "2026-10-10"
+published_date = "2026-10-10"
+markdown_sha256 = "0e31839cc6fb6c0a400b312aa01ac23e901bdfd5bff7ab5d614f4f8f0421ae27"
+publication_record = "2026-10-10-public-windows-operations-v1.1"
+reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已锁定 v1.0。PR 合入后由 CI 生成正式 PDF。"
+
 
 [[documents.external_northbound.versions]]
 version = "0.2"
@@ -191,10 +253,62 @@ status = "locked"
 locked_by = "2026-10-09-public-windows-operations-v1.0"
 locked_at = "2026-10-09"
 
+[[release_locks]]
+id = "kylin-operations-v1.0-to-v1.1"
+scope = "external_kylin_operations_document"
+from_version = "1.0"
+to_version = "1.1"
+status = "locked"
+locked_by = "2026-10-10-public-kylin-operations-v1.1"
+locked_at = "2026-10-10"
+
+[[release_locks]]
+id = "windows-operations-v1.0-to-v1.1"
+scope = "external_windows_operations_document"
+from_version = "1.0"
+to_version = "1.1"
+status = "locked"
+locked_by = "2026-10-10-public-windows-operations-v1.1"
+locked_at = "2026-10-10"
+
 [change_policy]
 external_documents_require_explicit_user_request = true
 default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
+
+[[change_records]]
+id = "2026-10-10-delivery-install-diagnostics"
+date = "2026-10-10"
+scope = "implementation"
+summary = "交付 PDF 使用 ASCII 副本名称与原名对照；Windows 仅保留 10/11 x64 EXE/MSI 共四项，麒麟引导 DEB 共一项；禁止矩阵外输入及空系统/架构归档。安装持久化阶段、源码提交和退出码，保留失败构建日志，两平台均提供不依赖已安装网关的失败日志导出入口。"
+external_document_action = "record_only"
+external_document_version = "0.3"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户反馈旧构建 3f31a037 文档文件名乱码、安装仅显示正在设置，并要求排除 Windows 7/32 位及补充失败日志。实现修复与新增指南 v1.1 发布记录分别登记，不回写历史北向协议或旧指南，不以模拟测试替代麒麟现场安装与采集验收。"
+
+[[change_records]]
+id = "2026-10-10-public-windows-operations-v1.1"
+date = "2026-10-10"
+scope = "external_windows_operations_document"
+summary = "部署指南 v1.1 补充安装前提、版本迁移、失败日志与导出、支持范围和现场验证。"
+external_document_action = "explicit_user_authorized"
+external_document_version = "1.1"
+change_state = "locked"
+release_lock = "windows-operations-v1.0-to-v1.1"
+reason = "用户当前请求明确要求完善部署文档；保留旧版独立文件与摘要，发布 PR 合入后生成对应 PDF Artifact，现场验收仍待执行。"
+
+[[change_records]]
+id = "2026-10-10-public-kylin-operations-v1.1"
+date = "2026-10-10"
+scope = "external_kylin_operations_document"
+summary = "部署指南 v1.1 补充安装前提、版本迁移、失败日志与导出、支持范围和现场验证。"
+external_document_action = "explicit_user_authorized"
+external_document_version = "1.1"
+change_state = "locked"
+release_lock = "kylin-operations-v1.0-to-v1.1"
+reason = "用户当前请求明确要求完善部署文档；保留旧版独立文件与摘要，发布 PR 合入后生成对应 PDF Artifact，现场验收仍待执行。"
 
 [[change_records]]
 id = "2026-10-10-pr15-bootstrap-lifecycle-fixes"

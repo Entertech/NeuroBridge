@@ -16,11 +16,11 @@ from neurobridge.versioning import APPLICATION_VERSION
 
 
 class ReleasePipelineTests(unittest.TestCase):
-    def test_matrix_has_one_kylin_bootstrap_and_twelve_windows_targets(self) -> None:
+    def test_matrix_has_one_kylin_bootstrap_and_four_windows_targets(self) -> None:
         targets = matrix()
-        self.assertEqual(len(targets), 13)
-        self.assertEqual(len({target["id"] for target in targets}), 13)
-        self.assertEqual(sum(target["platform"] == "windows" for target in targets), 12)
+        self.assertEqual(len(targets), 5)
+        self.assertEqual(len({target["id"] for target in targets}), 5)
+        self.assertEqual(sum(target["platform"] == "windows" for target in targets), 4)
         kylin = [target for target in targets if target["platform"] == "kylin"]
         self.assertEqual([target["id"] for target in kylin], ["kylin-v10-x86_64-deb"])
         self.assertEqual(kylin[0]["format"], "deb")
@@ -29,10 +29,10 @@ class ReleasePipelineTests(unittest.TestCase):
     def test_missing_input_is_recorded_without_a_fake_package(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            result = target_result("windows-7-x86-exe", root / "inputs", root / "results")
+            result = target_result("windows-10-x86_64-exe", root / "inputs", root / "results")
             self.assertEqual(result["status"], "blocked")
             self.assertEqual(result["reason"], "verified_offline_input_missing")
-            self.assertEqual(list((root / "results/windows-7-x86-exe").iterdir()), [root / "results/windows-7-x86-exe/result.json"])
+            self.assertEqual(list((root / "results/windows-10-x86_64-exe").iterdir()), [root / "results/windows-10-x86_64-exe/result.json"])
 
     def test_source_zip_cannot_masquerade_as_msi(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -93,7 +93,7 @@ class ReleasePipelineTests(unittest.TestCase):
             self.assertEqual(manifest["aggregateArchive"]["packageCount"], 2)
             self.assertEqual(manifest["coverage"]["windows"]["builtPackageCount"], 1)
             self.assertEqual(manifest["coverage"]["kylin"]["builtPackageCount"], 1)
-            self.assertEqual(len(manifest["coverage"]["windows"]["targetResults"]), 12)
+            self.assertEqual(len(manifest["coverage"]["windows"]["targetResults"]), 4)
             self.assertEqual(len(manifest["coverage"]["kylin"]["targetResults"]), 1)
             archive = next(release.glob("neurobridge-*.zip"))
             first_digest = sha256(archive)

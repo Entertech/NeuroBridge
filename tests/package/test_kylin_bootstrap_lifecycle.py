@@ -48,6 +48,7 @@ class Sandbox:
     def relocate(self, text: str) -> str:
         # Only paths and root/OS guards change; transaction control flow is real.
         text = text.replace('[[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run as root."', ":")
+        text = text.replace("[[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'Run as root.' >&2; exit 1; }", ":")
         text = text.replace("${ID,,}", "${ID}")
         return re.sub(r"/(?:opt|etc|var|dev|usr/lib)/", lambda match: str(self.root) + match[0], text)
 
@@ -88,6 +89,8 @@ class Sandbox:
         fetch = scripts / "fetch-runtime.sh"
         fetch.write_text(f'#!/bin/sh\nprintf "%s\\n" "{archive}"\n')
         fetch.chmod(0o755)
+        logger = scripts / "run-logged.sh"
+        logger.write_text(self.relocate((ROOT / "packaging/kylin/run-logged.sh").read_text()))
         script = scripts / "bootstrap-install.sh"
         script.write_text(self.relocate((ROOT / "packaging/kylin/bootstrap-install.sh").read_text()))
         return script
@@ -166,6 +169,61 @@ class SandboxTests(unittest.TestCase):
 
 
 class BootstrapLifecycleTests(SandboxTests):
+    def test_failed_install_keeps_error_and_exit_code_without_runtime(self) -> None:
+        box = self.sandbox()
+        result = box.run(box.installer())
+        self.assertNotEqual(result.returncode, 0)
+        logs = list((box.root / "var/log/neurobridge-bootstrap").glob("install-*.log"))
+        self.assertEqual(len(logs), 1)
+        content = logs[0].read_text()
+        self.assertIn("PHASE authorize-device", content)
+        self.assertIn("No usable non-root USB TTY group", content)
+        self.assertIn("exit_code=1", content)
+        self.assertFalse(box.app.exists())
+
+        # A failed/half-configured install must still be exportable without Python.
+        exporter = box.root / "scripts/export-install-logs.sh"
+        exporter.write_text(box.relocate((ROOT / "packaging/kylin/export-install-logs.sh").read_text()))
+        box.config.write_text("password=do-not-export\n")
+        secret = box.root / "var/lib/neurobridge/recordings/secret.txt"
+        secret.parent.mkdir(parents=True, exist_ok=True)
+        secret.write_text("sensitive-device-data")
+        output = box.root / "exports"
+        result = box.run(exporter, "--output-dir", str(output))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        archives = list(output.glob("*.tar.gz"))
+        self.assertEqual(len(archives), 1)
+        with tarfile.open(archives[0]) as archive:
+            self.assertTrue(any("install-logs/install-" in name for name in archive.getnames()))
+            payload = b"\n".join(archive.extractfile(member).read() for member in archive if member.isfile())
+            self.assertNotIn(b"do-not-export", payload)
+            self.assertNotIn(b"sensitive-device-data", payload)
+
+    def test_build_failure_preserves_sublogs_and_original_exit_code(self) -> None:
+        box = self.sandbox()
+        scripts = box.root / "scripts"
+        source = scripts / "source/tools"
+        source.mkdir(parents=True)
+        for name in ("bootstrap-build.sh", "run-logged.sh"):
+            (scripts / name).write_text(box.relocate((ROOT / "packaging/kylin" / name).read_text()))
+        installer = scripts / "bootstrap-install.sh"
+        installer.write_text("#!/bin/sh\nexit 0\n")
+        installer.chmod(0o755)
+        builder = source / "build-kylin-runtime-archive.sh"
+        builder.write_text('''#!/bin/bash
+mkdir -p "$(dirname "$0")/../.runtime/algorithm"
+echo 'compiler diagnostic fixture' > "$(dirname "$0")/../.runtime/algorithm/build.log"
+echo 'compiler failed fixture' >&2
+exit 7
+''')
+        builder.chmod(0o755)
+        result = box.run(scripts / "bootstrap-build.sh")
+        self.assertEqual(result.returncode, 7, result.stderr)
+        log_dir = box.root / "var/log/neurobridge-bootstrap"
+        self.assertIn("exit_code=7", next(log_dir.glob("install-*.log")).read_text())
+        self.assertEqual(next(log_dir.glob("build-*.log")).read_text().strip(), "compiler diagnostic fixture")
+        self.assertFalse(list((box.root / "var/tmp").glob("neurobridge-build.*")))
+
     def test_fresh_install_grants_actual_tty_group_before_service_start(self) -> None:
         for group in ("usb-serial", "dialout"):
             with self.subTest(group=group):

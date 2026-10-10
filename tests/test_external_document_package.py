@@ -36,7 +36,7 @@ class ExternalDocumentPackageTests(unittest.TestCase):
                 "windows_operations",
             ],
         )
-        self.assertEqual([document.version for document in documents], ["0.2", "0.1", "1.0", "1.0", "1.0", "1.0"])
+        self.assertEqual([document.version for document in documents], ["0.2", "0.1", "1.0", "1.0", "1.1", "1.1"])
         self.assertEqual(
             [document.delivery for document in documents],
             ["always", "always", "review_only", "review_only", "platform_bound", "platform_bound"],
@@ -52,8 +52,8 @@ class ExternalDocumentPackageTests(unittest.TestCase):
                 "头环数据采集包格式说明_v0.1.pdf",
                 "头环数据网关 SSH 运维操作指南_v1.0.pdf",
                 "头环数据网关有线网络配置指南_v1.0.pdf",
-                "数据网关银河麒麟部署与使用指南_v1.0.pdf",
-                "数据网关 Windows 部署与使用指南_v1.0.pdf",
+                "数据网关银河麒麟部署与使用指南_v1.1.pdf",
+                "数据网关 Windows 部署与使用指南_v1.1.pdf",
             ],
         )
 

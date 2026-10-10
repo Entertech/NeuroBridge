@@ -9,6 +9,10 @@
 # service.  A failed check leaves the machine as it was.
 set -euo pipefail
 
+if [[ ${NEUROBRIDGE_INSTALL_LOGGED:-0} != 1 && ${1:-} != --help && ${1:-} != -h ]]; then
+  exec bash "$(dirname "${BASH_SOURCE[0]}")/run-logged.sh" "${BASH_SOURCE[0]}" "$@"
+fi
+
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
@@ -120,10 +124,12 @@ cleanup() {
   local result=$?
   trap - EXIT
   if [[ $committed != true && $service_touched == true ]]; then
+    echo 'PHASE rollback'
     if ! restore_installation; then
       printf 'ERROR: Rollback incomplete; backups retained at %s and %s\n' "$previous_tree" "$stage" >&2
       exit 1
     fi
+    echo 'Rollback completed; previous deployment and service state restored.'
   fi
   rm -rf -- "$download_dir" "$stage"
   [[ -z $next_tree ]] || rm -rf -- "$next_tree"
@@ -134,6 +140,7 @@ trap cleanup EXIT
 [[ $had_unit == false ]] || cp -p "$unit" "$stage/previous.service"
 
 fetch_args=(--manifest "$manifest" --destination "$download_dir")
+echo 'PHASE verify-archive'
 [[ -z $local_archive ]] || fetch_args+=(--local-archive "$local_archive")
 archive=$("$fetch" "${fetch_args[@]}")
 [[ -f $archive && ! -L $archive ]] || fail "Fetch step did not return an archive."
@@ -156,6 +163,7 @@ id -u neurobridge >/dev/null 2>&1 || useradd --system --gid neurobridge --home-d
 # Only the group of an actual USB-derived TTY can authorize this deployment.
 # No device-group names are assumed, and the root group is never granted.
 serial_authorized=false
+echo 'PHASE authorize-device'
 for device in /dev/ttyACM* /dev/ttyUSB*; do
   [[ -c $device ]] || continue
   device_group=$(stat -Lc '%G' -- "$device")
@@ -164,6 +172,7 @@ for device in /dev/ttyACM* /dev/ttyUSB*; do
   usermod -aG "$device_group" neurobridge \
     || fail "Cannot grant neurobridge access to $device (group $device_group)."
   serial_authorized=true
+  printf 'Authorized USB TTY group: %s\n' "$device_group"
 done
 [[ $serial_authorized == true ]] \
   || fail "No usable non-root USB TTY group found. Connect the headset, check device ownership, and rerun the package installation."
@@ -184,6 +193,7 @@ previous_tree=$(mktemp -d /opt/neurobridge-previous.XXXXXX)
 # Build and stage while the previous version runs; stop before replacing any
 # installed paths, so shutdown finishes against the old code and algorithm.
 service_touched=true
+printf 'PHASE replace-service previous_active=%s previous_enabled=%s\n' "$service_was_active" "$service_was_enabled"
 if [[ $had_unit == true || $service_was_active == true ]]; then
   systemctl stop neurobridge.service
   if systemctl is-active --quiet neurobridge.service; then
@@ -203,6 +213,7 @@ fi
 install -m 0644 /opt/neurobridge/packaging/neurobridge.service "$unit"
 
 systemctl daemon-reload
+echo 'PHASE activate-service'
 if [[ $had_unit == false || $service_was_enabled == true ]]; then
   systemctl enable neurobridge.service
 fi

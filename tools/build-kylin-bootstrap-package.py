@@ -5,9 +5,9 @@ The package carries two things.  One is the per-machine installer: a manifest,
 the fetch script and the install script, which download the runtime or read a
 local copy of it.  The other is the one-time build: the gateway source, the
 vendored algorithm SDK, the pinned Python archive and wheels, and the setup
-scripts that turn them into a runtime.  On the single Kylin machine that
-produces the runtime, ``bootstrap-build.sh`` runs that build and then installs
-the result on the same machine.  Every other machine only runs the installer.
+scripts that turn them into a runtime.  Every package configure invokes ``bootstrap-build.sh`` to build and install
+the runtime on the target machine. A previously exported runtime can also be
+installed explicitly through ``bootstrap-install.sh``.
 
 The package does not contain a compiled runtime.  Building it needs only
 ``dpkg-deb`` or ``rpmbuild`` and does not need a Kylin machine.
@@ -108,10 +108,12 @@ def stage_payload(root: Path) -> None:
     payload = root / PAYLOAD_DIR.relative_to("/")
     payload.mkdir(parents=True)
     shutil.copy2(MANIFEST, payload / "kylin-runtime-manifest.toml")
-    for script in (FETCH, INSTALL, BUILD):
+    for script in (FETCH, INSTALL, BUILD, ROOT / "packaging/kylin/run-logged.sh", ROOT / "packaging/kylin/export-install-logs.sh"):
         destination = payload / script.name
         shutil.copy2(script, destination)
         destination.chmod(0o755)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    (payload / "build-info.txt").write_text(f"application_version={APPLICATION_VERSION}\nsource_commit={commit}\n", encoding="utf-8")
     source = payload / "source"
     for relative in SOURCE_FILES:
         origin = ROOT / relative
@@ -166,7 +168,7 @@ def deb_control() -> str:
         Priority: optional
         Architecture: {DEB_ARCH}
         Maintainer: Entertech <support@entertech.cn>
-        Depends: ca-certificates, curl, g++, tar
+        Depends: ca-certificates, curl, g++, make, tar
         Description: NeuroBridge installer that builds or fetches its runtime
          On one Galaxy Kylin machine, builds the runtime from the bundled
          source and installs it.  On every other machine, installs a runtime

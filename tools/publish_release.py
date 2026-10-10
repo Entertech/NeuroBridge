@@ -119,6 +119,7 @@ def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
         required.update(bundle_manifest.get("documents", []))
         required.update(bundle_manifest.get("systemDocuments", []))
         required.update(bundle_manifest.get("validationFiles", []))
+        required.update(bundle_manifest.get("metadataFiles", []))
         for system in bundle_manifest.get("systemArchives", []):
             path = system["fileName"]
             required.add(path)
@@ -142,7 +143,8 @@ def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
                             raise ValueError(f"variant archive is corrupt: {variant['fileName']}")
                         expected_architectures = {item["fileName"] for item in variant.get("architectureArchives", [])}
                         expected_documents = set(variant.get("documents", []))
-                        if set(variant_zip.namelist()) != expected_architectures | expected_documents:
+                        expected_support = set(variant.get("supportFiles", []))
+                        if set(variant_zip.namelist()) != expected_architectures | expected_documents | expected_support:
                             raise ValueError(f"variant archive contents mismatch: {variant['fileName']}")
                         for item in variant.get("architectureArchives", []):
                             architecture_data = variant_zip.read(item["fileName"])
