@@ -139,6 +139,7 @@ class BootstrapPackageTests(unittest.TestCase):
                 "config/kylin-runtime-manifest.toml",
                 "config/gateway.toml.example",
                 "packaging/kylin/neurobridge.service",
+                "packaging/kylin/python-launcher.sh",
                 "packaging/kylin/export-logs.sh",
                 "packaging/kylin/diagnostic-context.sh",
                 "third_party/NumCpp/CMakeLists.txt",

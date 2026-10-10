@@ -32,7 +32,7 @@ class Sandbox:
         self.env = {**os.environ, "NB_SANDBOX": str(root),
                     "PATH": str(root / "stubs") + os.pathsep + os.environ["PATH"]}
         for name in ("systemctl", "getent", "id", "groupadd", "useradd", "usermod",
-                     "stat", "uname", "chown", "install", "udevadm", "od", "getconf"):
+                     "stat", "uname", "chown", "install", "udevadm", "od", "getconf", "runuser"):
             path = root / "stubs" / name
             path.write_text(f"#!{sys.executable}\n" + SYSTEM_STUB)
             path.chmod(0o755)
@@ -133,6 +133,24 @@ if name == "systemctl":
         state["enabled"] = True
     elif action == "disable":
         state["enabled"] = False
+elif name == "runuser":
+    if args[:4] != ['-u', 'neurobridge', '--', '/bin/sh']:
+        code = 1
+    elif os.environ.get('NB_DENY_SERVICE_USER') == '1':
+        print('Permission denied (service-account fixture)', file=sys.stderr)
+        code = 1
+    else:
+        # Simulate access as an unprivileged account while keeping the test
+        # independent of root/user creation. Real target execution is required.
+        prefix = root / 'opt/neurobridge'
+        for path in (prefix, *prefix.rglob('*')):
+            if path.is_symlink():
+                continue
+            mode = path.stat().st_mode
+            if path.is_dir() and mode & 0o005 != 0o005:
+                code = 1
+            elif path.is_file() and mode & 0o004 != 0o004:
+                code = 1
 elif name == "usermod":
     code = int(os.environ.get("NB_DENY_GROUP", "0"))
     if os.environ.get('NB_DENY_GROUP_NAME') == args[1]:
@@ -364,6 +382,13 @@ exit 7
                 if active:
                     self.assertLess(calls.index(["systemctl", "stop", "neurobridge.service"]),
                                     calls.index(["systemctl", "start", "neurobridge.service"]))
+                    self.assertIn('SERVICE_STATUS started; startup_verified=true', result.stdout)
+                    self.assertNotIn('installed_not_started', result.stdout)
+                else:
+                    self.assertNotIn(["systemctl", "start", "neurobridge.service"], calls)
+                    self.assertIn('action=skip_start reason=preserve_stopped_state', result.stdout)
+                    self.assertIn('SERVICE_STATUS installed_not_started; startup_verified=false', result.stdout)
+                    self.assertIn('sudo systemctl start neurobridge.service', result.stdout)
 
     def test_failure_restores_unit_code_config_and_service_states(self) -> None:
         for active, enabled in ((True, True), (True, False), (False, True), (False, False)):
@@ -394,6 +419,26 @@ exit 7
         self.assertFalse(box.state()["active"])
         self.assertFalse(box.state()["enabled"])
 
+    def test_deployed_import_failure_rolls_back_before_service_activation(self) -> None:
+        box = self.sandbox()
+        box.existing(active=True, enabled=True)
+        script = box.installer()
+        interpreter = box.root / "archive-source/runtime/bin/python"
+        interpreter.write_text('#!/bin/sh\ncase "$(pwd -P)" in */opt/neurobridge) exit 1;; esac\nexit 0\n')
+        with tarfile.open(box.root / "runtime.tar.gz", "w:gz") as output:
+            output.add(box.root / "archive-source", arcname=".")
+        result = box.run(script)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("deployed runtime cannot import", result.stdout + result.stderr)
+        self.assertEqual((box.app / "version.txt").read_text(), "old-code")
+        self.assertEqual(box.unit.read_text(), box.unit_text("old-unit"))
+        self.assertEqual(box.config.read_text(), "现场配置\n")
+        self.assertTrue(box.state()["active"])
+        self.assertTrue(box.state()["enabled"])
+        self.assertNotIn("PHASE activate-service", result.stdout)
+        # Rollback starts the restored old deployment exactly once.
+        self.assertEqual(box.state()["calls"].count(["systemctl", "start", "neurobridge.service"]), 1)
+
     def test_failed_stop_does_not_replace_running_code(self) -> None:
         box = self.sandbox()
         box.existing(active=True, enabled=True)
@@ -403,6 +448,44 @@ exit 7
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((box.app / "version.txt").read_text(), "old-code")
         self.assertTrue(box.state()["active"])
+
+    def test_service_account_import_failure_restores_old_deployment(self) -> None:
+        box = self.sandbox()
+        box.existing(active=True, enabled=True)
+        box.env['NB_DENY_SERVICE_USER'] = '1'
+        result = box.run(box.installer())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('phase=verify_service_account', result.stdout)
+        self.assertIn('Permission denied', result.stdout + result.stderr)
+        self.assertEqual((box.app / 'version.txt').read_text(), 'old-code')
+        self.assertEqual(box.unit.read_text(), box.unit_text('old-unit'))
+        self.assertEqual(box.config.read_text(), '现场配置\n')
+        self.assertTrue(box.state()['active'])
+        self.assertTrue(box.state()['enabled'])
+        self.assertNotIn('PHASE activate-service', result.stdout)
+
+    def test_root_only_runtime_is_normalized_before_service_account_check(self) -> None:
+        box = self.sandbox()
+        script = box.installer()
+        source = box.root / 'archive-source'
+        nested = source / 'runtime/bin/python-runtime/bin'
+        nested.mkdir(parents=True)
+        (nested / 'python3').write_text('#!/bin/sh\nexit 0\n')
+        (nested / 'python3').chmod(0o700)
+        nested.chmod(0o700)
+        nested.parent.chmod(0o700)
+        (source / 'payload/neurobridge/__init__.py').chmod(0o600)
+        with tarfile.open(box.root / 'runtime.tar.gz', 'w:gz') as output:
+            output.add(source, arcname='.')
+        result = box.run(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        installed = box.app / 'runtime/bin/python-runtime/bin'
+        self.assertEqual(installed.stat().st_mode & 0o777, 0o755)
+        self.assertEqual((installed / 'python3').stat().st_mode & 0o777, 0o755)
+        self.assertEqual((box.app / 'neurobridge/__init__.py').stat().st_mode & 0o777, 0o644)
+        calls = box.state()['calls']
+        check = next(i for i, call in enumerate(calls) if call[0] == 'runuser')
+        self.assertLess(check, calls.index(['systemctl', 'start', 'neurobridge.service']))
 
 
 class BootstrapMaintainerTests(SandboxTests):
@@ -516,10 +599,10 @@ class BootstrapMaintainerTests(SandboxTests):
 
 class PortablePythonTests(SandboxTests):
     def test_archive_setup_uses_bundled_python_despite_system_python311(self) -> None:
-        for force_portable in (False, True):
-            with self.subTest(force_portable=force_portable):
+        for force_portable, external_site in ((False, False), (True, False), (True, True)):
+            with self.subTest(force_portable=force_portable, external_site=external_site):
                 box = self.sandbox()
-                interpreter_source = f"#!{sys.executable}\n" + r'''
+                interpreter_source = f"#!{sys.executable} -E\n" + r'''
 import json, os, pathlib, sys
 root = pathlib.Path(os.environ["NB_SANDBOX"])
 with (root / "python-calls.jsonl").open("a") as log:
@@ -530,7 +613,8 @@ if sys.argv[1:3] == ["-m", "venv"]:
     (venv / "bin/python").symlink_to(pathlib.Path(sys.argv[0]).resolve())
     (venv / "lib/python3.11/site-packages").mkdir(parents=True)
 elif sys.argv[1:2] == ["-c"] and "site.getsitepackages" in sys.argv[2]:
-    print(pathlib.Path(sys.argv[0]).resolve().parents[1] / "lib/python3.11/site-packages")
+    print(os.environ.get("NB_EXTERNAL_SITE") or
+          pathlib.Path(sys.argv[0]).resolve().parents[1] / "lib/python3.11/site-packages")
 elif "--version" in sys.argv:
     print("Python 3.11.16")
 '''
@@ -580,6 +664,8 @@ elif "--version" in sys.argv:
                     for relative in ("pyproject.toml", "sdk.lock", "config/gateway.toml.example"):
                         (box.root / relative).write_text("")
                     (box.root / "packaging/kylin/neurobridge.service").write_text("unit-fixture\n")
+                    (box.root / "packaging/kylin/python-launcher.sh").write_bytes(
+                        (ROOT / "packaging/kylin/python-launcher.sh").read_bytes())
                     for name in ('export-logs.sh', 'diagnostic-context.sh'):
                         (box.root / 'packaging/kylin' / name).write_text('#!/bin/bash\n')
                     (box.root / 'neurobridge/version_registry.toml').write_text('[application]\nversion = "9.9.9"\n')
@@ -596,6 +682,17 @@ elif "--version" in sys.argv:
                     stage.chmod(0o755)
                     builder = box.root / "tools/build-kylin-runtime-archive.sh"
                     builder.write_text(box.relocate((ROOT / "tools/build-kylin-runtime-archive.sh").read_text()))
+                    if external_site:
+                        outside = box.root / "external-site"
+                        outside.mkdir()
+                        box.env["NB_EXTERNAL_SITE"] = str(outside)
+                        result = box.run(builder, "--source-root", str(box.root),
+                                         "--output-dir", str(box.root / "output"))
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("site-packages outside the bundled runtime", result.stderr)
+                        self.assertEqual(list(outside.iterdir()), [])
+                        self.assertFalse(list((box.root / "output").glob("*.tar.gz")))
+                        continue
                     result = box.run(builder, "--source-root", str(box.root),
                                      "--output-dir", str(box.root / "output"))
                     self.assertTrue((box.root / "output/neurobridge-runtime-9.9.9-kylin-v10-x86_64.tar.gz").exists(), result.stderr)

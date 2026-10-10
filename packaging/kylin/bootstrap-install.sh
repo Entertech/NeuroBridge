@@ -73,6 +73,7 @@ nb_event verify_runtime_identity "os=$manifest_os version=$manifest_os_version a
 
 command -v tar >/dev/null 2>&1 || fail "tar is required to unpack the runtime archive."
 command -v systemctl >/dev/null 2>&1 || fail "systemctl is required to install the service."
+command -v runuser >/dev/null 2>&1 || fail "runuser (util-linux) is required to validate the service account."
 command -v udevadm >/dev/null 2>&1 || fail "udevadm is required to authorize USB serial devices."
 
 rule_name=70-neurobridge-usb-serial.rules
@@ -234,6 +235,8 @@ cp "$stage/gateway.toml.example" "$next_tree/gateway.toml.example"
 install -d -m 0755 "$next_tree/packaging"
 cp "$stage/packaging/neurobridge.service" "$next_tree/packaging/neurobridge.service"
 chown -R root:root "$next_tree"
+nb_normalize_runtime_permissions "$next_tree" \
+  || fail "Cannot prepare service-readable deployment permissions."
 previous_tree=$(mktemp -d /opt/neurobridge-previous.XXXXXX)
 
 # Build and stage while the previous version runs; stop before replacing any
@@ -263,14 +266,40 @@ if [[ ! -e /etc/neurobridge/gateway.toml ]]; then
 fi
 install -m 0644 /opt/neurobridge/packaging/neurobridge.service "$unit"
 
+# Validate the actual installed path, not just the root-owned staging tree.
+# This also imports the entry point rather than the nearly empty package init.
+(unset PYTHONPATH; cd /opt/neurobridge && runtime/bin/python -c 'import encodings, neurobridge.__main__, serial, websockets') \
+  || fail "The deployed runtime cannot import the gateway entry point; restoring the previous deployment."
+
+nb_event verify_service_account 'user=neurobridge phase=deployed_runtime'
+runuser -u neurobridge -- /bin/sh -c 'unset PYTHONPATH; cd /opt/neurobridge && exec runtime/bin/python -c "import encodings, neurobridge.__main__, serial, websockets"' \
+  || {
+    nb_event verify_service_account 'user=neurobridge result=failed'
+    if command -v namei >/dev/null 2>&1; then namei -l /opt/neurobridge/runtime/bin/python || true; fi
+    if command -v findmnt >/dev/null 2>&1; then findmnt -T /opt/neurobridge/runtime/bin/python -o TARGET,FSTYPE,OPTIONS || true; fi
+    fail "The neurobridge account cannot execute/import the deployed runtime; restoring the previous deployment."
+  }
+nb_event verify_service_account 'user=neurobridge result=ready'
+
 systemctl daemon-reload
 echo 'PHASE activate-service'
 if [[ $had_unit == false || $service_was_enabled == true ]]; then
+  nb_event service_activation 'action=enable'
   systemctl enable neurobridge.service
+else
+  nb_event service_activation 'action=keep_disabled reason=preserve_disabled_state'
 fi
 if [[ $had_unit == false || $service_was_active == true ]]; then
+  nb_event service_activation 'action=start'
   systemctl start neurobridge.service
   systemctl is-active --quiet neurobridge.service || fail "neurobridge.service did not stay active after installation."
+  echo 'SERVICE_STATUS started; startup_verified=true'
+else
+  nb_event service_activation "action=skip_start reason=preserve_stopped_state previous_enabled=$service_was_enabled"
+  echo 'SERVICE_STATUS installed_not_started; startup_verified=false; previous stopped state preserved.'
+  echo 'Start when needed: sudo systemctl start neurobridge.service'
+  echo 'Check status: sudo systemctl status neurobridge.service --no-pager -l'
+  echo 'Check startup errors: sudo journalctl -u neurobridge.service -n 80 --no-pager'
 fi
 committed=true
 

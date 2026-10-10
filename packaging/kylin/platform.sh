@@ -105,3 +105,16 @@ nb_require_python_development() {
   fi
   nb_event python_prerequisites "architecture=$NB_ARCH mode=source result=ready"
 }
+
+# This is only for immutable shipped code/runtime trees, never configuration,
+# recordings or logs. Tar may create implicit directories using umask 077;
+# root can run through those directories while the service account cannot.
+nb_normalize_runtime_permissions() {
+  local tree
+  for tree in "$@"; do
+    [[ -d $tree && ! -L $tree ]] || { nb_die "unsafe_runtime_permissions_root path=$tree"; return 1; }
+    find "$tree" -type d -exec chmod -- 0755 {} + || return 1
+    find "$tree" -type f -exec chmod -- u=rwX,go=rX {} + || return 1
+    nb_event runtime_permissions "path=$tree directories=0755 files=readable executable_bits=preserved owner_write_only=true"
+  done
+}
