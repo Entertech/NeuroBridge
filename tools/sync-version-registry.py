@@ -89,10 +89,11 @@ def main() -> None:
     if replacements != 1:
         raise SystemExit("Unable to update project version in pyproject.toml")
     PYPROJECT_PATH.write_text(updated_pyproject, encoding="utf-8")
+    kylin_version = registry["application"].get("platform_versions", {}).get("kylin", application_version)
     manifest_text = KYLIN_RUNTIME_MANIFEST_PATH.read_text(encoding="utf-8")
     for key, value in (
-        ("application_version", application_version),
-        ("file_name", f"neurobridge-runtime-{application_version}-kylin-v10-x86_64.tar.gz"),
+        ("application_version", kylin_version),
+        ("file_name", f"neurobridge-runtime-{kylin_version}-kylin-v10-x86_64.tar.gz"),
     ):
         manifest_text, count = re.subn(
             rf'(?m)^({key}\s*=\s*)"[^"]+"$',

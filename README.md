@@ -4,7 +4,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于 M1 验收范围。
 
-发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。应用版本递增的 `master` 合入尝试全部 5 个包目标；Windows 和麒麟各至少一个合格包、两个平台 ZIP、总 ZIP、清单和日志本地校验成功后，先上传 Actions Artifact，回下载核对上传前总 ZIP 的 SHA-256 和内容，再创建 tag、draft GitHub Release，资产复验后公开。发布基线取带总 ZIP 的已公开正式应用 Release；孤立 tag 和 draft 不代表发布成功，首次发布沿版本历史寻找递增前基线。版本不变的合入记录跳过发布，未完成目标逐项列明。产品版本统一取版本台账的 `[application].version`；旧平台版本字段不参与新发布。当前不启用签名或公证，真机验证结果通过独立补充附件持续记录。
+发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。应用版本递增的 `master` 合入尝试全部 5 个包目标；Windows 和麒麟各至少一个合格包、两个平台 ZIP、总 ZIP、清单和日志本地校验成功后，先上传 Actions Artifact，回下载核对上传前总 ZIP 的 SHA-256 和内容，再创建 tag、draft GitHub Release，资产复验后公开。发布基线取带总 ZIP 的已公开正式应用 Release；孤立 tag 和 draft 不代表发布成功，首次发布沿版本历史寻找递增前基线。版本不变的合入记录跳过发布，未完成目标逐项列明。总交付批次与 tag 取版本台账的 `[application].version`；平台安装包、运行时和诊断版本分别取 `[application.platform_versions]` 的 `windows` / `kylin`，兼容旧台账时回退到总版本。本次仅麒麟升级，Windows 保持原版本；旧 `[platform_releases]` 字段不参与新发布。当前不启用签名或公证，真机验证结果通过独立补充附件持续记录。
 
 发布实现及所需的离线安装包输入见[发布工作流技术方案](doc/tech/发布工作流技术方案.md)。当前仓库尚无全部 Windows 目标的正式安装包构建环境；CI 会把缺失输入记为 `blocked`，麒麟引导 DEB 由托管 runner 从源码和离线输入打包。PR 只执行校验，不打包；合入 `master` 后，两平台最低门槛未满足时发布失败。源码候选包不算正式安装包。
 
@@ -30,7 +30,7 @@ Windows 原生安装包工作流上传 Artifact 后，手动运行 `Release` 并
 
 麒麟引导包的 Python 入口按运行时当前位置设置随包标准库路径，安装器规范化代码/运行时权限，并在最终部署目录以服务账户校验网关入口后才启用服务；旧包出现 `No module named 'encodings'` 时，按[内部构建说明](doc/tech/源码原生安装包构建.md#python-标准库定位失败的现场恢复)验证与恢复。源码回归不替代目标机安装、采集和重启验收。
 
-麒麟引导支持按 `资源名 [HTTPS URL或文件路径]` 选择 `python`、`cmake`、`eigen`、`pyserial`、`websockets` 的来源。不传参数或仅传资源名时使用包内资源；指定 URL 会下载，指定路径会读取本机文件，均须匹配所选 CPU 的锁定版本与 SHA-256，失败不切换来源。首次安装使用随包 `sudo bash install-bootstrap.sh --package ./<引导包>.deb cmake "/media/usb/cmake包.tar.gz"`；其余资源继续使用包内默认值。安装入口位于麒麟版本 ZIP，DEB 位于其 `all` 分组 ZIP；独立引导 Artifact 中入口与 DEB 同目录。已安装后可运行 `sudo /usr/lib/neurobridge-bootstrap/bootstrap-build.sh cmake <URL或文件>` 重建，或用该脚本的 `--list-resources` 查询包内输入。详细语法、重试与系统依赖边界见[内部资源选择说明](doc/tech/麒麟V10网关运行与串口联调内部文档.md#引导安装资源来源选择)。当前为源码与模拟验证支持，目标机验收待完成。
+麒麟引导支持按 `资源名 [HTTPS URL或文件路径]` 选择 `python`、`cmake`、`eigen`、`pyserial`、`websockets` 的来源。不传参数或仅传资源名时使用包内资源；指定 URL 会下载，指定路径会读取本机文件，均须匹配所选 CPU 的锁定版本与 SHA-256，失败不切换来源。首次安装使用随包 `sudo bash install-bootstrap.sh --package ./<引导包>.deb cmake "/media/usb/cmake包.tar.gz"`；其余资源继续使用包内默认值。安装入口位于麒麟版本 ZIP，DEB 位于其 `all` 分组 ZIP；独立引导 Artifact 中入口与 DEB 同目录。已安装后可运行 `sudo /usr/lib/neurobridge-bootstrap/bootstrap-build.sh cmake <URL或文件>` 重建，或用该脚本的 `--list-resources` 查询包内输入。CI 的 `offline_resources` 默认 `all`，可填 `none` 或逗号分隔的资源名，只打入所选资源。包内缺少当前架构必需资源且未指定来源时，安装逐项提示资源名、所需文件和补充 URL/路径的命令格式，并写入日志后退出。详细语法、重试与系统依赖边界见[内部资源选择说明](doc/tech/麒麟V10网关运行与串口联调内部文档.md#引导安装资源来源选择)。当前为源码与模拟验证支持，目标机验收待完成。
 
 2026-09-10 用户确认耳机首次上电无需 ACK，直接 E1 即可出数。Windows 和银河麒麟现统一并行发现/打开串口与准备算法；已有合法流直接接管，静默设备两项就绪后发送 E1，收到完整合法 28 字节帧才确认连接并创建录制会话。算法复用预备实例，正常停止发送 E0；失败/取消清理候选和算法。不再发送 ACK 或使用停止提示文件，旧配置键兼容保留。详见[验证时序](doc/tech/银河麒麟V10耳机USB串口接入_PRD.md#42-验证时序)。源码回归不替代两平台真实耳机冷启动、停止/整机重启与拔插验收。
 

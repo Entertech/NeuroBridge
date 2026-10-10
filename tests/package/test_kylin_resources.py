@@ -258,6 +258,44 @@ sys.exit(subprocess.call(['bash', str(dst / 'bootstrap-build.sh')]))
         self.assertIn('exit_code=1', result.stdout)
         self.assertFalse(list((box.root / 'var/tmp').glob('neurobridge-package.*')))
 
+    def test_all_missing_unspecified_resources_are_prompted_and_logged_before_install(self):
+        box, scripts, data, content = self.prepare()
+        box.existing(active=True, enabled=True)
+        wrapper, package, payload = self.wrapper(box, scripts)
+        for name in ('source/python-runtime', 'source/wheelhouse', 'source/packaging/kylin/offline'):
+            shutil.rmtree(payload / name)
+        # A bare name still means bundled input and must report the missing file.
+        result = box.run(wrapper, '--package', str(package), 'cmake')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.count('phase=resource_missing'), 5)
+        logs = list((box.root / 'var/log/neurobridge-bootstrap').glob('*.log'))
+        self.assertTrue(logs)
+        saved = '\n'.join(path.read_text() for path in logs)
+        for name in ('python', 'cmake', 'eigen', 'pyserial', 'websockets'):
+            self.assertIn('name=' + name, saved)
+            self.assertIn(name + ' <HTTPS下载URL或本机文件路径>', result.stdout)
+        self.assertIn('source_unspecified=true', saved)
+        self.assertFalse(Path(box.env['NB_DPKG_CALLS']).exists())
+        self.assertFalse(Path(box.env['NB_CURL_CALLS']).exists())
+        self.assertTrue(box.state()['active'])
+        self.assertEqual((box.app / 'version.txt').read_text(), 'old-code')
+
+    def test_all_omitted_resources_can_be_supplied_by_explicit_local_files(self):
+        box, scripts, data, content = self.prepare()
+        wrapper, package, payload = self.wrapper(box, scripts)
+        for name in ('source/python-runtime', 'source/wheelhouse', 'source/packaging/kylin/offline'):
+            shutil.rmtree(payload / name)
+        local = box.root / 'usb input'
+        local.write_bytes(content)
+        args = [value for name in ('python', 'cmake', 'eigen', 'pyserial', 'websockets')
+                for value in (name, str(local))]
+        result = box.run(wrapper, '--package', str(package), *args)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count('mode=local'), 5)
+        self.assertEqual(result.stdout.count('mode=prepared'), 5)
+        self.assertTrue(Path(box.env['NB_DPKG_CALLS']).exists())
+        self.assertNotIn('phase=resource_missing', result.stdout)
+
     def test_list_entry_does_not_build_download_or_create_install_logs(self):
         box, scripts, data, content = self.prepare()
         entry = scripts / 'bootstrap-build.sh'

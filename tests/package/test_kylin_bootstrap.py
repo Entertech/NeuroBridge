@@ -96,7 +96,7 @@ class BootstrapPackageTests(unittest.TestCase):
             self.assertEqual(
                 seen["names"],
                 ["70-neurobridge-usb-serial.rules", "bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "diagnostic-context.sh", "export-install-logs.sh", "fetch-runtime.sh",
-                 "install-bootstrap.sh", "kylin-bootstrap-inputs.toml", "kylin-runtime-manifest.toml", "platform.sh", "resources.sh", "run-logged.sh", "source"],
+                 "install-bootstrap.sh", "kylin-bootstrap-inputs.toml", "kylin-runtime-manifest.toml", "offline-resources.json", "platform.sh", "resources.sh", "run-logged.sh", "source"],
             )
             self.assertGreater(output.stat().st_size, 1024)
             self.assertEqual((root / 'install-bootstrap.sh').read_bytes(), (ROOT / 'packaging/kylin/install-bootstrap.sh').read_bytes())
@@ -180,7 +180,7 @@ class BootstrapPackageTests(unittest.TestCase):
             self.assertEqual(
                 seen["names"],
                 ["70-neurobridge-usb-serial.rules", "bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "diagnostic-context.sh", "export-install-logs.sh", "fetch-runtime.sh",
-                 "install-bootstrap.sh", "kylin-bootstrap-inputs.toml", "kylin-runtime-manifest.toml", "platform.sh", "resources.sh", "run-logged.sh", "source"],
+                 "install-bootstrap.sh", "kylin-bootstrap-inputs.toml", "kylin-runtime-manifest.toml", "offline-resources.json", "platform.sh", "resources.sh", "run-logged.sh", "source"],
             )
             self.assertNotIn("eigen3-devel", seen["spec"])
             self.assertIn("%preun", seen["spec"])

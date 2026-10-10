@@ -84,6 +84,26 @@ nb_list_resources() {
 
 nb_prepare_resources() {
   local tree=$1 destination=$2 prepared=${3:-} index name key filename source mode temporary
+  # Report every missing default before any download, compilation or package
+  # configure. Explicit URLs/files are independent of missing bundled inputs.
+  if [[ -z $prepared ]]; then
+    local missing=0
+    for index in 0 1 2 3 4; do
+      [[ -z ${NB_RESOURCE_SOURCES[$index]} ]] || continue
+      name=${NB_RESOURCE_NAMES[$index]}
+      nb_resource_key "$name"
+      key=$NB_RESOURCE_KEY
+      filename=$(nb_lock_value "artifacts.$key" filename) || return 1
+      nb_resource_bundled_path "$tree" "$key" "$filename"
+      if [[ ! -e $NB_RESOURCE_PATH && ! -L $NB_RESOURCE_PATH ]]; then
+        missing=1
+        nb_event resource_missing "name=$name key=$key file=$filename architecture=$NB_ARCH mode=bundled reason=not_in_package source_unspecified=true"
+        printf 'ERROR: 引导包内缺少离线资源 %s（%s，架构 %s）。请在原安装命令中增加：%s <HTTPS下载URL或本机文件路径>；需要文件 %s。未自动联网或切换来源。\n' \
+          "$name" "$key" "$NB_ARCH" "$name" "$filename" >&2
+      fi
+    done
+    [[ $missing -eq 0 ]] || return 1
+  fi
   mkdir -p "$destination" || return 1
   for index in 0 1 2 3 4; do
     name=${NB_RESOURCE_NAMES[$index]}

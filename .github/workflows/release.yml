@@ -23,6 +23,11 @@ on:
     branches: [master]
   workflow_dispatch:
     inputs:
+      offline_resources:
+        description: "麒麟离线资源：all（默认）、none 或逗号分隔的 python,cmake,eigen,pyserial,websockets"
+        required: false
+        default: all
+        type: string
       native_input_run_id:
         description: "源码原生安装包 Workflow 的 Run ID；未填写时安装包输入记为 blocked"
         required: false
@@ -40,6 +45,7 @@ permissions:
   contents: read
 
 env:
+  OFFLINE_RESOURCES: ${{ inputs.offline_resources || 'all' }}
   SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
   SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
 
@@ -238,22 +244,28 @@ jobs:
           python-version: '3.11'
       # The Kylin deliverable is the bootstrap package. It is built here from
       # the checked-out source and does not consume a prebuilt runtime input.
+      - name: Resolve offline resource selection
+        id: resource-selection
+        if: matrix.platform == 'kylin'
+        run: |
+          key=$(python tools/prepare-kylin-bootstrap-inputs.py --offline-resources "$OFFLINE_RESOURCES" --selection-key)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
       - name: Restore approved Kylin dependency cache
         id: kylin-cache
         continue-on-error: true
-        if: matrix.platform == 'kylin'
+        if: matrix.platform == 'kylin' && steps.resource-selection.outputs.key != 'none'
         uses: actions/cache/restore@v4
         with:
           path: .runtime/kylin-bootstrap-inputs
-          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
+          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}-${{ steps.resource-selection.outputs.key }}
           fail-on-cache-miss: true
       - name: Record missing Kylin dependency cache
-        if: matrix.platform == 'kylin' && steps.kylin-cache.outputs.cache-hit != 'true'
+        if: matrix.platform == 'kylin' && steps.resource-selection.outputs.key != 'none' && steps.kylin-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p "artifacts/targets/${{ matrix.id }}"
           printf '%s\n' 'blocked: approved Kylin dependency cache missing; prepare and verify locked inputs first' > "artifacts/targets/${{ matrix.id }}/input-fetch.log"
       - name: Build the Kylin bootstrap package
-        if: matrix.platform == 'kylin' && steps.kylin-cache.outputs.cache-hit == 'true'
+        if: matrix.platform == 'kylin' && (steps.resource-selection.outputs.key == 'none' || steps.kylin-cache.outputs.cache-hit == 'true')
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -261,11 +273,11 @@ jobs:
           exec > >(tee "artifacts/targets/${{ matrix.id }}/input-fetch.log") 2>&1
           trap 'status=$?; if [[ $status -ne 0 ]]; then printf "blocked: Kylin dependency/package build failed exit_code=%s; see this log\n" "$status"; fi' EXIT
           sudo apt-get update && sudo apt-get install -y dpkg-dev
-          python tools/prepare-kylin-bootstrap-inputs.py
-          python tools/build-kylin-bootstrap-package.py --format deb --output-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}"
+          python tools/prepare-kylin-bootstrap-inputs.py --offline-resources "$OFFLINE_RESOURCES"
+          python tools/build-kylin-bootstrap-package.py --format deb --output-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}" --offline-resources "$OFFLINE_RESOURCES"
           python tools/write-kylin-bootstrap-verification.py \
             --target "${{ matrix.id }}" \
-            --input-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}"
+            --input-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}" --offline-resources "$OFFLINE_RESOURCES"
       - name: Retrieve approved offline target input
         if: matrix.platform != 'kylin'
         shell: bash

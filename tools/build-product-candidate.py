@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -21,7 +22,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from neurobridge.versioning import APPLICATION_VERSION, NORTHBOUND_PROTOCOL_VERSION
+from neurobridge.versioning import NORTHBOUND_PROTOCOL_VERSION, application_version
 
 
 INCLUDE = ("neurobridge", "web", "requirements.lock", "pyproject.toml")
@@ -41,6 +42,12 @@ def copy_payload(destination: Path, platform_name: str) -> None:
         elif source.is_file():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+
+    # Generated payload metadata follows the selected platform's product version.
+    metadata = destination / "pyproject.toml"
+    metadata.write_text(re.sub(r'(?m)^(version\s*=\s*)"[^"]+"$',
+                              lambda match: match[1] + '"' + application_version(platform_name) + '"',
+                              metadata.read_text(encoding="utf-8"), count=1), encoding="utf-8")
 
 
 def dependencies() -> list[dict[str, str]]:
@@ -99,11 +106,12 @@ def validate_runtime(platform_name: str, runtime: Path) -> None:
 
 
 def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
+    product_version = application_version(platform_name)
     if runtime is not None:
         validate_runtime(platform_name, runtime)
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="neurobridge-candidate-") as temporary:
-        stage = Path(temporary) / f"neurobridge-{APPLICATION_VERSION}-{platform_name}-x86_64"
+        stage = Path(temporary) / f"neurobridge-{product_version}-{platform_name}-x86_64"
         payload = stage / "payload"
         payload.mkdir(parents=True)
         copy_payload(payload, platform_name)
@@ -125,7 +133,7 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
         manifest = {
             "schemaVersion": 1,
             "product": "NeuroBridge",
-            "applicationVersion": APPLICATION_VERSION,
+            "applicationVersion": product_version,
             "northboundProtocolVersion": NORTHBOUND_PROTOCOL_VERSION,
             "sourceCommit": source_commit(),
             "sourceDirty": source_dirty(),
@@ -146,7 +154,7 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
             "bomFormat": "CycloneDX",
             "specVersion": "1.5",
             "version": 1,
-            "metadata": {"component": {"type": "application", "name": "NeuroBridge", "version": APPLICATION_VERSION}},
+            "metadata": {"component": {"type": "application", "name": "NeuroBridge", "version": product_version}},
             "components": dependencies() + native_dependencies(platform_name),
         }
         (metadata / "sbom.cdx.json").write_text(json.dumps(sbom, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

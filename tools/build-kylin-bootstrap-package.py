@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import json
 import shutil
 import subprocess
 import sys
@@ -29,8 +30,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from neurobridge.versioning import APPLICATION_VERSION
-from tools.kylin_inputs import CACHE, catalog, verified_input
+from neurobridge.versioning import application_version
+from tools.kylin_inputs import CACHE, catalog, verified_input, selected_artifacts, offline_manifest
 
 
 MANIFEST = ROOT / "config" / "kylin-runtime-manifest.toml"
@@ -40,6 +41,7 @@ BUILD = ROOT / "packaging" / "kylin" / "bootstrap-build.sh"
 PAYLOAD_DIR = Path("/usr/lib/neurobridge-bootstrap")
 DEB_ARCH = "all"
 RPM_ARCH = "noarch"
+APPLICATION_VERSION = application_version('kylin')
 
 # postrm/%postun run after the package payload has been deleted, so these
 # helpers must be embedded in the maintainer scripts rather than sourced.
@@ -115,7 +117,7 @@ def run(args: list[str], cwd: Path) -> None:
         raise RuntimeError(result.stderr.strip() or f"command failed ({result.returncode}): {' '.join(args)}")
 
 
-def stage_payload(root: Path) -> None:
+def stage_payload(root: Path, offline_resources: str = 'all') -> None:
     payload = root / PAYLOAD_DIR.relative_to("/")
     payload.mkdir(parents=True)
     shutil.copy2(MANIFEST, payload / "kylin-runtime-manifest.toml")
@@ -141,16 +143,17 @@ def stage_payload(root: Path) -> None:
             raise ValueError(f"bootstrap source is missing: {relative}")
         shutil.copytree(
             origin, source / relative,
-            # The wheelhouse under offline/ is staged at the top of the source
-            # tree, where the setup script looks for it.  The CMake archive stays
-            # here: setup-kylin-algorithm.sh reads it from offline/ directly.
-            ignore=shutil.ignore_patterns(*EXCLUDED, "wheelhouse"),
+            # All resource archives are staged explicitly below; never let
+            # repository-local offline files bypass the selected include list.
+            ignore=shutil.ignore_patterns(*EXCLUDED, "wheelhouse", "offline"),
             dirs_exist_ok=True,
         )
-    stage_offline_inputs(source)
+    stage_offline_inputs(source, offline_resources)
+    (payload / 'offline-resources.json').write_text(
+        json.dumps(offline_manifest(catalog(), offline_resources), indent=2) + '\n', encoding='utf-8')
 
 
-def stage_offline_inputs(source: Path) -> None:
+def stage_offline_inputs(source: Path, offline_resources: str = 'all') -> None:
     """Place the pinned Python archive and wheels where the setup scripts look.
 
     The scripts read ``python-runtime/`` and ``wheelhouse/`` at the top of the
@@ -164,7 +167,7 @@ def stage_offline_inputs(source: Path) -> None:
     for directory in (wheel_dest, python_dest, offline_dest):
         directory.mkdir(parents=True, exist_ok=True)
     checksums = []
-    for key, item in data["artifacts"].items():
+    for key, item in selected_artifacts(data, offline_resources).items():
         origin = verified_input(item, CACHE, OFFLINE_RUNTIME)
         destination = wheel_dest if key in ("pyserial", "websockets") else offline_dest
         if key == "python_x86_64":
@@ -286,7 +289,9 @@ def write_rpm(payload: Path, output: Path, work: Path) -> None:
     shutil.copy2(built[0], output)
 
 
-def build(fmt: str, output_dir: Path) -> Path:
+def build(fmt: str, output_dir: Path, offline_resources: str = 'all') -> Path:
+    # Reject malformed selections before creating an output or staging tree.
+    offline_manifest(catalog(), offline_resources)
     for required in (MANIFEST, FETCH, INSTALL, BUILD):
         if not required.is_file():
             raise ValueError(f"missing bootstrap input: {required.relative_to(ROOT)}")
@@ -299,7 +304,7 @@ def build(fmt: str, output_dir: Path) -> Path:
     with tempfile.TemporaryDirectory(prefix="neurobridge-bootstrap-") as directory:
         work = Path(directory)
         root = work / "package-root"
-        stage_payload(root)
+        stage_payload(root, offline_resources)
         if fmt == "deb":
             write_deb(root, output)
         else:
@@ -315,9 +320,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--format", choices=("deb", "rpm"), required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument('--offline-resources', default='all', help='all (default), none, or comma-separated resource names')
     args = parser.parse_args()
     try:
-        package = build(args.format, args.output_dir.resolve())
+        package = build(args.format, args.output_dir.resolve(), args.offline_resources)
     except (OSError, RuntimeError, ValueError) as error:
         print(f"bootstrap package build failed: {error}", file=sys.stderr)
         return 1

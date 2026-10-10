@@ -18,9 +18,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools"))
-from kylin_inputs import catalog, verified_input
-OFFLINE = ROOT / "packaging" / "kylin" / "offline"
+sys.path.insert(0, str(ROOT))
+from tools.kylin_package import inspect_package
 
 
 def digest(path: Path) -> str:
@@ -31,18 +30,11 @@ def digest(path: Path) -> str:
     return value.hexdigest()
 
 
-def digest_tree(path: Path) -> str:
-    value = hashlib.sha256()
-    for item in sorted(item for item in path.rglob("*") if item.is_file()):
-        value.update(item.relative_to(path).as_posix().encode("utf-8"))
-        value.update(bytes.fromhex(digest(item)))
-    return value.hexdigest()
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True)
     parser.add_argument("--input-dir", type=Path, required=True)
+    parser.add_argument('--offline-resources', default='all')
     args = parser.parse_args()
     packages = sorted(args.input_dir.glob("*.deb"))
     if len(packages) != 1:
@@ -51,13 +43,8 @@ def main() -> int:
     package = packages[0]
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     now = datetime.now(timezone.utc).isoformat()
-    inputs = catalog()
-    value = hashlib.sha256()
-    for key, item in sorted(inputs["artifacts"].items()):
-        value.update(key.encode())
-        value.update(bytes.fromhex(digest(verified_input(item))))
-    value.update(bytes.fromhex(digest(ROOT / "config/kylin-bootstrap-inputs.toml")))
-    input_digest = value.hexdigest()
+    inputs = inspect_package(package, args.offline_resources)
+    input_digest = inputs['inputSha256']
     log = args.input_dir / "validation.log"
     log.write_text(
         f"bootstrap package {package.name}\n"
@@ -65,6 +52,8 @@ def main() -> int:
         "runtime: built on the installing Kylin machine, not prebuilt\n",
         encoding="utf-8",
     )
+    with log.open('a', encoding='utf-8') as output:
+        output.write(f"offline resources: {','.join(inputs['resources']) or 'none'}; artifacts={inputs['artifactCount']}; bytes={inputs['resourceBytes']}\n")
     report = {
         "targetId": args.target,
         "targetArchitecture": "all",

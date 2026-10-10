@@ -296,13 +296,15 @@ def render_bundle_directory_guide(release_manifest: dict, systems: list[dict], d
 
     lines = [
         "# NeuroBridge 交付包目录说明", "",
-        f"应用版本：{release_manifest['applicationVersion']}", "",
+        f"总交付批次版本：{release_manifest['applicationVersion']}", "",
         f"源码提交：{code(release_manifest['git']['commit'])}", "",
         "面向部署人员。先阅读本说明，再按目标系统解压对应文件；本说明介绍文件的位置与用途，具体安装操作请阅读对应部署指南。", "",
         "## 1. 解压总包后，先看这些位置", "",
         "| 位置 | 用途 |", "| --- | --- |",
         f"| {code(DIRECTORY_GUIDE_FILENAME)} | 本目录说明，位于总 ZIP 根目录 |",
     ]
+    for platform, version in release_manifest.get('platformVersions', {}).items():
+        lines.append(f"平台产品版本 {code(platform)}：{code(version)}。")
     for system in systems:
         label = "Windows" if system['platform'] == 'windows' else "银河麒麟"
         lines.append(f"| {code(system['fileName'])} | {label}系统压缩包；只解压需要部署的平台 |")
@@ -405,7 +407,8 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
     platform_documents = documents_for_platform_archives(files, bound_documents, available_platforms)
     files = {str(PurePosixPath(name).parent / delivery_pdf_name(PurePosixPath(name).name)) if name.endswith(".pdf") else name: value for name, value in files.items()}
     files["metadata/document-filenames.json"] = json.dumps(aliases, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
-    build_info = f"application_version={release_manifest['applicationVersion']}\nsource_commit={release_manifest['git']['commit']}\n".encode('utf-8')
+    windows_version = release_manifest.get("platformVersions", {}).get("windows", release_manifest["applicationVersion"])
+    build_info = f"application_version={windows_version}\nsource_commit={release_manifest['git']['commit']}\n".encode('utf-8')
     system_archives, system_manifest = build_system_archives(grouped, timestamp, platform_documents, build_info)
     files.update(system_archives)
     files[DIRECTORY_GUIDE_FILENAME] = render_directory_pdf(render_bundle_directory_guide(
@@ -415,6 +418,7 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
     bundle_manifest = {
         "schemaVersion": 2,
         "applicationVersion": release_manifest["applicationVersion"],
+        "platformVersions": release_manifest.get("platformVersions", {}),
         "sourceCommit": release_manifest["git"]["commit"],
         "releaseStatus": release_manifest["releaseStatus"],
         "trigger": release_manifest["trigger"],

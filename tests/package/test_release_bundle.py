@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
@@ -60,7 +61,7 @@ def write_document_package(documents: Path) -> None:
         archive.writestr("release-manifest.json", json.dumps(manifest, ensure_ascii=False))
 
 
-def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> None:
+def write_release_fixture(release: Path, built_platforms: tuple[str, ...], platform_versions=None) -> None:
     """Write verified native packages for the requested platforms only."""
     release.mkdir()
     targets = matrix()
@@ -84,7 +85,8 @@ def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> No
         with zipfile.ZipFile(release / archive_name, "w") as archive:
             for index, (os_version, edition, architecture, package_format) in enumerate(specs):
                 family = f"windows-{os_version}" if platform == "windows" else f"kylin-{edition}"
-                filename = f"neurobridge-0.2.0-{family}-{architecture}.{package_format}"
+                version = (platform_versions or {}).get(platform, '0.2.0')
+                filename = f"neurobridge-{version}-{family}-{architecture}.{package_format}"
                 payload = f"{filename}-{index}".encode()
                 validation_name = f"validation/{platform}-{index}.json"
                 archive.writestr(f"packages/{filename}", payload)
@@ -104,6 +106,7 @@ def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> No
 
     save_json(release / "release-manifest.json", {
         "applicationVersion": "0.2.0",
+        **({'platformVersions': platform_versions} if platform_versions else {}),
         "releaseStatus": "candidate",
         "trigger": "pull_request",
         "git": {"commit": run("git", "rev-parse", "HEAD")},
@@ -119,6 +122,21 @@ def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> No
 
 
 class ReleaseBundleTests(unittest.TestCase):
+    def test_mixed_platform_versions_keep_windows_install_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            versions = {'windows': '0.3.0', 'kylin': '0.4.0'}
+            write_release_fixture(root / 'release', ('windows', 'kylin'), versions)
+            write_document_package(root / 'documents')
+            result = _build_release_bundle.build_bundle(root / 'release', root / 'documents', root / 'bundle.zip')
+            self.assertEqual(result['platformVersions'], versions)
+            with zipfile.ZipFile(root / 'bundle.zip') as bundle:
+                with zipfile.ZipFile(io.BytesIO(bundle.read('windows/windows.zip'))) as windows:
+                    with zipfile.ZipFile(io.BytesIO(windows.read('windows-10.zip'))) as family:
+                        self.assertIn(b'application_version=0.3.0', family.read('build-info.txt'))
+                        with zipfile.ZipFile(io.BytesIO(family.read('windows-10-x86_64.zip'))) as packages:
+                            self.assertIn('neurobridge-0.3.0-windows-10-x86_64.msi', packages.namelist())
+
     def setUp(self):
         # Archive tests exercise file placement and content selection, without
         # requiring Chrome/Pandoc in the unit-test environment.
