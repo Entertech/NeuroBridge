@@ -3,6 +3,8 @@
 param(
     [string]$Installer,
     [switch]$Export,
+    [ValidateRange(2, 200)]
+    [int]$KeepLogFiles = 20,
     [string]$OutputDirectory = (Get-Location).Path
 )
 $ErrorActionPreference = 'Stop'
@@ -51,6 +53,6 @@ try {
     Write-Host ('Installation logs: ' + $logDirectory)
     Write-Host 'Export: powershell -NoProfile -ExecutionPolicy Bypass -File .\install-with-logs.ps1 -Export'
     Get-ChildItem -LiteralPath $logDirectory -File | Where-Object { $_.Name -like 'install-*.log*' } |
-        Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 20 | Remove-Item -Force
+        Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip $KeepLogFiles | Remove-Item -Force
 }
 exit $result

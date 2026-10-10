@@ -171,6 +171,11 @@ class SandboxTests(unittest.TestCase):
 class BootstrapLifecycleTests(SandboxTests):
     def test_failed_install_keeps_error_and_exit_code_without_runtime(self) -> None:
         box = self.sandbox()
+        old_logs = box.root / "var/log/neurobridge-bootstrap"
+        old_logs.mkdir()
+        for stamp in ("20000101", "20000102"):
+            (old_logs / f"install-{stamp}.log").write_text("old attempt")
+        box.env["NEUROBRIDGE_INSTALL_LOG_KEEP"] = "1"
         result = box.run(box.installer())
         self.assertNotEqual(result.returncode, 0)
         logs = list((box.root / "var/log/neurobridge-bootstrap").glob("install-*.log"))
@@ -204,6 +209,10 @@ class BootstrapLifecycleTests(SandboxTests):
         scripts = box.root / "scripts"
         source = scripts / "source/tools"
         source.mkdir(parents=True)
+        old_logs = box.root / "var/log/neurobridge-bootstrap"
+        old_logs.mkdir()
+        (old_logs / "build-20000101-old.log").write_text("old build")
+        box.env["NEUROBRIDGE_BUILD_LOG_KEEP"] = "1"
         for name in ("bootstrap-build.sh", "run-logged.sh"):
             (scripts / name).write_text(box.relocate((ROOT / "packaging/kylin" / name).read_text()))
         installer = scripts / "bootstrap-install.sh"

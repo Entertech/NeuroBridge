@@ -184,7 +184,7 @@ Get-Content C:\ProgramData\NeuroBridge\logs\neurobridge.log -Tail 200 -Wait
 
 ### 8.1 安装失败日志与导出
 
-安装入口在运行安装程序之前即创建 `%LOCALAPPDATA%\NeuroBridge\installer-logs`，记录操作系统、安装包摘要、错误原因和退出码。MSI 使用 `/L*V` 生成详细日志，EXE 使用 `/log` 生成引导日志。保留最近 20 个日志文件；退出码 `0` 为成功，`1641` 或 `3010` 表示需要重启，其他值表示失败。成功退出仍应核对第 6 节服务、端口、页面和采集。
+安装入口在运行安装程序之前即创建 `%LOCALAPPDATA%\NeuroBridge\installer-logs`，记录操作系统、安装包摘要、错误原因和退出码。MSI 使用 `/L*V` 生成详细日志，EXE 使用 `/log` 生成引导日志。默认保留最近 20 个日志文件，可在安装入口通过 `-KeepLogFiles` 设置 2-200 个；退出码 `0` 为成功，`1641` 或 `3010` 表示需要重启，其他值表示失败。成功退出仍应核对第 6 节服务、端口、页面和采集。
 
 网关安装失败或服务不存在时，在原交付脚本目录运行：
 

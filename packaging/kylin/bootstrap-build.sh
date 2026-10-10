@@ -51,6 +51,8 @@ source_root=$package_dir/source
 builder=$source_root/tools/build-kylin-runtime-archive.sh
 installer=$package_dir/bootstrap-install.sh
 output_dir=/var/lib/neurobridge-bootstrap/runtime
+build_log_keep=${NEUROBRIDGE_BUILD_LOG_KEEP:-40}
+[[ $build_log_keep =~ ^[1-9][0-9]{0,2}$ && $build_log_keep -le 100 ]] || fail "NEUROBRIDGE_BUILD_LOG_KEEP must be 1..100."
 
 [[ -d $source_root && ! -L $source_root ]] || fail "This package has no bundled source tree: $source_root"
 [[ -x $builder ]] || fail "Bundled runtime build script is missing or not executable: $builder"
@@ -67,9 +69,9 @@ cleanup() {
   index=0
   while IFS= read -r file; do
     index=$((index + 1))
-    tail -c 2097152 "$file" > "$log_dir/build-$(basename "$work")-$index.log" || true
+    tail -c 2097152 "$file" > "$log_dir/build-$(date -u +%Y%m%dT%H%M%SZ)-$$-$index.log" || true
   done < <(find "$work/source/.runtime" -type f -name '*.log' 2>/dev/null)
-  for old in $(find "$log_dir" -maxdepth 1 -type f -name 'build-*.log' | sort -r | tail -n +41); do rm -f -- "$old"; done
+  for old in $(find "$log_dir" -maxdepth 1 -type f -name 'build-*.log' | sort -r | tail -n +"$((build_log_keep + 1))"); do rm -f -- "$old"; done
   rm -rf -- "$work"
   return "$status"
 }

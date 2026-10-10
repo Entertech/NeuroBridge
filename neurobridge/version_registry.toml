@@ -109,7 +109,7 @@ markdown_path = "doc/tech/对外/数据网关银河麒麟部署与使用指南/�
 pdf_artifact_name = "数据网关银河麒麟部署与使用指南_v1.1.pdf"
 created_date = "2026-10-10"
 published_date = "2026-10-10"
-markdown_sha256 = "06fce1597f41abcca02e3c6016455f91fab0e4e0aa65ef6a6354064e08503c34"
+markdown_sha256 = "354a3fdfab1172685e0bcafc8c49898ab531514810a5ddb60e4c7d6b1f02005d"
 publication_record = "2026-10-10-public-kylin-operations-v1.1"
 reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已锁定 v1.0。PR 合入后由 CI 生成正式 PDF。"
 
@@ -139,7 +139,7 @@ markdown_path = "doc/tech/对外/数据网关银河麒麟部署与使用指南/�
 pdf_artifact_name = "数据网关银河麒麟部署与使用指南_v1.1.pdf"
 created_date = "2026-10-10"
 published_date = "2026-10-10"
-markdown_sha256 = "06fce1597f41abcca02e3c6016455f91fab0e4e0aa65ef6a6354064e08503c34"
+markdown_sha256 = "354a3fdfab1172685e0bcafc8c49898ab531514810a5ddb60e4c7d6b1f02005d"
 publication_record = "2026-10-10-public-kylin-operations-v1.1"
 reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已锁定 v1.0。PR 合入后由 CI 生成正式 PDF。"
 
@@ -155,7 +155,7 @@ markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数�
 pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.1.pdf"
 created_date = "2026-10-10"
 published_date = "2026-10-10"
-markdown_sha256 = "0e31839cc6fb6c0a400b312aa01ac23e901bdfd5bff7ab5d614f4f8f0421ae27"
+markdown_sha256 = "fcfe3eb6bd86e01debb6fc242b9cc8e2a0ab1e31189a30452e0c715345abf464"
 publication_record = "2026-10-10-public-windows-operations-v1.1"
 reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已锁定 v1.0。PR 合入后由 CI 生成正式 PDF。"
 
@@ -185,7 +185,7 @@ markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数�
 pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.1.pdf"
 created_date = "2026-10-10"
 published_date = "2026-10-10"
-markdown_sha256 = "0e31839cc6fb6c0a400b312aa01ac23e901bdfd5bff7ab5d614f4f8f0421ae27"
+markdown_sha256 = "fcfe3eb6bd86e01debb6fc242b9cc8e2a0ab1e31189a30452e0c715345abf464"
 publication_record = "2026-10-10-public-windows-operations-v1.1"
 reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已锁定 v1.0。PR 合入后由 CI 生成正式 PDF。"
 

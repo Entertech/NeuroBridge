@@ -4,10 +4,12 @@ set -euo pipefail
 [[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'Run as root.' >&2; exit 1; }
 umask 077
 log_dir=/var/log/neurobridge-bootstrap
+keep=${NEUROBRIDGE_INSTALL_LOG_KEEP:-10}
+[[ $keep =~ ^[1-9][0-9]{0,2}$ && $keep -le 100 ]] || { echo 'NEUROBRIDGE_INSTALL_LOG_KEEP must be 1..100.' >&2; exit 1; }
 install -d -m 0700 "$log_dir"
 # A timestamp plus PID avoids overwriting previous attempts and concurrent runs.
 log=$log_dir/install-$(date -u +%Y%m%dT%H%M%SZ)-$$.log
-for old in $(find "$log_dir" -maxdepth 1 -type f -name 'install-*.log' | sort -r | tail -n +10); do
+for old in $(find "$log_dir" -maxdepth 1 -type f -name 'install-*.log' | sort -r | tail -n +"$keep"); do
   rm -f -- "$old"
 done
 echo "Installation log: $log"
