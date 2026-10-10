@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from neurobridge.versioning import APPLICATION_VERSION
+from tools.kylin_inputs import CACHE, catalog, verified_input
 
 
 MANIFEST = ROOT / "config" / "kylin-runtime-manifest.toml"
@@ -37,8 +38,8 @@ FETCH = ROOT / "packaging" / "kylin" / "fetch-runtime.sh"
 INSTALL = ROOT / "packaging" / "kylin" / "bootstrap-install.sh"
 BUILD = ROOT / "packaging" / "kylin" / "bootstrap-build.sh"
 PAYLOAD_DIR = Path("/usr/lib/neurobridge-bootstrap")
-DEB_ARCH = "amd64"
-RPM_ARCH = "x86_64"
+DEB_ARCH = "all"
+RPM_ARCH = "noarch"
 
 # postrm/%postun run after the package payload has been deleted, so these
 # helpers must be embedded in the maintainer scripts rather than sourced.
@@ -118,7 +119,8 @@ def stage_payload(root: Path) -> None:
     payload = root / PAYLOAD_DIR.relative_to("/")
     payload.mkdir(parents=True)
     shutil.copy2(MANIFEST, payload / "kylin-runtime-manifest.toml")
-    for script in (FETCH, INSTALL, BUILD, ROOT / "packaging/kylin/run-logged.sh", ROOT / "packaging/kylin/export-install-logs.sh", ROOT / "packaging/kylin/diagnostic-context.sh"):
+    shutil.copy2(ROOT / "config/kylin-bootstrap-inputs.toml", payload)
+    for script in (FETCH, INSTALL, BUILD, ROOT / "packaging/kylin/run-logged.sh", ROOT / "packaging/kylin/export-install-logs.sh", ROOT / "packaging/kylin/diagnostic-context.sh", ROOT / "packaging/kylin/platform.sh"):
         destination = payload / script.name
         shutil.copy2(script, destination)
         destination.chmod(0o755)
@@ -155,20 +157,22 @@ def stage_offline_inputs(source: Path) -> None:
     source tree.  Those directories are gitignored, so the package carries its
     own copy under ``packaging/kylin/offline`` and this lays it out for them.
     """
-    runtime_dir = OFFLINE_RUNTIME
-    archives = sorted(runtime_dir.glob("cpython-*.tar.gz"))
-    if len(archives) != 1:
-        raise ValueError(f"expected one pinned Python archive in {runtime_dir}, found {len(archives)}")
-    wheels = sorted((runtime_dir / "wheelhouse").glob("*.whl"))
-    if not wheels:
-        raise ValueError(f"no wheels found in {runtime_dir / 'wheelhouse'}")
-    python_dest = source / "python-runtime"
-    python_dest.mkdir()
-    shutil.copy2(archives[0], python_dest / archives[0].name)
+    data = catalog()
     wheel_dest = source / "wheelhouse"
-    wheel_dest.mkdir()
-    for wheel in wheels:
-        shutil.copy2(wheel, wheel_dest / wheel.name)
+    python_dest = source / "python-runtime"
+    offline_dest = source / "packaging/kylin/offline"
+    for directory in (wheel_dest, python_dest, offline_dest):
+        directory.mkdir(parents=True, exist_ok=True)
+    checksums = []
+    for key, item in data["artifacts"].items():
+        origin = verified_input(item, CACHE, OFFLINE_RUNTIME)
+        destination = wheel_dest if key in ("pyserial", "websockets") else offline_dest
+        if key == "python_x86_64":
+            destination = python_dest
+        shutil.copy2(origin, destination / item["filename"])
+        if destination == wheel_dest:
+            checksums.append(f'{item["sha256"]}  wheelhouse/{item["filename"]}')
+    (source / "config/kylin-wheelhouse.sha256").write_text("\n".join(checksums) + "\n", encoding="utf-8")
 
 
 def deb_control() -> str:
@@ -179,11 +183,11 @@ def deb_control() -> str:
         Priority: optional
         Architecture: {DEB_ARCH}
         Maintainer: Entertech <support@entertech.cn>
-        Depends: ca-certificates, curl, g++, make, tar, udev
+        Depends: ca-certificates, curl, g++, make, tar, xz-utils, udev, libssl-dev, libsqlite3-dev, libbz2-dev, liblzma-dev, libffi-dev, zlib1g-dev
         Description: NeuroBridge installer that builds or fetches its runtime
-         On one Galaxy Kylin machine, builds the runtime from the bundled
-         source and installs it.  On every other machine, installs a runtime
-         archive downloaded or copied from that machine.
+         Detects Galaxy Kylin V10 OS/CPU and builds a matching runtime from bundled
+         locked dependencies and source. A manually reused runtime must match the
+         target OS/CPU; new architectures require physical acceptance.
     """)
 
 
@@ -242,10 +246,10 @@ def write_rpm(payload: Path, output: Path, work: Path) -> None:
         License: Proprietary
         BuildArch: {RPM_ARCH}
         AutoReqProv: no
-        Requires: ca-certificates, curl, gcc-c++, make, tar, systemd-udev
+        Requires: ca-certificates, curl, gcc-c++, make, tar, xz, systemd-udev, openssl-devel, sqlite-devel, bzip2-devel, xz-devel, libffi-devel, zlib-devel
 
         %description
-        On one Galaxy Kylin machine, builds the runtime from the bundled source
+        Detects Galaxy Kylin V10 OS/CPU and builds a matching runtime from bundled source
         and installs it.  On every other machine, installs a runtime archive
         downloaded or copied from that machine.
 
@@ -288,7 +292,7 @@ def build(fmt: str, output_dir: Path) -> Path:
     # the package stays APPLICATION_VERSION; only the file name carries the
     # build time, so two builds of the same version cannot be confused.
     built_at = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    filename = f"neurobridge-bootstrap-{APPLICATION_VERSION}-{built_at}-kylin-v10-x86_64.{fmt}"
+    filename = f"neurobridge-bootstrap-{APPLICATION_VERSION}-{built_at}-kylin-v10-all.{fmt}"
     output = output_dir / filename
     with tempfile.TemporaryDirectory(prefix="neurobridge-bootstrap-") as directory:
         work = Path(directory)

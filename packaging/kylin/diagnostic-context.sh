@@ -32,7 +32,7 @@ nb_source_commit() {
 }
 
 nb_write_diagnostic_context() {
-  local destination=$1 scope=$2 root=$3 package_root=${4:-} python= python_version=unknown python_bits=unknown
+  local destination=$1 scope=$2 root=$3 package_root=${4:-} python= python_version=unknown python_bits=unknown python_endian=unknown
   local ID= NAME= PRETTY_NAME= VERSION= VERSION_ID= KYLIN_RELEASE_ID= BUILD_ID= os_error=
   for python in "$root/runtime/bin/python" "$root/.venv/bin/python"; do
     [[ ! -x $python ]] || break
@@ -41,6 +41,8 @@ nb_write_diagnostic_context() {
     python_version=$("$python" -c 'import platform; print(platform.python_version())' 2>/dev/null || true)
     python_version=${python_version:-unknown}
     python_bits=$("$python" -c 'import struct; print(struct.calcsize("P") * 8)' 2>/dev/null || true)
+    python_endian=$("$python" -c 'import sys; print(sys.byteorder)' 2>/dev/null || true)
+    python_endian=${python_endian:-unknown}
     case $python_bits in 32|64) python_bits="$python_bits-bit";; *) python_bits=unknown;; esac
   fi
   {
@@ -53,6 +55,6 @@ nb_write_diagnostic_context() {
     printf 'kernelVersion=%s\nosArchitecture=%s\nosBits=%s\nshellVersion=%s\n' "$(uname -r)" "$(uname -m)" "$(getconf LONG_BIT 2>/dev/null || printf unknown)" "$BASH_VERSION"
     printf 'libcVersion=%s\n' "$(getconf GNU_LIBC_VERSION 2>/dev/null || printf unknown)"
     printf 'environmentQueryError=%s\n' "$os_error"
-    printf 'pythonVersion=%s\npythonArchitecture=%s\n' "$python_version" "$python_bits"
+    printf 'pythonVersion=%s\npythonArchitecture=%s\npythonByteOrder=%s\n' "$python_version" "$python_bits" "$python_endian"
   } > "$destination"
 }

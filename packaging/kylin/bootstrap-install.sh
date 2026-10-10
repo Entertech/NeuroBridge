@@ -53,13 +53,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run as root."
-[[ $(uname -m) == x86_64 ]] || fail "This installer requires x86_64; detected $(uname -m)."
-[[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."
-# shellcheck disable=SC1091
-. /etc/os-release
-[[ ${ID,,} == kylin ]] || fail "This installer requires Galaxy Kylin; detected ID=${ID:-unknown}."
-[[ -f $manifest && ! -L $manifest ]] || fail "Bundled runtime manifest is missing: $manifest"
-[[ -x $fetch ]] || fail "Bundled fetch script is missing or not executable: $fetch"
+NB_INPUT_LOCK="$script_dir/kylin-bootstrap-inputs.toml"
+. "$script_dir/platform.sh"
+nb_select_platform || fail "Unsupported Kylin platform; see the selection diagnostics above."
+# Reject foreign runtimes before account creation or any service change.
+[[ -f $manifest && ! -L $manifest ]] || fail "Runtime manifest is missing or unsafe."
+input_lock=$NB_INPUT_LOCK
+NB_INPUT_LOCK=$manifest
+manifest_os=$(nb_lock_value runtime os) || fail "Runtime manifest lacks OS identity."
+manifest_os_version=$(nb_lock_value runtime os_version) || fail "Runtime manifest lacks OS version."
+manifest_arch=$(nb_lock_value runtime architecture) || fail "Runtime manifest lacks CPU architecture."
+manifest_version=$(nb_lock_value runtime application_version) || fail "Runtime manifest lacks application version."
+NB_INPUT_LOCK=$input_lock
+nb_event verify_runtime_identity "os=$manifest_os version=$manifest_os_version architecture=$manifest_arch application_version=$manifest_version host=$NB_ARCH"
+[[ $manifest_os == kylin && $manifest_os_version == v10 && $manifest_arch == "$NB_ARCH" ]] \
+  || fail "Runtime OS/CPU mismatch. Use an archive and manifest built on the same Kylin V10 architecture."
+
+
 
 command -v tar >/dev/null 2>&1 || fail "tar is required to unpack the runtime archive."
 command -v systemctl >/dev/null 2>&1 || fail "systemctl is required to install the service."
@@ -186,7 +196,7 @@ tar -xzf "$archive" -C "$stage"
 
 # Confirm the interpreter can load the gateway it shipped with before any
 # account or service is created.  A corrupt archive stops here.
-PYTHONPATH=$stage/payload "$stage/runtime/bin/python" -c 'import neurobridge' \
+PYTHONPATH=$stage/payload "$stage/runtime/bin/python" -c 'import neurobridge,serial,websockets,ssl,sqlite3,bz2,lzma,ctypes,zlib,struct,sys; assert struct.calcsize("P")*8 == int(sys.argv[1]); assert sys.byteorder == "little"' "$NB_BITS" \
   || fail "The runtime archive cannot import the gateway. Nothing was installed."
 
 getent group neurobridge >/dev/null 2>&1 || groupadd --system neurobridge

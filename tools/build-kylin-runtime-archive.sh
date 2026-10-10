@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the runtime archive once, on a Galaxy Kylin V10 x86_64 machine.
+# Build an architecture-specific runtime natively on a Galaxy Kylin V10 machine.
 #
 # The source it builds from does not have to be a git checkout.  The bootstrap
 # package carries the same source tree, and on the one Kylin machine that
@@ -18,7 +18,7 @@ usage() {
   cat <<'EOF'
 Usage: build-kylin-runtime-archive.sh [--source-root <dir>] [--output-dir <dir>]
 
-Runs on Galaxy Kylin V10 x86_64.  --source-root is the NeuroBridge tree to
+Runs natively on a supported Galaxy Kylin V10 CPU profile.  --source-root is the NeuroBridge tree to
 build from; it defaults to the repository that contains this script.  The
 bootstrap package passes the source tree it carries.
 
@@ -57,11 +57,9 @@ source_root=$(cd "$source_root" && pwd -P)
 # Root is only acceptable when the bootstrap package drives the build, because
 # a package install runs as root and has no desktop user to drop to.
 [[ ${EUID:-$(id -u)} -ne 0 || ${NEUROBRIDGE_BOOTSTRAP:-} == 1 ]] || fail "Run as the normal desktop user. The setup scripts use sudo only where they need it."
-[[ $(uname -m) == x86_64 ]] || fail "The runtime archive is built for x86_64; detected $(uname -m)."
-[[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."
-# shellcheck disable=SC1091
-. /etc/os-release
-[[ ${ID,,} == kylin ]] || fail "This archive must be built on Galaxy Kylin; detected ID=${ID:-unknown}."
+NB_INPUT_LOCK="$source_root/config/kylin-bootstrap-inputs.toml"
+. "$source_root/packaging/kylin/platform.sh"
+nb_select_platform || fail "Kylin V10 platform selection failed."
 [[ -f $source_root/pyproject.toml && ! -L $source_root/pyproject.toml ]] || fail "Source root is not a NeuroBridge tree: $source_root"
 
 python_runtime=$source_root/python-runtime/python
@@ -81,7 +79,9 @@ bridge=$source_root/.runtime/algorithm/neurobridge_affective_bridge
 
 template=$source_root/config/kylin-runtime-manifest.toml
 [[ -f $template && ! -L $template ]] || fail "Runtime manifest template is missing: $template"
-file_name=$(awk -F'"' '/^file_name = / { print $2; exit }' "$template")
+application_version=$(awk '/^\[application\]/ { inside=1; next } inside && /^\[/ { exit } inside && /^version[[:space:]]*=/ { split($0,parts,"\""); print parts[2]; exit }' "$source_root/neurobridge/version_registry.toml")
+[[ $application_version =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]] || fail "Missing application version."
+file_name="neurobridge-runtime-$application_version-kylin-v10-$NB_ARCH.tar.gz"
 [[ $file_name =~ ^[A-Za-z0-9._+-]+$ ]] || fail "Manifest file name is not a safe path component: ${file_name:-<empty>}"
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/neurobridge-runtime.XXXXXX")
@@ -143,13 +143,16 @@ digest=$(sha256sum -- "$archive" | awk '{print $1}')
 # The manifest is written next to the archive, not back into the source tree:
 # the tree shipped inside the bootstrap package must stay unchanged.
 manifest=$output_dir/kylin-runtime-manifest.toml
-awk -v digest="$digest" '
+awk -v digest="$digest" -v architecture="$NB_ARCH" -v file_name="$file_name" '
+  /^architecture = / { print "architecture = \"" architecture "\""; next }
+  /^file_name = / { print "file_name = \"" file_name "\""; next }
   /^sha256 = / { print "sha256 = \"" digest "\""; next }
   { print }
 ' "$template" >"$manifest"
 grep -q "^sha256 = \"${digest}\"$" "$manifest" || fail "Could not record the archive digest in the manifest."
 
-printf 'archive=%s\n' "$archive"
+nb_event runtime_archive "architecture=$NB_ARCH bits=$NB_BITS application_version=$application_version sha256=$digest file=$file_name"
+printf 'archive=%s\n'  "$archive"
 printf 'sha256=%s\n' "$digest"
 printf 'manifest=%s\n' "$manifest"
 printf 'The download URL in the manifest is unchanged. Set it to where this archive is published before building the bootstrap installer for other machines.\n'

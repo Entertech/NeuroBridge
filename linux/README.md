@@ -24,8 +24,8 @@ bash linux/neurobridge-kylin-bootstrap.sh
 - `uninstall-kylin-project.sh`：拆除源码部署的一键退出入口，也是助手菜单 `10` 调用的实现。`status` 只读体检；`uninstall` 停止并移除本项目安装的受管 systemd 单元，保留源码与 `.runtime` 数据；`purge` 在此之上先把 `.runtime/config`、`.runtime/recordings` 备份为 `$HOME/neurobridge-backup-<UTC时间戳>.tar.gz`，再删除整个源码目录。它校验单元文件里的托管标记和 `ExecStart` 归属，拒绝停止不是本项目安装的单元，也拒绝删除过浅或系统目录的路径；支持 `--yes`（非交互）、`--no-backup`、`--backup-dir`、`--force`。
 - `setup-kylin-python.sh`：银河麒麟 V10 项目 Python 环境一键初始化；系统仅有 Python 3.8 时自动准备经 SHA-256 锁定的项目内 Python 3.11，再选择离线 `wheelhouse` 或当前网络，所有运行时、缓存、临时文件和日志保存在项目内。
 - `diagnose-kylin-usb-serial.sh`：银河麒麟 V10 USB/串口一键识别；默认直接检查已连接设备，无需拔插，并保存 USB/TTY/驱动快照；仅在显式 `--plug-cycle` 时监控拔插过程和超时；旧版 `lsusb` 不支持 `-nn` 时自动回退。
-- `setup-kylin-serial.sh`：银河麒麟 x86_64 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务；项目启动脚本会处理账号已入组但当前会话权限尚未刷新的情况。
-- `setup-kylin-algorithm.sh`：在银河麒麟 V10 x86_64 本机使用项目内锁定 CMake 3.31.6、Eigen 3.3.7 和锁定源码构建算法 bridge 到 `.runtime/algorithm/`；在线自动下载 CMake，离线从忽略提交的 `algorithm-packages/` 读取，进程自检成功后才原子启用配置。
+- `setup-kylin-serial.sh`：银河麒麟 V10 按已配置架构 Profile 一键启用 USB 串口设备策略；备份并原子更新配置、补充最小设备组权限、验证候选并重启服务；项目启动脚本会处理账号已入组但当前会话权限尚未刷新的情况。
+- `setup-kylin-algorithm.sh`：在银河麒麟 V10 已配置架构 Profile 本机使用项目内锁定 CMake 3.31.6、Eigen 3.3.7 和锁定源码构建算法 bridge 到 `.runtime/algorithm/`；在线自动下载 CMake，离线从忽略提交的 `algorithm-packages/` 读取，进程自检成功后才原子启用配置。
 - `install-ubuntu.sh`：部署实现，安装锁定的算法 bridge、服务账户和 systemd 服务，并启用开机自启。
 - `systemd/`：开机自启服务单元；异常退出后 3 秒自动重启。
 - `logrotate/`：网关持久化日志的每日轮转配置。
@@ -386,3 +386,7 @@ N100/N150 改装银河麒麟 V10 后出现运行、驱动或 USB 串口问题时
 脚本的安全边界：只处理带 `# Managed by NeuroBridge Galaxy Kylin project autostart` 标记、且 `ExecStart` 指向当前源码目录的单元，否则拒绝停止；拒绝删除过浅路径、系统目录、用户主目录和符号链接目标；以普通用户运行，只在 systemd 操作和删除 root 属主文件时调用 `sudo`。仅当受管单元指向的旧源码目录已经不存在时，才需要显式加 `--force`。
 
 `uninstall` 会同时删除项目内 `.runtime/config/kylin-autostart.conf`，使自启偏好回到默认值，便于以后重新部署时恢复默认开机自启。源码模式不会创建 `neurobridge` 系统账户，也不会写 udev 规则或 logrotate 配置；`setup-kylin-serial.sh` 可能把当前用户加入串口组（通常为 `dialout`），不再使用串口时可自行执行 `sudo gpasswd -d $USER dialout` 移除。若系统上曾装过 `packaging/kylin/install.sh` 的安装包版本（`/opt/neurobridge`），那属于另一条链路，使用它自带的 `sudo bash packaging/kylin/uninstall.sh`。
+
+## 麒麟 V10 多架构引导
+
+当前引导源码支持七个候选 Profile（x86_64/aarch64/loongarch64/mips64el/sw64/x86/armhf），在 Kylin V10 识别 CPU、位数、字节序和本机编译器，选择锁定的 Python/CMake 输入。x86_64 保留预编译依赖，其余六个架构本机编译源码；全体串口运行时只安装 pyserial/websockets，不引入 BLE/dbus。新架构尚待真机编译与设备验收。详细依赖、交付准备、安装/运行日志导出和失败原因见[内部部署补充](../doc/tech/麒麟V10网关运行与串口联调内部文档.md#多架构引导部署补充2026-10-10)；通用引导 DEB 的 all 标识不能用于跨 CPU 复用运行时。本轮不打包、不推送。

@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 
 TOOLS_DIR = Path(__file__).resolve().parents[2] / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
@@ -32,7 +33,7 @@ PACKAGE_SPECS = {
         ("11", "none", "x86_64", "exe"),
     ],
     "kylin": [
-        ("V10", "v10", "x86_64", "deb"),
+        ("V10", "v10", "all", "deb"),
     ],
 }
 
@@ -118,6 +119,14 @@ def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> No
 
 
 class ReleaseBundleTests(unittest.TestCase):
+    def setUp(self):
+        # Archive tests exercise file placement and content selection, without
+        # requiring Chrome/Pandoc in the unit-test environment.
+        renderer = mock.patch.object(_build_release_bundle, 'render_directory_pdf',
+                                     side_effect=lambda markdown: b'%PDF-1.4\n' + markdown.encode('utf-8'))
+        renderer.start()
+        self.addCleanup(renderer.stop)
+
     def test_delivery_aliases_are_ascii_and_preserve_pdf_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -154,6 +163,27 @@ class ReleaseBundleTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "unsupported release target"):
                     build_bundle(root / "release", root / "documents", output)
 
+    def test_pdf_failure_blocks_bundle_and_missing_pdf_blocks_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_document_package(root / 'documents')
+            write_release_fixture(root / 'release', ('windows',))
+            output = root / 'bundle.zip'
+            with mock.patch.object(_build_release_bundle, 'render_directory_pdf', side_effect=ValueError('PDF failed')):
+                with self.assertRaisesRegex(ValueError, 'PDF failed'):
+                    build_bundle(root / 'release', root / 'documents', output)
+            self.assertFalse(output.exists())
+            manifest = build_bundle(root / 'release', root / 'documents', output)
+            missing = root / 'missing.pdf.zip'
+            with zipfile.ZipFile(output) as source, zipfile.ZipFile(missing, 'w') as target:
+                for name in source.namelist():
+                    if name != 'bundle-directory-guide.pdf':
+                        target.writestr(name, source.read(name))
+            # Even a tampered document list cannot waive the root PDF.
+            manifest['documents'].remove('bundle-directory-guide.pdf')
+            with self.assertRaisesRegex(ValueError, 'missing documented'):
+                verify_release_bundle(missing, manifest)
+
     def test_user_bundle_has_system_variant_architecture_layers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -166,20 +196,18 @@ class ReleaseBundleTests(unittest.TestCase):
             manifest = build_bundle(release, documents, output)
             with zipfile.ZipFile(output) as outer:
                 names = set(outer.namelist())
-                prd = outer.read('PRD.md').decode('utf-8')
+                guide = outer.read('bundle-directory-guide.pdf').decode('utf-8')
+                self.assertTrue(guide.startswith('%PDF-'))
                 self.assertNotIn('README.txt', names)
-                self.assertIn('麒麟 32 位 x86、ARM/aarch64', prd)
-                self.assertIn('耳机未连接时仍可安装', prd)
-                self.assertIn('kylin-v10-x86_64.zip', prd)
-                self.assertIn('windows-10-x86_64.zip', prd)
-                self.assertIn('windows-11-x86_64.zip', prd)
-                self.assertIn('checksums.sha256', prd)
-                self.assertIn('export-install-logs.sh', prd)
-                self.assertIn('loongarch64', prd)
-                self.assertIn('mips64el', prd)
-                self.assertIn('diagnostic-context', prd)
-                self.assertIn('扩展架构的影响', prd)
-                self.assertIn('PRD.md', manifest['documents'])
+                self.assertNotIn('PRD.md', names)
+                self.assertIn('交付包目录说明', guide)
+                self.assertIn('kylin-v10-all.zip', guide)
+                self.assertIn('windows-10-x86_64.zip', guide)
+                self.assertIn('windows-11-x86_64.zip', guide)
+                self.assertIn('checksums.sha256', guide)
+                self.assertIn('export-install-logs.sh', guide)
+                self.assertIn('diagnostic-context', guide)
+                self.assertIn('bundle-directory-guide.pdf', manifest['documents'])
                 self.assertIn("windows/windows.zip", names)
                 self.assertIn("kylin/kylin.zip", names)
                 # internal system PRDs must not ship in the user-facing bundle
@@ -218,13 +246,13 @@ class ReleaseBundleTests(unittest.TestCase):
                     with zipfile.ZipFile(kylin.open("kylin-v10.zip")) as family:
                         self.assertEqual(
                             set(family.namelist()),
-                            {"kylin-v10-x86_64.zip", "docs/kylin-deployment-guide_v1.0.pdf", "docs/protocol.pdf"},
+                            {"kylin-v10-all.zip", "docs/kylin-deployment-guide_v1.0.pdf", "docs/protocol.pdf"},
                         )
                         self.assertNotIn("docs/windows-deployment-guide_v1.0.pdf", family.namelist())
-                        with zipfile.ZipFile(family.open("kylin-v10-x86_64.zip")) as package:
+                        with zipfile.ZipFile(family.open("kylin-v10-all.zip")) as package:
                             self.assertEqual(
                                 set(package.namelist()),
-                                {"neurobridge-0.2.0-kylin-v10-x86_64.deb", "checksums.sha256"},
+                                {"neurobridge-0.2.0-kylin-v10-all.deb", "checksums.sha256"},
                             )
                 verify_release_bundle(output, json.loads(outer.read("metadata/bundle-manifest.json")))
             self.assertEqual(len(manifest["systemArchives"]), 2)
@@ -241,9 +269,10 @@ class ReleaseBundleTests(unittest.TestCase):
             build_bundle(release, documents, output)
             with zipfile.ZipFile(output) as outer:
                 names = set(outer.namelist())
-                prd = outer.read('PRD.md').decode('utf-8')
-                self.assertNotIn('windows/windows.zip', prd)
-                self.assertIn('kylin/kylin.zip', prd)
+                guide = outer.read('bundle-directory-guide.pdf').decode('utf-8')
+                self.assertNotIn('windows/windows.zip', guide)
+                self.assertNotIn('Windows 安装失败', guide)
+                self.assertIn('kylin/kylin.zip', guide)
                 # The Windows guide must not appear anywhere once Windows produced no packages.
                 self.assertNotIn(f"windows/{WINDOWS_GUIDE}", names)
                 self.assertNotIn(f"docs/external/{WINDOWS_GUIDE}", names)

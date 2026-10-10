@@ -22,6 +22,7 @@ macos_build_status = "source-build-and-synthetic-input-smoke-test"
 
 [affective_algorithm_sdk.build.eigen_versions]
 galaxy_kylin_v10_x86_64 = "3.3.7"
+galaxy_kylin_v10_native = "3.3.7"
 ubuntu_24_04_x86_64 = "3.4.0"
 macos_poc = "5.0.1"
 windows_x86_64 = "3.4.0"

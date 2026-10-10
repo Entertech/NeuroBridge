@@ -64,12 +64,11 @@ require_systemd_tools() {
   command -v sudo >/dev/null 2>&1 || fail "sudo is required for systemd changes."
 }
 
-require_kylin_x86_64() {
-  [[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."
-  # shellcheck source=/dev/null
-  . /etc/os-release
-  [[ ${ID,,} == kylin ]] || fail "This helper requires Galaxy Kylin; detected ID=${ID:-unknown}."
-  [[ $(uname -m) == x86_64 ]] || fail "This deployment requires x86_64; detected $(uname -m)."
+require_kylin_platform() {
+  NB_INPUT_LOCK="$root_dir/config/kylin-bootstrap-inputs.toml"
+  . "$root_dir/packaging/kylin/platform.sh"
+  nb_select_platform || fail "Unsupported Kylin V10 platform."
+
 }
 
 validate_project_root() {
@@ -359,7 +358,7 @@ case $action in
     ;;
   uninstall)
     require_systemd_tools
-    require_kylin_x86_64
+    require_kylin_platform
     validate_project_root
     printf '将停止并移除 %s；源码目录与 .runtime 现场数据会保留。\n' "$unit_name"
     confirm "是否继续卸载？" || { printf '已取消，未做任何改动。\n'; exit 1; }
@@ -372,7 +371,7 @@ case $action in
     ;;
   purge)
     require_systemd_tools
-    require_kylin_x86_64
+    require_kylin_platform
     validate_purge_target
     printf '\n即将停止服务、备份现场数据并删除整个源码目录：\n  %s\n' "$root_dir"
     checkout_inventory "将被删除的内容"

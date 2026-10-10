@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build, smoke-test, and enable the project-local native algorithm bridge on
-# Galaxy Kylin V10 x86_64. Generated files remain under ignored .runtime/.
+# Galaxy Kylin V10 with the selected native CPU profile. Generated files remain under ignored .runtime/.
 set -euo pipefail
 
 fail() {
@@ -47,7 +47,7 @@ usage() {
   cat <<EOF
 Usage: ./linux/setup-kylin-algorithm.sh
 
-Builds the locked C++ algorithm bridge locally on Galaxy Kylin V10 x86_64,
+Builds the locked C++ algorithm bridge locally on Galaxy Kylin V10 with the selected native CPU profile,
 runs a non-biological empty-input process smoke test, and only then enables it
 in the project runtime configuration.
 
@@ -73,12 +73,36 @@ fi
 for path in "$runtime_dir" "$algorithm_dir"; do
   [[ ! -L $path ]] || fail "$path must be a real project directory, not a symlink."
 done
+install -d -m 0750 "$runtime_dir" "$runtime_dir/logs" "$algorithm_dir"
+setup_log="$runtime_dir/logs/setup-kylin-algorithm-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
+touch "$setup_log"
+chmod 0600 "$setup_log"
+exec > >(tee -a "$setup_log") 2>&1
+
+algorithm_setup_end() {
+  local result=$1
+  printf 'EVENT utc=%s phase=algorithm_setup_end exit_code=%s duration_seconds=%s\n' "$(date -u +%FT%TZ)" "$result" "$SECONDS"
+}
+trap 'algorithm_setup_end "$?"' EXIT
 [[ -f $config_path && ! -L $config_path ]] || fail \
   "Project configuration is missing. First run: sudo $root_dir/linux/setup-kylin-serial.sh"
-[[ $(uname -m) == x86_64 ]] || fail "The algorithm bridge requires x86_64; detected $(uname -m)."
-[[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."
-. /etc/os-release
-[[ ${ID,,} == kylin ]] || fail "This helper requires Galaxy Kylin; detected ID=${ID:-unknown}."
+NB_INPUT_LOCK="$root_dir/config/kylin-bootstrap-inputs.toml"
+. "$root_dir/packaging/kylin/platform.sh"
+if [[ -f $root_dir/packaging/kylin/diagnostic-context.sh ]]; then
+  . "$root_dir/packaging/kylin/diagnostic-context.sh"
+  nb_event software_identity "application_version=$(nb_application_version "$root_dir") source_commit=$(nb_source_commit "$root_dir")"
+fi
+nb_select_platform || fail "Kylin V10 platform selection failed."
+cmake_archive=$(nb_lock_value "artifacts.$NB_CMAKE_INPUT" filename)
+cmake_sha256=$(nb_lock_value "artifacts.$NB_CMAKE_INPUT" sha256)
+cmake_url=$(nb_lock_value "artifacts.$NB_CMAKE_INPUT" url)
+if [[ $NB_CMAKE_INPUT == cmake_source ]]; then
+  cmake_archive=$(nb_lock_value artifacts.cmake_source filename)
+  cmake_sha256=$(nb_lock_value artifacts.cmake_source sha256)
+  cmake_home="$toolchain_dir/cmake-${cmake_version}-native-$NB_ARCH"
+  package_dir="$root_dir/packaging/kylin/offline"
+fi
+
 
 python_path=
 for candidate in "$root_dir/.venv/bin/python" "$root_dir/venv/bin/python"; do
@@ -97,11 +121,6 @@ done
 [[ -f $root_dir/sdk.lock && ! -L $root_dir/sdk.lock ]] \
   || fail "sdk.lock is missing or unsafe; algorithm source provenance cannot be verified."
 
-install -d -m 0750 "$runtime_dir" "$runtime_dir/logs" "$algorithm_dir"
-setup_log="$runtime_dir/logs/setup-kylin-algorithm-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
-touch "$setup_log"
-chmod 0600 "$setup_log"
-exec > >(tee -a "$setup_log") 2>&1
 
 echo "NeuroBridge Galaxy Kylin algorithm setup started"
 echo "project=$root_dir"
@@ -111,7 +130,7 @@ echo "osId=${ID:-unknown}"
 echo "osVersion=${VERSION_ID:-unknown}"
 echo "architecture=$(uname -m)"
 echo "kernel=$(uname -r)"
-lock_details=$("$python_path" - "$root_dir/sdk.lock" <<'PY'
+lock_details=$("$python_path" - "$root_dir/sdk.lock" "$NB_EIGEN_LOCK" <<'PY'
 import re
 import sys
 import tomllib
@@ -139,19 +158,19 @@ print(f"affectiveSdkVersion={sdk['version']}")
 print(f"affectiveSdkCommit={sdk['commit']}")
 print(f"numCppVersion={build['numcpp_version']}")
 print(f"numCppCommit={build['numcpp_commit']}")
-print(f"lockedEigenVersion={build['eigen_versions']['galaxy_kylin_v10_x86_64']}")
+print(f"lockedEigenVersion={build['eigen_versions'][sys.argv[2]]}")
 print(f"lockedCmakeMinimum={build['cmake_minimum_version']}")
 print(f"lockedCxxStandard={build['cxx_standard']}")
 PY
 ) || fail "sdk.lock is incomplete or inconsistent with the vendored algorithm source layout."
 printf '%s\n' "$lock_details"
 locked_eigen_version=$(
-  "$python_path" - "$root_dir/sdk.lock" <<'PY'
+  "$python_path" - "$root_dir/sdk.lock" "$NB_EIGEN_LOCK" <<'PY'
 import sys
 import tomllib
 from pathlib import Path
 lock = tomllib.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print(lock["affective_algorithm_sdk"]["build"]["eigen_versions"]["galaxy_kylin_v10_x86_64"])
+print(lock["affective_algorithm_sdk"]["build"]["eigen_versions"][sys.argv[2]])
 PY
 )
 
@@ -244,6 +263,7 @@ system_build_dependencies_ready || fail \
 prepare_bundled_eigen() {
   local archive_path="$package_dir/$eigen_archive"
   [[ -f $archive_path ]] || return 0
+  nb_verify_input eigen "$archive_path" || fail "Bundled Eigen failed input verification."
   local actual_sha
   actual_sha=$(sha256sum "$archive_path" | awk '{print $1}')
   [[ $actual_sha == "$eigen_sha256" ]] || fail \
@@ -284,6 +304,20 @@ EOF
 }
 
 prepare_project_cmake() {
+  if [[ $NB_CMAKE_INPUT == cmake_source ]]; then
+    nb_require_compiler || fail "Native CMake build prerequisites are unavailable."
+    local archive_path="$package_dir/$cmake_archive" source_dir="$toolchain_dir/cmake-source-$NB_ARCH"
+    nb_verify_input cmake_source "$archive_path" || fail "Copy the approved CMake source archive into $package_dir."
+    install -d -m 0750 "$source_dir"
+    tar -xzf "$archive_path" -C "$source_dir" --strip-components=1 || fail "CMake source extraction failed."
+    nb_event build_cmake "version=$cmake_version architecture=$NB_ARCH"
+    (cd "$source_dir" && ./bootstrap --prefix="$cmake_home" --parallel=2 -- -DCMAKE_USE_OPENSSL=OFF &&
+      make -j2 && make install) || fail "Native CMake build failed; see bootstrap/compiler output above."
+    export PATH="$cmake_home/bin:$PATH"
+    cmake_is_usable || fail "Native CMake version check failed."
+    nb_event build_cmake_complete "architecture=$NB_ARCH cmake=$cmake_home/bin/cmake"
+    return
+  fi
   local archive_path="$package_dir/$cmake_archive"
   local cached_archive="$runtime_dir/downloads/$cmake_archive"
   local actual_sha extract_dir extracted
@@ -311,6 +345,7 @@ prepare_project_cmake() {
     archive_path=$cached_archive
   fi
 
+  nb_verify_input "$NB_CMAKE_INPUT" "$archive_path" || fail "CMake failed input verification."
   actual_sha=$(sha256sum "$archive_path" | awk '{print $1}')
   [[ $actual_sha == "$cmake_sha256" ]] || fail \
     "CMake archive SHA-256 mismatch: file=$archive_path expected=$cmake_sha256 actual=$actual_sha"
@@ -338,9 +373,11 @@ prepare_project_cmake() {
   echo "projectCmakeSha256=$cmake_sha256"
 }
 
+nb_require_compiler || fail "Native compiler does not match the selected CPU/ABI."
 prepare_project_cmake
 prepare_bundled_eigen
 
+nb_event algorithm_build "architecture=$NB_ARCH eigen_lock=$NB_EIGEN_LOCK"
 echo "cmake=$(cmake --version | head -n 1)"
 echo "compiler=$(c++ --version | head -n 1)"
 echo "eigen=$(detect_eigen_version)"
@@ -377,7 +414,7 @@ restore_previous_bridge() {
     echo "Previous algorithm bridge restored after setup failure."
   fi
 }
-trap restore_previous_bridge EXIT
+trap 'result=$?; restore_previous_bridge; algorithm_setup_end "$result"' EXIT
 
 install -m 0750 "$attempt_bridge" "$temporary_bridge"
 if [[ -e $final_bridge || -L $final_bridge ]]; then
@@ -396,7 +433,7 @@ if ! PYTHONPATH=$root_dir "$python_path" -m neurobridge.algorithm_setup \
   fail "Bridge installation or configuration update failed. The previous bridge was restored and the original configuration was retained. Review: $setup_log"
 fi
 rollback_pending=false
-trap - EXIT
+trap 'algorithm_setup_end "$?"' EXIT
 [[ -z $previous_bridge ]] || rm -f -- "$previous_bridge"
 
 echo "Algorithm setup complete"

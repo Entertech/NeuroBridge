@@ -10,6 +10,8 @@ import io
 import json
 from pathlib import Path, PurePosixPath
 import tomllib
+import subprocess
+import tempfile
 import zipfile
 
 
@@ -280,103 +282,109 @@ def documents_for_platform_archives(
     return result
 
 
-def render_bundle_prd(release_manifest: dict, systems: list[dict]) -> str:
+DIRECTORY_GUIDE_FILENAME = "bundle-directory-guide.pdf"
+
+
+def render_bundle_directory_guide(release_manifest: dict, systems: list[dict], document_names: list[str]) -> str:
+    """Describe the files actually being shipped, for deployment staff."""
+    def code(value: str) -> str:
+        return "`" + value.replace("`", "&#96;").replace("|", "&#124;").replace("\n", " ") + "`"
+
     lines = [
-        "# NeuroBridge 交付包说明 PRD",
-        "",
-        f"应用版本：{release_manifest['applicationVersion']}",
-        f"源码提交：{release_manifest['git']['commit']}",
-        "",
-        "需求状态：本文随源码生成；安装、接入与故障恢复须在真实目标机验收。",
-        "",
-        "## 1. 支持范围",
-        "",
-        "Windows：仅 Windows 10/11 x86_64（Intel/AMD 64 位）。Windows 7、32 位和 ARM 不支持。",
-        "麒麟：仅银河麒麟 V10 x86_64（Intel/AMD 64 位）引导 DEB。",
-        "麒麟 32 位 x86、ARM/aarch64、龙芯/LoongArch/MIPS、申威等其他架构不支持。",
-        "V10 是系统版本，不代表所有架构通用；其他 64 位架构也不能安装此 x86_64 包。",
-        "在麒麟终端执行 uname -m，当前包要求输出 x86_64。",
-        "",
-        "| 系统 | CPU 架构 / 位数 | 当前包 |",
-        "| --- | --- | --- |",
-        "| Windows 10/11 | x86_64 / AMD64，Intel/AMD 64 位 | EXE、MSI；依实际清单交付 |",
-        "| 银河麒麟 V10 | x86_64 / AMD64，Intel/AMD 64 位；DEB 架构 amd64 | 引导 DEB；正式目标 N100/N150 |",
-        "| Windows 7、Windows x86 32 位、Windows ARM32/ARM64 | 不在当前矩阵 | 无 |",
-        "| 麒麟 V10 x86 32 位、ARM32/armhf、ARM64/aarch64 | 不在当前矩阵 | 无 |",
-        "| 麒麟 V10 龙芯 LoongArch64/loongarch64、龙芯 MIPS/mips64el、申威 SW64/sw64 | 各为不同架构；均不在当前矩阵 | 无 |",
-        "",
-        "银河麒麟正式验收结果不能由 Windows 或其他架构替代；当前版本新增修复仍须目标机验证。",
-        "本包包含的实际系统、版本与架构列在下方，未列出的目标不随包交付。",
-        "",
-        "## 2. 根目录与解压结构",
-        "",
-        "PRD.md：本说明，请先阅读。",
-        "docs/external/：共用接口文档、采集包格式说明和联调页面附件。",
-        "metadata/：源码/构建信息、验证日志、归档摘要，以及 PDF 原名称对照 document-filenames.json。",
-        "",
-        "```text",
+        "# NeuroBridge 交付包目录说明", "",
+        f"应用版本：{release_manifest['applicationVersion']}", "",
+        f"源码提交：{code(release_manifest['git']['commit'])}", "",
+        "面向部署人员。先阅读本说明，再按目标系统解压对应文件；本说明介绍文件的位置与用途，具体安装操作请阅读对应部署指南。", "",
+        "## 1. 解压总包后，先看这些位置", "",
+        "| 位置 | 用途 |", "| --- | --- |",
+        f"| {code(DIRECTORY_GUIDE_FILENAME)} | 本目录说明，位于总 ZIP 根目录 |",
     ]
     for system in systems:
-        lines.extend([f"{system['fileName']}：{system['platform']} 系统的压缩包。", ""])
-        for variant in system['variants']:
-            lines.append(f"  解压 {system['fileName']} -> {variant['fileName']}")
-            for architecture in variant['architectureArchives']:
-                lines.append(f"    解压 {variant['fileName']} -> {architecture['fileName']}")
-                for package in architecture['packages']:
-                    lines.append(f"      {package['fileName']}：{package['format']} 安装包")
-                lines.append("      checksums.sha256：同目录安装包 SHA-256，安装前核验。")
-            for document in variant['documents']:
-                lines.append(f"    {document}：该系统的部署指南或共用协议文档。")
-            for helper in variant.get('supportFiles', []):
-                purpose = {'install-with-logs.ps1': 'Windows 安装日志与失败日志导出入口',
-                           'diagnostic-context.ps1': '日志版本与系统环境采集模块',
-                           'build-info.txt': '当前交付软件版本及源码提交'}[helper]
-                lines.append(f"    {helper}：{purpose}。")
-        lines.append("")
+        label = "Windows" if system['platform'] == 'windows' else "银河麒麟"
+        lines.append(f"| {code(system['fileName'])} | {label}系统压缩包；只解压需要部署的平台 |")
+    if document_names:
+        lines.append("| `docs/external/` | 共用接口、采集包格式说明或联调附件，具体文件见第 3 节 |")
     lines.extend([
-        "```",
-        "",
-        "## 3. 解压与安装",
-        "",
-        "依次解压：总 ZIP -> 所需系统 ZIP -> 系统版本 ZIP -> x86_64 ZIP。",
-        "版本 ZIP 中的 docs/ 包含部署指南；安装文件和 checksums.sha256 在架构 ZIP 中。",
-        "Windows：选择对应系统版本，MSI 与 EXE 二选一；安装日志工具位于版本 ZIP 根目录。",
-        "麒麟：先核验 sha256sum -c checksums.sha256，再 sudo dpkg -i ./<安装包文件名>.deb。",
-        "麒麟引导包在本机构建运行时，需具备交付指南要求的系统依赖和管理员权限。",
-        "耳机未连接时仍可安装；服务等待设备，接入后才开始实时采集。安装成功不代表现场采集验收通过。",
-        "设备连接、断线恢复、服务重启等仍须在真实目标机验证。",
-        "",
-        "## 4. 日志与失败诊断",
-        "",
-        "麒麟安装日志：/var/log/neurobridge-bootstrap/；运行日志：/var/log/neurobridge/。",
-        '麒麟失败日志导出：sudo /usr/lib/neurobridge-bootstrap/export-install-logs.sh --output-dir "$HOME/下载"',
-        "服务尚未创建或软件包配置失败时也可以导出；串口节点及权限诊断在 tty-status.txt。",
-        "Windows：在版本 ZIP 目录执行 powershell -ExecutionPolicy Bypass -File .\\install-with-logs.ps1 -Installer .\\<x86_64目录>\\<安装包>。",
-        "Windows 导出：powershell -ExecutionPolicy Bypass -File .\\install-with-logs.ps1 -Export。",
-        '麒麟运行日志导出：sudo /opt/neurobridge/kylin/export-logs.sh --output-dir "$HOME/下载"。',
-        "Windows 运行日志导出：powershell -ExecutionPolicy Bypass -File 'C:\\Program Files\\NeuroBridge\\windows\\export-logs.ps1' -OutputDirectory C:\\Temp。",
-        "两平台诊断上下文记录 UTC 时间、安装/运行类型、软件版本/源码提交、安装包版本/提交、系统名称/版本/构建、CPU 架构/系统位数和部署 Python 版本/位数。",
-        "Windows 为 diagnostic-context.json（安装导出带时间后缀）；麒麟为 diagnostic-context.txt，另记内核/glibc/Bash；Windows 另记 PowerShell/导出进程位数。",
-        "软件版本来自磁盘上的部署文件；安装包版本来自交付 build-info.txt；服务状态另行记录，无法读取的值明确为 unknown。",
-        "Windows 安装摘要记录安装开始时环境；导出时重新采集当前环境，须按时间区分旧部署与升级包。诊断不收录配置正文、全量环境变量、凭据或录制数据。",
-        "PDF 副本使用英文文件名以避免解压乱码，中文标题和正文保留；请勿据名称猜测系统兼容性。",
-        "",
-        "## 5. 验收要求",
-        "",
-        "总包根目录必须包含本 PRD；目录结构、安装包名称与源码提交必须和实际文件及 metadata 清单一致。",
-        "不得生成或宣称支持矩阵之外的系统/架构，也不得把源码/模拟测试写成现场验收通过。",
-        "麒麟现场须验证无耳机安装、接入后实时采集、拔插重连、启动失败回滚、卸载和服务/整机重启。",
-        "耳机离线且存在历史录制时不得启动录播；浏览器断开/恢复须保持可观测状态。",
-        "",
-        "## 6. 扩展架构的影响",
-        "",
-        "新增架构须另行适配，当前包没有自动支持其他架构。逐架构准备和锁定 Python/wheel、CMake/C++17 工具链与系统依赖；重编译算法 SDK 并比对真实输入结果。",
-        "32 位须验证指针宽度、内存限制与库 ABI；ARM64、LoongArch、MIPS、SW64 即使都是 64 位也互不通用。Windows 7 另需旧系统 API 和工具链兼容性验证。",
-        "安装器需匹配系统/包管理器架构、USB TTY 驱动、udev/systemd，更新独立包名、输入摘要、发布矩阵和 CI。只改架构字段或在本机编译算法不足以获得支持。",
-        "各目标分别完成安装/回滚/卸载、算法比对、真实耳机 E1/E0、拔插、服务及整机重启、浏览器恢复、离线不录播和长稳验收；增加构建资源、离线输入体积与维护成本。",
-        "",
+        "| `metadata/` | 交付清单、构建来源、验证日志和 PDF 原名称对照；供核验与排错 |", "",
+        "## 2. 解压顺序与每层文件", "",
+        "1. 解压总 ZIP，找到本 PDF 和所需系统 ZIP。",
+        "2. 解压系统 ZIP，选择与目标系统版本对应的版本 ZIP。",
+        "3. 解压版本 ZIP：先阅读 `docs/` 中的部署指南，再解压其安装文件分组 ZIP。",
+        "4. 分组 ZIP 内是安装包与 `checksums.sha256`；核验后按部署指南安装。", "",
+        "平台目录、系统 ZIP、版本 ZIP 和安装文件分组 ZIP 是不同层级；PDF 与日志工具可能位于版本 ZIP，不在最内层安装包旁。以下路径与名称均由本次交付清单生成。", "",
     ])
-    return '\n'.join(lines)
+    purposes = {'install-with-logs.ps1': '安装并保存失败日志；-Export 导出安装日志',
+                'diagnostic-context.ps1': '日志环境采集模块，须与安装日志入口保存在一起',
+                'build-info.txt': '此交付包的应用版本与源码提交'}
+    for system in systems:
+        for variant in system['variants']:
+            lines.extend([f"### {variant['name']}", "",
+                          f"解压路径：{code(system['fileName'])} → {code(variant['fileName'])}。", "",
+                          "| 在版本 ZIP 中找到 | 用途 |", "| --- | --- |"])
+            for architecture in variant['architectureArchives']:
+                lines.append(f"| {code(architecture['fileName'])} | 安装文件分组 {code(architecture['architecture'])}，需继续解压 |")
+            for document in variant.get('documents', []):
+                lines.append(f"| {code(document)} | 部署指南或共用接口文档；按文件标题选择 |")
+            for helper in variant.get('supportFiles', []):
+                lines.append(f"| {code(helper)} | {purposes.get(helper, '随包支持文件')} |")
+            lines.extend(["", "继续解压安装文件分组：", "",
+                          "| 分组 ZIP | 内部安装包 | 格式 / 状态 |", "| --- | --- | --- |"])
+            for architecture in variant['architectureArchives']:
+                for package in architecture['packages']:
+                    lines.append(f"| {code(architecture['fileName'])} | {code(package['fileName'])} | {package['format'].upper()} / {package.get('status', 'candidate')} |")
+            lines.extend(["", "每个安装文件分组内的 `checksums.sha256` 仅用于核验同目录安装包。", ""])
+            if system['platform'] == 'windows':
+                lines.extend(["Windows：选择匹配系统的分组；EXE 和 MSI 二选一。安装日志入口及其模块在版本 ZIP 中，解压后保存在同一目录。", ""])
+            else:
+                architectures = {entry['architecture'] for entry in variant['architectureArchives']}
+                if 'all' in architectures:
+                    lines.extend(["麒麟：`all` 是共用引导 DEB 的分组标识。安装时检查目标系统与 CPU/ABI；该名称不表示生成的运行时可在任意架构复用，也不代表各架构已完成现场验收。", ""])
+                else:
+                    lines.extend(["麒麟：选择与目标 CPU 架构匹配的分组，再按部署指南安装。", ""])
+    lines.extend(["## 3. 共用附件与核验资料", "",
+                  "| 总包中的位置 | 用途 |", "| --- | --- |"])
+    for name in document_names:
+        lines.append(f"| {code(name)} | 共用文档或联调附件 |")
+    lines.extend([
+        "| `metadata/bundle-manifest.json` | 各层 ZIP、随包文档及安装包的交付清单和摘要 |",
+        "| `metadata/build-manifest.json` | 构建来源和目标结果 |",
+        "| `metadata/release-logs.jsonl` | 构建与交付验证记录 |",
+        "| `metadata/validation/` | 本次随包验证日志 |",
+        "| `metadata/document-filenames.json` | PDF 英文文件名与原中文名称对照 |", "",
+        "PDF 使用英文文件名以减少麒麟解压后的文件名乱码；打开后仍保留中文标题和正文。", "",
+        "## 4. 安装出错时，去哪里找日志", "",
+        "| 场景 | 日志位置 / 导出入口 |", "| --- | --- |",
+    ])
+    platforms = {system['platform'] for system in systems}
+    if 'windows' in platforms:
+        lines.extend([
+            "| Windows 安装失败 | 版本 ZIP 中的 `install-with-logs.ps1`；安装用 `-Installer`，导出用 `-Export`；日志在 `%LOCALAPPDATA%\\NeuroBridge\\installer-logs` |",
+            "| Windows 运行问题 | 安装目录 `windows/export-logs.ps1`；导出用 `-OutputDirectory` |",
+        ])
+    if 'kylin' in platforms:
+        lines.extend([
+            "| 麒麟安装失败 | 日志在 `/var/log/neurobridge-bootstrap/`；导出入口 `/usr/lib/neurobridge-bootstrap/export-install-logs.sh`，参数 `--output-dir` |",
+            "| 麒麟运行问题 | 日志在 `/var/log/neurobridge/`；导出入口 `/opt/neurobridge/kylin/export-logs.sh`，参数 `--output-dir` |",
+        ])
+    lines.extend(["", "安装未成功或服务未创建时，优先使用安装日志导出入口。诊断包标识软件/安装包版本、系统环境和导出时间；提交问题时请提供对应诊断包。", "",
+                  "交付状态与现场验证记录以清单和部署指南为准；构建或解压成功不代表现场采集验收通过。", ""])
+    return "\n".join(lines)
+
+
+def render_directory_pdf(markdown: str) -> bytes:
+    with tempfile.TemporaryDirectory(prefix="neurobridge-directory-guide-") as temporary:
+        directory = Path(temporary)
+        source = directory / "directory-guide.md"
+        output = directory / DIRECTORY_GUIDE_FILENAME
+        source.write_text(markdown, encoding="utf-8")
+        subprocess.run([str(ROOT / "tools/render-protocol-pdf.sh"), str(source), str(output),
+                        str(ROOT / 'tools/bundle-directory-guide.css')], check=True,
+                       stdout=subprocess.DEVNULL)
+        subprocess.run(["pdfinfo", str(output)], check=True, stdout=subprocess.DEVNULL)
+        result = output.read_bytes()
+        if not result.startswith(b"%PDF-"):
+            raise ValueError("directory guide renderer did not produce a PDF")
+        return result
 
 
 def build_bundle(release_directory: Path, documents_root: Path, output: Path) -> dict:
@@ -388,13 +396,15 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
     aliases = {PurePosixPath(name).name: delivery_pdf_name(PurePosixPath(name).name) for name in files if name.endswith(".pdf")}
     for documents in bound_documents.values():
         aliases.update({name: delivery_pdf_name(name) for name in documents})
+    aliases['交付包目录说明.pdf'] = DIRECTORY_GUIDE_FILENAME
     platform_documents = documents_for_platform_archives(files, bound_documents, available_platforms)
     files = {str(PurePosixPath(name).parent / delivery_pdf_name(PurePosixPath(name).name)) if name.endswith(".pdf") else name: value for name, value in files.items()}
     files["metadata/document-filenames.json"] = json.dumps(aliases, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
     build_info = f"application_version={release_manifest['applicationVersion']}\nsource_commit={release_manifest['git']['commit']}\n".encode('utf-8')
     system_archives, system_manifest = build_system_archives(grouped, timestamp, platform_documents, build_info)
     files.update(system_archives)
-    files["PRD.md"] = render_bundle_prd(release_manifest, system_manifest).encode("utf-8")
+    files[DIRECTORY_GUIDE_FILENAME] = render_directory_pdf(render_bundle_directory_guide(
+        release_manifest, system_manifest, sorted(name for name in files if name.startswith("docs/"))))
     for name, value in validation:
         files[f"metadata/validation/{name.removeprefix('validation/')}"] = value
     bundle_manifest = {
@@ -405,7 +415,7 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
         "trigger": release_manifest["trigger"],
         "coverage": release_manifest["coverage"],
         "systemArchives": system_manifest,
-        "documents": sorted(name for name in files if name.startswith("docs/") or name == "PRD.md"),
+        "documents": sorted(name for name in files if name.startswith("docs/") or name == DIRECTORY_GUIDE_FILENAME),
         "systemDocuments": sorted(name for name in files if name.startswith(("windows/", "kylin/")) and name.endswith(".pdf")),
         "validationFiles": sorted(name for name in files if name.startswith("metadata/validation/")),
         "metadataFiles": ["metadata/document-filenames.json"],
@@ -433,7 +443,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         result = build_bundle(args.release_dir, args.documents_dir, args.output)
-    except (OSError, KeyError, ValueError, json.JSONDecodeError, zipfile.BadZipFile) as error:
+    except (OSError, KeyError, ValueError, json.JSONDecodeError, zipfile.BadZipFile, subprocess.CalledProcessError) as error:
         parser.error(str(error))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

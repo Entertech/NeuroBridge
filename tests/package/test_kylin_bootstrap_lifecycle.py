@@ -23,7 +23,7 @@ class Sandbox:
         for relative in ("opt", "etc/neurobridge", "etc/systemd/system", "var/tmp",
                          "var/lib/neurobridge", "var/log/neurobridge", "dev", "stubs"):
             (root / relative).mkdir(parents=True, exist_ok=True)
-        (root / "etc/os-release").write_text("ID=kylin\n")
+        (root / "etc/os-release").write_text("ID=kylin\nVERSION_ID=V10\n")
         self.unit = root / "etc/systemd/system/neurobridge.service"
         self.app = root / "opt/neurobridge"
         self.config = root / "etc/neurobridge/gateway.toml"
@@ -32,7 +32,7 @@ class Sandbox:
         self.env = {**os.environ, "NB_SANDBOX": str(root),
                     "PATH": str(root / "stubs") + os.pathsep + os.environ["PATH"]}
         for name in ("systemctl", "getent", "id", "groupadd", "useradd", "usermod",
-                     "stat", "uname", "chown", "install", "udevadm"):
+                     "stat", "uname", "chown", "install", "udevadm", "od", "getconf"):
             path = root / "stubs" / name
             path.write_text(f"#!{sys.executable}\n" + SYSTEM_STUB)
             path.chmod(0o755)
@@ -66,6 +66,11 @@ class Sandbox:
         (self.root / "dev/ttyUSB0").symlink_to("/dev/null")
         self.env["NB_DEVICE_GROUP"] = group
 
+    def platform(self, scripts: Path):
+        scripts.mkdir(parents=True, exist_ok=True)
+        (scripts / 'platform.sh').write_text(self.relocate((ROOT / 'packaging/kylin/platform.sh').read_text()))
+        (scripts / 'kylin-bootstrap-inputs.toml').write_bytes((ROOT / 'config/kylin-bootstrap-inputs.toml').read_bytes())
+
     def installer(self) -> Path:
         source = self.root / "archive-source"
         for name in ("runtime/bin/python", "runtime/bin/neurobridge_affective_bridge",
@@ -85,7 +90,8 @@ class Sandbox:
             output.add(source, arcname=".")
         scripts = self.root / "scripts"
         scripts.mkdir()
-        (scripts / "kylin-runtime-manifest.toml").write_text("fetch fixture\n")
+        (scripts / "kylin-runtime-manifest.toml").write_text('[runtime]\nos = "kylin"\nos_version = "v10"\narchitecture = "x86_64"\napplication_version = "0.0.0"\n')
+        self.platform(scripts)
         (scripts / "70-neurobridge-usb-serial.rules").write_bytes(
             (ROOT / "packaging/kylin/70-neurobridge-usb-serial.rules").read_bytes())
         fetch = scripts / "fetch-runtime.sh"
@@ -142,7 +148,11 @@ elif name == "getent":
 elif name == "stat":
     print(os.environ.get("NB_DEVICE_GROUP", "usb-serial"))
 elif name == "uname":
-    print("x86_64")
+    print(os.environ.get("NB_CPU", "x86_64"))
+elif name == "getconf":
+    print(os.environ.get("NB_BITS", "64") if args[0] == "LONG_BIT" else "glibc 2.31")
+elif name == "od":
+    print("127 69 76 70 " + ("1" if os.environ.get("NB_BITS") == "32" else "2") + " 1")
 elif name == "id":
     print("123")
 elif name == "install":
@@ -235,6 +245,7 @@ class BootstrapLifecycleTests(SandboxTests):
         old_logs.mkdir()
         (old_logs / "build-20000101-old.log").write_text("old build")
         box.env["NEUROBRIDGE_BUILD_LOG_KEEP"] = "1"
+        box.platform(scripts)
         for name in ("bootstrap-build.sh", "run-logged.sh"):
             (scripts / name).write_text(box.relocate((ROOT / "packaging/kylin" / name).read_text()))
         installer = scripts / "bootstrap-install.sh"
@@ -541,6 +552,12 @@ elif "--version" in sys.argv:
                 wheel = box.root / "wheelhouse/test.whl"
                 wheel.write_bytes(b"wheel-fixture")
                 (box.root / "config").mkdir()
+                (box.root / "config/kylin-serial-requirements.lock").write_text("")
+                (box.root / "config/kylin-bootstrap-inputs.toml").write_text(
+                    (ROOT / "config/kylin-bootstrap-inputs.toml").read_text().replace(
+                        "25844eb97cdc72cdc78addaad0969ce3b2133a4de54bfcfa4d57f8a6d095eaab",
+                        hashlib.sha256(archive.read_bytes()).hexdigest()))
+                box.platform(box.root / "packaging/kylin")
                 (box.root / "config/kylin-wheelhouse.sha256").write_text(
                     hashlib.sha256(wheel.read_bytes()).hexdigest() + "  wheelhouse/test.whl\n"
                 )
@@ -559,7 +576,7 @@ elif "--version" in sys.argv:
                     # Run the real archive builder to verify that it requests
                     # the pinned interpreter from the real setup helper.
                     for relative in ("neurobridge", "web", "packaging/kylin", "tools"):
-                        (box.root / relative).mkdir(parents=True)
+                        (box.root / relative).mkdir(parents=True, exist_ok=True)
                     for relative in ("pyproject.toml", "sdk.lock", "config/gateway.toml.example"):
                         (box.root / relative).write_text("")
                     (box.root / "packaging/kylin/neurobridge.service").write_text("unit-fixture\n")
@@ -581,7 +598,7 @@ elif "--version" in sys.argv:
                     builder.write_text(box.relocate((ROOT / "tools/build-kylin-runtime-archive.sh").read_text()))
                     result = box.run(builder, "--source-root", str(box.root),
                                      "--output-dir", str(box.root / "output"))
-                    self.assertTrue((box.root / "output/runtime.tar.gz").exists(), result.stderr)
+                    self.assertTrue((box.root / "output/neurobridge-runtime-9.9.9-kylin-v10-x86_64.tar.gz").exists(), result.stderr)
                 else:
                     result = box.run(script)
                 self.assertEqual(result.returncode, 0, result.stderr)

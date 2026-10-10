@@ -1,6 +1,6 @@
 # NeuroBridge
 
-NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。运行时首个现场验证基线仍是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机；当前发布矩阵包含一个银河麒麟 V10 x86_64 引导 DEB 和 Windows 10/11 的 x86_64 EXE/MSI 目标。网关核心负责串口采集、数据与算法处理、北向协议适配、录播和运行维护。
+NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。运行时首个现场验证基线仍是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机；当前发布矩阵包含一个银河麒麟 V10 通用引导 DEB（all） 和 Windows 10/11 的 x86_64 EXE/MSI 目标。网关核心负责串口采集、数据与算法处理、北向协议适配、录播和运行维护。
 
 统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于 M1 验收范围。
 
@@ -10,7 +10,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。
 
-当前麒麟引导 DEB 仅支持 V10 x86_64（Intel/AMD 64 位），不支持 32 位 x86、ARM、龙芯或申威等其他架构。允许未接耳机时安装，服务等待设备；安装器保留实际 USB TTY 非 root 组授权，并为 USB 派生串口安装 `neurobridge` 组、`0660` 权限规则，后续插入无需重装授权。升级和重装都会使用当前包内源码重新构建并部署，归档固定使用随包 Python；已有服务保留原运行与自启状态，首次安装启用并启动服务。失败回滚恢复原程序、配置、服务单元、权限规则及状态；卸载自动停止服务、取消自启并移除单元及本包权限规则，保留程序目录、配置、日志和录制数据。详细行为及目标机待验收项见[发布工作流技术方案](doc/tech/发布工作流技术方案.md#麒麟引导包安装生命周期)。
+麒麟引导源码按系统/CPU/ABI 选择依赖，Profile 包括 x86_64、aarch64、loongarch64、mips64el、sw64、x86 与 armhf；x86_64 沿用预编译 Python/CMake，其余从锁定源码本机构建。新增架构为待真机验收候选，all 不意味着运行时跨 CPU 通用；详细支持表见[发布 PRD](doc/product/发布工作流%20PRD.md#27-系统与-cpu-架构支持表)。本轮不打包、不推送，已发布指南保持历史范围；最新适配部署步骤见[内部手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md#多架构引导部署补充2026-10-10)。允许未接耳机时安装，服务等待设备；安装器保留实际 USB TTY 非 root 组授权，并为 USB 派生串口安装 `neurobridge` 组、`0660` 权限规则，后续插入无需重装授权。升级和重装都会使用当前包内源码重新构建并部署，归档固定使用随包 Python；已有服务保留原运行与自启状态，首次安装启用并启动服务。失败回滚恢复原程序、配置、服务单元、权限规则及状态；卸载自动停止服务、取消自启并移除单元及本包权限规则，保留程序目录、配置、日志和录制数据。详细行为及目标机待验收项见[发布工作流技术方案](doc/tech/发布工作流技术方案.md#麒麟引导包安装生命周期)。
 
 Windows 原生安装包工作流上传 Artifact 后，手动运行 `Release` 并填写 `native_input_run_id` 选择输入运行；已移除发布输入仓库变量的自动写入与读取。后续自动输入方案接入前，自动 Release 因缺少 Run ID 将 Windows 输入记为 `blocked`，无法完成发布；麒麟引导包不依赖该输入运行。
 
@@ -176,8 +176,8 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 安装排错：麒麟安装日志保存在 `/var/log/neurobridge-bootstrap`，服务尚未创建时也可运行 `sudo /usr/lib/neurobridge-bootstrap/export-install-logs.sh --output-dir "$HOME/下载"`。Windows 10/11 64 位包随附 `install-with-logs.ps1`，通过 `-Installer` 安装、`-Export` 导出失败日志；Windows 7 和 32 位目标不参与构建与交付。交付 ZIP 的 PDF 副本使用英文文件名，原名称对照保存在 `metadata/document-filenames.json`。上述源码与模拟验证不替代银河麒麟现场验收。
 
-交付总 ZIP 根目录生成 `PRD.md`，说明实际系统/版本/架构归档、解压顺序、指南位置、校验值、安装与失败日志入口，以及不支持的系统架构；目录列表从本次交付清单生成。需求见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)。
+交付总 ZIP 根目录生成 `bundle-directory-guide.pdf`（《NeuroBridge 交付包目录说明》），面向部署人员介绍各层压缩包、解压顺序、安装包与部署指南、日志工具及校验资料的位置；按本次实际清单生成，不再交付根目录 `PRD.md`。PDF 使用英文文件名、中文标题和正文。需求见[发布工作流 PRD](doc/product/发布工作流%20PRD.md#26-总包根目录-pdf-目录说明)。
 
-详细支持表及扩展架构影响见[发布工作流 PRD §2.7–2.9](doc/product/发布工作流%20PRD.md#27-系统与-cpu-架构支持表)：当前仅 Windows 10/11 x86_64 和银河麒麟 V10 x86_64；ARM64、LoongArch64、龙芯 MIPS 与申威 SW64 分别需要运行时、离线依赖、算法构建及真机验收，不因同为 64 位而兼容。正式验收仍为麒麟 N100/N150，其他平台不能替代。
+详细支持表及扩展架构影响见[发布工作流 PRD §2.7–2.9](doc/product/发布工作流%20PRD.md#27-系统与-cpu-架构支持表)：Windows 保持 10/11 x86_64；麒麟新增六个源码构建候选 Profile，与既有 x86_64 共用引导入口。运行时依然须匹配 CPU/ABI，各架构分别完成算法与 USB 真机验收；既有 N100/N150 结果不能替代其他架构。
 
 两平台安装与运行日志导出新增诊断上下文，记录软件版本/源码提交、安装包版本/提交、导出时间、系统版本/构建、CPU 架构/位数、Python 与脚本环境。Windows 为 `diagnostic-context.json`（安装导出带时间后缀），麒麟为 `diagnostic-context.txt`；磁盘部署版本与安装包版本分别标识，缺失值写 `unknown`，服务状态另行记录。网页日志下载也附运行进程的版本和环境；配置正文、全量环境变量和录制数据不导出。麒麟运行日志可用 `sudo /opt/neurobridge/kylin/export-logs.sh --output-dir "$HOME/下载"` 导出；Windows 用安装目录 `windows/export-logs.ps1 -OutputDirectory C:\Temp`。

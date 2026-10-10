@@ -115,7 +115,7 @@ def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
         if outer.testzip() is not None:
             raise ValueError("release bundle CRC verification failed")
         names = set(outer.namelist())
-        required = {"metadata/bundle-manifest.json", "metadata/build-manifest.json", "metadata/release-logs.jsonl"}
+        required = {"bundle-directory-guide.pdf", "metadata/bundle-manifest.json", "metadata/build-manifest.json", "metadata/release-logs.jsonl"}
         required.update(bundle_manifest.get("documents", []))
         required.update(bundle_manifest.get("systemDocuments", []))
         required.update(bundle_manifest.get("validationFiles", []))
@@ -162,6 +162,8 @@ def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
                                         raise ValueError(f"package hash mismatch: {package['fileName']}")
         if not required.issubset(names) or names != required:
             raise ValueError("release bundle is missing documented or metadata entries")
+        if not outer.read('bundle-directory-guide.pdf').startswith(b'%PDF-'):
+            raise ValueError('release bundle directory guide is not a PDF')
 
 
 def sha256_bytes(value: bytes) -> str:

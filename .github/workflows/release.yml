@@ -231,10 +231,30 @@ jobs:
           python-version: '3.11'
       # The Kylin deliverable is the bootstrap package. It is built here from
       # the checked-out source and does not consume a prebuilt runtime input.
-      - name: Build the Kylin bootstrap package
+      - name: Restore approved Kylin dependency cache
+        id: kylin-cache
+        continue-on-error: true
         if: matrix.platform == 'kylin'
+        uses: actions/cache/restore@v4
+        with:
+          path: .runtime/kylin-bootstrap-inputs
+          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
+          fail-on-cache-miss: true
+      - name: Record missing Kylin dependency cache
+        if: matrix.platform == 'kylin' && steps.kylin-cache.outputs.cache-hit != 'true'
         run: |
+          mkdir -p "artifacts/targets/${{ matrix.id }}"
+          printf '%s\n' 'blocked: approved Kylin dependency cache missing; prepare and verify locked inputs first' > "artifacts/targets/${{ matrix.id }}/input-fetch.log"
+      - name: Build the Kylin bootstrap package
+        if: matrix.platform == 'kylin' && steps.kylin-cache.outputs.cache-hit == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p "artifacts/targets/${{ matrix.id }}"
+          exec > >(tee "artifacts/targets/${{ matrix.id }}/input-fetch.log") 2>&1
+          trap 'status=$?; if [[ $status -ne 0 ]]; then printf "blocked: Kylin dependency/package build failed exit_code=%s; see this log\n" "$status"; fi' EXIT
           sudo apt-get update && sudo apt-get install -y dpkg-dev
+          python tools/prepare-kylin-bootstrap-inputs.py
           python tools/build-kylin-bootstrap-package.py --format deb --output-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}"
           python tools/write-kylin-bootstrap-verification.py \
             --target "${{ matrix.id }}" \
@@ -267,6 +287,7 @@ jobs:
             fi
           fi
       - name: Verify target package and write result log
+        if: always()
         shell: bash
         env:
           TARGET_ID: ${{ matrix.id }}
@@ -312,6 +333,11 @@ jobs:
           # gate, so a manual branch build is deliberately the relaxed mode.
           RELEASE_TRIGGER: ${{ github.event_name == 'workflow_run' && 'push_master' || 'pull_request' }}
         run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER"
+      - name: Install delivery directory PDF renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
+          fc-cache -f
       - name: Assemble one user-facing release bundle
         id: bundle
         env:
@@ -325,6 +351,19 @@ jobs:
             python -m tools.publish_release --reuse-bundle artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
           fi
           printf 'archive_sha256=%s\n' "$(sha256sum artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Check directory PDF and render every page
+        run: |
+          mkdir -p "$RUNNER_TEMP/directory-guide" artifacts/directory-guide-preview
+          unzip -p artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip bundle-directory-guide.pdf > "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
+          pdfinfo "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
+          pdffonts "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" | grep -Eqi "Noto.*CJK|NotoSansCJK"
+          pdftoppm -png -r 144 "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" artifacts/directory-guide-preview/page
+      - uses: actions/upload-artifact@v4
+        with:
+          name: delivery-directory-guide-preview-${{ env.SOURCE_SHA }}
+          path: artifacts/directory-guide-preview/
+          if-no-files-found: error
+          retention-days: 30
       - uses: actions/upload-artifact@v4
         id: upload
         with:

@@ -1,6 +1,8 @@
 .venv/
 venv/
 .runtime/
+/output/pdf/
+/tmp/pdfs/
 /wheelhouse/
 algorithm-packages/
 /python-runtime/

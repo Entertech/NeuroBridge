@@ -20,7 +20,7 @@ windows_10_11_python_line = "3.11"
 # not prebuild a package per edition, architecture and format.
 [kylin]
 editions = ["v10"]
-architectures = ["x86_64"]
+architectures = ["all"]
 formats = ["deb"]
 expected_package_count = 1
 package_kind = "bootstrap"

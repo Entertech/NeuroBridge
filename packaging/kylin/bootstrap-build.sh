@@ -22,7 +22,7 @@ usage() {
   cat <<'EOF'
 Usage: bootstrap-build.sh
 
-Runs on the one Galaxy Kylin V10 x86_64 machine that produces the runtime.
+Detects the Galaxy Kylin V10 CPU/ABI and builds a matching runtime.
 Builds the runtime from the source tree shipped in this package, writes the
 archive and its manifest under /var/lib/neurobridge-bootstrap/runtime, then
 installs that archive on this machine.
@@ -40,13 +40,12 @@ fi
 [[ $# -eq 0 ]] || fail "Unknown option: $1"
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run as root."
-[[ $(uname -m) == x86_64 ]] || fail "The runtime is built for x86_64; detected $(uname -m)."
-[[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."
-# shellcheck disable=SC1091
-. /etc/os-release
-[[ ${ID,,} == kylin ]] || fail "This build requires Galaxy Kylin; detected ID=${ID:-unknown}."
-
 package_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+NB_INPUT_LOCK="$package_dir/kylin-bootstrap-inputs.toml"
+. "$package_dir/platform.sh"
+nb_select_platform || fail "Unsupported Kylin platform; see the selection diagnostics above."
+
+
 source_root=$package_dir/source
 builder=$source_root/tools/build-kylin-runtime-archive.sh
 installer=$package_dir/bootstrap-install.sh
@@ -69,8 +68,10 @@ cleanup() {
   index=0
   while IFS= read -r file; do
     index=$((index + 1))
-    tail -c 2097152 "$file" > "$log_dir/build-$(date -u +%Y%m%dT%H%M%SZ)-$$-$index.log" || true
-  done < <(find "$work/source/.runtime" -type f -name '*.log' 2>/dev/null)
+    saved="$log_dir/build-$(date -u +%Y%m%dT%H%M%SZ)-$$-$index.log"
+    tail -c 2097152 "$file" > "$saved" || true
+    nb_event preserve_build_log "source=${file#"$work/source/"} saved=$(basename "$saved") limit_bytes=2097152"
+  done < <(find "$work/source/.runtime" -type f \( -name '*.log' -o -name 'CMakeConfigureLog.yaml' \) 2>/dev/null)
   for old in $(find "$log_dir" -maxdepth 1 -type f -name 'build-*.log' | sort -r | tail -n +"$((build_log_keep + 1))"); do rm -f -- "$old"; done
   rm -rf -- "$work"
   return "$status"
@@ -82,6 +83,7 @@ echo 'PHASE prepare-source'
 cp -a "$source_root/." "$build_tree/"
 [[ ! -f $package_dir/build-info.txt ]] || cp "$package_dir/build-info.txt" "$build_tree/build-info.txt"
 
+nb_event build_runtime "architecture=$NB_ARCH bits=$NB_BITS python=$NB_PYTHON_INPUT cmake=$NB_CMAKE_INPUT"
 echo 'PHASE build-runtime'
 NEUROBRIDGE_BOOTSTRAP=1 "$build_tree/tools/build-kylin-runtime-archive.sh" \
   --source-root "$build_tree" --output-dir "$work/output"
@@ -101,4 +103,4 @@ echo 'PHASE deploy-runtime'
 "$installer" --local-archive "$archive" --manifest "$manifest"
 
 printf 'Runtime built and installed from %s\n' "$output_dir"
-printf 'Other machines install with: bootstrap-install.sh --local-archive <copy of %s>\n' "$(basename "$archive")"
+printf 'Only machines with this same OS/CPU install with: bootstrap-install.sh --local-archive <copy of %s>\n' "$(basename "$archive")"

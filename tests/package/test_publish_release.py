@@ -16,7 +16,7 @@ from neurobridge.versioning import APPLICATION_VERSION
 class PublishReleaseTests(unittest.TestCase):
     def candidate(self, root: Path, package_suffix: bytes = b"") -> tuple[Path, str]:
         commit = release_pipeline.run("git", "rev-parse", "HEAD")
-        selected = {"windows-10-x86_64-msi", "kylin-v10-x86_64-deb"}
+        selected = {"windows-10-x86_64-msi", "kylin-v10-all-deb"}
         for target in release_pipeline.matrix():
             folder = root / "results" / target["id"]
             result = {"target": target, "sourceCommit": commit, "status": "blocked", "reason": "fixture"}
@@ -45,7 +45,8 @@ class PublishReleaseTests(unittest.TestCase):
             fixture.writestr("release-manifest.json", json.dumps({"documents": [{"pdf_artifact_name": "protocol.pdf", "delivery": "always", "platforms": []}]}))
             fixture.writestr("protocol.pdf", document)
         archive = root / "downloaded" / f"neurobridge-v{APPLICATION_VERSION}.zip"
-        builder.build_bundle(directory, documents, archive)
+        with mock.patch.object(builder, 'render_directory_pdf', return_value=b'%PDF-1.4\nfixture guide'):
+            builder.build_bundle(directory, documents, archive)
         return archive
 
     def test_retry_reuses_original_bytes_and_can_complete_the_draft(self) -> None:
@@ -161,7 +162,8 @@ class PublishReleaseTests(unittest.TestCase):
             downloaded = root / "downloaded"
             downloaded.mkdir()
             archive = downloaded / f"neurobridge-v{APPLICATION_VERSION}.zip"
-            builder.build_bundle(directory, documents, archive)
+            with mock.patch.object(builder, 'render_directory_pdf', return_value=b'%PDF-1.4\nfixture guide'):
+                builder.build_bundle(directory, documents, archive)
             digest = release_pipeline.sha256(archive)
             commit = release_pipeline.run("git", "rev-parse", "HEAD")
             final = {"url": "https://example.invalid/release", "isDraft": False, "assets": [{"name": archive.name}]}

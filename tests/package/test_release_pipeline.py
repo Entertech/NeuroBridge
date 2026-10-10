@@ -22,7 +22,7 @@ class ReleasePipelineTests(unittest.TestCase):
         self.assertEqual(len({target["id"] for target in targets}), 5)
         self.assertEqual(sum(target["platform"] == "windows" for target in targets), 4)
         kylin = [target for target in targets if target["platform"] == "kylin"]
-        self.assertEqual([target["id"] for target in kylin], ["kylin-v10-x86_64-deb"])
+        self.assertEqual([target["id"] for target in kylin], ["kylin-v10-all-deb"])
         self.assertEqual(kylin[0]["format"], "deb")
         self.assertFalse(CONFIG["require_all_matrix_targets"])
 
@@ -71,7 +71,7 @@ class ReleasePipelineTests(unittest.TestCase):
     def test_aggregate_records_gaps_and_checks_candidate_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            selected = {"windows-10-x86_64-msi", "kylin-v10-x86_64-deb"}
+            selected = {"windows-10-x86_64-msi", "kylin-v10-all-deb"}
             for target in matrix():
                 folder = root / "results" / target["id"]
                 result = {"target": target, "sourceCommit": run("git", "rev-parse", "HEAD"), "status": "blocked", "reason": "fixture lacks target runtime"}

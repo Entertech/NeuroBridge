@@ -98,10 +98,9 @@ if [[ $action == status ]]; then
 fi
 
 command -v sudo >/dev/null 2>&1 || fail "sudo is required for systemd changes."
-[[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."
-. /etc/os-release
-[[ ${ID,,} == kylin ]] || fail "This helper requires Galaxy Kylin; detected ID=${ID:-unknown}."
-[[ $(uname -m) == x86_64 ]] || fail "This deployment requires x86_64; detected $(uname -m)."
+NB_INPUT_LOCK="$root_dir/config/kylin-bootstrap-inputs.toml"
+. "$root_dir/packaging/kylin/platform.sh"
+nb_select_platform || fail "Unsupported Kylin V10 platform."
 
 if [[ $action == disable ]]; then
   if ! sudo test -e "$unit_path"; then

@@ -18,6 +18,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+from kylin_inputs import catalog, verified_input
 OFFLINE = ROOT / "packaging" / "kylin" / "offline"
 
 
@@ -49,6 +51,13 @@ def main() -> int:
     package = packages[0]
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     now = datetime.now(timezone.utc).isoformat()
+    inputs = catalog()
+    value = hashlib.sha256()
+    for key, item in sorted(inputs["artifacts"].items()):
+        value.update(key.encode())
+        value.update(bytes.fromhex(digest(verified_input(item))))
+    value.update(bytes.fromhex(digest(ROOT / "config/kylin-bootstrap-inputs.toml")))
+    input_digest = value.hexdigest()
     log = args.input_dir / "validation.log"
     log.write_text(
         f"bootstrap package {package.name}\n"
@@ -58,15 +67,15 @@ def main() -> int:
     )
     report = {
         "targetId": args.target,
-        "targetArchitecture": "x86_64",
+        "targetArchitecture": "all",
         "sourceCommit": commit,
         "fileName": package.name,
         "sha256": digest(package),
         "automatedValidation": "passed",
         "validationLog": log.name,
         "toolchain": "kylin-bootstrap; dpkg-deb; runtime built at install time",
-        "runtimeSha256": digest_tree(OFFLINE),
-        "inputSha256": digest_tree(OFFLINE),
+        "runtimeSha256": input_digest,
+        "inputSha256": input_digest,
         "sourceReferences": [{
             "kind": "other",
             "url": f"https://github.com/Entertech/NeuroBridge/commit/{commit}",

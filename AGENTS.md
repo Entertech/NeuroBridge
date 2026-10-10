@@ -10,7 +10,7 @@
 - 当前目标机配置固定使用 `data_source.type="serial"` 与 `access.mode="local_browser"`；不得自动切换到 BLE、原生 USB 或旧专网策略。仓库既有兼容代码不等于本次交付能力。
 - 网关拥有设备连接、配对、重连、数据解析、时间戳、缓存、算法调用、录播和北向协议适配。
 - 同机浏览器负责展示，网关继续负责设备、算法与持久化；浏览器不得使用 Web Serial 或 WebUSB 直接访问耳机。
-- 正式部署与验收环境仅为银河麒麟 V10 on x86_64（N100/N150）。Ubuntu、macOS、Windows 和 ARM 均不得替代目标机结果。
+- 既有正式部署基线为银河麒麟 V10 x86_64（N100/N150）。用户授权引导源码扩展 aarch64、loongarch64、mips64el、sw64、x86 32 位与 armhf；新架构保持 candidate，必须分别完成目标机编译、算法比对与现场验收。Ubuntu、macOS、Windows 或另一架构不得替代该架构目标机结果。
 
 ## 数据与协议规则
 

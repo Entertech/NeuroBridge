@@ -61,6 +61,18 @@ def manifest(sha: str, url: str, file_name: str = "runtime.tar.gz") -> str:
 
 
 class BootstrapPackageTests(unittest.TestCase):
+    def setUp(self):
+        # Dependency payload fixtures only; no network or real package creation.
+        self.inputs = tempfile.TemporaryDirectory()
+        self.addCleanup(self.inputs.cleanup)
+        def fixture(item, *args):
+            path = Path(self.inputs.name) / item['filename']
+            path.write_bytes(b'locked-input-fixture')
+            return path
+        patch = mock.patch.object(BUILDER, 'verified_input', side_effect=fixture)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_deb_carries_the_manifest_and_scripts_but_no_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -84,10 +96,10 @@ class BootstrapPackageTests(unittest.TestCase):
             self.assertEqual(
                 seen["names"],
                 ["70-neurobridge-usb-serial.rules", "bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "diagnostic-context.sh", "export-install-logs.sh", "fetch-runtime.sh",
-                 "kylin-runtime-manifest.toml", "run-logged.sh", "source"],
+                 "kylin-bootstrap-inputs.toml", "kylin-runtime-manifest.toml", "platform.sh", "run-logged.sh", "source"],
             )
             self.assertGreater(output.stat().st_size, 1024)
-            self.assertIn("Architecture: amd64", seen["control"])
+            self.assertIn("Architecture: all", seen["control"])
             # The compiler and Eigen are declared dependencies so the install
             # builds the runtime itself instead of asking the user to run a script.
             self.assertIn("g++", seen["control"])
@@ -155,7 +167,7 @@ class BootstrapPackageTests(unittest.TestCase):
                 payload = topdir / "SOURCES/payload"
                 seen["names"] = sorted(item.name for item in payload.iterdir())
                 seen["spec"] = (topdir / "SPECS/neurobridge-bootstrap.spec").read_text(encoding="utf-8")
-                rpm = topdir / "RPMS/x86_64/bootstrap.rpm"
+                rpm = topdir / "RPMS/noarch/bootstrap.rpm"
                 rpm.parent.mkdir(parents=True)
                 rpm.write_bytes(bytes.fromhex("edabeedb") + b"\0" * 2048)
 
@@ -166,7 +178,7 @@ class BootstrapPackageTests(unittest.TestCase):
             self.assertEqual(
                 seen["names"],
                 ["70-neurobridge-usb-serial.rules", "bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "diagnostic-context.sh", "export-install-logs.sh", "fetch-runtime.sh",
-                 "kylin-runtime-manifest.toml", "run-logged.sh", "source"],
+                 "kylin-bootstrap-inputs.toml", "kylin-runtime-manifest.toml", "platform.sh", "run-logged.sh", "source"],
             )
             self.assertNotIn("eigen3-devel", seen["spec"])
             self.assertIn("%preun", seen["spec"])

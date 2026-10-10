@@ -394,10 +394,9 @@ class DeploymentTests(unittest.TestCase):
             # two host gates are neutralised; everything else stays untouched.
             patched = script_source
             for gate in (
-                '[[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."',
-                ". /etc/os-release",
-                '[[ ${ID,,} == kylin ]] || fail "This helper requires Galaxy Kylin; detected ID=${ID:-unknown}."',
-                '[[ $(uname -m) == x86_64 ]] || fail "This deployment requires x86_64; detected $(uname -m)."',
+                'NB_INPUT_LOCK="$root_dir/config/kylin-bootstrap-inputs.toml"',
+                '. "$root_dir/packaging/kylin/platform.sh"',
+                'nb_select_platform || fail "Unsupported Kylin V10 platform."',
             ):
                 self.assertIn(gate, patched)
                 patched = patched.replace(gate, ":")
@@ -470,10 +469,9 @@ class DeploymentTests(unittest.TestCase):
             stub_dir.mkdir()
             patched = script_source
             for gate in (
-                '[[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."',
-                ". /etc/os-release",
-                '[[ ${ID,,} == kylin ]] || fail "This helper requires Galaxy Kylin; detected ID=${ID:-unknown}."',
-                '[[ $(uname -m) == x86_64 ]] || fail "This deployment requires x86_64; detected $(uname -m)."',
+                'NB_INPUT_LOCK="$root_dir/config/kylin-bootstrap-inputs.toml"',
+                '. "$root_dir/packaging/kylin/platform.sh"',
+                'nb_select_platform || fail "Unsupported Kylin V10 platform."',
             ):
                 patched = patched.replace(gate, ":")
 
@@ -1353,7 +1351,7 @@ class DeploymentTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
-        self.assertIn("Galaxy Kylin V10 x86_64", help_result.stdout)
+        self.assertIn("Galaxy Kylin V10 with the selected native CPU profile", help_result.stdout)
         algorithm_setup_source = algorithm_setup.read_text(encoding="utf-8")
         self.assertIn('algorithm_dir="$runtime_dir/algorithm"', algorithm_setup_source)
         self.assertIn("build-algorithm-bridge.sh", algorithm_setup_source)

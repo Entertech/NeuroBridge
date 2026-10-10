@@ -9,12 +9,17 @@ fail() {
 }
 
 [[ ${EUID} -ne 0 || ${NEUROBRIDGE_BOOTSTRAP:-} == 1 ]] || fail "Do not build the SDK bridge as root. Use a dedicated POC operator account."
-[[ $(uname -m) == "x86_64" ]] || fail "The first-release algorithm bridge supports Linux x86_64 only."
+
 [[ -r /etc/os-release ]] || fail "Cannot identify the operating system."
 . /etc/os-release
 case ${ID,,} in
-  ubuntu) platform=ubuntu; eigen_lock_key=ubuntu_24_04_x86_64 ;;
-  kylin) platform=galaxy-kylin; eigen_lock_key=galaxy_kylin_v10_x86_64 ;;
+  ubuntu) [[ $(uname -m) == x86_64 ]] || fail "Ubuntu compatibility build requires x86_64."; platform=ubuntu; eigen_lock_key=ubuntu_24_04_x86_64 ;;
+  kylin)
+    repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+    NB_INPUT_LOCK="$repo_root/config/kylin-bootstrap-inputs.toml"
+    . "$repo_root/packaging/kylin/platform.sh"
+    nb_select_platform && nb_require_compiler || fail "Kylin CPU/compiler selection failed."
+    platform=galaxy-kylin; eigen_lock_key=$NB_EIGEN_LOCK ;;
   *) fail "The algorithm bridge build supports Ubuntu or Galaxy Kylin; detected ID=${ID:-unknown}." ;;
 esac
 

@@ -18,13 +18,14 @@ portable_archive="$portable_root/$portable_archive_name"
 portable_url="https://github.com/astral-sh/python-build-standalone/releases/download/20260825/$portable_archive_name"
 portable_sha256="25844eb97cdc72cdc78addaad0969ce3b2133a4de54bfcfa4d57f8a6d095eaab"
 wheelhouse_manifest="$root_dir/config/kylin-wheelhouse.sha256"
+requirements="$root_dir/config/kylin-serial-requirements.lock"
 
 usage() {
   cat <<EOF
 Usage: ./linux/setup-kylin-python.sh
 
-Checks Galaxy Kylin x86_64, prepares a project-local Python 3.11 when the
-system only has Python 3.8, creates .venv, installs requirements.lock, and
+Detects Galaxy Kylin V10 OS/CPU; checks interpreter ABI and, prepares a project-local Python 3.11 when the
+system only has Python 3.8, creates .venv, installs serial-only requirements, and
 verifies the runtime. Existing local archives/wheels are used offline;
 otherwise the pinned runtime and packages use the current network.
 
@@ -63,15 +64,28 @@ exec > >(tee -a "$setup_log") 2>&1
 echo "NeuroBridge Python setup started"
 echo "project=$root_dir"
 echo "log=$setup_log"
+trap 'result=$?; printf "EVENT utc=%s phase=python_setup_end exit_code=%s duration_seconds=%s\n" "$(date -u +%FT%TZ)" "$result" "$SECONDS"' EXIT
 
-[[ $(uname -m) == x86_64 ]] || fail "This deployment requires x86_64; detected $(uname -m)."
-[[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."
-. /etc/os-release
-[[ ${ID,,} == kylin ]] || fail "This helper requires Galaxy Kylin; detected ID=${ID:-unknown}."
-[[ -f $root_dir/requirements.lock ]] || fail "requirements.lock is missing from the project."
+NB_INPUT_LOCK="$root_dir/config/kylin-bootstrap-inputs.toml"
+. "$root_dir/packaging/kylin/platform.sh"
+if [[ -f $root_dir/packaging/kylin/diagnostic-context.sh ]]; then
+  . "$root_dir/packaging/kylin/diagnostic-context.sh"
+  nb_event software_identity "application_version=$(nb_application_version "$root_dir") source_commit=$(nb_source_commit "$root_dir")"
+fi
+nb_select_platform || fail "Platform selection failed. See: $setup_log"
+input_root="$root_dir/packaging/kylin/offline"
+portable_archive_name=$(nb_lock_value "artifacts.$NB_PYTHON_INPUT" filename)
+portable_sha256=$(nb_lock_value "artifacts.$NB_PYTHON_INPUT" sha256)
+portable_url=$(nb_lock_value "artifacts.$NB_PYTHON_INPUT" url)
+if [[ $NB_PYTHON_INPUT == python_source ]]; then
+  portable_archive="$input_root/$portable_archive_name"
+else
+  portable_archive="$portable_root/$portable_archive_name"
+fi
+[[ -f $requirements ]] || fail "Serial requirements lock is missing from the project."
 
 verify_portable_archive() {
-  printf '%s  %s\n' "$portable_sha256" "$portable_archive" | sha256sum -c - >/dev/null 2>&1
+  nb_verify_input "$NB_PYTHON_INPUT" "$portable_archive"
 }
 
 download_portable_archive() {
@@ -96,6 +110,20 @@ download_portable_archive() {
 }
 
 prepare_portable_python() {
+  if [[ $NB_PYTHON_INPUT == python_source ]]; then
+    nb_require_compiler || fail "Native compiler prerequisites are incomplete."
+    nb_verify_input python_source "$portable_archive" || fail "Copy approved source input: $portable_archive_name."
+    local source_dir="$runtime_dir/python-source-$NB_ARCH" build_dir="$runtime_dir/python-build-$NB_ARCH"
+    install -d -m 0750 "$source_dir" "$build_dir"
+    tar -xJf "$portable_archive" -C "$source_dir" --strip-components=1 || fail "Python source extraction failed."
+    nb_event build_python "version=$(nb_lock_value "" python_version) architecture=$NB_ARCH prefix=$portable_root/python"
+    (cd "$build_dir" && "$source_dir/configure" --prefix="$portable_root/python" --with-ensurepip=install &&
+      make -j2 && make install) || fail "Native Python build failed; see compiler/configure output above."
+    "$portable_python" -c 'import ssl,sqlite3,bz2,lzma,ctypes,zlib,venv; import sys; assert sys.version_info[:3] == (3,11,16)' \
+      || fail "Built Python is incomplete: install target OS SSL/sqlite/bzip2/xz/ffi/zlib development packages and rebuild."
+    nb_event build_python_complete "architecture=$NB_ARCH executable=$portable_python"
+    return
+  fi
   local extract_dir="$portable_root/.extract-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required to verify the Python runtime."
   command -v tar >/dev/null 2>&1 || fail "tar is required to unpack the Python runtime."
@@ -126,7 +154,7 @@ python_path=
 python_candidates=("$portable_python")
 # Runtime archives must carry the pinned interpreter and cp311 wheels, even
 # when this machine has a suitable system Python for a source-tree deployment.
-if [[ ${NEUROBRIDGE_PORTABLE_PYTHON:-} != 1 ]]; then
+if [[ ${NEUROBRIDGE_PORTABLE_PYTHON:-} != 1 && $NB_PYTHON_INPUT == python_x86_64 ]]; then
   python_candidates+=("$(command -v python3.11 2>/dev/null || true)" \
     "$(command -v python3 2>/dev/null || true)")
 fi
@@ -142,11 +170,19 @@ if [[ -z $python_path ]]; then
   python_path=$portable_python
 fi
 echo "python=$python_path ($("$python_path" --version 2>&1))"
+if [[ $NB_PYTHON_INPUT == python_source ]]; then
+  "$python_path" -c 'import sys; assert sys.version_info[:3] == (3,11,16)' || fail "Expected the locked source Python 3.11.16."
+fi
+"$python_path" -c 'import struct,sys; assert struct.calcsize("P")*8 == int(sys.argv[1]); assert sys.byteorder == "little"' "$NB_BITS" \
+  || fail "Python architecture/byte order does not match the selected profile."
 
-if [[ -d $venv_dir ]] && ! "$venv_dir/bin/python" -c \
-  'import sys; assert sys.version_info >= (3, 11)' >/dev/null 2>&1; then
+venv_check='import sys,struct; assert sys.version_info >= (3,11); assert struct.calcsize("P")*8 == int(sys.argv[1]); assert sys.byteorder == "little"'
+if [[ $NB_PYTHON_INPUT == python_source || ${NEUROBRIDGE_PORTABLE_PYTHON:-} == 1 ]]; then
+  venv_check+='; assert sys.version_info[:3] == (3,11,16)'
+fi
+if [[ -d $venv_dir ]] && ! "$venv_dir/bin/python" -c "$venv_check" "$NB_BITS" >/dev/null 2>&1; then
   venv_backup="$runtime_dir/backups/venv-before-python311-$(date -u +%Y%m%dT%H%M%SZ)"
-  echo "Existing .venv is not Python 3.11+; moving it to: $venv_backup"
+  echo "Existing .venv does not match the selected Python/ABI; moving it to: $venv_backup"
   mv -- "$venv_dir" "$venv_backup"
 fi
 if [[ ! -d $venv_dir ]]; then
@@ -173,13 +209,13 @@ if (( ${#wheel_files[@]} > 0 )); then
     fail "wheelhouse/ is incomplete or failed SHA-256 verification. Copy the complete approved offline package set, then rerun."
   fi
   if ! "$venv_dir/bin/python" -m pip install \
-    --no-index --find-links "$wheelhouse_dir" -r "$root_dir/requirements.lock"; then
-    fail "Offline installation failed. Replace wheelhouse/ with wheels matching Kylin x86_64 and this Python version."
+    --no-index --find-links "$wheelhouse_dir" -r "$requirements"; then
+    fail "Offline installation failed. Replace wheelhouse/ with wheels matching the selected Kylin architecture and Python version."
   fi
 else
   install_mode=current-network
   echo "wheelhouse/ is empty; installing locked dependencies through the current network."
-  if ! "$venv_dir/bin/python" -m pip install -r "$root_dir/requirements.lock"; then
+  if ! "$venv_dir/bin/python" -m pip install -r "$requirements"; then
     fail "Network installation failed. Check network access, or copy the approved wheels into wheelhouse/ and rerun."
   fi
 fi
@@ -190,6 +226,7 @@ PYTHONPATH=$root_dir "$venv_dir/bin/python" -c \
   'import neurobridge, serial, websockets; print("Runtime import check: OK")' \
   || fail "Runtime import check failed. See the setup log for the missing package."
 
+nb_event python_ready "architecture=$NB_ARCH bits=$NB_BITS install_mode=$install_mode requirements=serial-only"
 echo "Python environment ready"
 echo "mode=$install_mode"
 echo "python=$venv_dir/bin/python"

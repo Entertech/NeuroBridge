@@ -41,6 +41,7 @@ def runtime_context() -> dict:
         "kernelVersion": platform.release(),
         "osArchitecture": platform.machine(),
         "pythonVersion": platform.python_version(),
+        "pythonByteOrder": sys.byteorder,
         "pythonArchitecture": f"{struct.calcsize('P') * 8}-bit",
         "environmentQueryError": "",
     }
@@ -63,5 +64,6 @@ def runtime_context() -> dict:
     except OSError as error:
         context["environmentQueryError"] = str(error)
     context["osBits"] = {"x86_64": 64, "AMD64": 64, "aarch64": 64, "ARM64": 64,
-                         "i386": 32, "i686": 32, "x86": 32}.get(context["osArchitecture"], "unknown")
+                         "loongarch64": 64, "loong64": 64, "mips64": 64, "mips64el": 64, "sw64": 64, "sw_64": 64,
+                         "armv7l": 32, "armv8l": 32, "armhf": 32, "i386": 32, "i486": 32, "i586": 32, "i686": 32, "x86": 32}.get(context["osArchitecture"], "unknown")
     return context
