@@ -2,7 +2,14 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.3.0"
+version = "0.4.0"
+
+[[application_release_changes]]
+from_version = "0.3.0"
+to_version = "0.4.0"
+impact = "minor"
+compatibility = "Add optional Kylin bootstrap resource-source arguments and a first-install DEB entry; no-argument installs keep bundled inputs and gateway wire protocol/configuration remain compatible."
+evidence = "Select locked Python/CMake/Eigen/pyserial/websockets inputs by resource name with optional HTTPS URL or local file, preflight before first configure, reverify during native build, and ship the standalone installation entry."
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -275,6 +282,17 @@ locked_at = "2026-10-10"
 external_documents_require_explicit_user_request = true
 default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
+
+[[change_records]]
+id = "2026-10-10-kylin-resource-source-selection"
+date = "2026-10-10"
+scope = "kylin_bootstrap_resource_selection"
+summary = "麒麟引导增加 python/cmake/eigen/pyserial/websockets 资源名及可选 HTTPS URL 或本机文件参数，默认使用包内输入；首次安装入口在 dpkg 前完成架构选择和输入校验，通过一次性临时目录传给首次配置并再次核对锁定摘要，失败不回退来源；增加资源清单查询和随包入口交付。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求基于默认分支新建分支完成资源参数需求；按应用发布门禁登记兼容新增能力，不改变依赖版本或北向报文，不回写已发布指南及协议。仅完成源码和隔离模拟验证；网络下载、各架构本机编译、安装/升级/回滚、USB 实时采集与故障恢复仍须银河麒麟目标机验收，本轮不生成安装包或发布。"
 
 [[change_records]]
 id = "2026-10-10-headset-absent-bootstrap-and-bundle-prd"

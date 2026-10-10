@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
@@ -48,6 +49,7 @@ class Sandbox:
     def relocate(self, text: str) -> str:
         # Only paths and root/OS guards change; transaction control flow is real.
         text = text.replace('[[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run as root."', ":")
+        text = text.replace("[[ ${EUID:-$(id -u)} -eq 0 ]] || fail 'Run as root.'", ":")
         text = text.replace("[[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'Run as root.' >&2; exit 1; }", ":")
         text = text.replace("${ID,,}", "${ID}")
         return re.sub(r"/(?:opt|etc|var|dev|usr/lib)/", lambda match: str(self.root) + match[0], text)
@@ -69,7 +71,28 @@ class Sandbox:
     def platform(self, scripts: Path):
         scripts.mkdir(parents=True, exist_ok=True)
         (scripts / 'platform.sh').write_text(self.relocate((ROOT / 'packaging/kylin/platform.sh').read_text()))
+        (scripts / 'resources.sh').write_text((ROOT / 'packaging/kylin/resources.sh').read_text())
         (scripts / 'kylin-bootstrap-inputs.toml').write_bytes((ROOT / 'config/kylin-bootstrap-inputs.toml').read_bytes())
+
+    def resources(self, scripts: Path):
+        """Small locked input fixtures; never require downloads or real archives."""
+        content = b'approved resource fixture'
+        lock = scripts / 'kylin-bootstrap-inputs.toml'
+        data = tomllib.loads(lock.read_text())
+        text = lock.read_text()
+        for key, item in data['artifacts'].items():
+            text = text.replace(item['sha256'], hashlib.sha256(content).hexdigest())
+            if key == 'python_x86_64':
+                relative = 'python-runtime'
+            elif key in ('pyserial', 'websockets'):
+                relative = 'wheelhouse'
+            else:
+                relative = 'packaging/kylin/offline'
+            path = scripts / 'source' / relative / item['filename']
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        lock.write_text(text)
+        return data, content
 
     def installer(self) -> Path:
         source = self.root / "archive-source"
@@ -264,6 +287,7 @@ class BootstrapLifecycleTests(SandboxTests):
         (old_logs / "build-20000101-old.log").write_text("old build")
         box.env["NEUROBRIDGE_BUILD_LOG_KEEP"] = "1"
         box.platform(scripts)
+        box.resources(scripts)
         for name in ("bootstrap-build.sh", "run-logged.sh"):
             (scripts / name).write_text(box.relocate((ROOT / "packaging/kylin" / name).read_text()))
         installer = scripts / "bootstrap-install.sh"

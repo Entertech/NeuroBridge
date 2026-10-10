@@ -246,8 +246,9 @@ class ReleaseBundleTests(unittest.TestCase):
                     with zipfile.ZipFile(kylin.open("kylin-v10.zip")) as family:
                         self.assertEqual(
                             set(family.namelist()),
-                            {"kylin-v10-all.zip", "docs/kylin-deployment-guide_v1.0.pdf", "docs/protocol.pdf"},
+                            {"kylin-v10-all.zip", "docs/kylin-deployment-guide_v1.0.pdf", "docs/protocol.pdf", "install-bootstrap.sh"},
                         )
+                        self.assertEqual(family.read('install-bootstrap.sh'), (_build_release_bundle.ROOT / 'packaging/kylin/install-bootstrap.sh').read_bytes())
                         self.assertNotIn("docs/windows-deployment-guide_v1.0.pdf", family.namelist())
                         with zipfile.ZipFile(family.open("kylin-v10-all.zip")) as package:
                             self.assertEqual(

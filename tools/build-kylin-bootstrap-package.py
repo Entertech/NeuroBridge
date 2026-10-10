@@ -120,7 +120,7 @@ def stage_payload(root: Path) -> None:
     payload.mkdir(parents=True)
     shutil.copy2(MANIFEST, payload / "kylin-runtime-manifest.toml")
     shutil.copy2(ROOT / "config/kylin-bootstrap-inputs.toml", payload)
-    for script in (FETCH, INSTALL, BUILD, ROOT / "packaging/kylin/run-logged.sh", ROOT / "packaging/kylin/export-install-logs.sh", ROOT / "packaging/kylin/diagnostic-context.sh", ROOT / "packaging/kylin/platform.sh"):
+    for script in (FETCH, INSTALL, BUILD, ROOT / "packaging/kylin/run-logged.sh", ROOT / "packaging/kylin/export-install-logs.sh", ROOT / "packaging/kylin/diagnostic-context.sh", ROOT / "packaging/kylin/platform.sh", ROOT / "packaging/kylin/resources.sh", ROOT / "packaging/kylin/install-bootstrap.sh"):
         destination = payload / script.name
         shutil.copy2(script, destination)
         destination.chmod(0o755)
@@ -306,6 +306,8 @@ def build(fmt: str, output_dir: Path) -> Path:
             write_rpm(root / PAYLOAD_DIR.relative_to("/"), output, work)
     if output.stat().st_size < 1024:
         raise RuntimeError(f"bootstrap package is implausibly small: {output}")
+    if fmt == "deb":
+        shutil.copy2(ROOT / "packaging/kylin/install-bootstrap.sh", output_dir / "install-bootstrap.sh")
     return output
 
 

@@ -165,6 +165,8 @@ def build_system_archives(
             arch_entries: list[dict] = []
             family_documents = {f"docs/{delivery_pdf_name(name)}": payload for name, payload in sorted(platform_documents.get(platform, {}).items())}
             support_files = ["install-with-logs.ps1", "diagnostic-context.ps1", "build-info.txt"] if platform == "windows" else []
+            if platform == "kylin" and RELEASE_MATRIX["kylin"].get("package_kind") == "bootstrap":
+                support_files = ["install-bootstrap.sh"]
             family_stream = io.BytesIO()
             with zipfile.ZipFile(family_stream, "w", zipfile.ZIP_DEFLATED) as family_zip:
                 for architecture, packages in architectures:
@@ -178,6 +180,8 @@ def build_system_archives(
                     add_bytes(family_zip, "install-with-logs.ps1", (ROOT / "packaging/windows/install-with-logs.ps1").read_bytes(), timestamp)
                     add_bytes(family_zip, "diagnostic-context.ps1", (ROOT / "windows/diagnostic-context.ps1").read_bytes(), timestamp)
                     add_bytes(family_zip, "build-info.txt", build_info, timestamp)
+                elif "install-bootstrap.sh" in support_files:
+                    add_bytes(family_zip, "install-bootstrap.sh", (ROOT / "packaging/kylin/install-bootstrap.sh").read_bytes(), timestamp)
             family_data = family_stream.getvalue()
             family_filename = f"{family}.zip"
             family_archives.append((
@@ -314,6 +318,7 @@ def render_bundle_directory_guide(release_manifest: dict, systems: list[dict], d
         "平台目录、系统 ZIP、版本 ZIP 和安装文件分组 ZIP 是不同层级；PDF 与日志工具可能位于版本 ZIP，不在最内层安装包旁。以下路径与名称均由本次交付清单生成。", "",
     ])
     purposes = {'install-with-logs.ps1': '安装并保存失败日志；-Export 导出安装日志',
+                'install-bootstrap.sh': '麒麟引导安装入口；--package 指定 DEB，资源名后可指定 HTTPS URL 或本机文件',
                 'diagnostic-context.ps1': '日志环境采集模块，须与安装日志入口保存在一起',
                 'build-info.txt': '此交付包的应用版本与源码提交'}
     for system in systems:

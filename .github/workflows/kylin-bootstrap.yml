@@ -61,13 +61,15 @@ jobs:
       - name: Build the bootstrap deb
         run: python tools/build-kylin-bootstrap-package.py --format deb --output-dir artifacts
       - name: Record the package digest
-        run: sha256sum artifacts/*.deb | tee artifacts/SHA256SUMS
+        run: sha256sum artifacts/*.deb artifacts/install-bootstrap.sh | tee artifacts/SHA256SUMS
       - name: Check the package carries its source and offline inputs
         run: |
           set -eu
           listing=$(dpkg-deb --contents artifacts/*.deb)
           for required in \
             ./usr/lib/neurobridge-bootstrap/platform.sh \
+            ./usr/lib/neurobridge-bootstrap/resources.sh \
+            ./usr/lib/neurobridge-bootstrap/install-bootstrap.sh \
             ./usr/lib/neurobridge-bootstrap/kylin-bootstrap-inputs.toml \
             ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/offline/Python-3.11.16.tar.xz \
             ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/offline/cmake-3.31.6.tar.gz \
