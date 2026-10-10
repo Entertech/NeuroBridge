@@ -10,7 +10,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。
 
-当前麒麟引导 DEB 安装前须连接耳机：安装器只授权实际 USB TTY 的非 root 所属组，无可用设备或授权失败时中止并提示连接后重试。升级和重装都会使用当前包内源码重新构建并部署，归档固定使用随包 Python；已有服务保留原运行与自启状态，首次安装启用并启动服务。失败回滚恢复原程序、配置、服务单元及状态；卸载自动停止服务、取消自启并移除单元，保留程序目录、配置、日志和录制数据。详细行为及目标机待验收项见[发布工作流技术方案](doc/tech/发布工作流技术方案.md#麒麟引导包安装生命周期)。
+当前麒麟引导 DEB 仅支持 V10 x86_64（Intel/AMD 64 位），不支持 32 位 x86、ARM、龙芯或申威等其他架构。允许未接耳机时安装，服务等待设备；安装器保留实际 USB TTY 非 root 组授权，并为 USB 派生串口安装 `neurobridge` 组、`0660` 权限规则，后续插入无需重装授权。升级和重装都会使用当前包内源码重新构建并部署，归档固定使用随包 Python；已有服务保留原运行与自启状态，首次安装启用并启动服务。失败回滚恢复原程序、配置、服务单元、权限规则及状态；卸载自动停止服务、取消自启并移除单元及本包权限规则，保留程序目录、配置、日志和录制数据。详细行为及目标机待验收项见[发布工作流技术方案](doc/tech/发布工作流技术方案.md#麒麟引导包安装生命周期)。
 
 Windows 原生安装包工作流上传 Artifact 后，手动运行 `Release` 并填写 `native_input_run_id` 选择输入运行；已移除发布输入仓库变量的自动写入与读取。后续自动输入方案接入前，自动 Release 因缺少 Run ID 将 Windows 输入记为 `blocked`，无法完成发布；麒麟引导包不依赖该输入运行。
 
@@ -175,3 +175,5 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 对外文档的 Markdown 独立保存在仓库，PDF 不提交仓库。包含未发布对外文档的 PR 必须先在该 PR 分支运行 `python3 tools/mark-external-documents-published.py --date <YYYY-MM-DD>`，将文档状态、发布日期、摘要、发布记录和锁定区间一并提交；CI 会拒绝仍含未发布文档的 PR，因而无法合入 `master`。PR 的 CI 生成候选包；状态已发布且已锁定的 PR 合入 `master` 后，CI 将四份外部 Markdown 转为 PDF，连同可直接双击打开的 `b-client-test/index.html` 联调网页打包为 `neurobridge-external-documents.zip` 并上传正式 Artifact。`candidate` 仅生成候选包；`publish` 仅允许所有打包源文档已发布且锁定时执行。如需额外生成某个历史正式版本或内部预发布版的北向协议 PDF，可填写 `protocol_version` 和 `protocol_stage`。版本清单见 [版本台账](neurobridge/version_registry.toml)。
 
 安装排错：麒麟安装日志保存在 `/var/log/neurobridge-bootstrap`，服务尚未创建时也可运行 `sudo /usr/lib/neurobridge-bootstrap/export-install-logs.sh --output-dir "$HOME/下载"`。Windows 10/11 64 位包随附 `install-with-logs.ps1`，通过 `-Installer` 安装、`-Export` 导出失败日志；Windows 7 和 32 位目标不参与构建与交付。交付 ZIP 的 PDF 副本使用英文文件名，原名称对照保存在 `metadata/document-filenames.json`。上述源码与模拟验证不替代银河麒麟现场验收。
+
+交付总 ZIP 根目录生成 `PRD.md`，说明实际系统/版本/架构归档、解压顺序、指南位置、校验值、安装与失败日志入口，以及不支持的系统架构；目录列表从本次交付清单生成。需求见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)。

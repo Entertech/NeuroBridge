@@ -63,6 +63,28 @@ done
 
 command -v tar >/dev/null 2>&1 || fail "tar is required to unpack the runtime archive."
 command -v systemctl >/dev/null 2>&1 || fail "systemctl is required to install the service."
+command -v udevadm >/dev/null 2>&1 || fail "udevadm is required to authorize USB serial devices."
+
+rule_name=70-neurobridge-usb-serial.rules
+rule_source=$script_dir/$rule_name
+rule=/etc/udev/rules.d/$rule_name
+rule_marker='# Managed by neurobridge-bootstrap: USB serial access'
+[[ -f $rule_source && ! -L $rule_source ]] || fail "Bundled USB serial rule is missing: $rule_source"
+[[ ! -L $rule ]] || fail "Refusing to replace a linked USB serial rule: $rule"
+had_rule=false
+if [[ -e $rule ]]; then
+  [[ -f $rule ]] && grep -Fxq "$rule_marker" "$rule" \
+    || fail "The existing USB serial rule belongs to another deployment: $rule"
+  had_rule=true
+fi
+
+apply_serial_rules() {
+  udevadm control --reload-rules || return 1
+  # Limit change events to serial candidates; do not trigger unrelated devices.
+  udevadm trigger --action=change --subsystem-match=tty --sysname-match='ttyUSB*' || return 1
+  udevadm trigger --action=change --subsystem-match=tty --sysname-match='ttyACM*' || return 1
+  udevadm settle --timeout=10
+}
 
 unit=/etc/systemd/system/neurobridge.service
 [[ ! -L $unit ]] || fail "Refusing to replace a linked or masked service unit: $unit"
@@ -84,6 +106,7 @@ tree_swapped=false
 service_touched=false
 created_config=false
 committed=false
+rule_touched=false
 
 restore_installation() {
   # Keep the backup if stopping or restoring fails. Never remove a tree from
@@ -109,6 +132,14 @@ restore_installation() {
   fi
   if [[ $created_config == true ]]; then
     rm -f -- /etc/neurobridge/gateway.toml || return 1
+  fi
+  if [[ $rule_touched == true ]]; then
+    if [[ $had_rule == true ]]; then
+      cp -p "$stage/previous.rules" "$rule" || return 1
+    else
+      rm -f -- "$rule" || return 1
+    fi
+    apply_serial_rules || return 1
   fi
   systemctl daemon-reload || return 1
   if [[ $service_was_enabled == true ]]; then
@@ -138,6 +169,7 @@ cleanup() {
 }
 trap cleanup EXIT
 [[ $had_unit == false ]] || cp -p "$unit" "$stage/previous.service"
+[[ $had_rule == false ]] || cp -p "$rule" "$stage/previous.rules"
 
 fetch_args=(--manifest "$manifest" --destination "$download_dir")
 echo 'PHASE verify-archive'
@@ -159,23 +191,27 @@ PYTHONPATH=$stage/payload "$stage/runtime/bin/python" -c 'import neurobridge' \
 
 getent group neurobridge >/dev/null 2>&1 || groupadd --system neurobridge
 id -u neurobridge >/dev/null 2>&1 || useradd --system --gid neurobridge --home-dir /nonexistent --shell /usr/sbin/nologin neurobridge
+usermod -aG neurobridge neurobridge || fail "Cannot grant neurobridge access to its managed USB serial group."
 
-# Only the group of an actual USB-derived TTY can authorize this deployment.
-# No device-group names are assumed, and the root group is never granted.
-serial_authorized=false
+# Retain access through the actual non-root groups of existing devices. The
+# managed udev rule below also authorizes future plug-in without reinstalling.
+serial_candidates=0
 echo 'PHASE authorize-device'
 for device in /dev/ttyACM* /dev/ttyUSB*; do
   [[ -c $device ]] || continue
+  serial_candidates=$((serial_candidates + 1))
   device_group=$(stat -Lc '%G' -- "$device")
-  [[ $device_group != root ]] || continue
-  getent group "$device_group" >/dev/null 2>&1 || continue
+  if [[ $device_group == root ]] || ! getent group "$device_group" >/dev/null 2>&1; then
+    printf 'USB TTY %s group=%s; managed udev rule will provide access.\n' "$device" "$device_group"
+    continue
+  fi
   usermod -aG "$device_group" neurobridge \
     || fail "Cannot grant neurobridge access to $device (group $device_group)."
-  serial_authorized=true
   printf 'Authorized USB TTY group: %s\n' "$device_group"
 done
-[[ $serial_authorized == true ]] \
-  || fail "No usable non-root USB TTY group found. Connect the headset, check device ownership, and rerun the package installation."
+if [[ $serial_candidates -eq 0 ]]; then
+  echo 'DEVICE_STATUS waiting_for_device; no USB TTY present. Installation will continue.'
+fi
 
 install -d -o neurobridge -g neurobridge -m 0750 /var/lib/neurobridge/recordings /var/log/neurobridge
 install -d -o root -g neurobridge -m 0750 /etc/neurobridge
@@ -200,6 +236,11 @@ if [[ $had_unit == true || $service_was_active == true ]]; then
     fail "neurobridge.service did not stop; the installed tree was not changed."
   fi
 fi
+echo 'PHASE configure-hotplug-permissions'
+install -d -o root -g root -m 0755 /etc/udev/rules.d
+rule_touched=true
+install -o root -g root -m 0644 "$rule_source" "$rule"
+apply_serial_rules || fail "Cannot apply USB serial permissions; restoring the previous deployment."
 if [[ -d /opt/neurobridge ]]; then
   mv /opt/neurobridge "$previous_tree/app"
 fi
@@ -225,3 +266,6 @@ committed=true
 
 printf 'NeuroBridge installed from %s\n' "$archive"
 printf 'Configuration: /etc/neurobridge/gateway.toml (left unchanged if it already existed)\n'
+if [[ $serial_candidates -eq 0 ]]; then
+  echo 'Connect the headset to begin live capture; USB serial permissions apply on plug-in. No reinstall is needed.'
+fi

@@ -10,7 +10,8 @@
 schema_version = 1
 
 [runtime]
-application_version = "0.2.0"
+# Generated from neurobridge/version_registry.toml by tools/sync-version-registry.py.
+application_version = "0.2.1"
 os = "kylin"
 os_version = "v10"
 architecture = "x86_64"
@@ -26,7 +27,7 @@ sha256 = ""
 
 # File name of the archive, relative to a published directory or to the local
 # archive directory given at install time.
-file_name = "neurobridge-runtime-0.2.0-kylin-v10-x86_64.tar.gz"
+file_name = "neurobridge-runtime-0.2.1-kylin-v10-x86_64.tar.gz"
 
 # What the archive must contain, checked after extraction and before the
 # service is enabled.  Paths are relative to the extracted runtime root, which

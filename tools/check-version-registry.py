@@ -275,6 +275,9 @@ def main() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     if pyproject["project"]["version"] != application_version:
         fail("run tools/sync-version-registry.py after changing the application version")
+    runtime = tomllib.loads((ROOT / "config/kylin-runtime-manifest.toml").read_text(encoding="utf-8"))["runtime"]
+    if runtime["application_version"] != application_version or runtime["file_name"] != f"neurobridge-runtime-{application_version}-kylin-v10-x86_64.tar.gz":
+        fail("run tools/sync-version-registry.py to update the Kylin runtime manifest version and filename")
 
     generated_client_version = (
         "// Generated from neurobridge/version_registry.toml by tools/sync-version-registry.py.\n"

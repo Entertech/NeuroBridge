@@ -166,6 +166,16 @@ class ReleaseBundleTests(unittest.TestCase):
             manifest = build_bundle(release, documents, output)
             with zipfile.ZipFile(output) as outer:
                 names = set(outer.namelist())
+                prd = outer.read('PRD.md').decode('utf-8')
+                self.assertNotIn('README.txt', names)
+                self.assertIn('麒麟 32 位 x86、ARM/aarch64', prd)
+                self.assertIn('耳机未连接时仍可安装', prd)
+                self.assertIn('kylin-v10-x86_64.zip', prd)
+                self.assertIn('windows-10-x86_64.zip', prd)
+                self.assertIn('windows-11-x86_64.zip', prd)
+                self.assertIn('checksums.sha256', prd)
+                self.assertIn('export-install-logs.sh', prd)
+                self.assertIn('PRD.md', manifest['documents'])
                 self.assertIn("windows/windows.zip", names)
                 self.assertIn("kylin/kylin.zip", names)
                 # internal system PRDs must not ship in the user-facing bundle
@@ -225,6 +235,9 @@ class ReleaseBundleTests(unittest.TestCase):
             build_bundle(release, documents, output)
             with zipfile.ZipFile(output) as outer:
                 names = set(outer.namelist())
+                prd = outer.read('PRD.md').decode('utf-8')
+                self.assertNotIn('windows/windows.zip', prd)
+                self.assertIn('kylin/kylin.zip', prd)
                 # The Windows guide must not appear anywhere once Windows produced no packages.
                 self.assertNotIn(f"windows/{WINDOWS_GUIDE}", names)
                 self.assertNotIn(f"docs/external/{WINDOWS_GUIDE}", names)

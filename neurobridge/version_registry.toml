@@ -277,6 +277,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-10-10-headset-absent-bootstrap-and-bundle-prd"
+date = "2026-10-10"
+scope = "kylin_installation_and_delivery_structure"
+summary = "修复未接耳机时引导安装失败：允许完成部署并等待设备，持久化 USB 派生 ttyUSB/ttyACM 的服务组权限规则，纳入回滚和卸载；诊断增加串口存在性、节点权限及服务组信息。运行时模板版本和归档名由台账同步并校验。总包根目录新增按实际清单生成的 PRD.md，明确解压结构及仅支持 Windows 10/11 x64、麒麟 V10 x86_64 的架构边界。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户提供麒麟安装诊断并确认未连接耳机，明确要求修复后先不打包，并将交付根目录结构说明改为 PRD。真实麒麟日志已验证运行时和 C++ 构建成功，但部署在设备授权阶段退出；当前修复仅作源码与模拟验证，不改变已锁定部署指南或北向协议，不声明 32 位或其他架构已支持，不触发交付包或 PDF 构建。"
+
+[[change_records]]
 id = "2026-10-10-delivery-install-diagnostics"
 date = "2026-10-10"
 scope = "implementation"

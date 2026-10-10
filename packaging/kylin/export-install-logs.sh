@@ -27,6 +27,25 @@ mkdir "$work/install-logs" "$work/build-logs"
     sha256sum /etc/neurobridge/gateway.toml
   fi
 } > "$work/system.txt"
+{
+  printf '=== Service account ===\n'
+  id neurobridge 2>&1 || true
+  printf '\n=== USB serial candidates (no device data) ===\n'
+  found=false
+  for device in /dev/ttyACM* /dev/ttyUSB*; do
+    [[ -c $device ]] || continue
+    found=true
+    stat -Lc 'path=%n mode=%a owner=%U group=%G' -- "$device" 2>&1 || true
+  done
+  [[ $found == true ]] || echo 'No USB serial TTY present; connect the headset and check OS device enumeration.'
+  printf '\n=== Managed hotplug rule ===\n'
+  rule=/etc/udev/rules.d/70-neurobridge-usb-serial.rules
+  if [[ -f $rule && ! -L $rule ]]; then
+    sha256sum "$rule"
+  else
+    echo 'Managed hotplug rule is not installed.'
+  fi
+} > "$work/tty-status.txt"
 for source in /var/log/neurobridge-bootstrap/install-*.log /var/log/neurobridge-bootstrap/build-*.log; do
   [[ -f $source && ! -L $source ]] || continue
   destination=install-logs

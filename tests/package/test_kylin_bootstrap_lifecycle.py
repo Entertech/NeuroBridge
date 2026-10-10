@@ -32,7 +32,7 @@ class Sandbox:
         self.env = {**os.environ, "NB_SANDBOX": str(root),
                     "PATH": str(root / "stubs") + os.pathsep + os.environ["PATH"]}
         for name in ("systemctl", "getent", "id", "groupadd", "useradd", "usermod",
-                     "stat", "uname", "chown", "install"):
+                     "stat", "uname", "chown", "install", "udevadm"):
             path = root / "stubs" / name
             path.write_text(f"#!{sys.executable}\n" + SYSTEM_STUB)
             path.chmod(0o755)
@@ -86,6 +86,8 @@ class Sandbox:
         scripts = self.root / "scripts"
         scripts.mkdir()
         (scripts / "kylin-runtime-manifest.toml").write_text("fetch fixture\n")
+        (scripts / "70-neurobridge-usb-serial.rules").write_bytes(
+            (ROOT / "packaging/kylin/70-neurobridge-usb-serial.rules").read_bytes())
         fetch = scripts / "fetch-runtime.sh"
         fetch.write_text(f'#!/bin/sh\nprintf "%s\\n" "{archive}"\n')
         fetch.chmod(0o755)
@@ -127,8 +129,14 @@ if name == "systemctl":
         state["enabled"] = False
 elif name == "usermod":
     code = int(os.environ.get("NB_DENY_GROUP", "0"))
+    if os.environ.get('NB_DENY_GROUP_NAME') == args[1]:
+        code = 1
     if not code:
         state["groups"].append(args[1])
+elif name == "udevadm":
+    if args[0] == os.environ.get("NB_FAIL_UDEV") and not state.get("udev_failed"):
+        state["udev_failed"] = True
+        code = 1
 elif name == "getent":
     code = 1 if args[-1] == "unknown-group" else 0
 elif name == "stat":
@@ -176,13 +184,13 @@ class BootstrapLifecycleTests(SandboxTests):
         for stamp in ("20000101", "20000102"):
             (old_logs / f"install-{stamp}.log").write_text("old attempt")
         box.env["NEUROBRIDGE_INSTALL_LOG_KEEP"] = "1"
+        box.env["NB_DENY_GROUP"] = "1"
         result = box.run(box.installer())
         self.assertNotEqual(result.returncode, 0)
         logs = list((box.root / "var/log/neurobridge-bootstrap").glob("install-*.log"))
         self.assertEqual(len(logs), 1)
         content = logs[0].read_text()
-        self.assertIn("PHASE authorize-device", content)
-        self.assertIn("No usable non-root USB TTY group", content)
+        self.assertIn("Cannot grant neurobridge access", content)
         self.assertIn("exit_code=1", content)
         self.assertFalse(box.app.exists())
 
@@ -200,6 +208,7 @@ class BootstrapLifecycleTests(SandboxTests):
         self.assertEqual(len(archives), 1)
         with tarfile.open(archives[0]) as archive:
             self.assertTrue(any("install-logs/install-" in name for name in archive.getnames()))
+            self.assertIn(b'No USB serial TTY present', archive.extractfile('./tty-status.txt').read())
             payload = b"\n".join(archive.extractfile(member).read() for member in archive if member.isfile())
             self.assertNotIn(b"do-not-export", payload)
             self.assertNotIn(b"sensitive-device-data", payload)
@@ -241,22 +250,24 @@ exit 7
                 result = box.run(box.installer())
                 self.assertEqual(result.returncode, 0, result.stderr)
                 state = box.state()
-                self.assertEqual(state["groups"], [group])
+                self.assertEqual(state["groups"], ["neurobridge", group])
                 self.assertTrue(state["active"])
                 self.assertTrue(state["enabled"])
                 calls = state["calls"]
                 self.assertLess(calls.index(["usermod", "-aG", group, "neurobridge"]),
                                 calls.index(["systemctl", "start", "neurobridge.service"]))
 
-    def test_unavailable_or_failed_serial_authorization_keeps_old_deployment(self) -> None:
-        for group, denied in ((None, False), ("root", False), ("unknown-group", False),
-                              ("usb-serial", True)):
-            with self.subTest(group=group, denied=denied):
+    def test_failed_serial_authorization_keeps_old_deployment(self) -> None:
+        for group in (None, "usb-serial"):
+            with self.subTest(group=group):
                 box = self.sandbox()
                 box.existing(active=True, enabled=True)
                 if group:
                     box.device(group)
-                box.env["NB_DENY_GROUP"] = str(int(denied))
+                if group:
+                    box.env['NB_DENY_GROUP_NAME'] = group
+                else:
+                    box.env["NB_DENY_GROUP"] = "1"
                 result = box.run(box.installer())
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual((box.app / "version.txt").read_text(), "old-code")
@@ -264,6 +275,53 @@ exit 7
                 self.assertTrue(box.state()["active"])
                 self.assertNotIn(["systemctl", "stop", "neurobridge.service"], box.state()["calls"])
                 self.assertNotIn("root", box.state()["groups"])
+
+    def test_install_without_headset_sets_hotplug_access_and_starts_service(self) -> None:
+        for group in (None, "root", "unknown-group"):
+            with self.subTest(group=group):
+                box = self.sandbox()
+                if group:
+                    box.device(group)
+                result = box.run(box.installer())
+                self.assertEqual(result.returncode, 0, result.stderr)
+                state = box.state()
+                self.assertEqual(state['groups'], ['neurobridge'])
+                self.assertTrue(state['active'])
+                rule = box.root / 'etc/udev/rules.d/70-neurobridge-usb-serial.rules'
+                self.assertEqual(rule.read_bytes(), (ROOT / 'packaging/kylin/70-neurobridge-usb-serial.rules').read_bytes())
+                calls = state['calls']
+                self.assertLess(calls.index(['udevadm', 'settle', '--timeout=10']),
+                                calls.index(['systemctl', 'start', 'neurobridge.service']))
+                if group is None:
+                    self.assertIn('DEVICE_STATUS waiting_for_device', result.stdout)
+                    self.assertIn('No reinstall is needed', result.stdout)
+
+    def test_udev_failure_restores_old_rule_and_deployment(self) -> None:
+        for fail_action in ('control', 'trigger', 'settle'):
+            with self.subTest(fail_action=fail_action):
+                box = self.sandbox()
+                box.existing(active=True, enabled=True)
+                rule = box.root / 'etc/udev/rules.d/70-neurobridge-usb-serial.rules'
+                rule.parent.mkdir(parents=True)
+                old = '# Managed by neurobridge-bootstrap: USB serial access\n# old rule\n'
+                rule.write_text(old)
+                box.env['NB_FAIL_UDEV'] = fail_action
+                result = box.run(box.installer())
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(rule.read_text(), old)
+                self.assertEqual((box.app / 'version.txt').read_text(), 'old-code')
+                self.assertTrue(box.state()['active'])
+                self.assertIn('Rollback completed', result.stdout)
+
+    def test_foreign_serial_rule_is_preserved(self) -> None:
+        box = self.sandbox()
+        rule = box.root / 'etc/udev/rules.d/70-neurobridge-usb-serial.rules'
+        rule.parent.mkdir(parents=True)
+        rule.write_text('# local administrator rule\n')
+        result = box.run(box.installer())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(rule.read_text(), '# local administrator rule\n')
+        self.assertFalse(box.app.exists())
 
     def test_upgrade_replaces_code_and_preserves_service_states(self) -> None:
         for active, enabled in ((True, True), (True, False), (False, True), (False, False)):
@@ -308,6 +366,7 @@ exit 7
         self.assertFalse(box.app.exists())
         self.assertFalse(box.unit.exists())
         self.assertFalse(box.config.exists())
+        self.assertFalse((box.root / 'etc/udev/rules.d/70-neurobridge-usb-serial.rules').exists())
         self.assertFalse(box.state()["active"])
         self.assertFalse(box.state()["enabled"])
 
@@ -349,6 +408,9 @@ class BootstrapMaintainerTests(SandboxTests):
     def test_removal_disables_autostart_and_removes_only_unit(self) -> None:
         box = self.sandbox()
         box.existing(active=True, enabled=True)
+        rule = box.root / 'etc/udev/rules.d/70-neurobridge-usb-serial.rules'
+        rule.parent.mkdir(parents=True)
+        rule.write_bytes((ROOT / 'packaging/kylin/70-neurobridge-usb-serial.rules').read_bytes())
         scripts = self.scripts(box)
         result = box.run(scripts / "prerm", "remove")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -357,6 +419,7 @@ class BootstrapMaintainerTests(SandboxTests):
         result = box.run(scripts / "postrm", "remove")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(box.unit.exists())
+        self.assertFalse(rule.exists())
         self.assertTrue(box.app.exists())
         self.assertEqual(box.config.read_text(), "现场配置\n")
         self.assertEqual(box.run(scripts / "postrm", "purge").returncode, 0)
@@ -373,6 +436,17 @@ class BootstrapMaintainerTests(SandboxTests):
         self.assertTrue(box.unit.exists())
         self.assertTrue(box.state()["active"])
         self.assertTrue(box.state()["enabled"])
+
+    def test_removal_preserves_foreign_serial_rule(self) -> None:
+        box = self.sandbox()
+        box.existing(active=False, enabled=False)
+        rule = box.root / 'etc/udev/rules.d/70-neurobridge-usb-serial.rules'
+        rule.parent.mkdir(parents=True)
+        rule.write_text('# local administrator rule\n')
+        result = box.run(self.scripts(box) / 'postrm', 'remove')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(rule.read_text(), '# local administrator rule\n')
+        self.assertFalse(any(call[0] == 'udevadm' for call in box.state()['calls']))
 
     def test_removal_is_refused_when_stop_fails(self) -> None:
         box = self.sandbox()

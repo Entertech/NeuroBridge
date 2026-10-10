@@ -83,7 +83,7 @@ class BootstrapPackageTests(unittest.TestCase):
 
             self.assertEqual(
                 seen["names"],
-                ["bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "export-install-logs.sh", "fetch-runtime.sh",
+                ["70-neurobridge-usb-serial.rules", "bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "export-install-logs.sh", "fetch-runtime.sh",
                  "kylin-runtime-manifest.toml", "run-logged.sh", "source"],
             )
             self.assertGreater(output.stat().st_size, 1024)
@@ -163,7 +163,7 @@ class BootstrapPackageTests(unittest.TestCase):
 
             self.assertEqual(
                 seen["names"],
-                ["bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "export-install-logs.sh", "fetch-runtime.sh",
+                ["70-neurobridge-usb-serial.rules", "bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "export-install-logs.sh", "fetch-runtime.sh",
                  "kylin-runtime-manifest.toml", "run-logged.sh", "source"],
             )
             self.assertNotIn("eigen3-devel", seen["spec"])

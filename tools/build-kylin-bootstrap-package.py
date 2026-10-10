@@ -60,6 +60,16 @@ remove_our_unit() {
   unit_is_ours || return 0
   rm -f -- "$unit" || return 1
   systemctl daemon-reload
+}
+remove_our_serial_rule() {
+  rule=/etc/udev/rules.d/70-neurobridge-usb-serial.rules
+  [ ! -L "$rule" ] && [ -f "$rule" ] || return 0
+  grep -Fxq '# Managed by neurobridge-bootstrap: USB serial access' "$rule" || return 0
+  rm -f -- "$rule" || return 1
+  udevadm control --reload-rules || return 1
+  udevadm trigger --action=change --subsystem-match=tty --sysname-match='ttyUSB*' || return 1
+  udevadm trigger --action=change --subsystem-match=tty --sysname-match='ttyACM*' || return 1
+  udevadm settle --timeout=10
 }"""
 
 # What the one-time build needs from the repository, copied into the package so
@@ -112,6 +122,7 @@ def stage_payload(root: Path) -> None:
         destination = payload / script.name
         shutil.copy2(script, destination)
         destination.chmod(0o755)
+    shutil.copy2(ROOT / "packaging/kylin/70-neurobridge-usb-serial.rules", payload)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     (payload / "build-info.txt").write_text(f"application_version={APPLICATION_VERSION}\nsource_commit={commit}\n", encoding="utf-8")
     source = payload / "source"
@@ -168,7 +179,7 @@ def deb_control() -> str:
         Priority: optional
         Architecture: {DEB_ARCH}
         Maintainer: Entertech <support@entertech.cn>
-        Depends: ca-certificates, curl, g++, make, tar
+        Depends: ca-certificates, curl, g++, make, tar, udev
         Description: NeuroBridge installer that builds or fetches its runtime
          On one Galaxy Kylin machine, builds the runtime from the bundled
          source and installs it.  On every other machine, installs a runtime
@@ -200,7 +211,7 @@ def write_deb_metadata(root: Path) -> None:
     (debian / "postinst").chmod(0o755)
     for name, action in (
         ("prerm", 'case "${1:-}" in\n  remove) stop_our_unit ;;\nesac\n'),
-        ("postrm", 'case "${1:-}" in\n  remove|purge) remove_our_unit ;;\nesac\n'),
+        ("postrm", 'case "${1:-}" in\n  remove|purge) remove_our_unit; remove_our_serial_rule ;;\nesac\n'),
     ):
         script = debian / name
         script.write_text("#!/bin/sh\nset -eu\n" + UNIT_HELPERS + "\n" + action, encoding="utf-8")
@@ -231,7 +242,7 @@ def write_rpm(payload: Path, output: Path, work: Path) -> None:
         License: Proprietary
         BuildArch: {RPM_ARCH}
         AutoReqProv: no
-        Requires: ca-certificates, curl, gcc-c++, tar
+        Requires: ca-certificates, curl, gcc-c++, make, tar, systemd-udev
 
         %description
         On one Galaxy Kylin machine, builds the runtime from the bundled source
@@ -255,6 +266,7 @@ def write_rpm(payload: Path, output: Path, work: Path) -> None:
         {textwrap.indent(UNIT_HELPERS, '        ').lstrip()}
         if [ "$1" -eq 0 ]; then
           remove_our_unit || exit 1
+          remove_our_serial_rule || exit 1
         fi
 
         %files
