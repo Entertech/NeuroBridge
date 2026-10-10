@@ -183,11 +183,13 @@ def deb_control() -> str:
         Priority: optional
         Architecture: {DEB_ARCH}
         Maintainer: Entertech <support@entertech.cn>
-        Depends: ca-certificates, curl, g++, make, tar, xz-utils, udev, libssl-dev, libsqlite3-dev, libbz2-dev, liblzma-dev, libffi-dev, zlib1g-dev
+        Depends: ca-certificates, curl, g++, make, tar, xz-utils, udev
         Description: NeuroBridge installer that builds or fetches its runtime
          Detects Galaxy Kylin V10 OS/CPU and builds a matching runtime from bundled
          locked dependencies and source. A manually reused runtime must match the
          target OS/CPU; new architectures require physical acceptance.
+         Native Python builds additionally need target SSL/sqlite/bzip2/xz/ffi/zlib
+         development libraries, checked after selecting the host architecture.
     """)
 
 
@@ -246,7 +248,7 @@ def write_rpm(payload: Path, output: Path, work: Path) -> None:
         License: Proprietary
         BuildArch: {RPM_ARCH}
         AutoReqProv: no
-        Requires: ca-certificates, curl, gcc-c++, make, tar, xz, systemd-udev, openssl-devel, sqlite-devel, bzip2-devel, xz-devel, libffi-devel, zlib-devel
+        Requires: ca-certificates, curl, gcc-c++, make, tar, xz, systemd-udev
 
         %description
         Detects Galaxy Kylin V10 OS/CPU and builds a matching runtime from bundled source

@@ -69,3 +69,39 @@ nb_require_compiler() {
     nb_event toolchain "role=$role compiler_triplet=$triplet compiler=$("$compiler" --version | head -n 1) libc=$(getconf GNU_LIBC_VERSION 2>/dev/null || printf unknown)"
   done
 }
+
+# A universal package cannot express architecture-dependent Depends. Probe the
+# actual native headers/linker inputs only for profiles that build CPython.
+# Never invoke apt/dnf from a maintainer script while the package lock is held.
+nb_require_python_development() {
+  if [[ $NB_PYTHON_INPUT != python_source ]]; then
+    nb_event python_prerequisites "architecture=$NB_ARCH mode=bundled development_libraries=not_required"
+    return 0
+  fi
+  nb_require_compiler || return 1
+  local probe_dir index missing= compiler=${CC:-cc}
+  local deb_packages=(libssl-dev libsqlite3-dev libbz2-dev liblzma-dev libffi-dev zlib1g-dev)
+  local rpm_packages=(openssl-devel sqlite-devel bzip2-devel xz-devel libffi-devel zlib-devel)
+  local headers=(openssl/ssl.h sqlite3.h bzlib.h lzma.h ffi.h zlib.h)
+  local symbols=('OPENSSL_init_ssl(0, 0)' 'sqlite3_libversion()' 'BZ2_bzlibVersion()' 'lzma_version_string()' 'ffi_type_void.size' 'zlibVersion()')
+  local libraries=(-lssl -lsqlite3 -lbz2 -llzma -lffi -lz)
+  probe_dir=$(mktemp -d "${TMPDIR:-/tmp}/neurobridge-python-prereq.XXXXXX") || return 1
+  for index in "${!headers[@]}"; do
+    if printf '#include <%s>\nint main(void) { return (%s) ? 0 : 1; }\n' "${headers[$index]}" "${symbols[$index]}" |
+        "$compiler" -x c - -o "$probe_dir/probe" "${libraries[$index]}" > "$probe_dir/compiler.log" 2>&1; then
+      nb_event python_prerequisite "architecture=$NB_ARCH library=${deb_packages[$index]} result=available"
+    else
+      nb_event python_prerequisite "architecture=$NB_ARCH library=${deb_packages[$index]} rpm_library=${rpm_packages[$index]} result=missing_or_unusable"
+      cat "$probe_dir/compiler.log" >&2
+      missing+=" ${deb_packages[$index]}"
+    fi
+  done
+  rm -rf -- "$probe_dir"
+  if [[ -n $missing ]]; then
+    nb_die "missing_python_development architecture=$NB_ARCH deb_packages=${missing# }" || true
+    printf 'For DEB systems, prepare target-native dependencies from the approved repository:\nsudo apt-get install%s\nsudo dpkg --configure neurobridge-bootstrap\n' "$missing" >&2
+    printf 'For RPM systems, check vendor package names: %s\n' "${rpm_packages[*]}" >&2
+    return 1
+  fi
+  nb_event python_prerequisites "architecture=$NB_ARCH mode=source result=ready"
+}

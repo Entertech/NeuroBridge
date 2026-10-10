@@ -111,8 +111,8 @@ download_portable_archive() {
 
 prepare_portable_python() {
   if [[ $NB_PYTHON_INPUT == python_source ]]; then
-    nb_require_compiler || fail "Native compiler prerequisites are incomplete."
     nb_verify_input python_source "$portable_archive" || fail "Copy approved source input: $portable_archive_name."
+    nb_require_python_development || fail "Native Python development dependencies are incomplete; see the repair commands above."
     local source_dir="$runtime_dir/python-source-$NB_ARCH" build_dir="$runtime_dir/python-build-$NB_ARCH"
     install -d -m 0750 "$source_dir" "$build_dir"
     tar -xJf "$portable_archive" -C "$source_dir" --strip-components=1 || fail "Python source extraction failed."

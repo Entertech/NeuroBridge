@@ -28,8 +28,9 @@ archive and its manifest under /var/lib/neurobridge-bootstrap/runtime, then
 installs that archive on this machine.
 
 The package's postinst runs this on install, so it is not normally invoked by
-hand.  It runs as root: the package declares the compiler and Eigen as
-dependencies, and the build happens in a disposable copy of the source tree.
+hand. It runs as root: the package declares common build dependencies and ships
+Eigen. Native Python development libraries are checked for source profiles.
+The build happens in a disposable copy of the source tree.
 EOF
 }
 
@@ -44,6 +45,7 @@ package_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 NB_INPUT_LOCK="$package_dir/kylin-bootstrap-inputs.toml"
 . "$package_dir/platform.sh"
 nb_select_platform || fail "Unsupported Kylin platform; see the selection diagnostics above."
+nb_require_python_development || fail "Native Python development dependencies are incomplete; see the repair commands above."
 
 
 source_root=$package_dir/source
