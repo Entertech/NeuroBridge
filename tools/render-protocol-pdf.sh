@@ -39,9 +39,13 @@ fi
 }
 
 trap 'rm -rf "$render_work"' EXIT
+style_args=(--css "file://${root_dir}/tools/protocol-pdf.css")
+if [[ "$style_path" != "${root_dir}/tools/protocol-pdf.css" ]]; then
+  style_args+=(--css "file://${style_path}")
+fi
 pandoc "$source_path" --from gfm --to html5 --standalone \
   --metadata title="$document_title" \
-  --css "file://${style_path}" \
+  "${style_args[@]}" \
   -o "$html_path"
 "$chrome_path" --headless --no-sandbox --allow-file-access-from-files --user-data-dir="$chrome_profile" \
   --print-to-pdf="$output_path" --no-pdf-header-footer "$html_path"

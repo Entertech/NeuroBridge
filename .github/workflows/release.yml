@@ -363,7 +363,19 @@ jobs:
           mkdir -p "$RUNNER_TEMP/directory-guide" artifacts/directory-guide-preview
           unzip -p artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip bundle-directory-guide.pdf > "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
           pdfinfo "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
-          pdffonts "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" | grep -Eqi "Noto.*CJK|NotoSansCJK"
+          pdffonts "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" | tee "$RUNNER_TEMP/directory-guide/fonts.txt"
+          if ! grep -Eqi "Noto.*(CJK|SansSC|SerifSC)" "$RUNNER_TEMP/directory-guide/fonts.txt"; then
+            # Skia Type3 subsets can appear as [none] in pdffonts despite
+            # retaining the embedded font's name in its FontDescriptor.
+            python - "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" <<'PY'
+          from pathlib import Path
+          import re, sys
+          names = sorted(set(re.findall(rb'/FontName\s*/([^\s/<>\[\]()]+)', Path(sys.argv[1]).read_bytes())))
+          print('PDF font descriptors:', [name.decode('ascii', errors='replace') for name in names])
+          if not any(re.search(rb'Noto.*(?:CJK|SansSC|SerifSC)', name, re.I) for name in names):
+              raise SystemExit('No embedded Noto Chinese font found in the directory PDF')
+          PY
+          fi
           pdftoppm -png -r 144 "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" artifacts/directory-guide-preview/page
       - uses: actions/upload-artifact@v4
         with:
