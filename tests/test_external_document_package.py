@@ -32,17 +32,18 @@ class ExternalDocumentPackageTests(unittest.TestCase):
                 "capture_package",
                 "ssh_operations",
                 "wired_network_operations",
+                "kylin_operations",
                 "windows_operations",
             ],
         )
-        self.assertEqual([document.version for document in documents], ["0.2", "0.1", "1.0", "1.0", "1.0"])
+        self.assertEqual([document.version for document in documents], ["0.2", "0.1", "1.0", "1.0", "1.1", "1.1"])
         self.assertEqual(
             [document.delivery for document in documents],
-            ["always", "always", "review_only", "review_only", "platform_bound"],
+            ["always", "always", "review_only", "review_only", "platform_bound", "platform_bound"],
         )
         self.assertEqual(
             [list(document.platforms) for document in documents],
-            [[], [], [], [], ["windows"]],
+            [[], [], [], [], ["kylin"], ["windows"]],
         )
         self.assertEqual(
             [document.pdf_artifact_name for document in documents],
@@ -51,7 +52,8 @@ class ExternalDocumentPackageTests(unittest.TestCase):
                 "头环数据采集包格式说明_v0.1.pdf",
                 "头环数据网关 SSH 运维操作指南_v1.0.pdf",
                 "头环数据网关有线网络配置指南_v1.0.pdf",
-                "数据网关 Windows 部署与使用指南_v1.0.pdf",
+                "数据网关银河麒麟部署与使用指南_v1.1.pdf",
+                "数据网关 Windows 部署与使用指南_v1.1.pdf",
             ],
         )
 
@@ -61,7 +63,7 @@ class ExternalDocumentPackageTests(unittest.TestCase):
             manifest["unpublishedSourceDocumentCount"],
             sum(document.status == "unpublished" for document in documents),
         )
-        self.assertEqual([item["artifactStatus"] for item in manifest["documents"]], ["candidate"] * 5)
+        self.assertEqual([item["artifactStatus"] for item in manifest["documents"]], ["candidate"] * 6)
         self.assertEqual(
             [item["versionAction"] for item in manifest["documents"]],
             [

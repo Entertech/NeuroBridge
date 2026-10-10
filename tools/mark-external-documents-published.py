@@ -31,6 +31,12 @@ PUBLISHABLE_DOCUMENTS = (
         "scope": "external_windows_operations_document",
         "summary": "发布数据网关 Windows 部署与使用指南。",
     },
+    {
+        "key": "external_kylin_operations",
+        "slug": "kylin-operations",
+        "scope": "external_kylin_operations_document",
+        "summary": "发布数据网关银河麒麟部署与使用指南。",
+    },
 )
 UNPUBLISHED_STATUS = "状态：未发布（评审稿）"
 PUBLISHED_STATUS = "状态：已发布"

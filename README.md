@@ -1,16 +1,20 @@
 # NeuroBridge
 
-NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。运行时首个现场验证基线仍是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机；发布工作流承诺覆盖银河麒麟服务器版/桌面版五架构和 Windows 7/10/11 的 x86/x86_64 全矩阵。网关核心负责串口采集、数据与算法处理、北向协议适配、录播和运行维护。
+NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。运行时首个现场验证基线仍是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机；当前发布矩阵包含一个银河麒麟 V10 通用引导 DEB（all） 和 Windows 10/11 的 x86_64 EXE/MSI 目标。网关核心负责串口采集、数据与算法处理、北向协议适配、录播和运行维护。
 
 统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于 M1 验收范围。
 
-发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。应用版本递增的 `master` 合入尝试全部 32 个包目标；Windows 和麒麟各至少一个合格包、两个平台 ZIP、总 ZIP、清单和日志本地校验成功后，先上传 Actions Artifact，回下载核对上传前总 ZIP 的 SHA-256 和内容，再创建 tag、draft GitHub Release，资产复验后公开。发布基线取带总 ZIP 的已公开正式应用 Release；孤立 tag 和 draft 不代表发布成功，首次发布沿版本历史寻找递增前基线。版本不变的合入记录跳过发布，未完成目标逐项列明。产品版本统一取版本台账的 `[application].version`；旧平台版本字段不参与新发布。当前不启用签名或公证，真机验证结果通过独立补充附件持续记录。
+发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。应用版本递增的 `master` 合入尝试全部 5 个包目标；Windows 和麒麟各至少一个合格包、两个平台 ZIP、总 ZIP、清单和日志本地校验成功后，先上传 Actions Artifact，回下载核对上传前总 ZIP 的 SHA-256 和内容，再创建 tag、draft GitHub Release，资产复验后公开。发布基线取带总 ZIP 的已公开正式应用 Release；孤立 tag 和 draft 不代表发布成功，首次发布沿版本历史寻找递增前基线。版本不变的合入记录跳过发布，未完成目标逐项列明。产品版本统一取版本台账的 `[application].version`；旧平台版本字段不参与新发布。当前不启用签名或公证，真机验证结果通过独立补充附件持续记录。
 
-发布实现及所需的离线安装包输入见[发布工作流技术方案](doc/tech/发布工作流技术方案.md)。当前仓库尚无全部目标的正式安装包构建环境；CI 会把缺失输入记为 `blocked`。PR 仍上传包含全部目标结果的诊断总 ZIP，但不创建 tag 或 GitHub Release。合入 `master` 后，两平台最低门槛未满足时发布失败。源码候选包不算正式安装包。
+发布实现及所需的离线安装包输入见[发布工作流技术方案](doc/tech/发布工作流技术方案.md)。当前仓库尚无全部 Windows 目标的正式安装包构建环境；CI 会把缺失输入记为 `blocked`，麒麟引导 DEB 由托管 runner 从源码和离线输入打包。PR 只执行校验，不打包；合入 `master` 后，两平台最低门槛未满足时发布失败。源码候选包不算正式安装包。
 
 原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。
 
-原生安装包工作流上传 Artifact 后，手动运行 `Release` 并填写 `native_input_run_id` 选择输入运行；已移除发布输入仓库变量的自动写入与读取。后续自动输入方案接入前，自动 Release 因缺少 Run ID 将输入记为 `blocked`，无法完成发布。
+麒麟引导源码按系统/CPU/ABI 选择依赖，Profile 包括 x86_64、aarch64、loongarch64、mips64el、sw64、x86 与 armhf；x86_64 沿用预编译 Python/CMake，其余从锁定源码本机构建。新增架构为待真机验收候选，all 不意味着运行时跨 CPU 通用；详细支持表见[发布 PRD](doc/product/发布工作流%20PRD.md#27-系统与-cpu-架构支持表)。本轮不打包、不推送，已发布指南保持历史范围；最新适配部署步骤见[内部手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md#多架构引导部署补充2026-10-10)。允许未接耳机时安装，服务等待设备；安装器保留实际 USB TTY 非 root 组授权，并为 USB 派生串口安装 `neurobridge` 组、`0660` 权限规则，后续插入无需重装授权。升级和重装都会使用当前包内源码重新构建并部署，归档固定使用随包 Python；已有服务保留原运行与自启状态，首次安装启用并启动服务。失败回滚恢复原程序、配置、服务单元、权限规则及状态；卸载自动停止服务、取消自启并移除单元及本包权限规则，保留程序目录、配置、日志和录制数据。详细行为及目标机待验收项见[发布工作流技术方案](doc/tech/发布工作流技术方案.md#麒麟引导包安装生命周期)。
+
+麒麟通用包只声明共用系统依赖；x86_64 不要求 Python 源码开发库。其余源码 Profile 在构建前检查 SSL/sqlite/bzip2/xz/ffi/zlib 头文件与链接库，失败日志列出缺项和补齐命令。旧候选包在 dpkg 依赖阶段失败时，恢复步骤见[内部手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md#安装前环境与依赖)。
+
+Windows 原生安装包工作流上传 Artifact 后，手动运行 `Release` 并填写 `native_input_run_id` 选择输入运行；已移除发布输入仓库变量的自动写入与读取。后续自动输入方案接入前，自动 Release 因缺少 Run ID 将 Windows 输入记为 `blocked`，无法完成发布；麒麟引导包不依赖该输入运行。
 
 同提交的发布运行串行执行。若上一轮已上传总 ZIP，重试会先校验 Release 中登记的源码和原包摘要、下载检查包内容及安装包一致性，再复用原 ZIP 上传 Actions Artifact，继续公开 Release。PDF 重生成产生的时间差不会替换原资产；安装包或目标结果变化则拒绝复用。
 
@@ -23,6 +27,8 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 2026-09-08 需求审查修复已补充严格配置类型、Kylin V10 运行时检查、600 ms 合同校验、进程内日志轮转、存储错误分类与启动降级、会话控制及候选包摘要预检。默认日志按 10 MiB 轮转并保留 14 份备份；大小轮转归档使用 UTC 时间和唯一随机后缀，当前日志保留固定入口 `neurobridge.log`，命名与保留规则见[内部运行手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md#7-日志在哪里怎么导出)。详细配置、测试和仍未关闭的现场/发布门禁见[需求补齐与验收清单](doc/tech/NeuroBridge项目结构与多系统接入/需求补齐与验收清单.md#7-需求审查后的代码修复)。源码回归不代表目标机或正式安装包验收通过。
 
 仓库现已包含可部署的 Python 网关：`neurobridge/`。银河麒麟目标机固定使用 `data_source.type="serial"` 和 `access.mode="local_browser"`，由同机浏览器通过 `127.0.0.1` 使用 WebSocket。仓库保留的其他策略属于历史兼容代码，不是本次交付能力。
+
+麒麟引导包的 Python 入口按运行时当前位置设置随包标准库路径，安装器规范化代码/运行时权限，并在最终部署目录以服务账户校验网关入口后才启用服务；旧包出现 `No module named 'encodings'` 时，按[内部构建说明](doc/tech/源码原生安装包构建.md#python-标准库定位失败的现场恢复)验证与恢复。源码回归不替代目标机安装、采集和重启验收。
 
 2026-09-10 用户确认耳机首次上电无需 ACK，直接 E1 即可出数。Windows 和银河麒麟现统一并行发现/打开串口与准备算法；已有合法流直接接管，静默设备两项就绪后发送 E1，收到完整合法 28 字节帧才确认连接并创建录制会话。算法复用预备实例，正常停止发送 E0；失败/取消清理候选和算法。不再发送 ACK 或使用停止提示文件，旧配置键兼容保留。详见[验证时序](doc/tech/银河麒麟V10耳机USB串口接入_PRD.md#42-验证时序)。源码回归不替代两平台真实耳机冷启动、停止/整机重启与拔插验收。
 
@@ -92,7 +98,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 | 银河麒麟 V10 x86_64 网关 | [`linux/neurobridge-kylin-bootstrap.sh`](linux/neurobridge-kylin-bootstrap.sh) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。菜单 `1` 完成项目内配置并默认安装/启动 systemd 开机自启服务；菜单 `9` 可查看状态或显式配置为非自启。 |
 | Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 固定 BLE 头环与旧 B 端专网 Profile；源码入口已统一，仍需 M2 实机回归。 |
 | macOS 历史 POC | [`mac/start-poc.command`](mac/start-poc.command) | 已接入统一 Bootstrap/BLE Profile，不属于当前 M1 验收。 |
-| Windows 网关 | [`windows/README.md`](windows/README.md)；[一键操作教程](doc/tech/麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。双击 `windows/neurobridge-windows-bootstrap.cmd` 自动准备配置、构建自检算法，首次管理员授权后安装开机自启服务并打开本机页面；可在菜单关闭自启。用户已确认上述 Windows x64 实机运行成功，新增开机自启仍待实机重启验证。串口发现与算法准备并行，直接 E1 后以合法帧验证；真实耳机新流程复测待完成。Windows 7 独立兼容运行时和专项验收仍待完成；签名不属于当前发布门禁。 |
+| Windows 网关 | [`windows/README.md`](windows/README.md)；[一键操作教程](doc/tech/麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。双击 `windows/neurobridge-windows-bootstrap.cmd` 自动准备配置、构建自检算法，首次管理员授权后安装开机自启服务并打开本机页面；可在菜单关闭自启。用户已确认上述 Windows x64 实机运行成功，新增开机自启仍待实机重启验证。串口发现与算法准备并行，直接 E1 后以合法帧验证；真实耳机新流程复测待完成。Windows 7 与 32 位系统不在交付范围内；签名不属于当前发布门禁。 |
 | 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；明确区分实时耳机连接与 `live`/`replay` 数据来源，原始数据区与解析数据区固定上下排列。 |
 | 本机可视化/兼容 B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 默认由网关在回环地址提供；兼容模式仍可作为独立 B 端联调页。 |
 
@@ -164,10 +170,18 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 - [头环数据采集包格式说明 v0.1](doc/tech/%E5%AF%B9%E5%A4%96/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E9%87%87%E9%9B%86%E5%8C%85%E6%A0%BC%E5%BC%8F%E8%AF%B4%E6%98%8E/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E9%87%87%E9%9B%86%E5%8C%85%E6%A0%BC%E5%BC%8F%E8%AF%B4%E6%98%8E_v0.1.md)：已发布，一键保存 ZIP 的文件、字段和校验规则。
 - [头环数据网关 SSH 运维操作指南 v1.0](doc/tech/%E5%AF%B9%E5%A4%96/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%20SSH%20%E8%BF%90%E7%BB%B4%E6%93%8D%E4%BD%9C%E6%8C%87%E5%8D%97/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%20SSH%20%E8%BF%90%E7%BB%B4%E6%93%8D%E4%BD%9C%E6%8C%87%E5%8D%97_v1.0.md)：已发布，供经授权的外部运维人员操作网关 SSH 服务。
 - [头环数据网关有线网络配置指南 v1.0](doc/tech/%E5%AF%B9%E5%A4%96/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%E6%9C%89%E7%BA%BF%E7%BD%91%E7%BB%9C%E9%85%8D%E7%BD%AE%E6%8C%87%E5%8D%97/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%E6%9C%89%E7%BA%BF%E7%BD%91%E7%BB%9C%E9%85%8D%E7%BD%AE%E6%8C%87%E5%8D%97_v1.0.md)：已发布，供网关交付与 B 端运维人员配置专用有线直连网络。
-- [数据网关 Windows 部署与使用指南 v1.0](doc/tech/%E5%AF%B9%E5%A4%96/%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%20Windows%20%E9%83%A8%E7%BD%B2%E4%B8%8E%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97/%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%20Windows%20%E9%83%A8%E7%BD%B2%E4%B8%8E%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97_v1.0.md)：已发布，供 B 端接入与现场操作人员安装网关、确认运行状态并使用本机控制台。
+- [数据网关 Windows 部署与使用指南 v1.1](doc/tech/%E5%AF%B9%E5%A4%96/%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%20Windows%20%E9%83%A8%E7%BD%B2%E4%B8%8E%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97/%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%20Windows%20%E9%83%A8%E7%BD%B2%E4%B8%8E%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97_v1.0.md)：已发布，供 B 端接入与现场操作人员安装网关、确认运行状态并使用本机控制台。
 
 ### 其他文档
 
 - [B 端联调网页](web/b-client-test/README.md)：零依赖的浏览器测试工具，可连接网关并测试 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。
 
 对外文档的 Markdown 独立保存在仓库，PDF 不提交仓库。包含未发布对外文档的 PR 必须先在该 PR 分支运行 `python3 tools/mark-external-documents-published.py --date <YYYY-MM-DD>`，将文档状态、发布日期、摘要、发布记录和锁定区间一并提交；CI 会拒绝仍含未发布文档的 PR，因而无法合入 `master`。PR 的 CI 生成候选包；状态已发布且已锁定的 PR 合入 `master` 后，CI 将四份外部 Markdown 转为 PDF，连同可直接双击打开的 `b-client-test/index.html` 联调网页打包为 `neurobridge-external-documents.zip` 并上传正式 Artifact。`candidate` 仅生成候选包；`publish` 仅允许所有打包源文档已发布且锁定时执行。如需额外生成某个历史正式版本或内部预发布版的北向协议 PDF，可填写 `protocol_version` 和 `protocol_stage`。版本清单见 [版本台账](neurobridge/version_registry.toml)。
+
+安装排错：麒麟安装日志保存在 `/var/log/neurobridge-bootstrap`，服务尚未创建时也可运行 `sudo /usr/lib/neurobridge-bootstrap/export-install-logs.sh --output-dir "$HOME/下载"`。Windows 10/11 64 位包随附 `install-with-logs.ps1`，通过 `-Installer` 安装、`-Export` 导出失败日志；Windows 7 和 32 位目标不参与构建与交付。交付 ZIP 的 PDF 副本使用英文文件名，原名称对照保存在 `metadata/document-filenames.json`。上述源码与模拟验证不替代银河麒麟现场验收。
+
+交付总 ZIP 根目录生成 `bundle-directory-guide.pdf`（《NeuroBridge 交付包目录说明》），面向部署人员介绍各层压缩包、解压顺序、安装包与部署指南、日志工具及校验资料的位置；按本次实际清单生成，不再交付根目录 `PRD.md`。PDF 使用英文文件名、中文标题和正文。需求见[发布工作流 PRD](doc/product/发布工作流%20PRD.md#26-总包根目录-pdf-目录说明)。
+
+详细支持表及扩展架构影响见[发布工作流 PRD §2.7–2.9](doc/product/发布工作流%20PRD.md#27-系统与-cpu-架构支持表)：Windows 保持 10/11 x86_64；麒麟新增六个源码构建候选 Profile，与既有 x86_64 共用引导入口。运行时依然须匹配 CPU/ABI，各架构分别完成算法与 USB 真机验收；既有 N100/N150 结果不能替代其他架构。
+
+两平台安装与运行日志导出新增诊断上下文，记录软件版本/源码提交、安装包版本/提交、导出时间、系统版本/构建、CPU 架构/位数、Python 与脚本环境。Windows 为 `diagnostic-context.json`（安装导出带时间后缀），麒麟为 `diagnostic-context.txt`；磁盘部署版本与安装包版本分别标识，缺失值写 `unknown`，服务状态另行记录。网页日志下载也附运行进程的版本和环境；配置正文、全量环境变量和录制数据不导出。麒麟运行日志可用 `sudo /opt/neurobridge/kylin/export-logs.sh --output-dir "$HOME/下载"` 导出；Windows 用安装目录 `windows/export-logs.ps1 -OutputDirectory C:\Temp`。

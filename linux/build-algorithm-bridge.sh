@@ -8,13 +8,18 @@ fail() {
   exit 1
 }
 
-[[ ${EUID} -ne 0 ]] || fail "Do not build the SDK bridge as root. Use a dedicated POC operator account."
-[[ $(uname -m) == "x86_64" ]] || fail "The first-release algorithm bridge supports Linux x86_64 only."
+[[ ${EUID} -ne 0 || ${NEUROBRIDGE_BOOTSTRAP:-} == 1 ]] || fail "Do not build the SDK bridge as root. Use a dedicated POC operator account."
+
 [[ -r /etc/os-release ]] || fail "Cannot identify the operating system."
 . /etc/os-release
 case ${ID,,} in
-  ubuntu) platform=ubuntu; eigen_lock_key=ubuntu_24_04_x86_64 ;;
-  kylin) platform=galaxy-kylin; eigen_lock_key=galaxy_kylin_v10_x86_64 ;;
+  ubuntu) [[ $(uname -m) == x86_64 ]] || fail "Ubuntu compatibility build requires x86_64."; platform=ubuntu; eigen_lock_key=ubuntu_24_04_x86_64 ;;
+  kylin)
+    repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+    NB_INPUT_LOCK="$repo_root/config/kylin-bootstrap-inputs.toml"
+    . "$repo_root/packaging/kylin/platform.sh"
+    nb_select_platform && nb_require_compiler || fail "Kylin CPU/compiler selection failed."
+    platform=galaxy-kylin; eigen_lock_key=$NB_EIGEN_LOCK ;;
   *) fail "The algorithm bridge build supports Ubuntu or Galaxy Kylin; detected ID=${ID:-unknown}." ;;
 esac
 
@@ -42,8 +47,13 @@ except ValueError:
     raise SystemExit(1)
 raise SystemExit(0 if version >= (3, 22) else 1)
 PY
+# A bundled Eigen (NEUROBRIDGE_EIGEN_PREFIX) is searched before the system one.
+# The bootstrap package sets it to the locked 3.3.7 tree, so a different Eigen
+# already installed on the machine cannot be picked up instead.
+eigen_prefix=${NEUROBRIDGE_EIGEN_PREFIX:-}
 eigen_config=
 for candidate in \
+  ${eigen_prefix:+$eigen_prefix/share/eigen3/cmake/Eigen3Config.cmake} \
   /usr/share/eigen3/cmake/Eigen3Config.cmake \
   /usr/lib/cmake/eigen3/Eigen3Config.cmake \
   /usr/lib64/cmake/eigen3/Eigen3Config.cmake \
@@ -53,9 +63,14 @@ for candidate in \
     break
   fi
 done
-[[ -n $eigen_config && -d /usr/include/eigen3 ]] || fail \
+if [[ -n $eigen_prefix ]]; then
+  eigen_include=$eigen_prefix/include/eigen3
+else
+  eigen_include=/usr/include/eigen3
+fi
+[[ -n $eigen_config && -d $eigen_include ]] || fail \
   "Eigen3 headers/CMake configuration are missing. Install the approved Eigen3 development package for $platform."
-eigen_macros=/usr/include/eigen3/Eigen/src/Core/util/Macros.h
+eigen_macros=$eigen_include/Eigen/src/Core/util/Macros.h
 [[ -f $eigen_macros ]] || fail "Eigen3 version header is missing: $eigen_macros"
 eigen_version=$(awk '
   $2 == "EIGEN_WORLD_VERSION" { world=$3 }
@@ -104,7 +119,7 @@ cmake -Wno-dev -S "$repo_root/mac/algorithm_bridge" -B "$build_root/bridge" \
   -DCMAKE_BUILD_TYPE=Release \
   -DAFFECTIVE_SDK_SOURCE_DIR="$sdk_dir" \
   -DNUMCPP_NO_USE_BOOST=ON \
-  -DCMAKE_PREFIX_PATH="/usr;$numcpp_prefix"
+  -DCMAKE_PREFIX_PATH="${eigen_prefix:+$eigen_prefix;}/usr;$numcpp_prefix"
 cmake --build "$build_root/bridge" --parallel 2
 
 install -m 0755 "$build_root/bridge/bin/neurobridge_affective_bridge" "$output_dir/neurobridge_affective_bridge"

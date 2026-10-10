@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "neurobridge" / "version_registry.toml"
 CLIENT_VERSION_PATH = ROOT / "web" / "b-client-test" / "version.js"
 PYPROJECT_PATH = ROOT / "pyproject.toml"
+KYLIN_RUNTIME_MANIFEST_PATH = ROOT / "config" / "kylin-runtime-manifest.toml"
 
 
 def render_change_log(registry: dict) -> str:
@@ -88,6 +89,18 @@ def main() -> None:
     if replacements != 1:
         raise SystemExit("Unable to update project version in pyproject.toml")
     PYPROJECT_PATH.write_text(updated_pyproject, encoding="utf-8")
+    manifest_text = KYLIN_RUNTIME_MANIFEST_PATH.read_text(encoding="utf-8")
+    for key, value in (
+        ("application_version", application_version),
+        ("file_name", f"neurobridge-runtime-{application_version}-kylin-v10-x86_64.tar.gz"),
+    ):
+        manifest_text, count = re.subn(
+            rf'(?m)^({key}\s*=\s*)"[^"]+"$',
+            rf'\g<1>"{value}"', manifest_text,
+        )
+        if count != 1:
+            raise SystemExit(f"Unable to update {key} in Kylin runtime manifest")
+    KYLIN_RUNTIME_MANIFEST_PATH.write_text(manifest_text, encoding="utf-8")
     change_log_path = ROOT / registry["change_policy"]["change_log_path"]
     change_log_path.parent.mkdir(parents=True, exist_ok=True)
     change_log_path.write_text(render_change_log(registry), encoding="utf-8")

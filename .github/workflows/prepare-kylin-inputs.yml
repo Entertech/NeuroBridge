@@ -1,0 +1,26 @@
+name: Prepare Kylin dependencies
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Download and verify locked dependency inputs
+        run: python tools/prepare-kylin-bootstrap-inputs.py --download
+      - uses: actions/cache/save@v4
+        with:
+          path: .runtime/kylin-bootstrap-inputs
+          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kylin-verified-dependency-inputs
+          path: .runtime/kylin-bootstrap-inputs
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30

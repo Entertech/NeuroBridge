@@ -1,0 +1,37 @@
+# Default runtime manifest template; version is synced from the registry.
+# The native builder replaces architecture/file_name/sha256 for the detected
+# Kylin V10 CPU. A built archive is reusable only on the same OS/CPU profile.
+#
+# `url` is intentionally empty until an operator publishes an archive and
+# records where it can be fetched.  A bootstrap package built while it is
+# empty can only install from a local archive passed to its fetch step.
+
+schema_version = 1
+
+[runtime]
+# Generated from neurobridge/version_registry.toml by tools/sync-version-registry.py.
+application_version = "0.3.0"
+os = "kylin"
+os_version = "v10"
+architecture = "x86_64"
+
+# Where the bootstrap installer downloads the archive from.  Leave empty to
+# require a local archive; an installer never guesses a location.
+url = ""
+
+# sha256 of the archive named below.  Empty until the first archive is built;
+# the build script fills it in and refuses to package an archive whose digest
+# does not match.
+sha256 = ""
+
+# File name of the archive, relative to a published directory or to the local
+# archive directory given at install time.
+file_name = "neurobridge-runtime-0.3.0-kylin-v10-x86_64.tar.gz"
+
+# What the archive must contain, checked after extraction and before the
+# service is enabled.  Paths are relative to the extracted runtime root, which
+# is the same layout native packages stage under /opt/neurobridge/runtime.
+required_executables = [
+  "bin/python",
+  "bin/neurobridge_affective_bridge",
+]

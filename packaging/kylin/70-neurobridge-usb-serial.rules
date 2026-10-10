@@ -1,0 +1,4 @@
+# Managed by neurobridge-bootstrap: USB serial access
+# Restrict access to USB-derived serial nodes; never grant the root group.
+SUBSYSTEM=="tty", KERNEL=="ttyUSB[0-9]*", SUBSYSTEMS=="usb", GROUP="neurobridge", MODE="0660"
+SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*", SUBSYSTEMS=="usb", GROUP="neurobridge", MODE="0660"

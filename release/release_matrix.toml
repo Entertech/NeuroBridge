@@ -7,26 +7,26 @@ require_all_matrix_targets = false
 minimum_packages_per_platform = 1
 
 [windows]
-versions = ["7", "10", "11"]
-architectures = ["x86", "x86_64"]
+versions = ["10", "11"]
+architectures = ["x86_64"]
 formats = ["exe", "msi"]
-expected_package_count = 12
+expected_package_count = 4
 installer_tool = "wix-toolset-with-burn"
 installer_tool_major = 7
-windows_7_baseline = "SP1"
-windows_7_browser_baseline = "Edge 109"
-windows_7_python = "3.8.10"
 windows_10_11_python_line = "3.11"
-windows_7_requires_compatibility_port = true
 
+# The Kylin deliverable is one bootstrap package. It carries the gateway source
+# and builds the runtime on the machine it is installed on, so the release does
+# not prebuild a package per edition, architecture and format.
 [kylin]
-editions = ["server", "desktop"]
-architectures = ["x86_64", "arm64", "loongarch64", "mips64el", "sw64"]
-formats = ["deb", "rpm"]
-expected_package_count = 20
+editions = ["v10"]
+architectures = ["all"]
+formats = ["deb"]
+expected_package_count = 1
+package_kind = "bootstrap"
 
 [aggregate]
-expected_package_count = 32
+expected_package_count = 5
 platform_archives = ["windows", "kylin"]
 file_name_pattern = "neurobridge-v<applicationVersion>-<buildDate>.zip"
 

@@ -161,7 +161,7 @@
         "target": { "type": "string", "enum": ["windows", "kylin"] },
         "osVersion": { "type": "string", "minLength": 1 },
         "edition": { "type": "string", "enum": ["server", "desktop", "none"] },
-        "architecture": { "type": "string", "enum": ["x86", "x86_64", "arm64", "loongarch64", "mips64el", "sw64"] },
+        "architecture": { "type": "string", "enum": ["x86", "x86_64", "arm64", "loongarch64", "mips64el", "sw64", "all"] },
         "format": { "type": "string", "enum": ["exe", "msi", "deb", "rpm"] },
         "status": { "const": "candidate" },
         "fileName": { "type": "string", "minLength": 1 },
@@ -187,7 +187,7 @@
             "properties": {
               "osVersion": { "const": "V10" },
               "edition": { "enum": ["server", "desktop"] },
-              "architecture": { "enum": ["x86_64", "arm64", "loongarch64", "mips64el", "sw64"] },
+              "architecture": { "enum": ["x86_64", "arm64", "loongarch64", "mips64el", "sw64", "all"] },
               "format": { "enum": ["deb", "rpm"] }
             }
           }

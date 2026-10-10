@@ -1,0 +1,96 @@
+# Architecture selection and approved dependency inputs. No implicit downloads.
+schema_version = 1
+python_version = "3.11.16"
+cmake_version = "3.31.6"
+eigen_version = "3.3.7"
+
+[profiles.x86_64]
+bits = "64"
+deb_arch = "amd64"
+rpm_arch = "x86_64"
+python = "python_x86_64"
+cmake = "cmake_x86_64"
+eigen_lock = "galaxy_kylin_v10_x86_64"
+
+[profiles.aarch64]
+bits = "64"
+deb_arch = "arm64"
+rpm_arch = "aarch64"
+python = "python_source"
+cmake = "cmake_source"
+eigen_lock = "galaxy_kylin_v10_native"
+
+[profiles.loongarch64]
+bits = "64"
+deb_arch = "loong64"
+rpm_arch = "loongarch64"
+python = "python_source"
+cmake = "cmake_source"
+eigen_lock = "galaxy_kylin_v10_native"
+
+[profiles.mips64el]
+bits = "64"
+deb_arch = "mips64el"
+rpm_arch = "mips64el"
+python = "python_source"
+cmake = "cmake_source"
+eigen_lock = "galaxy_kylin_v10_native"
+
+[profiles.sw64]
+bits = "64"
+deb_arch = "sw64"
+rpm_arch = "sw_64"
+python = "python_source"
+cmake = "cmake_source"
+eigen_lock = "galaxy_kylin_v10_native"
+
+[profiles.x86]
+bits = "32"
+deb_arch = "i386"
+rpm_arch = "i686"
+python = "python_source"
+cmake = "cmake_source"
+eigen_lock = "galaxy_kylin_v10_native"
+
+[profiles.armhf]
+bits = "32"
+deb_arch = "armhf"
+rpm_arch = "armv7hl"
+python = "python_source"
+cmake = "cmake_source"
+eigen_lock = "galaxy_kylin_v10_native"
+
+[artifacts.python_x86_64]
+filename = "cpython-3.11.16+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260825/cpython-3.11.16+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz"
+sha256 = "25844eb97cdc72cdc78addaad0969ce3b2133a4de54bfcfa4d57f8a6d095eaab"
+
+[artifacts.python_source]
+filename = "Python-3.11.16.tar.xz"
+url = "https://www.python.org/ftp/python/3.11.16/Python-3.11.16.tar.xz"
+sha256 = "91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8"
+
+[artifacts.cmake_x86_64]
+filename = "cmake-3.31.6-linux-x86_64.tar.gz"
+url = "https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-linux-x86_64.tar.gz"
+sha256 = "5a1133ff103c71eb5120e2cc3de922733e7d8a26a98ae716397e8676adb367bf"
+
+[artifacts.cmake_source]
+filename = "cmake-3.31.6.tar.gz"
+url = "https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6.tar.gz"
+sha256 = "653427f0f5014750aafff22727fb2aa60c6c732ca91808cfb78ce22ddd9e55f0"
+
+[artifacts.eigen]
+filename = "eigen-3.3.7.tar.gz"
+url = "https://gitlab.com/libeigen/eigen/-/archive/3.3.7/eigen-3.3.7.tar.gz"
+sha256 = "b6363950528209f9e15bd022819c0b8b4f6cb2c192d629db5e69157bff79df34"
+
+[artifacts.pyserial]
+filename = "pyserial-3.5-py2.py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/07/bc/587a445451b253b285629263eb51c2d8e9bcea4fc97826266d186f96f558/pyserial-3.5-py2.py3-none-any.whl"
+sha256 = "c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0"
+
+[artifacts.websockets]
+filename = "websockets-12.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/79/4d/9cc401e7b07e80532ebc8c8e993f42541534da9e9249c59ee0139dcb0352/websockets-12.0-py3-none-any.whl"
+sha256 = "dc284bbc8d7c78a6c69e0c7325ab46ee5e40bb4d50e494d8131a07ef47500e9e"

@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import zipfile
 
-from tools.release_pipeline import ROOT, log, require_digest, save_json, sha256, version_tuple
+from tools.release_pipeline import CONFIG, ROOT, log, require_digest, save_json, sha256, version_tuple
 
 ARCHIVE_CHECKPOINT = "<!-- neurobridge-verified-archive\n"
 
@@ -115,10 +115,11 @@ def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
         if outer.testzip() is not None:
             raise ValueError("release bundle CRC verification failed")
         names = set(outer.namelist())
-        required = {"metadata/bundle-manifest.json", "metadata/build-manifest.json", "metadata/release-logs.jsonl"}
+        required = {"bundle-directory-guide.pdf", "metadata/bundle-manifest.json", "metadata/build-manifest.json", "metadata/release-logs.jsonl"}
         required.update(bundle_manifest.get("documents", []))
         required.update(bundle_manifest.get("systemDocuments", []))
         required.update(bundle_manifest.get("validationFiles", []))
+        required.update(bundle_manifest.get("metadataFiles", []))
         for system in bundle_manifest.get("systemArchives", []):
             path = system["fileName"]
             required.add(path)
@@ -142,7 +143,8 @@ def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
                             raise ValueError(f"variant archive is corrupt: {variant['fileName']}")
                         expected_architectures = {item["fileName"] for item in variant.get("architectureArchives", [])}
                         expected_documents = set(variant.get("documents", []))
-                        if set(variant_zip.namelist()) != expected_architectures | expected_documents:
+                        expected_support = set(variant.get("supportFiles", []))
+                        if set(variant_zip.namelist()) != expected_architectures | expected_documents | expected_support:
                             raise ValueError(f"variant archive contents mismatch: {variant['fileName']}")
                         for item in variant.get("architectureArchives", []):
                             architecture_data = variant_zip.read(item["fileName"])
@@ -160,6 +162,8 @@ def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
                                         raise ValueError(f"package hash mismatch: {package['fileName']}")
         if not required.issubset(names) or names != required:
             raise ValueError("release bundle is missing documented or metadata entries")
+        if not outer.read('bundle-directory-guide.pdf').startswith(b'%PDF-'):
+            raise ValueError('release bundle directory guide is not a PDF')
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -278,8 +282,9 @@ def publish(directory: Path, expected_sha256: str) -> dict:
         raise ValueError("manifest commit, release state or trigger does not match this checkout")
     if manifest["git"]["dirty"] or command("git", "status", "--porcelain", "--untracked-files=no"):
         raise ValueError("release checkout is dirty")
-    if len(manifest["coverage"]["windows"]["targetResults"]) != 12 or len(manifest["coverage"]["kylin"]["targetResults"]) != 20:
-        raise ValueError("manifest lacks results for all 32 targets")
+    expected_counts = {"windows": CONFIG["windows"]["expected_package_count"], "kylin": CONFIG["kylin"]["expected_package_count"]}
+    if any(len(manifest["coverage"][platform]["targetResults"]) != count for platform, count in expected_counts.items()):
+        raise ValueError("manifest lacks results for every release target")
     if any(manifest["coverage"][platform]["builtPackageCount"] < 1 for platform in ("windows", "kylin")):
         raise ValueError("minimum per-platform package gate failed")
     if not archive.is_file() or sha256(archive) != manifest["aggregateArchive"]["sha256"]:
@@ -303,7 +308,7 @@ def publish(directory: Path, expected_sha256: str) -> dict:
     else:
         release_log = directory / "release-logs.jsonl"
         release_log_text = release_log.read_text(encoding="utf-8") if release_log.is_file() else ""
-    if len(release_log_text.splitlines()) != 32:
+    if len(release_log_text.splitlines()) != sum(expected_counts.values()):
         raise ValueError("release logs missing or incomplete")
     logged = {entry["target"]["id"]: entry["status"] for entry in (json.loads(line) for line in release_log_text.splitlines())}
     expected_logged = {item["targetId"]: item["status"] for platform in ("windows", "kylin") for item in manifest["coverage"][platform]["targetResults"]}

@@ -101,7 +101,7 @@ jobs:
             name=$(basename "$pdf_path" .pdf)
             pdftoppm -png -r 144 "$pdf_path" "artifacts/document-preview/$name"
           done
-          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 5
+          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 6
       - uses: actions/upload-artifact@v4
         with:
           name: external-document-package
@@ -173,10 +173,17 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # A tag/draft left by a failed attempt is not a successful release.
           # Before the first public release, inspect the full version history.
-          python tools/release_pipeline.py gate --repository "$GITHUB_REPOSITORY" --output "$RUNNER_TEMP/release-gate.json"
+          gate_args=(--repository "$GITHUB_REPOSITORY")
+          # A manual feature-branch bundle uses the same baseline as its PR;
+          # unpublished intermediate versions are not public release state.
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$SOURCE_BRANCH" != "$DEFAULT_BRANCH" ]]; then
+            gate_args=(--base "origin/$DEFAULT_BRANCH")
+          fi
+          python tools/release_pipeline.py gate "${gate_args[@]}" --output "$RUNNER_TEMP/release-gate.json"
           python tools/release_pipeline.py plan --output "$RUNNER_TEMP/release-matrix.json" > "$RUNNER_TEMP/release-matrix.log"
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
@@ -229,7 +236,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      # The Kylin deliverable is the bootstrap package. It is built here from
+      # the checked-out source and does not consume a prebuilt runtime input.
+      - name: Restore approved Kylin dependency cache
+        id: kylin-cache
+        continue-on-error: true
+        if: matrix.platform == 'kylin'
+        uses: actions/cache/restore@v4
+        with:
+          path: .runtime/kylin-bootstrap-inputs
+          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
+          fail-on-cache-miss: true
+      - name: Record missing Kylin dependency cache
+        if: matrix.platform == 'kylin' && steps.kylin-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "artifacts/targets/${{ matrix.id }}"
+          printf '%s\n' 'blocked: approved Kylin dependency cache missing; prepare and verify locked inputs first' > "artifacts/targets/${{ matrix.id }}/input-fetch.log"
+      - name: Build the Kylin bootstrap package
+        if: matrix.platform == 'kylin' && steps.kylin-cache.outputs.cache-hit == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mkdir -p "artifacts/targets/${{ matrix.id }}"
+          exec > >(tee "artifacts/targets/${{ matrix.id }}/input-fetch.log") 2>&1
+          trap 'status=$?; if [[ $status -ne 0 ]]; then printf "blocked: Kylin dependency/package build failed exit_code=%s; see this log\n" "$status"; fi' EXIT
+          sudo apt-get update && sudo apt-get install -y dpkg-dev
+          python tools/prepare-kylin-bootstrap-inputs.py
+          python tools/build-kylin-bootstrap-package.py --format deb --output-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}"
+          python tools/write-kylin-bootstrap-verification.py \
+            --target "${{ matrix.id }}" \
+            --input-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}"
       - name: Retrieve approved offline target input
+        if: matrix.platform != 'kylin'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -256,6 +294,7 @@ jobs:
             fi
           fi
       - name: Verify target package and write result log
+        if: always()
         shell: bash
         env:
           TARGET_ID: ${{ matrix.id }}
@@ -301,6 +340,11 @@ jobs:
           # gate, so a manual branch build is deliberately the relaxed mode.
           RELEASE_TRIGGER: ${{ github.event_name == 'workflow_run' && 'push_master' || 'pull_request' }}
         run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER"
+      - name: Install delivery directory PDF renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
+          fc-cache -f
       - name: Assemble one user-facing release bundle
         id: bundle
         env:
@@ -314,6 +358,31 @@ jobs:
             python -m tools.publish_release --reuse-bundle artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
           fi
           printf 'archive_sha256=%s\n' "$(sha256sum artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Check directory PDF and render every page
+        run: |
+          mkdir -p "$RUNNER_TEMP/directory-guide" artifacts/directory-guide-preview
+          unzip -p artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip bundle-directory-guide.pdf > "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
+          pdfinfo "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
+          pdffonts "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" | tee "$RUNNER_TEMP/directory-guide/fonts.txt"
+          if ! grep -Eqi "Noto.*(CJK|SansSC|SerifSC)" "$RUNNER_TEMP/directory-guide/fonts.txt"; then
+            # Skia Type3 subsets can appear as [none] in pdffonts despite
+            # retaining the embedded font's name in its FontDescriptor.
+            python - "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" <<'PY'
+          from pathlib import Path
+          import re, sys
+          names = sorted(set(re.findall(rb'/FontName\s*/([^\s/<>\[\]()]+)', Path(sys.argv[1]).read_bytes())))
+          print('PDF font descriptors:', [name.decode('ascii', errors='replace') for name in names])
+          if not any(re.search(rb'Noto.*(?:CJK|SansSC|SerifSC)', name, re.I) for name in names):
+              raise SystemExit('No embedded Noto Chinese font found in the directory PDF')
+          PY
+          fi
+          pdftoppm -png -r 144 "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" artifacts/directory-guide-preview/page
+      - uses: actions/upload-artifact@v4
+        with:
+          name: delivery-directory-guide-preview-${{ env.SOURCE_SHA }}
+          path: artifacts/directory-guide-preview/
+          if-no-files-found: error
+          retention-days: 30
       - uses: actions/upload-artifact@v4
         id: upload
         with:

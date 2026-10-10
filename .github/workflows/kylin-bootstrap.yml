@@ -1,0 +1,95 @@
+name: Kylin bootstrap package
+
+# Builds the Kylin bootstrap deb, the package that carries the gateway source
+# and builds its own runtime when installed on Galaxy Kylin.  Nothing in it is
+# compiled, so it builds on a plain Ubuntu runner with dpkg-deb; it does not
+# need the self-hosted Kylin runner.  The deb is an Actions artifact, not a
+# release asset: installing it is what produces the runtime, on the Kylin
+# machine itself.
+#
+# A pull request never builds it.  The two ways in match release.yml:
+#
+#   * after the "Test" workflow completes successfully on a push to master; and
+#   * a manual dispatch, which builds the latest commit of the chosen branch.
+#
+# `workflow_run` reports the default-branch tip in github.sha, so the checkout
+# uses SOURCE_SHA.  A workflow_run also fires for a failed or hand-dispatched
+# Test run, so the job itself requires a push-triggered success.
+
+on:
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  deb:
+    name: Build the Kylin bootstrap deb
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dpkg-deb
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev
+      - uses: actions/cache/restore@v4
+        id: kylin-cache
+        with:
+          path: .runtime/kylin-bootstrap-inputs
+          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
+      - name: Prepare missing locked dependency cache
+        if: steps.kylin-cache.outputs.cache-hit != 'true'
+        run: python tools/prepare-kylin-bootstrap-inputs.py --download
+      - uses: actions/cache/save@v4
+        if: steps.kylin-cache.outputs.cache-hit != 'true'
+        with:
+          path: .runtime/kylin-bootstrap-inputs
+          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
+      - name: Verify locked dependency inputs
+        run: python tools/prepare-kylin-bootstrap-inputs.py
+      - name: Build the bootstrap deb
+        run: python tools/build-kylin-bootstrap-package.py --format deb --output-dir artifacts
+      - name: Record the package digest
+        run: sha256sum artifacts/*.deb | tee artifacts/SHA256SUMS
+      - name: Check the package carries its source and offline inputs
+        run: |
+          set -eu
+          listing=$(dpkg-deb --contents artifacts/*.deb)
+          for required in \
+            ./usr/lib/neurobridge-bootstrap/platform.sh \
+            ./usr/lib/neurobridge-bootstrap/kylin-bootstrap-inputs.toml \
+            ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/offline/Python-3.11.16.tar.xz \
+            ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/offline/cmake-3.31.6.tar.gz \
+            ./usr/lib/neurobridge-bootstrap/source/wheelhouse/websockets-12.0-py3-none-any.whl \
+            ./usr/lib/neurobridge-bootstrap/bootstrap-build.sh \
+            ./usr/lib/neurobridge-bootstrap/bootstrap-install.sh \
+            ./usr/lib/neurobridge-bootstrap/source/python-runtime/cpython-3.11.16+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz \
+            ./usr/lib/neurobridge-bootstrap/source/wheelhouse/pyserial-3.5-py2.py3-none-any.whl \
+            ./usr/lib/neurobridge-bootstrap/source/linux/setup-kylin-algorithm.sh \
+            ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/python-launcher.sh \
+            ./usr/lib/neurobridge-bootstrap/source/mac/algorithm_bridge/CMakeLists.txt \
+            ./usr/lib/neurobridge-bootstrap/source/mac/algorithm_bridge/affective_bridge.cpp \
+            ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/offline/cmake-3.31.6-linux-x86_64.tar.gz \
+            ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/offline/eigen-3.3.7.tar.gz \
+            ./usr/lib/neurobridge-bootstrap/source/third_party/NumCpp/CMakeLists.txt
+          do
+            printf '%s\n' "$listing" | grep -q "$required" || { echo "missing: $required"; exit 1; }
+          done
+          dpkg-deb --info artifacts/*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neurobridge-kylin-bootstrap-deb
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 30

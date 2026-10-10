@@ -1,9 +1,11 @@
 .venv/
 venv/
 .runtime/
-wheelhouse/
+/output/pdf/
+/tmp/pdfs/
+/wheelhouse/
 algorithm-packages/
-python-runtime/
+/python-runtime/
 __pycache__/
 *.py[cod]
 .pytest_cache/

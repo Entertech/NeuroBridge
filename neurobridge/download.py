@@ -15,6 +15,7 @@ import zipfile
 
 from .application.gateway import GatewayApplication as Gateway
 from .versioning import APPLICATION_VERSION
+from .diagnostics import runtime_context
 
 LOG = logging.getLogger(__name__)
 MAX_REQUEST_HEADER_BYTES = 16 * 1024
@@ -43,6 +44,7 @@ def _log_archive(log_directory: Path, filename: str) -> Path:
     candidates = sorted(path for path in log_directory.glob("*.log*") if path.is_file() and not path.is_symlink())
     try:
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            bundle.writestr("diagnostic-context.json", json.dumps(runtime_context(), ensure_ascii=False, indent=2) + "\n")
             file_details = []
             for path in candidates:
                 initial_stat = path.stat()

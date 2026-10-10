@@ -1,0 +1,3 @@
+# The Kylin headset profile uses USB TTY only. Both wheels are architecture-neutral.
+pyserial==3.5
+websockets==12.0

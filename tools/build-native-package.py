@@ -78,6 +78,30 @@ def target_for(target_id: str) -> dict[str, str]:
         raise ValueError(f"unknown release target: {target_id}") from error
 
 
+def target_from_id(target_id: str) -> dict[str, str]:
+    """Describe one native package without consulting the release matrix.
+
+    The shipped Kylin deliverable is the bootstrap package, so the release
+    matrix no longer lists the prebuilt server/desktop packages. The builder
+    that produces those prebuilt packages is still tested against its own
+    target shape.
+    """
+    parts = target_id.split("-")
+    if parts[0] == "windows" and len(parts) == 4:
+        version, architecture, fmt = parts[1:]
+        platform = "windows"
+        edition = "none"
+    elif parts[0] == "kylin" and len(parts) == 4:
+        edition, architecture, fmt = parts[1:]
+        platform = "kylin"
+        version = "V10"
+    else:
+        raise ValueError(f"unrecognised native package target: {target_id}")
+    if fmt not in {"exe", "msi", "deb", "rpm"}:
+        raise ValueError(f"unrecognised native package format: {fmt}")
+    return {"id": target_id, "platform": platform, "osVersion": version, "edition": edition, "architecture": architecture, "format": fmt, "runner": "test"}
+
+
 def copy_source(stage: Path, target: dict[str, str], runtime: Path) -> None:
     payload = stage / "opt" / "neurobridge"
     payload.mkdir(parents=True)
@@ -90,6 +114,11 @@ def copy_source(stage: Path, target: dict[str, str], runtime: Path) -> None:
             shutil.copy2(source, destination)
     platform_dir = ROOT / ("windows" if target["platform"] == "windows" else "packaging/kylin")
     shutil.copytree(platform_dir, payload / platform_dir.name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    (payload / "build-info.txt").write_text(
+        f"application_version={APPLICATION_VERSION}\nsource_commit={commit}\ntarget_id={target['id']}\n",
+        encoding="utf-8",
+    )
     if target["platform"] == "kylin":
         service_dir = payload / "packaging"
         service_dir.mkdir(parents=True, exist_ok=True)

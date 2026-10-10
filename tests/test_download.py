@@ -111,6 +111,12 @@ class DownloadServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("neurobridge.log", bundle.namelist())
             self.assertIn("manifest.json", bundle.namelist())
             manifest = json.loads(bundle.read("manifest.json"))
+            context = json.loads(bundle.read('diagnostic-context.json'))
+            self.assertEqual(context['applicationVersion'], manifest['applicationVersion'])
+            self.assertEqual(context['diagnosticScope'], 'runtime')
+            self.assertIn(context['pythonArchitecture'], ('32-bit', '64-bit'))
+            self.assertTrue(context['osVersion'])
+            self.assertTrue(context['osArchitecture'])
             self.assertEqual(manifest["scope"], "application-file-logs-only")
             self.assertIn("systemd journal", manifest["excluded"])
             details = {entry["name"]: entry for entry in manifest["fileDetails"]}

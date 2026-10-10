@@ -71,6 +71,14 @@ def validate_published_operations_document(registry: dict, locks: dict, document
     lock = locks.get(records[0].get("release_lock"))
     if lock is None or lock["scope"] != scope or lock["to_version"] != document["version"]:
         fail(f"published {label} publication lock is invalid")
+    versions = document.get("versions", [])
+    if versions:
+        if len({item["version"] for item in versions}) != len(versions):
+            fail(f"duplicate historical {label} versions")
+        if not any(item["version"] == document["version"] and item["markdown_sha256"] == document["markdown_sha256"] for item in versions):
+            fail(f"current {label} version is missing from its history")
+        for historical in versions:
+            validate_published_operations_document(registry, locks, historical, scope, label)
 
 
 def main() -> None:
@@ -85,6 +93,7 @@ def main() -> None:
     ssh_operations = registry["documents"].get("external_ssh_operations")
     wired_network_operations = registry["documents"].get("external_wired_network_operations")
     windows_operations = registry["documents"].get("external_windows_operations")
+    kylin_operations = registry["documents"].get("external_kylin_operations")
     wire_version = registry["northbound_wire_protocol"]["version"]
     application_version = registry["application"]["version"]
 
@@ -216,6 +225,14 @@ def main() -> None:
         if "头环" in windows_text:
             fail("Windows operations Markdown must not use the legacy 头环 product naming")
 
+    if kylin_operations and kylin_operations["status"] == "published":
+        validate_published_operations_document(
+            registry, locks, kylin_operations, "external_kylin_operations_document", "Kylin operations"
+        )
+        kylin_text = (ROOT / kylin_operations["markdown_path"]).read_text(encoding="utf-8")
+        if any(re.search(pattern, kylin_text, flags=re.IGNORECASE) for pattern in FORBIDDEN_IMPLEMENTATION_PATTERNS):
+            fail("Kylin operations Markdown contains gateway implementation details")
+
     tracked_pdfs = subprocess.run(
         ["git", "ls-files", "--", "doc/tech/*.pdf"], cwd=ROOT, check=True, capture_output=True, text=True
     ).stdout.strip()
@@ -258,6 +275,9 @@ def main() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     if pyproject["project"]["version"] != application_version:
         fail("run tools/sync-version-registry.py after changing the application version")
+    runtime = tomllib.loads((ROOT / "config/kylin-runtime-manifest.toml").read_text(encoding="utf-8"))["runtime"]
+    if runtime["application_version"] != application_version or runtime["file_name"] != f"neurobridge-runtime-{application_version}-kylin-v10-x86_64.tar.gz":
+        fail("run tools/sync-version-registry.py to update the Kylin runtime manifest version and filename")
 
     generated_client_version = (
         "// Generated from neurobridge/version_registry.toml by tools/sync-version-registry.py.\n"

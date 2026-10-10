@@ -53,12 +53,17 @@ jobs:
             (Join-Path $PWD 'windows/setup-windows-gateway.ps1'),
             (Join-Path $PWD 'windows/diagnose-service.ps1'),
             (Join-Path $PWD 'windows/export-logs.ps1'),
+            (Join-Path $PWD 'windows/diagnostic-context.ps1'),
+            (Join-Path $PWD 'packaging/windows/install-with-logs.ps1'),
             (Join-Path $PWD 'tools/prepare-windows-candidate-runtime.ps1')
           )) {
             [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null
             if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
           }
       - run: python -m unittest discover -s tests -p test_windows_launcher.py -v
+      - name: Verify installation failure logs without an installed gateway
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/test_windows_install_logging.ps1
       - run: python -m unittest discover -s tests -p test_serial_startup.py -v
       - run: python -m unittest discover -s tests -p test_windows_algorithm_build.py -v
       - name: Verify recording rotation and recovery on Windows

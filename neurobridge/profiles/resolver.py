@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import platform
 import re
+import struct
 import sys
 from typing import Mapping
 
@@ -36,6 +37,9 @@ class DeploymentProfile:
     delivery_stage: str
 
 
+KYLIN_ARCHITECTURES = frozenset({"x86_64", "aarch64", "loongarch64", "mips64el", "sw64", "x86", "armhf"})
+
+
 _PROFILES = {
     "macos_headband_wired": DeploymentProfile("macos_headband_wired", "macos", "any", "bluetooth", "headband_ble", "wired_b_side", MACOS_CAPABILITIES, "M2"),
     "ubuntu_headband_wired": DeploymentProfile("ubuntu_headband_wired", "ubuntu", "x86_64", "bluetooth", "headband_ble", "wired_b_side", UBUNTU_CAPABILITIES, "M2"),
@@ -45,7 +49,7 @@ _PROFILES = {
 
 
 def detect_runtime_platform(os_release: Mapping[str, str] | None = None) -> RuntimePlatform:
-    architecture = {"amd64": "x86_64", "x64": "x86_64", "arm64": "aarch64"}.get(platform.machine().lower(), platform.machine().lower())
+    architecture = {"amd64": "x86_64", "x64": "x86_64", "arm64": "aarch64", "loong64": "loongarch64", "sw_64": "sw64", "i386": "x86", "i486": "x86", "i586": "x86", "i686": "x86", "mips64": "mips64el", "armv7l": "armhf", "armv8l": "armhf"}.get(platform.machine().lower(), platform.machine().lower())
     if sys.platform == "darwin":
         return RuntimePlatform("macos", architecture)
     if sys.platform == "win32":
@@ -62,12 +66,19 @@ def detect_runtime_platform(os_release: Mapping[str, str] | None = None) -> Runt
 
 
 def resolve_profile(config: GatewayConfig, runtime: RuntimePlatform | None = None) -> DeploymentProfile:
+    detected = runtime is None
     runtime = runtime or detect_runtime_platform()
+    if detected and runtime.os_family == "kylin":
+        expected_bits = 32 if runtime.architecture in {"x86", "armhf"} else 64
+        if sys.byteorder != "little" or struct.calcsize("P") * 8 != expected_bits:
+            raise ValueError("Kylin runtime CPU/ABI mismatch: little-endian and matching Python bitness required")
     profile_id = config.profile or _legacy_profile_id(config, runtime)
     try:
         profile = _PROFILES[profile_id]
     except KeyError as exc:
         raise ValueError(f"Unsupported deployment profile: {profile_id}") from exc
+    if profile.os_family == "kylin" and runtime.architecture in KYLIN_ARCHITECTURES:
+        profile = replace(profile, architecture=runtime.architecture)
     mismatches: list[str] = []
     if profile.os_family == "kylin" and runtime.version is not None and not re.fullmatch(r"[Vv]?10(?:\..*)?", runtime.version):
         mismatches.append("version expected=Kylin V10; runtime version unsupported or missing")

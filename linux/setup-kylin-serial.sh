@@ -83,10 +83,9 @@ done
 [[ $device == auto || $device == /* ]] || fail "--device must be auto or an absolute path"
 [[ -z $python_override || $python_override == /* ]] || fail "--python must be an absolute path"
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run with sudo."
-[[ $(uname -m) == x86_64 ]] || fail "The confirmed Kylin deployment requires x86_64."
-[[ -r /etc/os-release ]] || fail "/etc/os-release is unavailable."
-. /etc/os-release
-[[ ${ID,,} == kylin ]] || fail "This helper is only for Galaxy Kylin; detected ID=${ID:-unknown}."
+NB_INPUT_LOCK="$root_dir/config/kylin-bootstrap-inputs.toml"
+. "$root_dir/packaging/kylin/platform.sh"
+nb_select_platform || fail "Unsupported Kylin V10 platform."
 
 runtime_dir="$root_dir/.runtime"
 invoking_uid=${SUDO_UID:-0}

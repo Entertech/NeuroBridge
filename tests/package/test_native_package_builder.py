@@ -32,7 +32,7 @@ class NativePackageBuilderTests(unittest.TestCase):
         return runtime
 
     def test_source_payload_is_staged_with_bundled_runtime(self) -> None:
-        target = BUILDER.target_for("kylin-server-x86_64-deb")
+        target = BUILDER.target_from_id("kylin-server-x86_64-deb")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runtime = self.runtime(root, target["id"])
@@ -55,7 +55,7 @@ class NativePackageBuilderTests(unittest.TestCase):
             (prefix / "lib/python3.11/os.py").write_text("stdlib fixture\n")
             (runtime / "bin/python").symlink_to("python-runtime/bin/python")
             (runtime / "bin/neurobridge_affective_bridge").write_bytes(b"bridge fixture")
-            target = BUILDER.target_for("kylin-server-x86_64-rpm")
+            target = BUILDER.target_from_id("kylin-server-x86_64-rpm")
             stage = root / "stage"
             BUILDER.copy_source(stage, target, runtime)
 
@@ -89,7 +89,7 @@ class NativePackageBuilderTests(unittest.TestCase):
                     entry.unlink()
                     entry.symlink_to(target)
                     with self.assertRaisesRegex(ValueError, "runtime.*link"):
-                        BUILDER.copy_source(root / ("stage-" + str(len(target))), BUILDER.target_for("kylin-server-x86_64-deb"), runtime)
+                        BUILDER.copy_source(root / ("stage-" + str(len(target))), BUILDER.target_from_id("kylin-server-x86_64-deb"), runtime)
 
     def test_runtime_fingerprint_includes_the_symlink_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -134,7 +134,7 @@ class NativePackageBuilderTests(unittest.TestCase):
 
     def test_maintainer_scripts_only_act_on_the_unit_the_package_installed(self) -> None:
         """A source deployment owns the same unit path, so the guard is load-bearing."""
-        target = BUILDER.target_for("kylin-server-x86_64-deb")
+        target = BUILDER.target_from_id("kylin-server-x86_64-deb")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stage = root / "stage"
@@ -181,9 +181,14 @@ class NativePackageBuilderTests(unittest.TestCase):
 
         A later build of the same version must replace them rather than install
         beside them, and the replacement must not stop the running gateway.
+        The identity is the upgrade code, which does not change when the
+        application version does.
         """
         shipped_version = "0.2.0"
-        self.assertEqual(BUILDER.APPLICATION_VERSION, shipped_version)
+        self.assertGreater(
+            tuple(int(part) for part in BUILDER.APPLICATION_VERSION.split(".")),
+            tuple(int(part) for part in shipped_version.split(".")),
+        )
 
         # Windows MSI.  The upgrade code is derived, not stored, so a future
         # edit that rewords the URL would silently stop detecting the shipped
@@ -206,7 +211,7 @@ class NativePackageBuilderTests(unittest.TestCase):
                 BUILDER.command = real_command
             wxs = (stage / "neurobridge.wxs").read_text(encoding="utf-8")
             upgrade_code = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge"))
-            self.assertIn(f'Version="{shipped_version}"', wxs)
+            self.assertIn(f'Version="{BUILDER.APPLICATION_VERSION}"', wxs)
             self.assertIn(f'UpgradeCode="{upgrade_code}"', wxs)
             self.assertIn('AllowSameVersionUpgrades="yes"', wxs)
             self.assertNotIn("ProductCode=", wxs)
@@ -228,16 +233,16 @@ class NativePackageBuilderTests(unittest.TestCase):
                 BUILDER.command = real_command
             bundle = bundle_path.read_text(encoding="utf-8")
         bundle_upgrade = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge/bundle"))
-        self.assertIn(f'Version="{shipped_version}"', bundle)
+        self.assertIn(f'Version="{BUILDER.APPLICATION_VERSION}"', bundle)
         self.assertIn(f'UpgradeCode="{bundle_upgrade}"', bundle)
         self.assertIn(f'<RelatedBundle Action="Upgrade" Id="{bundle_upgrade}" />', bundle)
 
         # Kylin.  The package name is what apt/dnf match on, and prerm must let
         # an upgrade through without stopping the service the new package keeps.
         for edition in ("desktop", "server"):
-            target = BUILDER.target_for(f"kylin-{edition}-x86_64-deb")
+            target = BUILDER.target_from_id(f"kylin-{edition}-x86_64-deb")
             self.assertEqual(BUILDER.deb_control(target).splitlines()[0], f"Package: neurobridge-{edition}")
-            self.assertIn(f"Version: {shipped_version}", BUILDER.deb_control(target))
+            self.assertIn(f"Version: {BUILDER.APPLICATION_VERSION}", BUILDER.deb_control(target))
             with tempfile.TemporaryDirectory() as directory:
                 stage = Path(directory) / "stage"
                 stage.mkdir()
@@ -256,7 +261,7 @@ class NativePackageBuilderTests(unittest.TestCase):
             ("kylin-server-x86_64-deb", 'profile = "kylin_headset_local"'),
         ):
             with self.subTest(target=target_id):
-                target = BUILDER.target_for(target_id)
+                target = BUILDER.target_from_id(target_id)
                 with tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
                     runtime = self.runtime(root, target_id)
@@ -278,7 +283,7 @@ class NativePackageBuilderTests(unittest.TestCase):
             ("windows-10-x86_64-msi", "opt/neurobridge/windows/export-logs.ps1"),
         ):
             with self.subTest(target=target_id):
-                target = BUILDER.target_for(target_id)
+                target = BUILDER.target_from_id(target_id)
                 with tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
                     runtime = self.runtime(root, target_id)
@@ -286,6 +291,10 @@ class NativePackageBuilderTests(unittest.TestCase):
                     BUILDER.copy_source(stage, target, runtime)
                     exporter = stage / relative
                     self.assertTrue(exporter.is_file(), f"{relative} must ship inside {target_id}")
+                    self.assertTrue((exporter.parent / ('diagnostic-context.sh' if target_id.startswith('kylin') else 'diagnostic-context.ps1')).is_file())
+                    info = (stage / 'opt/neurobridge/build-info.txt').read_text()
+                    self.assertIn('application_version=' + BUILDER.APPLICATION_VERSION, info)
+                    self.assertIn('source_commit=' + subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), info)
                     if target_id.startswith("kylin"):
                         self.assertTrue(os.access(exporter, os.X_OK))
 
@@ -304,7 +313,7 @@ class NativePackageBuilderTests(unittest.TestCase):
             for name, groups, fail_usermod, expected_code in cases:
                 with self.subTest(kind=kind, case=name), tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)
-                    target = BUILDER.target_for(f"kylin-server-x86_64-{kind}")
+                    target = BUILDER.target_from_id(f"kylin-server-x86_64-{kind}")
                     if kind == "deb":
                         BUILDER.deb_scripts(root, target)
                         script = (root / "DEBIAN/postinst").read_text(encoding="utf-8")
