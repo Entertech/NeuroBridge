@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -26,7 +27,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from neurobridge.versioning import APPLICATION_VERSION
+from neurobridge.versioning import application_version
 from tools.release_pipeline import matrix
 
 
@@ -116,7 +117,7 @@ def copy_source(stage: Path, target: dict[str, str], runtime: Path) -> None:
     shutil.copytree(platform_dir, payload / platform_dir.name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     (payload / "build-info.txt").write_text(
-        f"application_version={APPLICATION_VERSION}\nsource_commit={commit}\ntarget_id={target['id']}\n",
+        f"application_version={application_version(target['platform'])}\nsource_commit={commit}\ntarget_id={target['id']}\n",
         encoding="utf-8",
     )
     if target["platform"] == "kylin":
@@ -132,6 +133,12 @@ def copy_source(stage: Path, target: dict[str, str], runtime: Path) -> None:
     if target["platform"] == "kylin":
         validate_runtime_links(runtime)
     shutil.copytree(runtime, payload / "runtime", symlinks=target["platform"] == "kylin", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+    # Generated payload metadata follows the selected platform's product version.
+    metadata = payload / "pyproject.toml"
+    metadata.write_text(re.sub(r'(?m)^(version\s*=\s*)"[^"]+"$',
+                              lambda match: match[1] + '"' + application_version(target['platform']) + '"',
+                              metadata.read_text(encoding="utf-8"), count=1), encoding="utf-8")
 
 
 def validate_runtime_links(runtime: Path) -> None:
@@ -225,7 +232,7 @@ def write_wix_msi(stage: Path, target: dict[str, str], output: Path, log: Path) 
     wix = textwrap.dedent(
         f'''\
         <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-          <Package Name="NeuroBridge" Manufacturer="Entertech" Version="{APPLICATION_VERSION}" UpgradeCode="{upgrade_code}">
+          <Package Name="NeuroBridge" Manufacturer="Entertech" Version="{application_version(target['platform'])}" UpgradeCode="{upgrade_code}">
             <SummaryInformation Description="NeuroBridge gateway" />
             <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer NeuroBridge version is already installed." />
             <MediaTemplate EmbedCab="yes" />
@@ -256,7 +263,7 @@ def write_wix_bundle(msi: Path, output: Path, log: Path) -> None:
     upgrade_code = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge/bundle"))
     bundle.write_text(textwrap.dedent(f'''\
       <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
-        <Bundle Name="NeuroBridge" Version="{APPLICATION_VERSION}" Manufacturer="Entertech" UpgradeCode="{upgrade_code}">
+        <Bundle Name="NeuroBridge" Version="{application_version('windows')}" Manufacturer="Entertech" UpgradeCode="{upgrade_code}">
           <RelatedBundle Action="Upgrade" Id="{upgrade_code}" />
           <BootstrapperApplication>
             <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl="https://github.com/Entertech/NeuroBridge" />
@@ -272,7 +279,7 @@ def write_wix_bundle(msi: Path, output: Path, log: Path) -> None:
 
 def build_windows(stage: Path, target: dict[str, str], output: Path, log: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="neurobridge-wix-") as directory:
-        msi = Path(directory) / f"neurobridge-{APPLICATION_VERSION}-{target['id']}.msi"
+        msi = Path(directory) / f"neurobridge-{application_version(target['platform'])}-{target['id']}.msi"
         write_wix_msi(stage, target, msi, log)
         if target["format"] == "msi":
             shutil.copy2(msi, output)
@@ -284,7 +291,7 @@ def deb_control(target: dict[str, str]) -> str:
     package_name = f"neurobridge-{target['edition']}"
     return textwrap.dedent(f'''\
         Package: {package_name}
-        Version: {APPLICATION_VERSION}
+        Version: {application_version(target['platform'])}
         Section: utils
         Priority: optional
         Architecture: {DEB_ARCH[target['architecture']]}
@@ -434,7 +441,7 @@ def rpm_spec(target: dict[str, str], topdir: Path) -> Path:
     serial_access = indent_block(SERIAL_ACCESS, 8)
     spec.write_text(textwrap.dedent(f'''\
         Name: {package_name}
-        Version: {APPLICATION_VERSION}
+        Version: {application_version(target['platform'])}
         Release: 1
         Summary: NeuroBridge USB serial gateway ({target['edition']})
         License: Proprietary
@@ -517,7 +524,7 @@ def build(target: dict[str, str], runtime: Path, output_dir: Path) -> Path:
         stage = Path(directory) / "package-root"
         copy_source(stage, target, runtime)
         input_sha = digest_tree(stage)
-        filename = f"neurobridge-{APPLICATION_VERSION}-{target['id']}.{target['format']}"
+        filename = f"neurobridge-{application_version(target['platform'])}-{target['id']}.{target['format']}"
         output = output_dir / filename
         if target["platform"] == "windows":
             build_windows(stage, target, output, log)

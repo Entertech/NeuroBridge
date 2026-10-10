@@ -10,6 +10,9 @@ function Get-NeuroBridgeIdentity {
             $section = [regex]::Match($text, '(?ms)^\[application\]\s*\r?\n(.*?)(?=^\[|\z)')
             $match = [regex]::Match($section.Groups[1].Value, '(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"')
             if ($match.Success) { $version = $match.Groups[1].Value }
+            $section = [regex]::Match($text, '(?ms)^\[application\.platform_versions\]\s*\r?\n(.*?)(?=^\[|\z)')
+            $match = [regex]::Match($section.Groups[1].Value, '(?m)^windows\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"')
+            if ($match.Success) { $version = $match.Groups[1].Value }
         }
         $info = Join-Path $Root 'build-info.txt'
         if (Test-Path -LiteralPath $info -PathType Leaf) {

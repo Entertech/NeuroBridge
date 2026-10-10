@@ -12,7 +12,7 @@ from unittest import mock
 from tools import release_pipeline
 from tools.release_pipeline import CONFIG, assemble, matrix, run, save_json, sha256, target_result, version_tuple
 from tools.publish_release import verify_nested_archives
-from neurobridge.versioning import APPLICATION_VERSION
+from neurobridge.versioning import application_version
 
 
 class ReleasePipelineTests(unittest.TestCase):
@@ -40,7 +40,7 @@ class ReleasePipelineTests(unittest.TestCase):
             target_id = "windows-10-x86_64-msi"
             source = root / "inputs" / target_id
             source.mkdir(parents=True)
-            package = source / f"neurobridge-windows-{APPLICATION_VERSION}-x86_64.msi"
+            package = source / f"neurobridge-windows-{application_version('windows')}-x86_64.msi"
             package.write_bytes(b"PK\x03\x04source archive")
             (source / "validation.log").write_text("claimed validation\n")
             save_json(source / "verification.json", {
@@ -79,9 +79,9 @@ class ReleasePipelineTests(unittest.TestCase):
                     # The bootstrap deb names the platform "kylin", not the
                     # matrix id "kylin-v10"; Windows keeps platform-version-arch.
                     if target["platform"] == "kylin":
-                        name = f"neurobridge-bootstrap-{APPLICATION_VERSION}-20261009T000000Z-kylin-v10-{target['architecture']}.{target['format']}"
+                        name = f"neurobridge-bootstrap-{application_version(target['platform'])}-20261009T000000Z-kylin-v10-{target['architecture']}.{target['format']}"
                     else:
-                        name = f"neurobridge-{target['platform']}-{APPLICATION_VERSION}-{target['architecture']}.{target['format']}"
+                        name = f"neurobridge-{target['platform']}-{application_version(target['platform'])}-{target['architecture']}.{target['format']}"
                     package = folder / name
                     package.parent.mkdir(parents=True)
                     package.write_bytes(target["id"].encode())
@@ -90,6 +90,11 @@ class ReleasePipelineTests(unittest.TestCase):
                 save_json(folder / "result.json", result)
             release = root / "release"
             manifest = assemble(root / "results", release)
+            self.assertEqual(manifest['platformVersions'], {'windows': application_version('windows'),
+                                                          'kylin': application_version('kylin')})
+            archives = {item['platform']: item['fileName'] for item in manifest['platformArchives']}
+            self.assertTrue(archives['windows'].startswith('windows-v' + application_version('windows') + '-'))
+            self.assertTrue(archives['kylin'].startswith('kylin-v' + application_version('kylin') + '-'))
             self.assertEqual(manifest["aggregateArchive"]["packageCount"], 2)
             self.assertEqual(manifest["coverage"]["windows"]["builtPackageCount"], 1)
             self.assertEqual(manifest["coverage"]["kylin"]["builtPackageCount"], 1)
@@ -105,7 +110,7 @@ class ReleasePipelineTests(unittest.TestCase):
             tampered["platformArchives"][0]["packages"][0]["sha256"] = "0" * 64
             with self.assertRaisesRegex(ValueError, "package hash mismatch"):
                 verify_nested_archives(archive, tampered)
-            package = root / f"results/windows-10-x86_64-msi/neurobridge-windows-{APPLICATION_VERSION}-x86_64.msi"
+            package = root / f"results/windows-10-x86_64-msi/neurobridge-windows-{application_version('windows')}-x86_64.msi"
             package.write_bytes(b"modified")
             with self.assertRaisesRegex(ValueError, "changed"):
                 assemble(root / "results", release)

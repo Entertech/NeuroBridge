@@ -165,6 +165,8 @@ def build_system_archives(
             arch_entries: list[dict] = []
             family_documents = {f"docs/{delivery_pdf_name(name)}": payload for name, payload in sorted(platform_documents.get(platform, {}).items())}
             support_files = ["install-with-logs.ps1", "diagnostic-context.ps1", "build-info.txt"] if platform == "windows" else []
+            if platform == "kylin" and RELEASE_MATRIX["kylin"].get("package_kind") == "bootstrap":
+                support_files = ["install-bootstrap.sh"]
             family_stream = io.BytesIO()
             with zipfile.ZipFile(family_stream, "w", zipfile.ZIP_DEFLATED) as family_zip:
                 for architecture, packages in architectures:
@@ -178,6 +180,8 @@ def build_system_archives(
                     add_bytes(family_zip, "install-with-logs.ps1", (ROOT / "packaging/windows/install-with-logs.ps1").read_bytes(), timestamp)
                     add_bytes(family_zip, "diagnostic-context.ps1", (ROOT / "windows/diagnostic-context.ps1").read_bytes(), timestamp)
                     add_bytes(family_zip, "build-info.txt", build_info, timestamp)
+                elif "install-bootstrap.sh" in support_files:
+                    add_bytes(family_zip, "install-bootstrap.sh", (ROOT / "packaging/kylin/install-bootstrap.sh").read_bytes(), timestamp)
             family_data = family_stream.getvalue()
             family_filename = f"{family}.zip"
             family_archives.append((
@@ -292,13 +296,15 @@ def render_bundle_directory_guide(release_manifest: dict, systems: list[dict], d
 
     lines = [
         "# NeuroBridge 交付包目录说明", "",
-        f"应用版本：{release_manifest['applicationVersion']}", "",
+        f"总交付批次版本：{release_manifest['applicationVersion']}", "",
         f"源码提交：{code(release_manifest['git']['commit'])}", "",
         "面向部署人员。先阅读本说明，再按目标系统解压对应文件；本说明介绍文件的位置与用途，具体安装操作请阅读对应部署指南。", "",
         "## 1. 解压总包后，先看这些位置", "",
         "| 位置 | 用途 |", "| --- | --- |",
         f"| {code(DIRECTORY_GUIDE_FILENAME)} | 本目录说明，位于总 ZIP 根目录 |",
     ]
+    for platform, version in release_manifest.get('platformVersions', {}).items():
+        lines.append(f"平台产品版本 {code(platform)}：{code(version)}。")
     for system in systems:
         label = "Windows" if system['platform'] == 'windows' else "银河麒麟"
         lines.append(f"| {code(system['fileName'])} | {label}系统压缩包；只解压需要部署的平台 |")
@@ -314,6 +320,7 @@ def render_bundle_directory_guide(release_manifest: dict, systems: list[dict], d
         "平台目录、系统 ZIP、版本 ZIP 和安装文件分组 ZIP 是不同层级；PDF 与日志工具可能位于版本 ZIP，不在最内层安装包旁。以下路径与名称均由本次交付清单生成。", "",
     ])
     purposes = {'install-with-logs.ps1': '安装并保存失败日志；-Export 导出安装日志',
+                'install-bootstrap.sh': '麒麟引导安装入口；--package 指定 DEB，资源名后可指定 HTTPS URL 或本机文件',
                 'diagnostic-context.ps1': '日志环境采集模块，须与安装日志入口保存在一起',
                 'build-info.txt': '此交付包的应用版本与源码提交'}
     for system in systems:
@@ -400,7 +407,8 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
     platform_documents = documents_for_platform_archives(files, bound_documents, available_platforms)
     files = {str(PurePosixPath(name).parent / delivery_pdf_name(PurePosixPath(name).name)) if name.endswith(".pdf") else name: value for name, value in files.items()}
     files["metadata/document-filenames.json"] = json.dumps(aliases, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
-    build_info = f"application_version={release_manifest['applicationVersion']}\nsource_commit={release_manifest['git']['commit']}\n".encode('utf-8')
+    windows_version = release_manifest.get("platformVersions", {}).get("windows", release_manifest["applicationVersion"])
+    build_info = f"application_version={windows_version}\nsource_commit={release_manifest['git']['commit']}\n".encode('utf-8')
     system_archives, system_manifest = build_system_archives(grouped, timestamp, platform_documents, build_info)
     files.update(system_archives)
     files[DIRECTORY_GUIDE_FILENAME] = render_directory_pdf(render_bundle_directory_guide(
@@ -410,6 +418,7 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
     bundle_manifest = {
         "schemaVersion": 2,
         "applicationVersion": release_manifest["applicationVersion"],
+        "platformVersions": release_manifest.get("platformVersions", {}),
         "sourceCommit": release_manifest["git"]["commit"],
         "releaseStatus": release_manifest["releaseStatus"],
         "trigger": release_manifest["trigger"],

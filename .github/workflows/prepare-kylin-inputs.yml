@@ -1,8 +1,16 @@
 name: Prepare Kylin dependencies
 on:
   workflow_dispatch:
+    inputs:
+      offline_resources:
+        description: "麒麟离线资源：all（默认）、none 或逗号分隔的 python,cmake,eigen,pyserial,websockets"
+        required: false
+        default: all
+        type: string
 permissions:
   contents: read
+env:
+  OFFLINE_RESOURCES: ${{ inputs.offline_resources || 'all' }}
 jobs:
   prepare:
     runs-on: ubuntu-22.04
@@ -11,13 +19,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Resolve offline resource selection
+        id: resource-selection
+        run: |
+          key=$(python tools/prepare-kylin-bootstrap-inputs.py --offline-resources "$OFFLINE_RESOURCES" --selection-key)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
       - name: Download and verify locked dependency inputs
-        run: python tools/prepare-kylin-bootstrap-inputs.py --download
+        run: python tools/prepare-kylin-bootstrap-inputs.py --download --offline-resources "$OFFLINE_RESOURCES"
       - uses: actions/cache/save@v4
+        if: steps.resource-selection.outputs.key != 'none'
         with:
           path: .runtime/kylin-bootstrap-inputs
-          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
+          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}-${{ steps.resource-selection.outputs.key }}
       - uses: actions/upload-artifact@v4
+        if: steps.resource-selection.outputs.key != 'none'
         with:
           name: kylin-verified-dependency-inputs
           path: .runtime/kylin-bootstrap-inputs

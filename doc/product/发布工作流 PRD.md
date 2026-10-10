@@ -18,7 +18,7 @@
 
 ### 2.1 应用版本门禁
 
-- 版本唯一来源为 `neurobridge/version_registry.toml` 的 `[application].version`；平台覆盖矩阵唯一来源为 [`release/release_matrix.toml`](../../release/release_matrix.toml)。
+- 版本唯一来源为 `neurobridge/version_registry.toml`：`[application].version` 是总交付批次版本，`[application.platform_versions]` 是各平台产品版本；平台覆盖矩阵唯一来源为 [`release/release_matrix.toml`](../../release/release_matrix.toml)。
 - **是否产出发布包只由 `[application].version` 相对基线是否递增决定**，与改了哪些文件无关。变更文件列表只用于判定「是否必须升版本」：改了交付范围内的文件却没升版本时门禁**失败**，而不是安静跳过。因此「改了某个目录就等效于该变化」并不成立，必须落实为版本号递增。
 - PR 门禁以 PR 目标分支（固定为 `master`）的提交为基线比较版本；打包运行以**最后一个已发布 tag**（`v<应用版本>`）为基线，仓库尚无 tag 时退回被处理提交的父提交。
 - 业务代码范围由配置维护（`tools/release_pipeline.py` 的 `PRODUCT_PATHS`），至少覆盖 `neurobridge/`、平台部署目录、运行依赖和打包配置，并包含**随包交付的对外文档目录 `doc/tech/对外/`**——改了交付给用户的文档必须升版本，否则该文档不会随包发出。只改其他文档、测试或网页资源不强制升应用版本。
@@ -39,7 +39,7 @@
 
 - 银河麒麟当前交付一个 **引导包**（DEB），目标为银河麒麟 V10 的七个架构 Profile（见 §2.7）。引导包携带网关源码和离线构建输入，在安装该包的麒麟机器上构建运行时并安装服务，不再按服务器版/桌面版、五种架构和 DEB/RPM 预先构建完整包。具体配置见 `release/release_matrix.toml` 的 `package_kind = "bootstrap"`。
 - 引导包的安装、失败回滚和重装规则随包内脚本交付；Workflow 不根据目标机在线探测改写矩阵。
-- Python 运行时、wheel、CMake 和 Eigen 的版本与校验值随包内离线输入固定，安装阶段不再下载。
+- Python 运行时、wheel、CMake 和 Eigen 的版本与校验值固定；默认使用包内输入。CI 可通过 `offline_resources=all|none|逗号分隔资源列表` 控制携带哪些输入，默认全部。安装可按 `资源名 [HTTPS URL或文件路径]` 显式指定来源；未指定来源且包内缺项时须逐项提示并写日志、非零退出，不自动联网。
 - 包内包含安装说明、版本清单和 SHA-256 校验值。
 - 未完成目标机器现场验证时只能标记为 `candidate`。
 - 当前引导包只支持 Intel/AMD 的 `x86_64`，不支持 32 位 x86、ARM/aarch64、龙芯/LoongArch/MIPS、申威等其他架构；银河麒麟 V10 不意味着多架构通用，不能将所有 64 位系统视为兼容。
@@ -85,7 +85,7 @@
 
 ### 2.8 多架构引导与验收要求
 
-1. **选择与输入**：安装前记录 `/etc/os-release`、内核 CPU、用户空间位数、ELF 字节序/位数，按 `config/kylin-bootstrap-inputs.toml` 选依赖；所有输入固定版本/URL/SHA-256。准备阶段可显式下载；正式打包和目标机安装只读取已校验的离线输入。缓存缺失则失败，不在安装器内调用包管理器或下载源码。
+1. **选择与输入**：安装前记录 `/etc/os-release`、内核 CPU、用户空间位数、ELF 字节序/位数，按 `config/kylin-bootstrap-inputs.toml` 选依赖；所有输入固定版本/URL/SHA-256。准备阶段可显式下载；正式打包只读取所选已校验的输入，`none` 无需依赖缓存。目标机默认读取包内输入，用户显式提供 HTTPS URL 时下载，提供路径时读取本机文件，所有来源仍核对锁定 SHA-256。缺资源且未指定来源时提示并记录日志；安装器不调用包管理器补系统依赖。
 2. **本机构建**：非 x86_64 从 CPython 和 CMake 锁定源码编译，再构建 C++17 算法。共用包只声明所有 Profile 必需的系统依赖；Python 的 SSL/sqlite/bzip2/xz/ffi/zlib 开发库仅在源码 Profile 要求，x86_64 随包 Python 不要求它们。选择 Profile 后、构建或修改旧部署前逐项编译/链接探针，缺项须列出具体库、编译器输出、目标环境与管理员补齐/重试命令；维护脚本不得调用包管理器。32 位内存限制、供应商编译器、老 glibc 和 SDK 数值差异须独立验证。不能承诺所有供应商 V10 镜像自动编译成功；失败报告中必须保留阶段、命令输出和退出码。
 3. **运行时隔离**：生成文件名与 manifest 使用真实架构；复用归档必须同时匹配 Kylin V10 与 CPU，再验证 SHA-256、Python 位数/字节序及必要模块。跨 CPU 运行时在账号和服务修改前拒绝。保留已有部署的原子替换与失败回滚，未接耳机仍允许安装并等待接入。
 4. **交付规模**：发布矩阵仍是一个麒麟引导 DEB 与四个 Windows 包，共五个目标；新增源文件和 wheel 增加单引导包大小，而不新增每架构预编译包。可生成手工 RPM noarch，但不纳入当前正式矩阵；RPM 系统库依赖仍须供应商确认。
@@ -154,7 +154,7 @@ Windows 与麒麟的安装/运行导出均须携带独立诊断上下文：Windo
 - 构建、下载、缓存或打包步骤失败时自动重试，单个步骤最多 3 次；3 次仍失败则 Workflow 失败并保留明确错误原因。
 - Windows 安装器方案：EXE 提供可独立执行的安装/启动入口，MSI 提供标准 Windows Installer 安装、升级和卸载入口；两者都必须支持静默安装参数、版本检测和卸载。Windows 10、11 的 x86_64 组合均需纳入验证；Windows 7 和 32 位系统不构建、不归档、不交付。
 - 运行时依赖清单基线：Python 运行时（按支持的 Windows 架构提供）、`bleak==0.19.0`、`websockets==12.0`、网关 Python 包及其锁定依赖；BLE 驱动/运行库、Windows 服务运行组件和 VC++ 运行库按每个系统组合的实际构建结果补齐并写入清单。
-- 依赖必须随包提供或进入离线缓存，安装阶段不得临时访问公网；每项依赖记录版本、架构、来源和 SHA-256。
+- 依赖必须随包提供或进入离线缓存，安装阶段只有显式 URL 参数才访问公网；每项依赖记录版本、架构、来源和 SHA-256。
 
 ## 7. 麒麟安装包实现建议
 
@@ -188,7 +188,7 @@ Windows 与麒麟的安装/运行导出均须携带独立诊断上下文：Windo
 
 **重试与幂等：**发布 job 仅授予 `contents: write`，PR job 保持 `contents: read`；同一应用版本串行发布。重跑先检查远端 tag：不存在时在全部本地校验通过后创建；存在且指向同一 commit 时继续；指向不同 commit 时立即失败，绝不移动或删除。Release 不存在则创建 draft，已存在 draft 则只补齐缺失资产并校验同名资产的大小和 SHA-256；已公开且资产完全一致时视为幂等成功，已公开但内容不一致时失败并要求新应用版本。上传失败保留 draft 供同 commit 重试，公开前校验唯一总 ZIP 与包外清单一致。公开成功后生成符合 [`schemas/release-receipt.schema.json`](../../schemas/release-receipt.schema.json) 的回执并保存为 Actions Artifact；不能把 draft 或仅有 tag 记为 `published`。
 
-**版本关系：**正式包名、tag、GitHub Release 和清单统一使用台账 `[application].version`。`[platform_releases.windows]` 与 `[platform_releases.kylin]` 是旧流程元数据，本次 Workflow 不读取、不自动递增，也不作为安装器显示版本；后续迁移清理需单独变更台账。仅某个平台的安装器或依赖变化时仍按应用版本影响规则升级 `[application].version`，全部 5 个目标使用相同应用版本。重跑同一 commit 的 `GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT` 只作为构建追踪号，不改变产品版本。
+**版本关系：**总 ZIP、tag、GitHub Release 和清单总版本使用台账 `[application].version`。平台包名、平台 ZIP、安装器、运行时和诊断版本使用 `[application.platform_versions]` 的对应字段；旧台账缺此字段时兼容回退到总版本。仅某个平台变化时只提升该平台版本，总批次仍按门禁升级，其他平台保持原版本；本次麒麟 0.4.0、Windows 0.3.0。`[platform_releases.windows]` / `[platform_releases.kylin]` 仍是旧流程元数据。重跑追踪号不改变产品版本。
 
 **待真机补录：**银河麒麟 V10 x86_64 的安装/升级/卸载、真实采集、耳机离线与拔插、服务/整机重启、浏览器恢复，以及 Windows 10/11 x64 的安装和采集结果，由对应目标机日志补充。未完成验收时 `physicalVerification` 保持 `pending`，不得把 CI 或模拟回归写成现场验收通过。
 

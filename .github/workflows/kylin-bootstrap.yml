@@ -22,11 +22,18 @@ on:
     types: [completed]
     branches: [master]
   workflow_dispatch:
+    inputs:
+      offline_resources:
+        description: "麒麟离线资源：all（默认）、none 或逗号分隔的 python,cmake,eigen,pyserial,websockets"
+        required: false
+        default: all
+        type: string
 
 permissions:
   contents: read
 
 env:
+  OFFLINE_RESOURCES: ${{ inputs.offline_resources || 'all' }}
   SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
@@ -41,51 +48,36 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Resolve offline resource selection
+        id: resource-selection
+        run: |
+          key=$(python tools/prepare-kylin-bootstrap-inputs.py --offline-resources "$OFFLINE_RESOURCES" --selection-key)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
       - name: Install dpkg-deb
         run: sudo apt-get update && sudo apt-get install -y dpkg-dev
       - uses: actions/cache/restore@v4
         id: kylin-cache
+        if: steps.resource-selection.outputs.key != 'none'
         with:
           path: .runtime/kylin-bootstrap-inputs
-          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
+          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}-${{ steps.resource-selection.outputs.key }}
       - name: Prepare missing locked dependency cache
-        if: steps.kylin-cache.outputs.cache-hit != 'true'
-        run: python tools/prepare-kylin-bootstrap-inputs.py --download
+        if: steps.resource-selection.outputs.key != 'none' && steps.kylin-cache.outputs.cache-hit != 'true'
+        run: python tools/prepare-kylin-bootstrap-inputs.py --download --offline-resources "$OFFLINE_RESOURCES"
       - uses: actions/cache/save@v4
-        if: steps.kylin-cache.outputs.cache-hit != 'true'
+        if: steps.resource-selection.outputs.key != 'none' && steps.kylin-cache.outputs.cache-hit != 'true'
         with:
           path: .runtime/kylin-bootstrap-inputs
-          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
+          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}-${{ steps.resource-selection.outputs.key }}
       - name: Verify locked dependency inputs
-        run: python tools/prepare-kylin-bootstrap-inputs.py
+        run: python tools/prepare-kylin-bootstrap-inputs.py --offline-resources "$OFFLINE_RESOURCES"
       - name: Build the bootstrap deb
-        run: python tools/build-kylin-bootstrap-package.py --format deb --output-dir artifacts
+        run: python tools/build-kylin-bootstrap-package.py --format deb --output-dir artifacts --offline-resources "$OFFLINE_RESOURCES"
       - name: Record the package digest
-        run: sha256sum artifacts/*.deb | tee artifacts/SHA256SUMS
-      - name: Check the package carries its source and offline inputs
+        run: sha256sum artifacts/*.deb artifacts/install-bootstrap.sh | tee artifacts/SHA256SUMS
+      - name: Verify source and selected offline resources in the actual package
         run: |
-          set -eu
-          listing=$(dpkg-deb --contents artifacts/*.deb)
-          for required in \
-            ./usr/lib/neurobridge-bootstrap/platform.sh \
-            ./usr/lib/neurobridge-bootstrap/kylin-bootstrap-inputs.toml \
-            ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/offline/Python-3.11.16.tar.xz \
-            ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/offline/cmake-3.31.6.tar.gz \
-            ./usr/lib/neurobridge-bootstrap/source/wheelhouse/websockets-12.0-py3-none-any.whl \
-            ./usr/lib/neurobridge-bootstrap/bootstrap-build.sh \
-            ./usr/lib/neurobridge-bootstrap/bootstrap-install.sh \
-            ./usr/lib/neurobridge-bootstrap/source/python-runtime/cpython-3.11.16+20260825-x86_64-unknown-linux-gnu-install_only.tar.gz \
-            ./usr/lib/neurobridge-bootstrap/source/wheelhouse/pyserial-3.5-py2.py3-none-any.whl \
-            ./usr/lib/neurobridge-bootstrap/source/linux/setup-kylin-algorithm.sh \
-            ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/python-launcher.sh \
-            ./usr/lib/neurobridge-bootstrap/source/mac/algorithm_bridge/CMakeLists.txt \
-            ./usr/lib/neurobridge-bootstrap/source/mac/algorithm_bridge/affective_bridge.cpp \
-            ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/offline/cmake-3.31.6-linux-x86_64.tar.gz \
-            ./usr/lib/neurobridge-bootstrap/source/packaging/kylin/offline/eigen-3.3.7.tar.gz \
-            ./usr/lib/neurobridge-bootstrap/source/third_party/NumCpp/CMakeLists.txt
-          do
-            printf '%s\n' "$listing" | grep -q "$required" || { echo "missing: $required"; exit 1; }
-          done
+          python tools/check-kylin-bootstrap-payload.py --package artifacts/*.deb --offline-resources "$OFFLINE_RESOURCES"
           dpkg-deb --info artifacts/*.deb
       - uses: actions/upload-artifact@v4
         with:

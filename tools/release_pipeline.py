@@ -25,6 +25,12 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = tomllib.loads((ROOT / "release/release_matrix.toml").read_text(encoding="utf-8"))
 REGISTRY = ROOT / "neurobridge/version_registry.toml"
+
+
+def product_version(platform: str) -> str:
+    application = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["application"]
+    return application.get("platform_versions", {}).get(platform, application["version"])
+
 # A change under these paths makes an application version bump mandatory.  It
 # does not by itself produce a release: gate() decides that by comparing
 # [application].version against the base.  `doc/tech/对外/` is the only
@@ -172,7 +178,7 @@ def target_result(target_id: str, input_root: Path, output_root: Path) -> dict[s
                 raise ValueError("package filename, path or format mismatch")
             if package.name == "result.json" or report["validationLog"] == "result.json":
                 raise ValueError("input cannot overwrite target result")
-            identity = (target["platform"], target["architecture"], tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["application"]["version"])
+            identity = (target["platform"], target["architecture"], product_version(target["platform"]))
             # The bootstrap package names itself with a build timestamp rather
             # than the matrix target id, so "kylin" stands in for "kylin-v10".
             if CONFIG["kylin"].get("package_kind") == "bootstrap" and target["platform"] == "kylin":
@@ -258,7 +264,7 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
     output.mkdir(parents=True, exist_ok=True)
     platform_archives = []
     for platform in ("windows", "kylin"):
-        archive = output / f"{platform}-v{version}-{date}.zip"
+        archive = output / f"{platform}-v{product_version(platform)}-{date}.zip"
         package_entries = []
         seen_packages: set[str] = set()
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
@@ -280,7 +286,7 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
     for platform in ("windows", "kylin"):
         config = CONFIG[platform]
         coverage[platform] = {"expectedTargets": [item["id"] for item in targets if item["platform"] == platform], "expectedFormats": config["formats"], "expectedPackageCount": config["expected_package_count"], "builtPackageCount": counts[platform], "targetResults": [{"targetId": item["target"]["id"], "status": item["status"], "reason": item["reason"], **({"validationLog": item["validationLog"]} if item.get("validationLog") else {})} for item in results if item["target"]["platform"] == platform]}
-    internal_manifest = {"applicationVersion": version, "sourceCommit": commit, "coverage": coverage, "platformArchives": [{key: item[key] for key in ("platform", "fileName", "sha256", "packageCount")} for item in platform_archives]}
+    internal_manifest = {"platformVersions": {platform: product_version(platform) for platform in ("windows", "kylin")}, "applicationVersion": version, "sourceCommit": commit, "coverage": coverage, "platformArchives": [{key: item[key] for key in ("platform", "fileName", "sha256", "packageCount")} for item in platform_archives]}
     internal_path = output / "build-manifest.json"
     save_json(internal_path, internal_manifest)
     release_log = output / "release-logs.jsonl"
@@ -296,7 +302,7 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
         if bundle.testzip() is not None or set(bundle.namelist()) != {"build-manifest.json", "release-logs.jsonl", *(item["fileName"] for item in platform_archives)}:
             raise ValueError("aggregate ZIP verification failed")
     references = list({json.dumps(ref, sort_keys=True): ref for item in results if item["status"] == "candidate" for ref in item["sourceReferences"]}.values())
-    manifest = {"schemaVersion": "1.0", "manifestType": "neurobridge.release", "applicationVersion": version, "wireProtocolVersion": tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["northbound_wire_protocol"]["version"], "releaseStatus": "candidate", "trigger": trigger, "git": {"commit": commit, "ref": os.environ.get("GITHUB_REF", "refs/heads/master"), "dirty": bool(run("git", "status", "--porcelain", "--untracked-files=no"))}, "build": {"startedAt": built_times[0].isoformat(), "finishedAt": built_times[-1].isoformat(), "offline": True, "workflowRunId": os.environ.get("GITHUB_RUN_ID", "local"), "runner": os.environ.get("RUNNER_IMAGE", sys.platform)}, "coverage": coverage, "platformArchives": platform_archives, "aggregateArchive": {"fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": sum(counts.values())}, "release": {"tagStatus": "pending", "githubReleaseStatus": "pending"}, "validation": {"status": "pending", "automated": "passed", "physicalVerification": "pending", "logFiles": [release_log.name] + [entry["validationLog"] for item in platform_archives for entry in item["packages"]]}, "sourceReferences": references}
+    manifest = {"schemaVersion": "1.0", "manifestType": "neurobridge.release", "applicationVersion": version, "wireProtocolVersion": tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["northbound_wire_protocol"]["version"], "releaseStatus": "candidate", "trigger": trigger, "git": {"commit": commit, "ref": os.environ.get("GITHUB_REF", "refs/heads/master"), "dirty": bool(run("git", "status", "--porcelain", "--untracked-files=no"))}, "build": {"startedAt": built_times[0].isoformat(), "finishedAt": built_times[-1].isoformat(), "offline": True, "workflowRunId": os.environ.get("GITHUB_RUN_ID", "local"), "runner": os.environ.get("RUNNER_IMAGE", sys.platform)}, "coverage": coverage, "platformVersions": {platform: product_version(platform) for platform in ("windows", "kylin")}, "platformArchives": platform_archives, "aggregateArchive": {"fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": sum(counts.values())}, "release": {"tagStatus": "pending", "githubReleaseStatus": "pending"}, "validation": {"status": "pending", "automated": "passed", "physicalVerification": "pending", "logFiles": [release_log.name] + [entry["validationLog"] for item in platform_archives for entry in item["packages"]]}, "sourceReferences": references}
     save_json(output / "release-manifest.json", manifest)
     (output / f"{archive.name}.sha256").write_text(f"{sha256(archive)}  {archive.name}\n", encoding="utf-8")
     log("aggregate_verified", archive=archive.name, sha256=sha256(archive), packages=sum(counts.values()))

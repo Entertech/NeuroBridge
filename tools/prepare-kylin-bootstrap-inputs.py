@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import urllib.request
-from kylin_inputs import CACHE, catalog, digest, verified_input
+from kylin_inputs import CACHE, catalog, digest, verified_input, selected_artifacts, selection_key
 
 
 def event(message):
@@ -18,9 +18,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--download', action='store_true', help='fetch missing locked inputs over HTTPS')
     parser.add_argument('--cache-dir', type=Path, default=CACHE)
+    parser.add_argument('--offline-resources', default='all', help='all (default), none, or comma-separated resource names')
+    parser.add_argument('--selection-key', action='store_true', help='print canonical cache selection key without preparing files')
     args = parser.parse_args()
+    if args.selection_key:
+        print(selection_key(args.offline_resources))
+        return
     data = catalog()
-    for key, item in data['artifacts'].items():
+    event('selection=' + selection_key(args.offline_resources))
+    for key, item in selected_artifacts(data, args.offline_resources).items():
         try:
             path = verified_input(item, args.cache_dir)
         except ValueError as error:

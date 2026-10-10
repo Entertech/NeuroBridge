@@ -13,9 +13,13 @@ nb_application_version() {
   if [[ -z $root ]]; then printf 'unknown\n'; return; fi
   if [[ -f $root/neurobridge/version_registry.toml ]]; then
     version=$(awk '
+      /^\[application.platform_versions\]/ { platform = 1; inside = 0; next }
+      platform && /^\[/ { platform = 0 }
+      platform && /^kylin[[:space:]]*=/ { split($0, parts, "\""); print parts[2]; found = 1; exit }
       /^\[application\]/ { inside = 1; next }
-      inside && /^\[/ { exit }
-      inside && /^version[[:space:]]*=/ { split($0, parts, "\""); print parts[2]; exit }
+      inside && /^\[/ { inside = 0 }
+      inside && /^version[[:space:]]*=/ { split($0, parts, "\""); fallback = parts[2] }
+      END { if (!found) print fallback }
     ' "$root/neurobridge/version_registry.toml" 2>/dev/null || true)
   fi
   if [[ -n $version ]]; then printf '%s\n' "$version"; else nb_info_value "$root/build-info.txt" application_version; fi

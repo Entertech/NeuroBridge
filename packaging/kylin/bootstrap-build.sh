@@ -9,7 +9,7 @@
 # this same machine.  No archive has to be published anywhere first.
 set -euo pipefail
 
-if [[ ${NEUROBRIDGE_INSTALL_LOGGED:-0} != 1 && ${1:-} != --help && ${1:-} != -h ]]; then
+if [[ ${NEUROBRIDGE_INSTALL_LOGGED:-0} != 1 && ${1:-} != --help && ${1:-} != -h && ${1:-} != --list-resources ]]; then
   exec bash "$(dirname "${BASH_SOURCE[0]}")/run-logged.sh" "${BASH_SOURCE[0]}" "$@"
 fi
 
@@ -20,7 +20,19 @@ fail() {
 
 usage() {
   cat <<'EOF'
-Usage: bootstrap-build.sh
+Usage: bootstrap-build.sh [resource [URL|file] ...]
+       bootstrap-build.sh --list-resources
+
+Resources: python cmake eigen pyserial websockets.
+No arguments or a resource name alone use the bundled input. An HTTPS URL
+forces download; a path forces a local archive/wheel, even if bundled inputs
+exist. All inputs must match the locked version and SHA-256 for this CPU.
+Missing or invalid inputs fail without switching sources. Quote file paths
+containing spaces. --list-resources reports bundled inputs without building;
+run it as root if the shipped input files are readable only by root.
+
+For first installation use the accompanying install-bootstrap.sh --package
+<bootstrap.deb> with these same resource arguments.
 
 Detects the Galaxy Kylin V10 CPU/ABI and builds a matching runtime.
 Builds the runtime from the source tree shipped in this package, writes the
@@ -38,12 +50,19 @@ if [[ ${1:-} == -h || ${1:-} == --help ]]; then
   usage
   exit 0
 fi
-[[ $# -eq 0 ]] || fail "Unknown option: $1"
-
-[[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run as root."
 package_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 NB_INPUT_LOCK="$package_dir/kylin-bootstrap-inputs.toml"
 . "$package_dir/platform.sh"
+. "$package_dir/resources.sh"
+if [[ ${1:-} == --list-resources ]]; then
+  [[ $# -eq 1 ]] || fail '--list-resources does not accept resource overrides.'
+  nb_parse_resources
+  nb_select_platform || fail 'Unsupported target OS/CPU.'
+  nb_list_resources "$package_dir/source"
+  exit 0
+fi
+[[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Run as root."
+nb_parse_resources "$@" || fail 'Invalid resource selection.'
 nb_select_platform || fail "Unsupported Kylin platform; see the selection diagnostics above."
 nb_require_python_development || fail "Native Python development dependencies are incomplete; see the repair commands above."
 
@@ -84,6 +103,11 @@ build_tree=$work/source
 echo 'PHASE prepare-source'
 cp -a "$source_root/." "$build_tree/"
 [[ ! -f $package_dir/build-info.txt ]] || cp "$package_dir/build-info.txt" "$build_tree/build-info.txt"
+
+echo 'PHASE prepare-resources'
+nb_prepare_resources "$source_root" "$work/inputs" "${NEUROBRIDGE_RESOURCE_DIR:-}" \
+  || fail 'Resource selection failed. Specify a matching HTTPS URL or local file; no fallback was attempted.'
+nb_stage_resources "$work/inputs" "$build_tree" || fail 'Cannot stage verified resources.'
 
 nb_event build_runtime "architecture=$NB_ARCH bits=$NB_BITS python=$NB_PYTHON_INPUT cmake=$NB_CMAKE_INPUT"
 echo 'PHASE build-runtime'

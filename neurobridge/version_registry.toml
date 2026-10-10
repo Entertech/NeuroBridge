@@ -1,8 +1,20 @@
 # 本文件是仓库版本号的唯一来源。不要在其他文件中直接修改版本号；
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
+# 总交付批次版本；安装包及运行时版本分别读取 platform_versions。
 [application]
-version = "0.3.0"
+version = "0.4.0"
+
+[application.platform_versions]
+windows = "0.3.0"
+kylin = "0.4.0"
+
+[[application_release_changes]]
+from_version = "0.3.0"
+to_version = "0.4.0"
+impact = "minor"
+compatibility = "Kylin advances to 0.4.0; Windows remains 0.3.0. No-argument installs keep bundled inputs and gateway wire protocol/configuration remain compatible."
+evidence = "Select locked inputs by resource name with optional HTTPS URL or local file; CI includes all, none or selected offline resources, verifies the actual payload, and installation logs every missing default input before configure. Platform product versions are independent of the aggregate release version."
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -275,6 +287,17 @@ locked_at = "2026-10-10"
 external_documents_require_explicit_user_request = true
 default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
+
+[[change_records]]
+id = "2026-10-10-kylin-resource-source-selection"
+date = "2026-10-10"
+scope = "kylin_bootstrap_resource_selection"
+summary = "麒麟引导增加 python/cmake/eigen/pyserial/websockets 资源名及可选 HTTPS URL 或本机文件参数，默认使用包内输入；首次安装入口在 dpkg 前完成架构选择和输入校验，通过一次性临时目录传给首次配置并再次核对锁定摘要，失败不回退来源；增加资源清单查询和随包入口交付。CI 可选 all、none 或指定资源清单，默认全部，实际包内输入核验与按选择隔离的缓存避免遗漏或混入。缺包内资源且未指定来源时逐项提示并写入安装日志；仅麒麟升级为 0.4.0，Windows 保持 0.3.0。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求基于默认分支新建分支完成资源参数需求；按应用发布门禁登记兼容新增能力，不改变依赖版本或北向报文，不回写已发布指南及协议。仅完成源码和隔离模拟验证；网络下载、各架构本机编译、安装/升级/回滚、USB 实时采集与故障恢复仍须银河麒麟目标机验收，本轮不生成安装包或发布。"
 
 [[change_records]]
 id = "2026-10-10-headset-absent-bootstrap-and-bundle-prd"
