@@ -123,9 +123,14 @@ prepare_portable_python() {
 }
 
 python_path=
-for candidate in "$portable_python" \
-  "$(command -v python3.11 2>/dev/null || true)" \
-  "$(command -v python3 2>/dev/null || true)"; do
+python_candidates=("$portable_python")
+# Runtime archives must carry the pinned interpreter and cp311 wheels, even
+# when this machine has a suitable system Python for a source-tree deployment.
+if [[ ${NEUROBRIDGE_PORTABLE_PYTHON:-} != 1 ]]; then
+  python_candidates+=("$(command -v python3.11 2>/dev/null || true)" \
+    "$(command -v python3 2>/dev/null || true)")
+fi
+for candidate in "${python_candidates[@]}"; do
   [[ -n $candidate ]] || continue
   if "$candidate" -c 'import sys; assert sys.version_info >= (3, 11)' >/dev/null 2>&1; then
     python_path=$candidate

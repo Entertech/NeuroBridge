@@ -197,6 +197,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-10-10-pr15-bootstrap-lifecycle-fixes"
+date = "2026-10-10"
+scope = "kylin_bootstrap_installation_lifecycle"
+summary = "修复 PR #15 五项问题：引导安装授权实际 USB TTY 非 root 组；升级及重装部署当前源码；失败回滚恢复服务单元、运行和自启状态；归档固定使用随包 Python；卸载自动停止、禁用及移除所属服务单元并保留现场数据。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确要求修复 PR #15 审查问题，未授权更新对外文档。仅修复同一待合入引导包版本的内部部署行为并同步 README 与技术方案；已发布麒麟指南 v1.0 中安装后接耳机和无卸载脚本说明暂不回写，后续须另发新文档版本。脚本模拟回归不代表银河麒麟 V10 x86_64 安装、回滚、整机重启或真实采集验收通过。"
+
+[[change_records]]
 id = "2026-10-09-public-kylin-operations-v1.0"
 date = "2026-10-09"
 scope = "external_kylin_operations_document"

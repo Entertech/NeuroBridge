@@ -40,6 +40,28 @@ PAYLOAD_DIR = Path("/usr/lib/neurobridge-bootstrap")
 DEB_ARCH = "amd64"
 RPM_ARCH = "x86_64"
 
+# postrm/%postun run after the package payload has been deleted, so these
+# helpers must be embedded in the maintainer scripts rather than sourced.
+UNIT_HELPERS = """unit=/etc/systemd/system/neurobridge.service
+unit_is_ours() {
+  [ -f "$unit" ] || return 1
+  grep -q '^ExecStart=/opt/neurobridge/runtime/bin/python ' "$unit"
+}
+stop_our_unit() {
+  unit_is_ours || return 0
+  systemctl stop neurobridge.service || return 1
+  if systemctl is-active --quiet neurobridge.service; then
+    echo "neurobridge.service is still active; stop it before removing this package." >&2
+    return 1
+  fi
+  systemctl disable neurobridge.service || return 1
+}
+remove_our_unit() {
+  unit_is_ours || return 0
+  rm -f -- "$unit" || return 1
+  systemctl daemon-reload
+}"""
+
 # What the one-time build needs from the repository, copied into the package so
 # the Kylin machine that runs it does not need its own checkout.  Paths are
 # relative to the repository root.
@@ -161,22 +183,26 @@ def write_deb_metadata(root: Path) -> None:
     debian = root / "DEBIAN"
     debian.mkdir()
     (debian / "control").write_text(deb_control(), encoding="utf-8")
-    # dpkg passes "configure" both for a fresh install and for an upgrade.
-    # The package version does not change between builds, so "is this an
-    # upgrade" cannot tell a rebuilt package from a repeat install of the same
-    # one.  Build whenever the runtime is not already installed; a machine that
-    # already has the service keeps it.
+    # Each configure deploys the source carried by this package, including
+    # same-version rebuilds and repairs. An existing interpreter says nothing
+    # about whether the gateway or algorithm matches this package.
     (debian / "postinst").write_text(
         "#!/bin/sh\n"
         "set -eu\n"
-        'if [ "${1:-}" = "configure" ] '
-        '&& [ ! -x /opt/neurobridge/runtime/bin/python ]; then\n'
+        'if [ "${1:-}" = "configure" ]; then\n'
         "  /usr/lib/neurobridge-bootstrap/bootstrap-build.sh\n"
         "fi\n"
         "exit 0\n",
         encoding="utf-8",
     )
     (debian / "postinst").chmod(0o755)
+    for name, action in (
+        ("prerm", 'case "${1:-}" in\n  remove) stop_our_unit ;;\nesac\n'),
+        ("postrm", 'case "${1:-}" in\n  remove|purge) remove_our_unit ;;\nesac\n'),
+    ):
+        script = debian / name
+        script.write_text("#!/bin/sh\nset -eu\n" + UNIT_HELPERS + "\n" + action, encoding="utf-8")
+        script.chmod(0o755)
 
 
 def write_deb(root: Path, output: Path) -> None:
@@ -215,11 +241,18 @@ def write_rpm(payload: Path, output: Path, work: Path) -> None:
         cp -a %{{_sourcedir}}/payload/. %{{buildroot}}/usr/lib/neurobridge-bootstrap/
 
         %post
-        # The package version does not change between builds, so an upgrade and
-        # a reinstall of the same version look alike.  Build when the runtime
-        # is missing; a machine that already has it keeps it.
-        if [ ! -x /opt/neurobridge/runtime/bin/python ]; then
-          /usr/lib/neurobridge-bootstrap/bootstrap-build.sh
+        /usr/lib/neurobridge-bootstrap/bootstrap-build.sh || exit 1
+
+        %preun
+        {textwrap.indent(UNIT_HELPERS, '        ').lstrip()}
+        if [ "$1" -eq 0 ]; then
+          stop_our_unit || exit 1
+        fi
+
+        %postun
+        {textwrap.indent(UNIT_HELPERS, '        ').lstrip()}
+        if [ "$1" -eq 0 ]; then
+          remove_our_unit || exit 1
         fi
 
         %files

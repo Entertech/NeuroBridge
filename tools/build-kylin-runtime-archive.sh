@@ -69,7 +69,7 @@ bridge=$source_root/.runtime/algorithm/neurobridge_affective_bridge
 
 [[ -x $python_runtime/bin/python3 && -x $bridge ]] || {
   printf 'Python runtime or algorithm bridge is not built yet; running the existing setup.\n'
-  "$source_root/linux/setup-kylin-python.sh"
+  NEUROBRIDGE_PORTABLE_PYTHON=1 "$source_root/linux/setup-kylin-python.sh"
   install -d -m 0750 "$source_root/.runtime/config"
   [[ -f $source_root/.runtime/config/gateway.toml ]] || cp "$source_root/config/gateway.toml.example" "$source_root/.runtime/config/gateway.toml"
   "$source_root/linux/setup-kylin-algorithm.sh"

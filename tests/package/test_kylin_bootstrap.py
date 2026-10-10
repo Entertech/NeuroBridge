@@ -95,10 +95,9 @@ class BootstrapPackageTests(unittest.TestCase):
             # depend on whichever version the distro's eigen package happens to be.
             self.assertNotIn("libeigen3-dev", seen["control"])
             self.assertIn("bootstrap-build.sh", seen["postinst"])
-            # A reinstall of the same package version must rebuild when the
-            # runtime is absent.  Gating on "first install" skips that rebuild,
-            # because the package version never changes.
-            self.assertIn("/opt/neurobridge/runtime/bin/python", seen["postinst"])
+            # Reinstalls and upgrades deploy the package even with an existing
+            # interpreter. Execution is covered by the lifecycle regressions.
+            self.assertNotIn("[ ! -x", seen["postinst"])
             self.assertNotIn('"${2:-}"', seen["postinst"])
             self.assertNotIn("echo", seen["postinst"])
 
@@ -168,7 +167,8 @@ class BootstrapPackageTests(unittest.TestCase):
                  "kylin-runtime-manifest.toml", "source"],
             )
             self.assertNotIn("eigen3-devel", seen["spec"])
-            self.assertIn("/opt/neurobridge/runtime/bin/python", seen["spec"])
+            self.assertIn("%preun", seen["spec"])
+            self.assertIn("%postun", seen["spec"])
 
 
 class StageVenvPackagesTests(unittest.TestCase):
