@@ -44,10 +44,18 @@ jobs:
       - name: Install dpkg-deb
         run: sudo apt-get update && sudo apt-get install -y dpkg-dev
       - uses: actions/cache/restore@v4
+        id: kylin-cache
         with:
           path: .runtime/kylin-bootstrap-inputs
           key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
-          fail-on-cache-miss: true
+      - name: Prepare missing locked dependency cache
+        if: steps.kylin-cache.outputs.cache-hit != 'true'
+        run: python tools/prepare-kylin-bootstrap-inputs.py --download
+      - uses: actions/cache/save@v4
+        if: steps.kylin-cache.outputs.cache-hit != 'true'
+        with:
+          path: .runtime/kylin-bootstrap-inputs
+          key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
       - name: Verify locked dependency inputs
         run: python tools/prepare-kylin-bootstrap-inputs.py
       - name: Build the bootstrap deb
