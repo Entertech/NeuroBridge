@@ -1286,9 +1286,12 @@ class DeploymentTests(unittest.TestCase):
             ".venv/",
             "venv/",
             ".runtime/",
-            "wheelhouse/",
+            # A leading slash anchors the pattern at the repository root. The
+            # bootstrap package stages its own copies under source/, and those
+            # must not be swallowed by a pattern that matches anywhere.
+            "/wheelhouse/",
             "algorithm-packages/",
-            "python-runtime/",
+            "/python-runtime/",
         ):
             self.assertIn(ignored_directory, ignore)
 

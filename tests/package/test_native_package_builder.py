@@ -181,9 +181,14 @@ class NativePackageBuilderTests(unittest.TestCase):
 
         A later build of the same version must replace them rather than install
         beside them, and the replacement must not stop the running gateway.
+        The identity is the upgrade code, which does not change when the
+        application version does.
         """
         shipped_version = "0.2.0"
-        self.assertEqual(BUILDER.APPLICATION_VERSION, shipped_version)
+        self.assertGreater(
+            tuple(int(part) for part in BUILDER.APPLICATION_VERSION.split(".")),
+            tuple(int(part) for part in shipped_version.split(".")),
+        )
 
         # Windows MSI.  The upgrade code is derived, not stored, so a future
         # edit that rewords the URL would silently stop detecting the shipped
@@ -206,7 +211,7 @@ class NativePackageBuilderTests(unittest.TestCase):
                 BUILDER.command = real_command
             wxs = (stage / "neurobridge.wxs").read_text(encoding="utf-8")
             upgrade_code = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge"))
-            self.assertIn(f'Version="{shipped_version}"', wxs)
+            self.assertIn(f'Version="{BUILDER.APPLICATION_VERSION}"', wxs)
             self.assertIn(f'UpgradeCode="{upgrade_code}"', wxs)
             self.assertIn('AllowSameVersionUpgrades="yes"', wxs)
             self.assertNotIn("ProductCode=", wxs)
@@ -228,7 +233,7 @@ class NativePackageBuilderTests(unittest.TestCase):
                 BUILDER.command = real_command
             bundle = bundle_path.read_text(encoding="utf-8")
         bundle_upgrade = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge/bundle"))
-        self.assertIn(f'Version="{shipped_version}"', bundle)
+        self.assertIn(f'Version="{BUILDER.APPLICATION_VERSION}"', bundle)
         self.assertIn(f'UpgradeCode="{bundle_upgrade}"', bundle)
         self.assertIn(f'<RelatedBundle Action="Upgrade" Id="{bundle_upgrade}" />', bundle)
 
@@ -237,7 +242,7 @@ class NativePackageBuilderTests(unittest.TestCase):
         for edition in ("desktop", "server"):
             target = BUILDER.target_from_id(f"kylin-{edition}-x86_64-deb")
             self.assertEqual(BUILDER.deb_control(target).splitlines()[0], f"Package: neurobridge-{edition}")
-            self.assertIn(f"Version: {shipped_version}", BUILDER.deb_control(target))
+            self.assertIn(f"Version: {BUILDER.APPLICATION_VERSION}", BUILDER.deb_control(target))
             with tempfile.TemporaryDirectory() as directory:
                 stage = Path(directory) / "stage"
                 stage.mkdir()
