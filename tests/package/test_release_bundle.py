@@ -175,6 +175,10 @@ class ReleaseBundleTests(unittest.TestCase):
                 self.assertIn('windows-11-x86_64.zip', prd)
                 self.assertIn('checksums.sha256', prd)
                 self.assertIn('export-install-logs.sh', prd)
+                self.assertIn('loongarch64', prd)
+                self.assertIn('mips64el', prd)
+                self.assertIn('diagnostic-context', prd)
+                self.assertIn('扩展架构的影响', prd)
                 self.assertIn('PRD.md', manifest['documents'])
                 self.assertIn("windows/windows.zip", names)
                 self.assertIn("kylin/kylin.zip", names)
@@ -200,8 +204,10 @@ class ReleaseBundleTests(unittest.TestCase):
                     with zipfile.ZipFile(windows.open("windows-10.zip")) as windows_7:
                         self.assertEqual(
                             set(windows_7.namelist()),
-                            {"windows-10-x86_64.zip", "docs/windows-deployment-guide_v1.0.pdf", "docs/protocol.pdf", "install-with-logs.ps1"},
+                            {"windows-10-x86_64.zip", "docs/windows-deployment-guide_v1.0.pdf", "docs/protocol.pdf", "install-with-logs.ps1", "diagnostic-context.ps1", "build-info.txt"},
                         )
+                        self.assertIn(b'application_version=0.2.0', windows_7.read('build-info.txt'))
+                        self.assertIn(manifest['sourceCommit'].encode(), windows_7.read('build-info.txt'))
                         with zipfile.ZipFile(windows_7.open("windows-10-x86_64.zip")) as x86:
                             self.assertEqual(set(x86.namelist()), {"neurobridge-0.2.0-windows-10-x86_64.exe", "neurobridge-0.2.0-windows-10-x86_64.msi", "checksums.sha256"})
                 self.assertEqual({name for name in names if name.startswith("kylin/")}, {"kylin/kylin.zip"})

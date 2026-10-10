@@ -8,6 +8,18 @@ param(
     [string]$OutputDirectory = (Get-Location).Path
 )
 $ErrorActionPreference = 'Stop'
+$contextHelper = Join-Path $PSScriptRoot 'diagnostic-context.ps1'
+$packageRoot = $PSScriptRoot
+if (-not (Test-Path -LiteralPath $contextHelper -PathType Leaf)) {
+    $packageRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+    $contextHelper = Join-Path $packageRoot 'windows\diagnostic-context.ps1'
+}
+. $contextHelper
+$programFiles = $env:ProgramW6432
+if (-not $programFiles) { $programFiles = $env:ProgramFiles }
+$installedRoot = Join-Path $programFiles 'NeuroBridge'
+$context = Get-NeuroBridgeDiagnosticContext -Scope installation -ApplicationRoot $installedRoot `
+    -PackageRoot $packageRoot -Python (Join-Path $installedRoot 'runtime\python.exe')
 $logDirectory = Join-Path $env:LOCALAPPDATA 'NeuroBridge\installer-logs'
 New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
 $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '-' + [guid]::NewGuid().ToString('N')
@@ -18,7 +30,11 @@ if ($Export) {
         $_.Name -like 'install-*.log*' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)
     })
     if ($files.Count -eq 0) { throw 'No installation logs. Run installation through this script first.' }
-    Compress-Archive -LiteralPath $files.FullName -DestinationPath $archive
+    $contextPath = Join-Path $logDirectory ('diagnostic-context-' + $stamp + '.json')
+    try {
+        $context | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $contextPath -Encoding UTF8
+        Compress-Archive -LiteralPath (@($files.FullName) + @($contextPath)) -DestinationPath $archive
+    } finally { Remove-Item -LiteralPath $contextPath -Force -ErrorAction SilentlyContinue }
     Write-Host ('Log export: ' + $archive)
     exit 0
 }
@@ -27,6 +43,7 @@ $nativeLog = $summary + '.native.log'
 $result = 1
 try {
     ('INSTALL_BEGIN utc=' + [DateTime]::UtcNow.ToString('o')) | Set-Content -LiteralPath $summary -Encoding UTF8
+    ('DIAGNOSTIC_CONTEXT ' + ($context | ConvertTo-Json -Depth 4 -Compress)) | Add-Content -LiteralPath $summary -Encoding UTF8
     $os = Get-CimInstance Win32_OperatingSystem
     ('OS=' + $os.Caption + ' version=' + $os.Version + ' architecture=' + $os.OSArchitecture) | Add-Content -LiteralPath $summary -Encoding UTF8
     if (-not [Environment]::Is64BitOperatingSystem -or [version]$os.Version -lt [version]'10.0') {

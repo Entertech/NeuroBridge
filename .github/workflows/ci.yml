@@ -53,6 +53,7 @@ jobs:
             (Join-Path $PWD 'windows/setup-windows-gateway.ps1'),
             (Join-Path $PWD 'windows/diagnose-service.ps1'),
             (Join-Path $PWD 'windows/export-logs.ps1'),
+            (Join-Path $PWD 'windows/diagnostic-context.ps1'),
             (Join-Path $PWD 'packaging/windows/install-with-logs.ps1'),
             (Join-Path $PWD 'tools/prepare-windows-candidate-runtime.ps1')
           )) {

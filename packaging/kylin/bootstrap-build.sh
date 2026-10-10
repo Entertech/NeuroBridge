@@ -80,6 +80,7 @@ trap cleanup EXIT
 build_tree=$work/source
 echo 'PHASE prepare-source'
 cp -a "$source_root/." "$build_tree/"
+[[ ! -f $package_dir/build-info.txt ]] || cp "$package_dir/build-info.txt" "$build_tree/build-info.txt"
 
 echo 'PHASE build-runtime'
 NEUROBRIDGE_BOOTSTRAP=1 "$build_tree/tools/build-kylin-runtime-archive.sh" \

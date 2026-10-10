@@ -16,6 +16,7 @@ unit_path="/etc/systemd/system/$unit_name"
 package_root=/opt/neurobridge
 package_config=/etc/neurobridge/gateway.toml
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+. "$script_dir/diagnostic-context.sh"
 # From a checkout this script sits at <checkout>/packaging/kylin/.  Installed by
 # a deb/rpm it sits at /opt/neurobridge/kylin/, where two levels up is /opt, so
 # fall back to the application root rather than treating /opt as a checkout.
@@ -121,13 +122,7 @@ record_skip() {
 }
 
 application_version() {
-  local registry=$1
-  [[ -f $registry ]] || { printf 'unknown\n'; return 0; }
-  awk '
-    /^\[application\]/ { inside = 1; next }
-    inside && /^\[/ { exit }
-    inside && /^version[[:space:]]*=/ { gsub(/[^0-9A-Za-z._-]/, "", $3); print $3; exit }
-  ' "$registry"
+  nb_application_version "$(dirname "$(dirname "$1")")"
 }
 
 # Read [logging] directory without loading or copying the rest of the file.
@@ -182,6 +177,7 @@ else
 fi
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+nb_write_diagnostic_context "$work_dir/diagnostic-context.txt" runtime "$root_dir"
 {
   printf 'NeuroBridge log export\n'
   printf 'generatedAtUtc: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -224,7 +220,7 @@ for log_directory in ${log_directories[@]+"${log_directories[@]}"}; do
       }
       printf 'log %s bytes=%s stored=tail(%s)\n' "$source" "$size" "$max_log_bytes" >>"$inventory"
     else
-      cp --preserve=timestamps "$source" "$destination/$base" 2>/dev/null || {
+      cp -p "$source" "$destination/$base" 2>/dev/null || {
         warn "Could not copy log: $source"
         continue
       }
@@ -244,7 +240,7 @@ fi
 # ---- service state ---------------------------------------------------------
 mkdir -p "$work_dir/service"
 if [[ -f $unit_path ]]; then
-  cp --preserve=timestamps "$unit_path" "$work_dir/service/$unit_name" 2>/dev/null \
+  cp -p "$unit_path" "$work_dir/service/$unit_name" 2>/dev/null \
     || warn "Could not copy the unit file: $unit_path"
 else
   record_skip "unit file $unit_path is absent"

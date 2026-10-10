@@ -112,6 +112,18 @@ for name in neurobridge web requirements.lock pyproject.toml sdk.lock config; do
 done
 cp "$source_root/config/gateway.toml.example" "$stage/gateway.toml.example"
 cp "$source_root/packaging/kylin/neurobridge.service" "$stage/packaging/neurobridge.service"
+install -d -m 0755 "$stage/payload/kylin"
+for name in export-logs.sh diagnostic-context.sh; do
+  install -m 0755 "$source_root/packaging/kylin/$name" "$stage/payload/kylin/$name"
+done
+if [[ -f $source_root/build-info.txt ]]; then
+  cp "$source_root/build-info.txt" "$stage/payload/build-info.txt"
+else
+  version=$(awk '/^\[application\]/ { inside=1; next } inside && /^\[/ { exit } inside && /^version[[:space:]]*=/ { split($0, parts, "\""); print parts[2]; exit }' "$source_root/neurobridge/version_registry.toml")
+  commit=unknown
+  [[ ! -e $source_root/.git ]] || commit=$(git -C "$source_root" rev-parse HEAD 2>/dev/null || printf unknown)
+  printf 'application_version=%s\nsource_commit=%s\n' "$version" "$commit" > "$stage/payload/build-info.txt"
+fi
 
 # The archive is only worth publishing if the interpreter it carries can
 # import the gateway it carries.  This is the same check the per-machine

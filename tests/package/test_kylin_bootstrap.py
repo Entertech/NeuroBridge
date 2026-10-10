@@ -83,7 +83,7 @@ class BootstrapPackageTests(unittest.TestCase):
 
             self.assertEqual(
                 seen["names"],
-                ["70-neurobridge-usb-serial.rules", "bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "export-install-logs.sh", "fetch-runtime.sh",
+                ["70-neurobridge-usb-serial.rules", "bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "diagnostic-context.sh", "export-install-logs.sh", "fetch-runtime.sh",
                  "kylin-runtime-manifest.toml", "run-logged.sh", "source"],
             )
             self.assertGreater(output.stat().st_size, 1024)
@@ -127,6 +127,8 @@ class BootstrapPackageTests(unittest.TestCase):
                 "config/kylin-runtime-manifest.toml",
                 "config/gateway.toml.example",
                 "packaging/kylin/neurobridge.service",
+                "packaging/kylin/export-logs.sh",
+                "packaging/kylin/diagnostic-context.sh",
                 "third_party/NumCpp/CMakeLists.txt",
                 "neurobridge/__init__.py",
             ):
@@ -163,7 +165,7 @@ class BootstrapPackageTests(unittest.TestCase):
 
             self.assertEqual(
                 seen["names"],
-                ["70-neurobridge-usb-serial.rules", "bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "export-install-logs.sh", "fetch-runtime.sh",
+                ["70-neurobridge-usb-serial.rules", "bootstrap-build.sh", "bootstrap-install.sh", "build-info.txt", "diagnostic-context.sh", "export-install-logs.sh", "fetch-runtime.sh",
                  "kylin-runtime-manifest.toml", "run-logged.sh", "source"],
             )
             self.assertNotIn("eigen3-devel", seen["spec"])

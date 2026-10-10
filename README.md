@@ -177,3 +177,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 安装排错：麒麟安装日志保存在 `/var/log/neurobridge-bootstrap`，服务尚未创建时也可运行 `sudo /usr/lib/neurobridge-bootstrap/export-install-logs.sh --output-dir "$HOME/下载"`。Windows 10/11 64 位包随附 `install-with-logs.ps1`，通过 `-Installer` 安装、`-Export` 导出失败日志；Windows 7 和 32 位目标不参与构建与交付。交付 ZIP 的 PDF 副本使用英文文件名，原名称对照保存在 `metadata/document-filenames.json`。上述源码与模拟验证不替代银河麒麟现场验收。
 
 交付总 ZIP 根目录生成 `PRD.md`，说明实际系统/版本/架构归档、解压顺序、指南位置、校验值、安装与失败日志入口，以及不支持的系统架构；目录列表从本次交付清单生成。需求见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)。
+
+详细支持表及扩展架构影响见[发布工作流 PRD §2.7–2.9](doc/product/发布工作流%20PRD.md#27-系统与-cpu-架构支持表)：当前仅 Windows 10/11 x86_64 和银河麒麟 V10 x86_64；ARM64、LoongArch64、龙芯 MIPS 与申威 SW64 分别需要运行时、离线依赖、算法构建及真机验收，不因同为 64 位而兼容。正式验收仍为麒麟 N100/N150，其他平台不能替代。
+
+两平台安装与运行日志导出新增诊断上下文，记录软件版本/源码提交、安装包版本/提交、导出时间、系统版本/构建、CPU 架构/位数、Python 与脚本环境。Windows 为 `diagnostic-context.json`（安装导出带时间后缀），麒麟为 `diagnostic-context.txt`；磁盘部署版本与安装包版本分别标识，缺失值写 `unknown`，服务状态另行记录。网页日志下载也附运行进程的版本和环境；配置正文、全量环境变量和录制数据不导出。麒麟运行日志可用 `sudo /opt/neurobridge/kylin/export-logs.sh --output-dir "$HOME/下载"` 导出；Windows 用安装目录 `windows/export-logs.ps1 -OutputDirectory C:\Temp`。

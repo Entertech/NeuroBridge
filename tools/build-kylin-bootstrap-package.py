@@ -118,7 +118,7 @@ def stage_payload(root: Path) -> None:
     payload = root / PAYLOAD_DIR.relative_to("/")
     payload.mkdir(parents=True)
     shutil.copy2(MANIFEST, payload / "kylin-runtime-manifest.toml")
-    for script in (FETCH, INSTALL, BUILD, ROOT / "packaging/kylin/run-logged.sh", ROOT / "packaging/kylin/export-install-logs.sh"):
+    for script in (FETCH, INSTALL, BUILD, ROOT / "packaging/kylin/run-logged.sh", ROOT / "packaging/kylin/export-install-logs.sh", ROOT / "packaging/kylin/diagnostic-context.sh"):
         destination = payload / script.name
         shutil.copy2(script, destination)
         destination.chmod(0o755)

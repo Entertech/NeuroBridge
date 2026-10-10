@@ -115,6 +115,10 @@ powershell -ExecutionPolicy Bypass -File 'C:\Program Files\NeuroBridge\windows\e
 
 命令是只读的：不启停服务、不改配置、不删锁、不动录制。它**不包含配置正文、录制数据和凭据**，配置只记录 SHA-256。读取事件日志需要管理员权限，非管理员运行时相应小节会记录为已跳过。
 
+`diagnostic-context.json` 记录部署文件的应用版本、源码提交、诊断时间/类型、Windows 名称/版本/OS 构建号、原生 CPU 架构、系统和导出进程位数、PowerShell 与部署 Python 版本/位数。缺失值标为 `unknown`；磁盘文件版本不表示旧运行进程已加载新版本，服务状态应同时查看。菜单 `7` 的摘要和网页日志下载也含运行 Python 进程的版本与环境。
+
+交付目录中的 `install-with-logs.ps1`、`diagnostic-context.ps1` 与 `build-info.txt` 须保存在一起。安装用 `-Installer <MSI或EXE路径>`，失败用 `-Export -OutputDirectory C:\Temp`；尚未创建服务也能导出。安装摘要保存安装开始时的上下文，导出 ZIP 另附 `diagnostic-context-<UTC时间及唯一后缀>.json`，将 `applicationVersion`（当前部署文件）与 `packageApplicationVersion`（本次交付包）分开，源码提交也分别记录；不要将升级包版本当作已安装成功的版本。
+
 网关自带的 HTTP 导出（`http://127.0.0.1:8766/downloads/logs/neurobridge-logs.zip`）只在网关运行且下载服务启用时可用，且按设计不含事件日志与 COM 端口信息；排障时优先用上面的命令。
 
 ## MSI / EXE 安装包部署

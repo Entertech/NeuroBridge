@@ -125,9 +125,11 @@ def serial_summary(config) -> list[str]:
 def diagnostics(root: Path) -> Path:
     """Allowlisted metadata only: never archive config, logs or recordings wholesale."""
     from neurobridge.versioning import APPLICATION_VERSION
+    from neurobridge.diagnostics import runtime_context
     report = {'applicationVersion': APPLICATION_VERSION, 'system': platform.platform(),
               'python': platform.python_version(), 'architecture': platform.machine(),
               'rawDataIncluded': False, 'logsIncluded': False}
+    report['diagnosticContext'] = runtime_context()
     path = config_path(root)
     report['configExists'] = path.is_file()
     if path.is_file():

@@ -114,6 +114,11 @@ def copy_source(stage: Path, target: dict[str, str], runtime: Path) -> None:
             shutil.copy2(source, destination)
     platform_dir = ROOT / ("windows" if target["platform"] == "windows" else "packaging/kylin")
     shutil.copytree(platform_dir, payload / platform_dir.name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    (payload / "build-info.txt").write_text(
+        f"application_version={APPLICATION_VERSION}\nsource_commit={commit}\ntarget_id={target['id']}\n",
+        encoding="utf-8",
+    )
     if target["platform"] == "kylin":
         service_dir = payload / "packaging"
         service_dir.mkdir(parents=True, exist_ok=True)

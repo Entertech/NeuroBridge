@@ -197,6 +197,12 @@ class BootstrapLifecycleTests(SandboxTests):
         # A failed/half-configured install must still be exportable without Python.
         exporter = box.root / "scripts/export-install-logs.sh"
         exporter.write_text(box.relocate((ROOT / "packaging/kylin/export-install-logs.sh").read_text()))
+        helper = box.root / 'scripts/diagnostic-context.sh'
+        helper.write_text(box.relocate((ROOT / 'packaging/kylin/diagnostic-context.sh').read_text()))
+        (box.root / 'scripts/build-info.txt').write_text('application_version=2.0.0\nsource_commit=' + 'b' * 40 + '\n')
+        (box.app / 'neurobridge').mkdir(parents=True)
+        (box.app / 'neurobridge/version_registry.toml').write_text('[application]\nversion = "1.0.0"\n')
+        (box.app / 'build-info.txt').write_text('application_version=1.0.0\nsource_commit=' + 'a' * 40 + '\n')
         box.config.write_text("password=do-not-export\n")
         secret = box.root / "var/lib/neurobridge/recordings/secret.txt"
         secret.parent.mkdir(parents=True, exist_ok=True)
@@ -209,6 +215,13 @@ class BootstrapLifecycleTests(SandboxTests):
         with tarfile.open(archives[0]) as archive:
             self.assertTrue(any("install-logs/install-" in name for name in archive.getnames()))
             self.assertIn(b'No USB serial TTY present', archive.extractfile('./tty-status.txt').read())
+            context = archive.extractfile('./diagnostic-context.txt').read()
+            self.assertIn(b'applicationVersion=1.0.0', context)
+            self.assertIn(b'packageApplicationVersion=2.0.0', context)
+            self.assertIn(b'sourceCommit=' + b'a' * 40, context)
+            self.assertIn(b'packageSourceCommit=' + b'b' * 40, context)
+            self.assertIn(b'osId=kylin', context)
+            self.assertIn(b'osArchitecture=x86_64', context)
             payload = b"\n".join(archive.extractfile(member).read() for member in archive if member.isfile())
             self.assertNotIn(b"do-not-export", payload)
             self.assertNotIn(b"sensitive-device-data", payload)
@@ -550,6 +563,9 @@ elif "--version" in sys.argv:
                     for relative in ("pyproject.toml", "sdk.lock", "config/gateway.toml.example"):
                         (box.root / relative).write_text("")
                     (box.root / "packaging/kylin/neurobridge.service").write_text("unit-fixture\n")
+                    for name in ('export-logs.sh', 'diagnostic-context.sh'):
+                        (box.root / 'packaging/kylin' / name).write_text('#!/bin/bash\n')
+                    (box.root / 'neurobridge/version_registry.toml').write_text('[application]\nversion = "9.9.9"\n')
                     (box.root / "config/kylin-runtime-manifest.toml").write_text(
                         'file_name = "runtime.tar.gz"\nsha256 = ""\nurl = ""\n'
                     )
@@ -576,6 +592,10 @@ elif "--version" in sys.argv:
                 calls = [json.loads(line) for line in (box.root / "python-calls.jsonl").read_text().splitlines()]
                 if force_portable:
                     self.assertFalse(any(call[0] == str(system_python) for call in calls))
+                    with tarfile.open(next((box.root / 'output').glob('*.tar.gz'))) as bundled:
+                        self.assertIn('./payload/kylin/export-logs.sh', bundled.getnames())
+                        self.assertIn('./payload/kylin/diagnostic-context.sh', bundled.getnames())
+                        self.assertIn(b'application_version=9.9.9', bundled.extractfile('./payload/build-info.txt').read())
 
 
 if __name__ == "__main__":

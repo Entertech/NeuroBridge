@@ -291,6 +291,10 @@ class NativePackageBuilderTests(unittest.TestCase):
                     BUILDER.copy_source(stage, target, runtime)
                     exporter = stage / relative
                     self.assertTrue(exporter.is_file(), f"{relative} must ship inside {target_id}")
+                    self.assertTrue((exporter.parent / ('diagnostic-context.sh' if target_id.startswith('kylin') else 'diagnostic-context.ps1')).is_file())
+                    info = (stage / 'opt/neurobridge/build-info.txt').read_text()
+                    self.assertIn('application_version=' + BUILDER.APPLICATION_VERSION, info)
+                    self.assertIn('source_commit=' + subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), info)
                     if target_id.startswith("kylin"):
                         self.assertTrue(os.access(exporter, os.X_OK))
 

@@ -163,6 +163,15 @@ EOF
 } >"$work_dir/manifest.txt"
 
 # Host, operating system, clock, hardware, storage, and resource state.
+if [[ -r $root_dir/packaging/kylin/diagnostic-context.sh ]]; then
+  . "$root_dir/packaging/kylin/diagnostic-context.sh"
+  nb_write_diagnostic_context "$work_dir/collector-diagnostic-context.txt" runtime "$root_dir"
+  if [[ -d /opt/neurobridge/neurobridge ]]; then
+    nb_write_diagnostic_context "$work_dir/deployed-diagnostic-context.txt" runtime /opt/neurobridge
+  fi
+else
+  warn "Version/environment context helper is unavailable in the collector checkout"
+fi
 capture os-release cat /etc/os-release
 [[ -r /etc/issue ]] && capture issue cat /etc/issue || warn "/etc/issue is unavailable"
 [[ -r /etc/kylin-release ]] && capture kylin-release cat /etc/kylin-release || warn "/etc/kylin-release is unavailable"

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -564,6 +565,8 @@ class DeploymentTests(unittest.TestCase):
             )
             exporter = checkout / "packaging" / "kylin" / "export-logs.sh"
             exporter.write_text(script_source, encoding="utf-8")
+            (exporter.parent / 'diagnostic-context.sh').write_text(
+                (ROOT / 'packaging/kylin/diagnostic-context.sh').read_text(), encoding='utf-8')
             exporter.chmod(0o755)
 
             result = subprocess.run(
@@ -592,6 +595,12 @@ class DeploymentTests(unittest.TestCase):
             self.assertEqual(manifest.returncode, 0, manifest.stderr)
             self.assertIn("layout: source", manifest.stdout)
             self.assertIn("applicationVersion: 9.9.9", manifest.stdout)
+            with tarfile.open(archives[0]) as archive:
+                context = archive.extractfile('./diagnostic-context.txt').read().decode()
+                self.assertIn('applicationVersion=9.9.9', context)
+                self.assertIn('diagnosticScope=runtime', context)
+                self.assertIn('osArchitecture=', context)
+                self.assertIn('kernelVersion=', context)
             # One log directory, not the same one collected under two spellings.
             self.assertEqual(manifest.stdout.count("logDirectories:"), 1)
             self.assertNotIn("stored=tail", manifest.stdout.split("File inventory:")[0])

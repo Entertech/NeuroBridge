@@ -1714,3 +1714,15 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户明确授权修复第二轮复审 #3、#4。仅修改 CI 打包与发布重试，不修改应用版本或北向报文；复审 #1、#2 和原审查 #6 未修复。源码回归不替代银河麒麟 V10 x86_64 原生包及真实采集验收。"
+
+
+[[change_records]]
+id = "2026-10-10-diagnostic-version-environment-and-architecture-scope"
+date = "2026-10-10"
+scope = "installation_runtime_diagnostics_and_architecture_documentation"
+summary = "Windows/麒麟安装与运行导出标识应用和包版本/源码提交、诊断时间、系统版本/构建、CPU架构/位数及Python/脚本环境，升级失败区分旧部署与新包；原生载荷和麒麟引导生成的运行时保存构建身份并交付运行日志导出入口，网页日志及摘要补充运行环境；PRD详细列出支持架构及未来适配成本与验收门禁。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求说明32位及麒麟其他架构扩展的影响，并补齐支持范围和两平台诊断身份/环境。本轮只修复源码、内部PRD和测试，不新增受支持架构，不生成安装包/PDF/总包，不修改已发布及预发布北向正文；当前版本目标机安装、真实采集与故障恢复仍待验证。"

@@ -8,15 +8,18 @@ fi
 [[ $# -eq 2 && $1 == --output-dir ]] || { echo 'Usage: sudo export-install-logs.sh --output-dir <directory>' >&2; exit 2; }
 [[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'Run as root.' >&2; exit 1; }
 umask 077
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+. "$script_dir/diagnostic-context.sh"
 output_dir=$2
 mkdir -p -- "$output_dir"
 work=$(mktemp -d /var/tmp/neurobridge-support.XXXXXX)
 trap 'rm -rf -- "$work"' EXIT
 mkdir "$work/install-logs" "$work/build-logs"
+nb_write_diagnostic_context "$work/diagnostic-context.txt" installation /opt/neurobridge "$script_dir"
 {
   date -u +%FT%TZ
   uname -srmo
-  cat /etc/os-release
+  cat /etc/os-release 2>&1 || true
   dpkg-query -W -f='${Package} ${Version} ${Status}\n' neurobridge-bootstrap 2>&1 || true
   systemctl is-active neurobridge.service 2>&1 || true
   systemctl is-enabled neurobridge.service 2>&1 || true

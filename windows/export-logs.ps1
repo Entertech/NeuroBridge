@@ -44,6 +44,7 @@ param(
 $ErrorActionPreference = 'Stop'
 # Keep the export quiet when it is captured from a scheduled or support session.
 $ProgressPreference = 'SilentlyContinue'
+. (Join-Path $PSScriptRoot 'diagnostic-context.ps1')
 
 function Get-ProgramFilesDirectory {
     # A 32-bit host would otherwise resolve to "Program Files (x86)".
@@ -170,10 +171,16 @@ function Export-GatewayLogs {
     $logDirectory = Resolve-LogDirectory -Layout $Layout
 
     try {
+        $context = Get-NeuroBridgeDiagnosticContext -Scope runtime -ApplicationRoot $Layout.Root -Python $Layout.Python
+        $context | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $staging 'diagnostic-context.json') -Encoding UTF8
         $manifest.Add('NeuroBridge log export')
         $manifest.Add('generatedAtUtc: ' + [DateTime]::UtcNow.ToString('o'))
         $manifest.Add('layout: ' + $Layout.Kind)
         $manifest.Add('applicationRoot: ' + $Layout.Root)
+        $manifest.Add('applicationVersion: ' + $context.applicationVersion)
+        $manifest.Add('sourceCommit: ' + $context.sourceCommit)
+        $manifest.Add('os: ' + $context.osName + ' version=' + $context.osVersion + ' build=' + $context.osBuild)
+        $manifest.Add('architecture: ' + $context.nativeArchitecture + ' osBits=' + $context.osBits + ' exporterBits=' + $context.exporterBits)
         $manifest.Add('dataRoot: ' + $Layout.DataRoot)
         $manifest.Add('serviceName: ' + $Layout.ServiceName)
         $manifest.Add('logDirectory: ' + $logDirectory)

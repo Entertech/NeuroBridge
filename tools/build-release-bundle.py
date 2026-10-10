@@ -138,6 +138,7 @@ def build_system_archives(
     grouped: dict[tuple[str, str, str], list[dict]],
     timestamp: tuple[int, int, int, int, int, int],
     platform_documents: dict[str, dict[str, bytes]],
+    build_info: bytes,
 ) -> tuple[dict[str, bytes], list[dict]]:
     files: dict[str, bytes] = {}
     manifest: list[dict] = []
@@ -161,7 +162,7 @@ def build_system_archives(
                 continue
             arch_entries: list[dict] = []
             family_documents = {f"docs/{delivery_pdf_name(name)}": payload for name, payload in sorted(platform_documents.get(platform, {}).items())}
-            support_files = ["install-with-logs.ps1"] if platform == "windows" else []
+            support_files = ["install-with-logs.ps1", "diagnostic-context.ps1", "build-info.txt"] if platform == "windows" else []
             family_stream = io.BytesIO()
             with zipfile.ZipFile(family_stream, "w", zipfile.ZIP_DEFLATED) as family_zip:
                 for architecture, packages in architectures:
@@ -173,6 +174,8 @@ def build_system_archives(
                     add_bytes(family_zip, document_name, payload, timestamp)
                 if platform == "windows":
                     add_bytes(family_zip, "install-with-logs.ps1", (ROOT / "packaging/windows/install-with-logs.ps1").read_bytes(), timestamp)
+                    add_bytes(family_zip, "diagnostic-context.ps1", (ROOT / "windows/diagnostic-context.ps1").read_bytes(), timestamp)
+                    add_bytes(family_zip, "build-info.txt", build_info, timestamp)
             family_data = family_stream.getvalue()
             family_filename = f"{family}.zip"
             family_archives.append((
@@ -293,6 +296,16 @@ def render_bundle_prd(release_manifest: dict, systems: list[dict]) -> str:
         "麒麟 32 位 x86、ARM/aarch64、龙芯/LoongArch/MIPS、申威等其他架构不支持。",
         "V10 是系统版本，不代表所有架构通用；其他 64 位架构也不能安装此 x86_64 包。",
         "在麒麟终端执行 uname -m，当前包要求输出 x86_64。",
+        "",
+        "| 系统 | CPU 架构 / 位数 | 当前包 |",
+        "| --- | --- | --- |",
+        "| Windows 10/11 | x86_64 / AMD64，Intel/AMD 64 位 | EXE、MSI；依实际清单交付 |",
+        "| 银河麒麟 V10 | x86_64 / AMD64，Intel/AMD 64 位；DEB 架构 amd64 | 引导 DEB；正式目标 N100/N150 |",
+        "| Windows 7、Windows x86 32 位、Windows ARM32/ARM64 | 不在当前矩阵 | 无 |",
+        "| 麒麟 V10 x86 32 位、ARM32/armhf、ARM64/aarch64 | 不在当前矩阵 | 无 |",
+        "| 麒麟 V10 龙芯 LoongArch64/loongarch64、龙芯 MIPS/mips64el、申威 SW64/sw64 | 各为不同架构；均不在当前矩阵 | 无 |",
+        "",
+        "银河麒麟正式验收结果不能由 Windows 或其他架构替代；当前版本新增修复仍须目标机验证。",
         "本包包含的实际系统、版本与架构列在下方，未列出的目标不随包交付。",
         "",
         "## 2. 根目录与解压结构",
@@ -315,7 +328,10 @@ def render_bundle_prd(release_manifest: dict, systems: list[dict]) -> str:
             for document in variant['documents']:
                 lines.append(f"    {document}：该系统的部署指南或共用协议文档。")
             for helper in variant.get('supportFiles', []):
-                lines.append(f"    {helper}：Windows 安装日志与失败日志导出入口。")
+                purpose = {'install-with-logs.ps1': 'Windows 安装日志与失败日志导出入口',
+                           'diagnostic-context.ps1': '日志版本与系统环境采集模块',
+                           'build-info.txt': '当前交付软件版本及源码提交'}[helper]
+                lines.append(f"    {helper}：{purpose}。")
         lines.append("")
     lines.extend([
         "```",
@@ -337,6 +353,12 @@ def render_bundle_prd(release_manifest: dict, systems: list[dict]) -> str:
         "服务尚未创建或软件包配置失败时也可以导出；串口节点及权限诊断在 tty-status.txt。",
         "Windows：在版本 ZIP 目录执行 powershell -ExecutionPolicy Bypass -File .\\install-with-logs.ps1 -Installer .\\<x86_64目录>\\<安装包>。",
         "Windows 导出：powershell -ExecutionPolicy Bypass -File .\\install-with-logs.ps1 -Export。",
+        '麒麟运行日志导出：sudo /opt/neurobridge/kylin/export-logs.sh --output-dir "$HOME/下载"。',
+        "Windows 运行日志导出：powershell -ExecutionPolicy Bypass -File 'C:\\Program Files\\NeuroBridge\\windows\\export-logs.ps1' -OutputDirectory C:\\Temp。",
+        "两平台诊断上下文记录 UTC 时间、安装/运行类型、软件版本/源码提交、安装包版本/提交、系统名称/版本/构建、CPU 架构/系统位数和部署 Python 版本/位数。",
+        "Windows 为 diagnostic-context.json（安装导出带时间后缀）；麒麟为 diagnostic-context.txt，另记内核/glibc/Bash；Windows 另记 PowerShell/导出进程位数。",
+        "软件版本来自磁盘上的部署文件；安装包版本来自交付 build-info.txt；服务状态另行记录，无法读取的值明确为 unknown。",
+        "Windows 安装摘要记录安装开始时环境；导出时重新采集当前环境，须按时间区分旧部署与升级包。诊断不收录配置正文、全量环境变量、凭据或录制数据。",
         "PDF 副本使用英文文件名以避免解压乱码，中文标题和正文保留；请勿据名称猜测系统兼容性。",
         "",
         "## 5. 验收要求",
@@ -345,6 +367,13 @@ def render_bundle_prd(release_manifest: dict, systems: list[dict]) -> str:
         "不得生成或宣称支持矩阵之外的系统/架构，也不得把源码/模拟测试写成现场验收通过。",
         "麒麟现场须验证无耳机安装、接入后实时采集、拔插重连、启动失败回滚、卸载和服务/整机重启。",
         "耳机离线且存在历史录制时不得启动录播；浏览器断开/恢复须保持可观测状态。",
+        "",
+        "## 6. 扩展架构的影响",
+        "",
+        "新增架构须另行适配，当前包没有自动支持其他架构。逐架构准备和锁定 Python/wheel、CMake/C++17 工具链与系统依赖；重编译算法 SDK 并比对真实输入结果。",
+        "32 位须验证指针宽度、内存限制与库 ABI；ARM64、LoongArch、MIPS、SW64 即使都是 64 位也互不通用。Windows 7 另需旧系统 API 和工具链兼容性验证。",
+        "安装器需匹配系统/包管理器架构、USB TTY 驱动、udev/systemd，更新独立包名、输入摘要、发布矩阵和 CI。只改架构字段或在本机编译算法不足以获得支持。",
+        "各目标分别完成安装/回滚/卸载、算法比对、真实耳机 E1/E0、拔插、服务及整机重启、浏览器恢复、离线不录播和长稳验收；增加构建资源、离线输入体积与维护成本。",
         "",
     ])
     return '\n'.join(lines)
@@ -362,7 +391,8 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
     platform_documents = documents_for_platform_archives(files, bound_documents, available_platforms)
     files = {str(PurePosixPath(name).parent / delivery_pdf_name(PurePosixPath(name).name)) if name.endswith(".pdf") else name: value for name, value in files.items()}
     files["metadata/document-filenames.json"] = json.dumps(aliases, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
-    system_archives, system_manifest = build_system_archives(grouped, timestamp, platform_documents)
+    build_info = f"application_version={release_manifest['applicationVersion']}\nsource_commit={release_manifest['git']['commit']}\n".encode('utf-8')
+    system_archives, system_manifest = build_system_archives(grouped, timestamp, platform_documents, build_info)
     files.update(system_archives)
     files["PRD.md"] = render_bundle_prd(release_manifest, system_manifest).encode("utf-8")
     for name, value in validation:
