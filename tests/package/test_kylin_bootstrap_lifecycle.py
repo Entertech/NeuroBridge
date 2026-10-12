@@ -599,8 +599,8 @@ class BootstrapMaintainerTests(SandboxTests):
 
 class PortablePythonTests(SandboxTests):
     def test_archive_setup_uses_bundled_python_despite_system_python311(self) -> None:
-        for force_portable, external_site in ((False, False), (True, False), (True, True)):
-            with self.subTest(force_portable=force_portable, external_site=external_site):
+        for force_portable, external_site, independent in ((False, False, False), (True, False, False), (True, False, True), (True, True, True)):
+            with self.subTest(force_portable=force_portable, external_site=external_site, independent=independent):
                 box = self.sandbox()
                 interpreter_source = f"#!{sys.executable} -E\n" + r'''
 import json, os, pathlib, sys
@@ -668,7 +668,12 @@ elif "--version" in sys.argv:
                         (ROOT / "packaging/kylin/python-launcher.sh").read_bytes())
                     for name in ('export-logs.sh', 'diagnostic-context.sh'):
                         (box.root / 'packaging/kylin' / name).write_text('#!/bin/bash\n')
-                    (box.root / 'neurobridge/version_registry.toml').write_text('[application]\nversion = "9.9.9"\n')
+                    version_text = '[application]\nversion = "9.9.9"\n'
+                    package_version = '9.9.9'
+                    if independent:
+                        version_text += '[release_version_policy]\nindependent_platforms = true\n[platform_releases.kylin]\nversion = "8.8.8"\n'
+                        package_version = '8.8.8'
+                    (box.root / 'neurobridge/version_registry.toml').write_text(version_text)
                     (box.root / "config/kylin-runtime-manifest.toml").write_text(
                         'file_name = "runtime.tar.gz"\nsha256 = ""\nurl = ""\n'
                     )
@@ -695,7 +700,7 @@ elif "--version" in sys.argv:
                         continue
                     result = box.run(builder, "--source-root", str(box.root),
                                      "--output-dir", str(box.root / "output"))
-                    self.assertTrue((box.root / "output/neurobridge-runtime-9.9.9-kylin-v10-x86_64.tar.gz").exists(), result.stderr)
+                    self.assertTrue((box.root / f"output/neurobridge-runtime-{package_version}-kylin-v10-x86_64.tar.gz").exists(), result.stderr)
                 else:
                     result = box.run(script)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -709,7 +714,8 @@ elif "--version" in sys.argv:
                     with tarfile.open(next((box.root / 'output').glob('*.tar.gz'))) as bundled:
                         self.assertIn('./payload/kylin/export-logs.sh', bundled.getnames())
                         self.assertIn('./payload/kylin/diagnostic-context.sh', bundled.getnames())
-                        self.assertIn(b'application_version=9.9.9', bundled.extractfile('./payload/build-info.txt').read())
+                        expected_version = b'8.8.8' if independent else b'9.9.9'
+                        self.assertIn(b'application_version=' + expected_version, bundled.extractfile('./payload/build-info.txt').read())
 
 
 if __name__ == "__main__":

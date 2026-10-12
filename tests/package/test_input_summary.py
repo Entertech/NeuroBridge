@@ -50,8 +50,8 @@ class InputSummaryTests(unittest.TestCase):
     def test_failures_come_before_blocked_and_built(self) -> None:
         output = self.render(
             {
-                "status-windows-10-x86_64-exe.txt": record(
-                    "windows-10-x86_64-exe", "built", "native package produced and validated"
+                "status-windows-10-11-x86_64-exe.txt": record(
+                    "windows-10-11-x86_64-exe", "built", "native package produced and validated"
                 ),
                 "status-windows-7-x86_64-exe.txt": record(
                     "windows-7-x86_64-exe", "blocked", "Windows 7 needs the Python 3.8 port"

@@ -26,7 +26,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from neurobridge.versioning import APPLICATION_VERSION
+from neurobridge.versioning import platform_version
 from tools.release_pipeline import matrix
 
 
@@ -87,8 +87,8 @@ def target_from_id(target_id: str) -> dict[str, str]:
     target shape.
     """
     parts = target_id.split("-")
-    if parts[0] == "windows" and len(parts) == 4:
-        version, architecture, fmt = parts[1:]
+    if parts[0] == "windows" and len(parts) == 5 and parts[1:3] == ["10", "11"]:
+        version, architecture, fmt = "10-11", parts[3], parts[4]
         platform = "windows"
         edition = "none"
     elif parts[0] == "kylin" and len(parts) == 4:
@@ -97,6 +97,8 @@ def target_from_id(target_id: str) -> dict[str, str]:
         version = "V10"
     else:
         raise ValueError(f"unrecognised native package target: {target_id}")
+    if platform == "windows" and (architecture != "x86_64" or fmt not in {"exe", "msi"}):
+        raise ValueError(f"unsupported Windows target: {target_id}")
     if fmt not in {"exe", "msi", "deb", "rpm"}:
         raise ValueError(f"unrecognised native package format: {fmt}")
     return {"id": target_id, "platform": platform, "osVersion": version, "edition": edition, "architecture": architecture, "format": fmt, "runner": "test"}
@@ -116,7 +118,7 @@ def copy_source(stage: Path, target: dict[str, str], runtime: Path) -> None:
     shutil.copytree(platform_dir, payload / platform_dir.name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     (payload / "build-info.txt").write_text(
-        f"application_version={APPLICATION_VERSION}\nsource_commit={commit}\ntarget_id={target['id']}\n",
+        f"application_version={platform_version(target['platform'])}\nsource_commit={commit}\ntarget_id={target['id']}\n",
         encoding="utf-8",
     )
     if target["platform"] == "kylin":
@@ -225,7 +227,7 @@ def write_wix_msi(stage: Path, target: dict[str, str], output: Path, log: Path) 
     wix = textwrap.dedent(
         f'''\
         <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-          <Package Name="NeuroBridge" Manufacturer="Entertech" Version="{APPLICATION_VERSION}" UpgradeCode="{upgrade_code}">
+          <Package Name="NeuroBridge" Manufacturer="Entertech" Version="{platform_version(target['platform'])}" UpgradeCode="{upgrade_code}">
             <SummaryInformation Description="NeuroBridge gateway" />
             <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer NeuroBridge version is already installed." />
             <MediaTemplate EmbedCab="yes" />
@@ -256,7 +258,7 @@ def write_wix_bundle(msi: Path, output: Path, log: Path) -> None:
     upgrade_code = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge/bundle"))
     bundle.write_text(textwrap.dedent(f'''\
       <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
-        <Bundle Name="NeuroBridge" Version="{APPLICATION_VERSION}" Manufacturer="Entertech" UpgradeCode="{upgrade_code}">
+        <Bundle Name="NeuroBridge" Version="{platform_version('windows')}" Manufacturer="Entertech" UpgradeCode="{upgrade_code}">
           <RelatedBundle Action="Upgrade" Id="{upgrade_code}" />
           <BootstrapperApplication>
             <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl="https://github.com/Entertech/NeuroBridge" />
@@ -272,7 +274,7 @@ def write_wix_bundle(msi: Path, output: Path, log: Path) -> None:
 
 def build_windows(stage: Path, target: dict[str, str], output: Path, log: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="neurobridge-wix-") as directory:
-        msi = Path(directory) / f"neurobridge-{APPLICATION_VERSION}-{target['id']}.msi"
+        msi = Path(directory) / f"neurobridge-{platform_version(target['platform'])}-{target['id']}.msi"
         write_wix_msi(stage, target, msi, log)
         if target["format"] == "msi":
             shutil.copy2(msi, output)
@@ -284,7 +286,7 @@ def deb_control(target: dict[str, str]) -> str:
     package_name = f"neurobridge-{target['edition']}"
     return textwrap.dedent(f'''\
         Package: {package_name}
-        Version: {APPLICATION_VERSION}
+        Version: {platform_version(target['platform'])}
         Section: utils
         Priority: optional
         Architecture: {DEB_ARCH[target['architecture']]}
@@ -434,7 +436,7 @@ def rpm_spec(target: dict[str, str], topdir: Path) -> Path:
     serial_access = indent_block(SERIAL_ACCESS, 8)
     spec.write_text(textwrap.dedent(f'''\
         Name: {package_name}
-        Version: {APPLICATION_VERSION}
+        Version: {platform_version(target['platform'])}
         Release: 1
         Summary: NeuroBridge USB serial gateway ({target['edition']})
         License: Proprietary
@@ -517,7 +519,7 @@ def build(target: dict[str, str], runtime: Path, output_dir: Path) -> Path:
         stage = Path(directory) / "package-root"
         copy_source(stage, target, runtime)
         input_sha = digest_tree(stage)
-        filename = f"neurobridge-{APPLICATION_VERSION}-{target['id']}.{target['format']}"
+        filename = f"neurobridge-{platform_version(target['platform'])}-{target['id']}.{target['format']}"
         output = output_dir / filename
         if target["platform"] == "windows":
             build_windows(stage, target, output, log)
@@ -531,6 +533,7 @@ def build(target: dict[str, str], runtime: Path, output_dir: Path) -> Path:
     report = {
         "targetId": target["id"],
         "targetArchitecture": target["architecture"],
+        "platformVersion": platform_version(target['platform']),
         "sourceCommit": commit,
         "fileName": output.name,
         "sha256": digest(output),

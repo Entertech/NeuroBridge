@@ -86,7 +86,9 @@ def collect_native_packages(release_directory: Path, release_manifest: dict) -> 
     for platform_archive in release_manifest.get("platformArchives", []):
         archive_path = release_directory / platform_archive["fileName"]
         if not archive_path.is_file():
-            continue
+            raise ValueError(f"missing platform archive: {archive_path.name}")
+        if digest_file(archive_path) != platform_archive['sha256']:
+            raise ValueError('platform archive digest mismatch')
         with zipfile.ZipFile(archive_path) as archive:
             if archive.testzip() is not None:
                 raise ValueError(f"corrupt platform archive: {archive_path.name}")
@@ -98,6 +100,10 @@ def collect_native_packages(release_directory: Path, release_manifest: dict) -> 
                 version = package["osVersion"] if platform == "windows" else package["edition"]
                 if version not in versions or package["architecture"] not in policy["architectures"] or package["format"] not in policy["formats"]:
                     raise ValueError(f"unsupported release target: {package['fileName']}")
+                if package['platformVersion'] != platform_archive['version'] or package['sourceCommit'] != platform_archive['sourceCommit']:
+                    raise ValueError('package version/commit differs from its platform archive')
+                if not all(fragment in package['fileName'] for fragment in (platform, platform_archive['version'], package['architecture'])):
+                    raise ValueError('package filename version identity mismatch')
                 family = f"windows-{package['osVersion']}" if platform == "windows" else f"kylin-{package['edition']}"
                 member = f"packages/{package['fileName']}"
                 if member not in members:
@@ -140,7 +146,7 @@ def build_system_archives(
     grouped: dict[tuple[str, str, str], list[dict]],
     timestamp: tuple[int, int, int, int, int, int],
     platform_documents: dict[str, dict[str, bytes]],
-    build_info: bytes,
+    platform_info: dict,
 ) -> tuple[dict[str, bytes], list[dict]]:
     files: dict[str, bytes] = {}
     manifest: list[dict] = []
@@ -169,7 +175,7 @@ def build_system_archives(
             with zipfile.ZipFile(family_stream, "w", zipfile.ZIP_DEFLATED) as family_zip:
                 for architecture, packages in architectures:
                     data, entry = build_architecture_archive(packages, timestamp)
-                    filename = f"{family}-{architecture}.zip"
+                    filename = f"{platform}-v{platform_info[platform]['version']}-{architecture}.zip"
                     add_bytes(family_zip, filename, data, timestamp)
                     arch_entries.append({"architecture": architecture, "fileName": filename, **entry})
                 for document_name, payload in family_documents.items():
@@ -177,9 +183,11 @@ def build_system_archives(
                 if platform == "windows":
                     add_bytes(family_zip, "install-with-logs.ps1", (ROOT / "packaging/windows/install-with-logs.ps1").read_bytes(), timestamp)
                     add_bytes(family_zip, "diagnostic-context.ps1", (ROOT / "windows/diagnostic-context.ps1").read_bytes(), timestamp)
+                    identity = platform_info[platform]
+                    build_info = f"application_version={identity['version']}\nsource_commit={identity['sourceCommit']}\n".encode()
                     add_bytes(family_zip, "build-info.txt", build_info, timestamp)
             family_data = family_stream.getvalue()
-            family_filename = f"{family}.zip"
+            family_filename = f"{platform}-v{platform_info[platform]['version']}.zip"
             family_archives.append((
                 family_filename,
                 family_data,
@@ -202,7 +210,7 @@ def build_system_archives(
         system_data = system_stream.getvalue()
         system_path = f"{platform}/{system_filename}"
         files[system_path] = system_data
-        manifest.append({"platform": platform, "fileName": system_path, "sha256": digest_bytes(system_data), "variants": [entry for _, _, entry in family_archives]})
+        manifest.append({"platform": platform, **platform_info[platform], "fileName": system_path, "sha256": digest_bytes(system_data), "variants": [entry for _, _, entry in family_archives]})
     return files, manifest
 
 
@@ -292,7 +300,8 @@ def render_bundle_directory_guide(release_manifest: dict, systems: list[dict], d
 
     lines = [
         "# NeuroBridge 交付包目录说明", "",
-        f"应用版本：{release_manifest['applicationVersion']}", "",
+        f"交付版本：{release_manifest['applicationVersion']}；提交：{release_manifest['git']['commit']}", "",
+        f"Windows 软件版本：{release_manifest['platformVersions']['windows']}；麒麟软件版本：{release_manifest['platformVersions']['kylin']}", "",
         f"源码提交：{code(release_manifest['git']['commit'])}", "",
         "面向部署人员。先阅读本说明，再按目标系统解压对应文件；本说明介绍文件的位置与用途，具体安装操作请阅读对应部署指南。", "",
         "## 1. 解压总包后，先看这些位置", "",
@@ -308,14 +317,14 @@ def render_bundle_directory_guide(release_manifest: dict, systems: list[dict], d
         "| `metadata/` | 交付清单、构建来源、验证日志和 PDF 原名称对照；供核验与排错 |", "",
         "## 2. 解压顺序与每层文件", "",
         "1. 解压总 ZIP，找到本 PDF 和所需系统 ZIP。",
-        "2. 解压系统 ZIP，选择与目标系统版本对应的版本 ZIP。",
+        "2. 解压系统 ZIP，再解压该平台的软件版本 ZIP；Windows 10/11 x64 使用相同分组。",
         "3. 解压版本 ZIP：先阅读 `docs/` 中的部署指南，再解压其安装文件分组 ZIP。",
         "4. 分组 ZIP 内是安装包与 `checksums.sha256`；核验后按部署指南安装。", "",
         "平台目录、系统 ZIP、版本 ZIP 和安装文件分组 ZIP 是不同层级；PDF 与日志工具可能位于版本 ZIP，不在最内层安装包旁。以下路径与名称均由本次交付清单生成。", "",
     ])
     purposes = {'install-with-logs.ps1': '安装并保存失败日志；-Export 导出安装日志',
                 'diagnostic-context.ps1': '日志环境采集模块，须与安装日志入口保存在一起',
-                'build-info.txt': '此交付包的应用版本与源码提交'}
+                'build-info.txt': '该平台安装包版本与原始源码提交'}
     for system in systems:
         for variant in system['variants']:
             lines.extend([f"### {variant['name']}", "",
@@ -334,7 +343,7 @@ def render_bundle_directory_guide(release_manifest: dict, systems: list[dict], d
                     lines.append(f"| {code(architecture['fileName'])} | {code(package['fileName'])} | {package['format'].upper()} / {package.get('status', 'candidate')} |")
             lines.extend(["", "每个安装文件分组内的 `checksums.sha256` 仅用于核验同目录安装包。", ""])
             if system['platform'] == 'windows':
-                lines.extend(["Windows：选择匹配系统的分组；EXE 和 MSI 二选一。安装日志入口及其模块在版本 ZIP 中，解压后保存在同一目录。", ""])
+                lines.extend(["Windows：同一份 x64 安装包用于 Windows 10/11；EXE 和 MSI 二选一。安装日志入口及其模块在版本 ZIP 中，解压后保存在同一目录。", ""])
             else:
                 architectures = {entry['architecture'] for entry in variant['architectureArchives']}
                 if 'all' in architectures:
@@ -400,16 +409,25 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
     platform_documents = documents_for_platform_archives(files, bound_documents, available_platforms)
     files = {str(PurePosixPath(name).parent / delivery_pdf_name(PurePosixPath(name).name)) if name.endswith(".pdf") else name: value for name, value in files.items()}
     files["metadata/document-filenames.json"] = json.dumps(aliases, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
-    build_info = f"application_version={release_manifest['applicationVersion']}\nsource_commit={release_manifest['git']['commit']}\n".encode('utf-8')
-    system_archives, system_manifest = build_system_archives(grouped, timestamp, platform_documents, build_info)
+    platform_info = {item["platform"]: {"version": item["version"], "sourceCommit": item["sourceCommit"]} for item in release_manifest["platformArchives"]}
+    if available_platforms != {"windows", "kylin"}:
+        raise ValueError("delivery bundle requires both Windows and Kylin packages")
+    if {p: item['version'] for p, item in platform_info.items()} != release_manifest['platformVersions']:
+        raise ValueError("delivery platform versions differ from the release manifest")
+    for platform in ('windows', 'kylin'):
+        packages = [pkg for key, items in grouped.items() if key[0] == platform for pkg in items]
+        if len(packages) != RELEASE_MATRIX[platform]['expected_package_count'] or {pkg['format'] for pkg in packages} != set(RELEASE_MATRIX[platform]['formats']):
+            raise ValueError(f'{platform} delivery requires every installer format exactly once')
+    system_archives, system_manifest = build_system_archives(grouped, timestamp, platform_documents, platform_info)
     files.update(system_archives)
     files[DIRECTORY_GUIDE_FILENAME] = render_directory_pdf(render_bundle_directory_guide(
         release_manifest, system_manifest, sorted(name for name in files if name.startswith("docs/"))))
     for name, value in validation:
         files[f"metadata/validation/{name.removeprefix('validation/')}"] = value
     bundle_manifest = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "applicationVersion": release_manifest["applicationVersion"],
+        "platformVersions": release_manifest["platformVersions"],
         "sourceCommit": release_manifest["git"]["commit"],
         "releaseStatus": release_manifest["releaseStatus"],
         "trigger": release_manifest["trigger"],

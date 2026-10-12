@@ -29,7 +29,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from neurobridge.versioning import APPLICATION_VERSION
+from neurobridge.versioning import platform_version
+
+APPLICATION_VERSION = platform_version("kylin")
 from tools.kylin_inputs import CACHE, catalog, verified_input
 
 

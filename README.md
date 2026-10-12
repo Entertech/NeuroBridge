@@ -4,7 +4,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于 M1 验收范围。
 
-发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。应用版本递增的 `master` 合入尝试全部 5 个包目标；Windows 和麒麟各至少一个合格包、两个平台 ZIP、总 ZIP、清单和日志本地校验成功后，先上传 Actions Artifact，回下载核对上传前总 ZIP 的 SHA-256 和内容，再创建 tag、draft GitHub Release，资产复验后公开。发布基线取带总 ZIP 的已公开正式应用 Release；孤立 tag 和 draft 不代表发布成功，首次发布沿版本历史寻找递增前基线。版本不变的合入记录跳过发布，未完成目标逐项列明。产品版本统一取版本台账的 `[application].version`；旧平台版本字段不参与新发布。当前不启用签名或公证，真机验证结果通过独立补充附件持续记录。
+发布规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。Windows 与麒麟分别使用台账 `platform_releases.<platform>.version`，独立升版、构建和发布；Windows 10/11 x64 共用一份 MSI 和一份 EXE，麒麟交付一个引导 DEB。总包始终含两平台，命名为 `neurobridge-v<交付版本>-<commit前12位>.zip`；交付版本读取 `[application].version`，不传递给安装包。未更新的平台复用已发布且校验通过的原始包，清单保留各平台版本、源码提交和复用依据。平台包与总包均先上传 Actions Artifact、回下载验证摘要与内容，再创建各自不可变标签及 Release。源码、自动化检查与逐系统/架构现场验收分别记录；当前不启用签名或公证。
 
 发布实现及所需的离线安装包输入见[发布工作流技术方案](doc/tech/发布工作流技术方案.md)。当前仓库尚无全部 Windows 目标的正式安装包构建环境；CI 会把缺失输入记为 `blocked`，麒麟引导 DEB 由托管 runner 从源码和离线输入打包。PR 只执行校验，不打包；合入 `master` 后，两平台最低门槛未满足时发布失败。源码候选包不算正式安装包。
 

@@ -7,7 +7,9 @@ function Get-NeuroBridgeIdentity {
         $registry = Join-Path $Root 'neurobridge\version_registry.toml'
         if (Test-Path -LiteralPath $registry -PathType Leaf) {
             $text = [string](Get-Content -LiteralPath $registry -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
-            $section = [regex]::Match($text, '(?ms)^\[application\]\s*\r?\n(.*?)(?=^\[|\z)')
+            $sectionName = 'application'
+            if ($text -match '(?m)^independent_platforms\s*=\s*true\s*$') { $sectionName = 'platform_releases.windows' }
+            $section = [regex]::Match($text, '(?ms)^\[' + [regex]::Escape($sectionName) + '\]\s*\r?\n(.*?)(?=^\[|\z)')
             $match = [regex]::Match($section.Groups[1].Value, '(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"')
             if ($match.Success) { $version = $match.Groups[1].Value }
         }

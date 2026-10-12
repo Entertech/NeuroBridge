@@ -31,13 +31,9 @@ jobs:
       matrix:
         include:
           # Buildable: GitHub-hosted windows-2022 with the locked Python 3.11 x64 runtime.
-          - id: windows-10-x86_64-exe
+          - id: windows-10-11-x86_64-exe
             blocked_reason: ""
-          - id: windows-10-x86_64-msi
-            blocked_reason: ""
-          - id: windows-11-x86_64-exe
-            blocked_reason: ""
-          - id: windows-11-x86_64-msi
+          - id: windows-10-11-x86_64-msi
             blocked_reason: ""
     steps:
       - uses: actions/checkout@v4

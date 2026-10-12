@@ -91,8 +91,8 @@ def main() -> None:
     PYPROJECT_PATH.write_text(updated_pyproject, encoding="utf-8")
     manifest_text = KYLIN_RUNTIME_MANIFEST_PATH.read_text(encoding="utf-8")
     for key, value in (
-        ("application_version", application_version),
-        ("file_name", f"neurobridge-runtime-{application_version}-kylin-v10-x86_64.tar.gz"),
+        ("application_version", registry["platform_releases"]["kylin"]["version"]),
+        ("file_name", f"neurobridge-runtime-{registry['platform_releases']['kylin']['version']}-kylin-v10-x86_64.tar.gz"),
     ):
         manifest_text, count = re.subn(
             rf'(?m)^({key}\s*=\s*)"[^"]+"$',
