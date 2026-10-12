@@ -27,10 +27,8 @@ WIRED_GUIDE = "头环数据网关有线网络配置指南_v1.0.pdf"
 
 PACKAGE_SPECS = {
     "windows": [
-        ("10", "none", "x86_64", "exe"),
-        ("10", "none", "x86_64", "msi"),
-        ("11", "none", "x86_64", "msi"),
-        ("11", "none", "x86_64", "exe"),
+        ("10-11", "none", "x86_64", "exe"),
+        ("10-11", "none", "x86_64", "msi"),
     ],
     "kylin": [
         ("V10", "v10", "all", "deb"),
@@ -68,7 +66,7 @@ def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> No
         platform: {
             "builtPackageCount": 1,
             "expectedFormats": ["exe", "msi"] if platform == "windows" else ["deb"],
-            "expectedPackageCount": 4 if platform == "windows" else 1,
+            "expectedPackageCount": 2 if platform == "windows" else 1,
             "expectedTargets": [item["id"] for item in targets if item["platform"] == platform],
             "targetResults": [{"targetId": item["id"], "status": "blocked", "reason": "fixture"} for item in targets if item["platform"] == platform],
         }
@@ -91,6 +89,8 @@ def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> No
                 archive.writestr(validation_name, b"passed\n")
                 package_entries.append({
                     "target": platform,
+                    "platformVersion": "0.2.0",
+                    "sourceCommit": run("git", "rev-parse", "HEAD"),
                     "osVersion": os_version,
                     "edition": edition,
                     "architecture": architecture,
@@ -100,10 +100,11 @@ def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> No
                     "sha256": _build_release_bundle.digest_bytes(payload),
                     "validationLog": validation_name,
                 })
-        platform_archives.append({"platform": platform, "fileName": archive_name, "packages": package_entries})
+        platform_archives.append({"platform": platform, "version": "0.2.0", "sourceCommit": run("git", "rev-parse", "HEAD"), "fileName": archive_name, "sha256": _build_release_bundle.digest_file(release / archive_name), "packages": package_entries})
 
     save_json(release / "release-manifest.json", {
         "applicationVersion": "0.2.0",
+        "platformVersions": {"windows": "0.2.0", "kylin": "0.2.0"},
         "releaseStatus": "candidate",
         "trigger": "pull_request",
         "git": {"commit": run("git", "rev-parse", "HEAD")},
@@ -138,7 +139,7 @@ class ReleaseBundleTests(unittest.TestCase):
                 mapping = json.loads(outer.read("metadata/document-filenames.json"))
                 self.assertEqual(mapping[KYLIN_GUIDE], "kylin-deployment-guide_v1.0.pdf")
                 with zipfile.ZipFile(outer.open("kylin/kylin.zip")) as system:
-                    with zipfile.ZipFile(system.open("kylin-v10.zip")) as family:
+                    with zipfile.ZipFile(system.open("kylin-v0.2.0.zip")) as family:
                         self.assertTrue(all(name.isascii() for name in family.namelist()))
                         with zipfile.ZipFile(root / "documents/neurobridge-external-documents.zip") as originals:
                             self.assertEqual(family.read("docs/" + mapping[KYLIN_GUIDE]), originals.read(KYLIN_GUIDE))
@@ -147,16 +148,16 @@ class ReleaseBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_document_package(root / "documents")
-            write_release_fixture(root / "release", ("windows",))
+            write_release_fixture(root / "release", ("windows", "kylin"))
             path = root / "release/release-manifest.json"
             manifest = json.loads(path.read_text())
-            manifest["platformArchives"][0]["packages"] = [package for package in manifest["platformArchives"][0]["packages"] if package["osVersion"] == "10"]
+            manifest["platformArchives"][0]["packages"] = [package for package in manifest["platformArchives"][0]["packages"] if package["osVersion"] == "10-11"]
             path.write_text(json.dumps(manifest))
             output = root / "bundle.zip"
             build_bundle(root / "release", root / "documents", output)
             with zipfile.ZipFile(output) as outer:
                 with zipfile.ZipFile(outer.open("windows/windows.zip")) as system:
-                    self.assertEqual(system.namelist(), ["windows-10.zip"])
+                    self.assertEqual(system.namelist(), ["windows-v0.2.0.zip"])
             for version, architecture in (("7", "x86_64"), ("10", "x86")):
                 manifest["platformArchives"][0]["packages"][0].update(osVersion=version, architecture=architecture)
                 path.write_text(json.dumps(manifest))
@@ -167,7 +168,7 @@ class ReleaseBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_document_package(root / 'documents')
-            write_release_fixture(root / 'release', ('windows',))
+            write_release_fixture(root / 'release', ('windows', 'kylin'))
             output = root / 'bundle.zip'
             with mock.patch.object(_build_release_bundle, 'render_directory_pdf', side_effect=ValueError('PDF failed')):
                 with self.assertRaisesRegex(ValueError, 'PDF failed'):
@@ -201,9 +202,9 @@ class ReleaseBundleTests(unittest.TestCase):
                 self.assertNotIn('README.txt', names)
                 self.assertNotIn('PRD.md', names)
                 self.assertIn('交付包目录说明', guide)
-                self.assertIn('kylin-v10-all.zip', guide)
-                self.assertIn('windows-10-x86_64.zip', guide)
-                self.assertIn('windows-11-x86_64.zip', guide)
+                self.assertIn('kylin-v0.2.0-all.zip', guide)
+                self.assertIn('windows-v0.2.0-x86_64.zip', guide)
+                self.assertIn('windows-v0.2.0-x86_64.zip', guide)
                 self.assertIn('checksums.sha256', guide)
                 self.assertIn('export-install-logs.sh', guide)
                 self.assertIn('diagnostic-context', guide)
@@ -223,33 +224,33 @@ class ReleaseBundleTests(unittest.TestCase):
                 self.assertNotIn(f"docs/external/{SSH_GUIDE}", names)
                 self.assertNotIn(f"docs/external/{WIRED_GUIDE}", names)
                 with zipfile.ZipFile(outer.open("windows/windows.zip")) as windows:
-                    self.assertEqual(set(windows.namelist()), {"windows-10.zip", "windows-11.zip"})
+                    self.assertEqual(set(windows.namelist()), {"windows-v0.2.0.zip", "windows-v0.2.0.zip"})
                     # every Windows version archive carries the shipped documents
-                    for version in ("10", "11"):
-                        with zipfile.ZipFile(windows.open(f"windows-{version}.zip")) as family:
+                    for version in ("0.2.0",):
+                        with zipfile.ZipFile(windows.open(f"windows-v{version}.zip")) as family:
                             self.assertIn("docs/windows-deployment-guide_v1.0.pdf", family.namelist())
                             self.assertIn("docs/protocol.pdf", family.namelist())
-                    with zipfile.ZipFile(windows.open("windows-10.zip")) as windows_7:
+                    with zipfile.ZipFile(windows.open("windows-v0.2.0.zip")) as windows_7:
                         self.assertEqual(
                             set(windows_7.namelist()),
-                            {"windows-10-x86_64.zip", "docs/windows-deployment-guide_v1.0.pdf", "docs/protocol.pdf", "install-with-logs.ps1", "diagnostic-context.ps1", "build-info.txt"},
+                            {"windows-v0.2.0-x86_64.zip", "docs/windows-deployment-guide_v1.0.pdf", "docs/protocol.pdf", "install-with-logs.ps1", "diagnostic-context.ps1", "build-info.txt"},
                         )
                         self.assertIn(b'application_version=0.2.0', windows_7.read('build-info.txt'))
                         self.assertIn(manifest['sourceCommit'].encode(), windows_7.read('build-info.txt'))
-                        with zipfile.ZipFile(windows_7.open("windows-10-x86_64.zip")) as x86:
-                            self.assertEqual(set(x86.namelist()), {"neurobridge-0.2.0-windows-10-x86_64.exe", "neurobridge-0.2.0-windows-10-x86_64.msi", "checksums.sha256"})
+                        with zipfile.ZipFile(windows_7.open("windows-v0.2.0-x86_64.zip")) as x86:
+                            self.assertEqual(set(x86.namelist()), {"neurobridge-0.2.0-windows-10-11-x86_64.exe", "neurobridge-0.2.0-windows-10-11-x86_64.msi", "checksums.sha256"})
                 self.assertEqual({name for name in names if name.startswith("kylin/")}, {"kylin/kylin.zip"})
                 self.assertNotIn(f"kylin/{KYLIN_GUIDE}", names)
                 self.assertNotIn(f"docs/external/{KYLIN_GUIDE}", names)
                 with zipfile.ZipFile(outer.open("kylin/kylin.zip")) as kylin:
-                    self.assertEqual(set(kylin.namelist()), {"kylin-v10.zip"})
-                    with zipfile.ZipFile(kylin.open("kylin-v10.zip")) as family:
+                    self.assertEqual(set(kylin.namelist()), {"kylin-v0.2.0.zip"})
+                    with zipfile.ZipFile(kylin.open("kylin-v0.2.0.zip")) as family:
                         self.assertEqual(
                             set(family.namelist()),
-                            {"kylin-v10-all.zip", "docs/kylin-deployment-guide_v1.0.pdf", "docs/protocol.pdf"},
+                            {"kylin-v0.2.0-all.zip", "docs/kylin-deployment-guide_v1.0.pdf", "docs/protocol.pdf"},
                         )
                         self.assertNotIn("docs/windows-deployment-guide_v1.0.pdf", family.namelist())
-                        with zipfile.ZipFile(family.open("kylin-v10-all.zip")) as package:
+                        with zipfile.ZipFile(family.open("kylin-v0.2.0-all.zip")) as package:
                             self.assertEqual(
                                 set(package.namelist()),
                                 {"neurobridge-0.2.0-kylin-v10-all.deb", "checksums.sha256"},
@@ -257,40 +258,55 @@ class ReleaseBundleTests(unittest.TestCase):
                 verify_release_bundle(output, json.loads(outer.read("metadata/bundle-manifest.json")))
             self.assertEqual(len(manifest["systemArchives"]), 2)
 
-    def test_platform_bound_document_is_omitted_when_platform_has_no_packages(self) -> None:
+    def test_partial_delivery_is_rejected(self) -> None:
+        for platforms in (("windows",), ("kylin",)):
+            with self.subTest(platforms=platforms), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                write_document_package(root / "documents")
+                write_release_fixture(root / "release", platforms)
+                with self.assertRaisesRegex(ValueError, "requires both"):
+                    build_bundle(root / "release", root / "documents", root / "bundle.zip")
+                self.assertFalse((root / "bundle.zip").exists())
+
+    def test_versions_and_original_commits_are_preserved_per_platform(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_document_package(root / "documents")
+            write_release_fixture(root / "release", ("windows", "kylin"))
+            path = root / "release/release-manifest.json"
+            manifest = json.loads(path.read_text())
+            manifest['platformVersions']['windows'] = '0.1.9'
+            entry = manifest['platformArchives'][0]
+            archive_path = root / 'release' / entry['fileName']
+            with zipfile.ZipFile(archive_path) as bundle:
+                members = {name: bundle.read(name) for name in bundle.namelist()}
+            for package in entry['packages']:
+                original = package['fileName']
+                package['fileName'] = original.replace('0.2.0', '0.1.9')
+                package.update(platformVersion='0.1.9', sourceCommit='a' * 40)
+                members['packages/' + package['fileName']] = members.pop('packages/' + original)
+            with zipfile.ZipFile(archive_path, 'w') as bundle:
+                for name, data in members.items():
+                    bundle.writestr(name, data)
+            entry.update(version='0.1.9', sourceCommit='a' * 40, sha256=_build_release_bundle.digest_file(archive_path))
+            path.write_text(json.dumps(manifest))
+            output = root / 'bundle.zip'
+            delivered = build_bundle(root / 'release', root / 'documents', output)
+            self.assertEqual(delivered['platformVersions'], {'windows': '0.1.9', 'kylin': '0.2.0'})
+            self.assertEqual(delivered['systemArchives'][0]['sourceCommit'], 'a' * 40)
+            with zipfile.ZipFile(output) as outer, zipfile.ZipFile(outer.open('windows/windows.zip')) as system, zipfile.ZipFile(system.open('windows-v0.1.9.zip')) as family:
+                info = family.read('build-info.txt')
+                self.assertIn(b'application_version=0.1.9', info)
+                self.assertIn(('source_commit=' + 'a' * 40).encode(), info)
+            verify_release_bundle(output, delivered)
+
+    def test_both_platform_archives_carry_their_own_guides(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             release = root / "release"
             documents = root / "documents"
             write_document_package(documents)
-            write_release_fixture(release, ("kylin",))
-
-            output = root / "neurobridge-v0.2.0.zip"
-            build_bundle(release, documents, output)
-            with zipfile.ZipFile(output) as outer:
-                names = set(outer.namelist())
-                guide = outer.read('bundle-directory-guide.pdf').decode('utf-8')
-                self.assertNotIn('windows/windows.zip', guide)
-                self.assertNotIn('Windows 安装失败', guide)
-                self.assertIn('kylin/kylin.zip', guide)
-                # The Windows guide must not appear anywhere once Windows produced no packages.
-                self.assertNotIn(f"windows/{WINDOWS_GUIDE}", names)
-                self.assertNotIn(f"docs/external/{WINDOWS_GUIDE}", names)
-                with zipfile.ZipFile(outer.open("kylin/kylin.zip")) as kylin:
-                    with zipfile.ZipFile(kylin.open("kylin-v10.zip")) as family:
-                        self.assertIn("docs/kylin-deployment-guide_v1.0.pdf", family.namelist())
-                        self.assertNotIn("docs/windows-deployment-guide_v1.0.pdf", family.namelist())
-                # always documents are unaffected by platform coverage.
-                self.assertIn("docs/external/protocol.pdf", names)
-                verify_release_bundle(output, json.loads(outer.read("metadata/bundle-manifest.json")))
-
-    def test_kylin_guide_is_omitted_when_kylin_has_no_packages(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            release = root / "release"
-            documents = root / "documents"
-            write_document_package(documents)
-            write_release_fixture(release, ("windows",))
+            write_release_fixture(release, ("windows", "kylin"))
 
             output = root / "neurobridge-v0.2.0.zip"
             build_bundle(release, documents, output)
@@ -298,7 +314,7 @@ class ReleaseBundleTests(unittest.TestCase):
                 names = set(outer.namelist())
                 self.assertFalse(any(KYLIN_GUIDE in name for name in names))
                 with zipfile.ZipFile(outer.open("windows/windows.zip")) as windows:
-                    with zipfile.ZipFile(windows.open("windows-10.zip")) as family:
+                    with zipfile.ZipFile(windows.open("windows-v0.2.0.zip")) as family:
                         self.assertIn("docs/windows-deployment-guide_v1.0.pdf", family.namelist())
                         self.assertNotIn("docs/kylin-deployment-guide_v1.0.pdf", family.namelist())
                 verify_release_bundle(output, json.loads(outer.read("metadata/bundle-manifest.json")))

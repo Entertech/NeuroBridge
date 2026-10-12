@@ -7,10 +7,11 @@ require_all_matrix_targets = false
 minimum_packages_per_platform = 1
 
 [windows]
-versions = ["10", "11"]
+versions = ["10-11"]
+supported_os_versions = ["10", "11"]
 architectures = ["x86_64"]
 formats = ["exe", "msi"]
-expected_package_count = 4
+expected_package_count = 2
 installer_tool = "wix-toolset-with-burn"
 installer_tool_major = 7
 windows_10_11_python_line = "3.11"
@@ -26,13 +27,14 @@ expected_package_count = 1
 package_kind = "bootstrap"
 
 [aggregate]
-expected_package_count = 5
+expected_package_count = 3
 platform_archives = ["windows", "kylin"]
-file_name_pattern = "neurobridge-v<applicationVersion>-<buildDate>.zip"
+file_name_pattern = "neurobridge-v<applicationVersion>-<commit>.zip"
 
 [release]
 trigger = "push_master"
-tag_pattern = "v<applicationVersion>"
+tag_pattern = "delivery-v<applicationVersion>-<commit>"
+platform_tag_pattern = "<platform>-v<platformVersion>"
 github_release_required = true
 github_release_starts_as_draft = true
 release_receipt_schema = "schemas/release-receipt.schema.json"
@@ -49,10 +51,12 @@ cross_arch_requires_target_verification = true
 missing_verified_input = "blocked"
 
 [versioning]
-public_version_source = "application.version"
-platform_release_fields = "legacy_ignored"
-retry_identity = "github_run_id_and_attempt"
-same_version_master_push = "skip_release"
+public_version_source = "platform_releases.<platform>.version"
+delivery_version_source = "application.version"
+platform_release_fields = "independent"
+retry_identity = "platform_version_and_source_commit"
+delivery_retry_identity = "delivery_version_and_source_commit"
+same_version_master_push = "skip_when_delivery_and_platform_versions_unchanged"
 
 [validation]
 physical_verification = "pending_until_logs_uploaded"

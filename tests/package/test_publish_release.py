@@ -10,19 +10,20 @@ import zipfile
 from unittest import mock
 
 from tools import publish_release, release_pipeline
-from neurobridge.versioning import APPLICATION_VERSION
+from neurobridge.versioning import DELIVERY_VERSION, platform_version
 
 
 class PublishReleaseTests(unittest.TestCase):
     def candidate(self, root: Path, package_suffix: bytes = b"") -> tuple[Path, str]:
         commit = release_pipeline.run("git", "rev-parse", "HEAD")
-        selected = {"windows-10-x86_64-msi", "kylin-v10-all-deb"}
+        selected = {"windows-10-11-x86_64-msi", "windows-10-11-x86_64-exe", "kylin-v10-all-deb"}
         for target in release_pipeline.matrix():
             folder = root / "results" / target["id"]
-            result = {"target": target, "sourceCommit": commit, "status": "blocked", "reason": "fixture"}
+            version = platform_version(target["platform"])
+            result = {"platformVersion": version, "target": target, "sourceCommit": commit, "status": "blocked", "reason": "fixture"}
             if target["id"] in selected:
                 folder.mkdir(parents=True)
-                package = folder / f"neurobridge-{target['id']}.{target['format']}"
+                package = folder / f"neurobridge-{version}-{target['id']}.{target['format']}"
                 package.write_bytes(target["id"].encode() + package_suffix)
                 (folder / "validation.log").write_text("fixture\n")
                 result.update(status="candidate", fileName=package.name, sha256=release_pipeline.sha256(package), validationLog="validation.log", sourceReferences=[])
@@ -44,7 +45,7 @@ class PublishReleaseTests(unittest.TestCase):
         with zipfile.ZipFile(documents / "neurobridge-external-documents.zip", "w") as fixture:
             fixture.writestr("release-manifest.json", json.dumps({"documents": [{"pdf_artifact_name": "protocol.pdf", "delivery": "always", "platforms": []}]}))
             fixture.writestr("protocol.pdf", document)
-        archive = root / "downloaded" / f"neurobridge-v{APPLICATION_VERSION}.zip"
+        archive = root / "downloaded" / release_pipeline.delivery_filename(DELIVERY_VERSION, release_pipeline.run("git", "rev-parse", "HEAD"))
         with mock.patch.object(builder, 'render_directory_pdf', return_value=b'%PDF-1.4\nfixture guide'):
             builder.build_bundle(directory, documents, archive)
         return archive
@@ -56,7 +57,7 @@ class PublishReleaseTests(unittest.TestCase):
             rebuilt = self.bundle(root / "retry", b"renderer output at later generation time")
             self.assertNotEqual(original.read_bytes(), rebuilt.read_bytes())
             commit = release_pipeline.run("git", "rev-parse", "HEAD")
-            checkpoint = publish_release.archive_checkpoint(original, APPLICATION_VERSION, commit)
+            checkpoint = publish_release.archive_checkpoint(original, DELIVERY_VERSION, commit)
             info = {"isDraft": True, "url": "https://example.invalid/release", "assets": [{"name": original.name}], "body": publish_release.ARCHIVE_CHECKPOINT + json.dumps(checkpoint) + "\n-->\n"}
             events = []
 
@@ -92,7 +93,7 @@ class PublishReleaseTests(unittest.TestCase):
                 rebuilt = self.bundle(root / "retry", b"later document bytes", b"changed" if failure == "changed-package" else b"")
                 before = rebuilt.read_bytes()
                 commit = release_pipeline.run("git", "rev-parse", "HEAD")
-                checkpoint = publish_release.archive_checkpoint(original, APPLICATION_VERSION, commit)
+                checkpoint = publish_release.archive_checkpoint(original, DELIVERY_VERSION, commit)
                 if failure == "other-commit":
                     checkpoint["sourceCommit"] = "0" * 40
                 if failure == "wrong-digest":
@@ -133,8 +134,8 @@ class PublishReleaseTests(unittest.TestCase):
             notes.write_text("verified archive checkpoint fixture")
             info = {"isDraft": True, "assets": []}
             with mock.patch.object(publish_release, "release_info", return_value=info), mock.patch.object(publish_release, "command") as command:
-                self.assertEqual(publish_release.ensure_release("v" + APPLICATION_VERSION, notes), info)
-                command.assert_called_once_with("gh", "release", "edit", "v" + APPLICATION_VERSION, "--notes-file", str(notes))
+                self.assertEqual(publish_release.ensure_release("v" + DELIVERY_VERSION, notes), info)
+                command.assert_called_once_with("gh", "release", "edit", "v" + DELIVERY_VERSION, "--notes-file", str(notes))
 
     def test_downloaded_artifact_must_match_before_any_tag_or_release_write(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -161,7 +162,7 @@ class PublishReleaseTests(unittest.TestCase):
                 fixture.writestr("b-client-test/index.html", "fixture")
             downloaded = root / "downloaded"
             downloaded.mkdir()
-            archive = downloaded / f"neurobridge-v{APPLICATION_VERSION}.zip"
+            archive = downloaded / release_pipeline.delivery_filename(DELIVERY_VERSION, release_pipeline.run("git", "rev-parse", "HEAD"))
             with mock.patch.object(builder, 'render_directory_pdf', return_value=b'%PDF-1.4\nfixture guide'):
                 builder.build_bundle(directory, documents, archive)
             digest = release_pipeline.sha256(archive)
@@ -173,8 +174,8 @@ class PublishReleaseTests(unittest.TestCase):
                 tag.assert_not_called()
             with mock.patch.object(publish_release, "command", side_effect=[commit, ""]), mock.patch.object(publish_release, "ensure_tag") as tag, mock.patch.object(publish_release, "ensure_release", return_value=final), mock.patch.object(publish_release, "verify_asset") as assets, mock.patch.object(publish_release, "release_info", return_value=final):
                 self.assertEqual(publish_release.publish(downloaded, digest)["status"], "published")
-                tag.assert_called_once_with("v" + APPLICATION_VERSION, commit)
-                assets.assert_called_once_with("v" + APPLICATION_VERSION, archive, True)
+                tag.assert_called_once_with(f"delivery-v{DELIVERY_VERSION}-{commit[:12]}", commit)
+                assets.assert_called_once_with(f"delivery-v{DELIVERY_VERSION}-{commit[:12]}", archive, True)
 
     def test_tag_follows_download_and_content_checks_and_assets_precede_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -197,7 +198,7 @@ class PublishReleaseTests(unittest.TestCase):
                     return ""
                 self.fail(f"unexpected command: {args}")
 
-            asset_names = {p.name for p in directory.iterdir() if p.name in ("release-manifest.json", "release-logs.jsonl") or p.name.startswith(f"neurobridge-v{APPLICATION_VERSION}-") and (p.suffix == ".zip" or p.suffix == ".sha256")}
+            asset_names = {p.name for p in directory.iterdir() if p.name in ("release-manifest.json", "release-logs.jsonl") or p.name.startswith(f"neurobridge-v{DELIVERY_VERSION}-") and (p.suffix == ".zip" or p.suffix == ".sha256")}
             final = {"url": "https://example.invalid/release", "isDraft": False, "assets": [{"name": name} for name in asset_names]}
             with mock.patch.object(publish_release, "command", side_effect=command), mock.patch.object(publish_release, "verify_nested_archives", side_effect=verify), mock.patch.object(publish_release, "ensure_tag", side_effect=lambda *args: events.append("tag")), mock.patch.object(publish_release, "ensure_release", return_value={"isDraft": True, "assets": []}), mock.patch.object(publish_release, "verify_asset", side_effect=lambda *args: events.append("asset_verified")), mock.patch.object(publish_release, "release_info", return_value=final):
                 receipt = publish_release.publish(directory, digest)

@@ -79,7 +79,11 @@ bridge=$source_root/.runtime/algorithm/neurobridge_affective_bridge
 
 template=$source_root/config/kylin-runtime-manifest.toml
 [[ -f $template && ! -L $template ]] || fail "Runtime manifest template is missing: $template"
-application_version=$(awk '/^\[application\]/ { inside=1; next } inside && /^\[/ { exit } inside && /^version[[:space:]]*=/ { split($0,parts,"\""); print parts[2]; exit }' "$source_root/neurobridge/version_registry.toml")
+version_section=application
+if grep -Eq '^independent_platforms[[:space:]]*=[[:space:]]*true' "$source_root/neurobridge/version_registry.toml"; then
+  version_section=platform_releases.kylin
+fi
+application_version=$(awk -v section="$version_section" '$0 == "[" section "]" { inside=1; next } inside && /^\[/ { exit } inside && /^version[[:space:]]*=/ { split($0,parts,"\""); print parts[2]; exit }' "$source_root/neurobridge/version_registry.toml")
 [[ $application_version =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]] || fail "Missing application version."
 file_name="neurobridge-runtime-$application_version-kylin-v10-$NB_ARCH.tar.gz"
 [[ $file_name =~ ^[A-Za-z0-9._+-]+$ ]] || fail "Manifest file name is not a safe path component: ${file_name:-<empty>}"
@@ -123,7 +127,7 @@ done
 if [[ -f $source_root/build-info.txt ]]; then
   cp "$source_root/build-info.txt" "$stage/payload/build-info.txt"
 else
-  version=$(awk '/^\[application\]/ { inside=1; next } inside && /^\[/ { exit } inside && /^version[[:space:]]*=/ { split($0, parts, "\""); print parts[2]; exit }' "$source_root/neurobridge/version_registry.toml")
+  version=$application_version
   commit=unknown
   [[ ! -e $source_root/.git ]] || commit=$(git -C "$source_root" rev-parse HEAD 2>/dev/null || printf unknown)
   printf 'application_version=%s\nsource_commit=%s\n' "$version" "$commit" > "$stage/payload/build-info.txt"

@@ -7,6 +7,7 @@
   "required": [
     "schemaVersion",
     "applicationVersion",
+    "platformVersions",
     "sourceCommit",
     "tag",
     "githubReleaseUrl",
@@ -18,10 +19,11 @@
   "properties": {
     "schemaVersion": { "const": "1.0" },
     "applicationVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "platformVersions": {"type": "object", "additionalProperties": false, "required": ["windows", "kylin"], "properties": {"windows": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}, "kylin": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}}},
     "sourceCommit": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
-    "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "tag": { "type": "string", "pattern": "^delivery-v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9a-f]{12}$" },
     "githubReleaseUrl": { "type": "string", "format": "uri" },
-    "aggregateArchiveFileName": { "type": "string", "pattern": "^neurobridge-v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9]{8}\\.zip$" },
+    "aggregateArchiveFileName": { "type": "string", "pattern": "^neurobridge-v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9a-f]{12}\\.zip$" },
     "aggregateArchiveSha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
     "publishedAt": { "type": "string", "format": "date-time" },
     "status": { "const": "published" }

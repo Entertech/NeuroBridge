@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   version-gate:
-    name: Application version gate
+    name: Platform and delivery version gate
     # release.yml only runs after a push to master, so the gate has to run here
     # too, or a PR could merge a shipped-file change with no version bump.  This
     # is a check, not packaging: it produces no artifact.

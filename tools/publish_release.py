@@ -12,9 +12,10 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import zipfile
 
-from tools.release_pipeline import CONFIG, ROOT, log, require_digest, save_json, sha256, version_tuple
+from tools.release_pipeline import CONFIG, ROOT, log, require_digest, save_json, sha256, version_tuple, delivery_filename, platform_versions, REGISTRY
 
 ARCHIVE_CHECKPOINT = "<!-- neurobridge-verified-archive\n"
 
@@ -111,6 +112,16 @@ def verify_nested_archives(archive: Path, manifest: dict) -> None:
 
 def verify_release_bundle(archive: Path, bundle_manifest: dict) -> None:
     """Verify the single user-facing ZIP and its system/version/architecture ZIPs."""
+    systems = bundle_manifest.get("systemArchives", [])
+    if len(systems) != 2 or {s["platform"] for s in systems} != {"windows", "kylin"}:
+        raise ValueError("delivery requires both platform archives")
+    if {s["platform"]: s["version"] for s in systems} != bundle_manifest.get("platformVersions"):
+        raise ValueError("delivery platform version identity mismatch")
+    for system in systems:
+        packages = [p for variant in system['variants'] for group in variant['architectureArchives'] for p in group['packages']]
+        expected = CONFIG[system['platform']]
+        if len(packages) != expected['expected_package_count'] or {p['format'] for p in packages} != set(expected['formats']):
+            raise ValueError('delivery requires every platform installer format')
     with zipfile.ZipFile(archive) as outer:
         if outer.testzip() is not None:
             raise ValueError("release bundle CRC verification failed")
@@ -190,6 +201,7 @@ def load_bundle_manifest(directory: Path) -> tuple[Path, dict] | None:
         package_count = sum(item.get("packageCount", 0) for item in raw.get("architectureArchives", []))
     manifest = {
         "applicationVersion": raw["applicationVersion"],
+        "platformVersions": raw["platformVersions"],
         "releaseStatus": raw["releaseStatus"],
         "trigger": raw["trigger"],
         "git": {"commit": raw["sourceCommit"], "ref": "refs/heads/master", "dirty": False},
@@ -228,7 +240,7 @@ def reuse_release_bundle(archive: Path) -> bool:
     if current["sourceCommit"] != commit or current["trigger"] != "push_master":
         raise ValueError("release retry bundle does not match this source commit and publication trigger")
     verify_release_bundle(archive, current)
-    tag = f"v{version}"
+    tag = f"delivery-v{version}-{commit[:12]}"
     info = release_info(tag)
     if info is None or not info.get("assets"):
         log("release_bundle_reuse_skipped", tag=tag, reason="no_uploaded_release_asset")
@@ -252,7 +264,7 @@ def reuse_release_bundle(archive: Path) -> bool:
             raise ValueError("original release bundle differs from its verified archive checkpoint")
         with zipfile.ZipFile(downloaded) as bundle:
             previous = json.loads(bundle.read("metadata/bundle-manifest.json"))
-        if any(previous.get(key) != current.get(key) for key in ("sourceCommit", "applicationVersion", "releaseStatus", "trigger", "coverage")) or bundle_packages(previous) != bundle_packages(current):
+        if any(previous.get(key) != current.get(key) for key in ("sourceCommit", "applicationVersion", "platformVersions", "releaseStatus", "trigger", "coverage")) or bundle_packages(previous) != bundle_packages(current):
             raise ValueError("release retry changed source, package bytes or target results; a new version is required")
         verify_release_bundle(downloaded, previous)
         replacement = archive.with_suffix(archive.suffix + ".reuse")
@@ -276,8 +288,13 @@ def publish(directory: Path, expected_sha256: str) -> dict:
         archive = directory / manifest["aggregateArchive"]["fileName"]
     version = manifest["applicationVersion"]
     version_tuple(version)
-    tag = f"v{version}"
+    registry = tomllib.loads(REGISTRY.read_text(encoding='utf-8'))
+    if version != registry['application']['version'] or manifest['platformVersions'] != platform_versions(registry):
+        raise ValueError('delivery versions differ from the source registry')
     commit = command("git", "rev-parse", "HEAD")
+    tag = f"delivery-v{version}-{commit[:12]}"
+    if archive.name != delivery_filename(version, commit):
+        raise ValueError("delivery archive filename must identify version and source commit")
     if manifest["git"]["commit"] != commit or manifest["releaseStatus"] != "candidate" or manifest["trigger"] != "push_master":
         raise ValueError("manifest commit, release state or trigger does not match this checkout")
     if manifest["git"]["dirty"] or command("git", "status", "--porcelain", "--untracked-files=no"):
@@ -285,7 +302,7 @@ def publish(directory: Path, expected_sha256: str) -> dict:
     expected_counts = {"windows": CONFIG["windows"]["expected_package_count"], "kylin": CONFIG["kylin"]["expected_package_count"]}
     if any(len(manifest["coverage"][platform]["targetResults"]) != count for platform, count in expected_counts.items()):
         raise ValueError("manifest lacks results for every release target")
-    if any(manifest["coverage"][platform]["builtPackageCount"] < 1 for platform in ("windows", "kylin")):
+    if any(manifest["coverage"][platform]["builtPackageCount"] != expected_counts[platform] for platform in ("windows", "kylin")):
         raise ValueError("minimum per-platform package gate failed")
     if not archive.is_file() or sha256(archive) != manifest["aggregateArchive"]["sha256"]:
         raise ValueError("aggregate ZIP missing or SHA-256 mismatch")
@@ -328,7 +345,7 @@ def publish(directory: Path, expected_sha256: str) -> dict:
     final = release_info(tag)
     if final is None or final["isDraft"] or {item["name"] for item in final.get("assets", [])} != expected_names:
         raise ValueError("public Release or asset list could not be verified")
-    receipt = {"schemaVersion": "1.0", "applicationVersion": version, "sourceCommit": commit, "tag": tag, "githubReleaseUrl": final["url"], "aggregateArchiveFileName": archive.name, "aggregateArchiveSha256": sha256(archive), "publishedAt": datetime.now(timezone.utc).isoformat(), "status": "published"}
+    receipt = {"schemaVersion": "1.0", "applicationVersion": version, "platformVersions": manifest["platformVersions"], "sourceCommit": commit, "tag": tag, "githubReleaseUrl": final["url"], "aggregateArchiveFileName": archive.name, "aggregateArchiveSha256": sha256(archive), "publishedAt": datetime.now(timezone.utc).isoformat(), "status": "published"}
     save_json(directory / "release-receipt.json", receipt)
     log("release_published", tag=tag, url=final["url"], archiveSha256=receipt["aggregateArchiveSha256"])
     return receipt

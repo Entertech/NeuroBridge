@@ -4,13 +4,22 @@ import unittest
 
 import neurobridge
 from neurobridge.business.gateway import PROTOCOL_VERSION
-from neurobridge.versioning import REGISTRY
+from neurobridge.versioning import REGISTRY, runtime_version, platform_version
 
 
 class VersionRegistryTests(unittest.TestCase):
     def test_runtime_versions_are_loaded_from_the_registry(self) -> None:
-        self.assertEqual(neurobridge.__version__, REGISTRY["application"]["version"])
+        self.assertEqual(neurobridge.__version__, runtime_version())
         self.assertEqual(PROTOCOL_VERSION, REGISTRY["northbound_wire_protocol"]["version"])
+
+    def test_platform_runtime_and_delivery_versions_are_independent(self) -> None:
+        self.assertEqual(runtime_version('win32'), platform_version('windows'))
+        self.assertEqual(runtime_version('linux'), platform_version('kylin'))
+        registry = {'platform_releases': {'windows': {'version': '1.2.3'}, 'kylin': {'version': '4.5.6'}}}
+        self.assertEqual(platform_version('windows', registry), '1.2.3')
+        self.assertEqual(platform_version('kylin', registry), '4.5.6')
+        with self.assertRaises(ValueError):
+            platform_version('unknown', registry)
 
     def test_external_document_requires_explicit_authorization_by_default(self) -> None:
         policy = REGISTRY["change_policy"]

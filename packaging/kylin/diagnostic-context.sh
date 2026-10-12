@@ -9,11 +9,14 @@ nb_info_value() {
 }
 
 nb_application_version() {
-  local root=$1 version=
+  local root=$1 version= section=application
   if [[ -z $root ]]; then printf 'unknown\n'; return; fi
   if [[ -f $root/neurobridge/version_registry.toml ]]; then
-    version=$(awk '
-      /^\[application\]/ { inside = 1; next }
+    if grep -Eq '^independent_platforms[[:space:]]*=[[:space:]]*true' "$root/neurobridge/version_registry.toml"; then
+      section=platform_releases.kylin
+    fi
+    version=$(awk -v section="$section" '
+      $0 == "[" section "]" { inside = 1; next }
       inside && /^\[/ { exit }
       inside && /^version[[:space:]]*=/ { split($0, parts, "\""); print parts[2]; exit }
     ' "$root/neurobridge/version_registry.toml" 2>/dev/null || true)

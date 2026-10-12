@@ -2,7 +2,8 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.3.0"
+# Source/distribution and delivery bundle version; never an installer version.
+version = "0.4.0"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -18,14 +19,17 @@ impact = "minor"
 compatibility = "The Kylin deliverable changes from prebuilt packages to one bootstrap package; gateway wire protocol and existing runtime configuration remain compatible."
 evidence = "Replace the Kylin prebuilt matrix with a universal bootstrap; detect Kylin V10 CPU/ABI, select locked binary or native source dependencies, and extend seven architecture profiles with independent target acceptance pending."
 
-# Legacy platform delivery versions retained for old installers. The release
-# workflow uses only [application].version and does not advance these fields.
+# Independent installer versions. Migration starts from the effective 0.3.0
+# installer baseline, rather than the ignored legacy 0.0.1 fields.
+[release_version_policy]
+independent_platforms = true
+
 [platform_releases.windows]
-version = "0.0.1"
+version = "0.4.0"
 build = 1
 
 [platform_releases.kylin]
-version = "0.0.1"
+version = "0.4.0"
 build = 1
 
 [northbound_wire_protocol]
@@ -1804,3 +1808,37 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户反馈新候选包安装成功但服务 Permission denied，namei 已确认根因；按要求修复后仅通过 CI 生成麒麟引导包，同时纳入已验证的随包标准库定位和依赖目录门禁修复。保持未正式发布的 0.3.0 候选版本并用提交/时间区分构建，不修改设备算法行为、北向报文或历史已发布文档；权限、目录搬移、失败回滚与模拟事务检查不能替代麒麟目标机服务启动及真实采集验收。"
+
+[[application_release_changes]]
+from_version = "0.3.0"
+to_version = "0.4.0"
+impact = "minor"
+compatibility = "Delivery archives use version plus commit; wire protocol and runtime configuration remain compatible."
+evidence = "Independent platform releases, reusable immutable platform inputs and shared Windows 10/11 x64 installers."
+
+[[platform_release_changes]]
+platform = "windows"
+from_version = "0.3.0"
+to_version = "0.4.0"
+impact = "minor"
+compatibility = "One MSI and one EXE support Windows 10/11 x64; stable upgrade identities preserve the previous installer family."
+evidence = "Migrate from effective unified installer version, merge Windows package targets and publish independently."
+
+[[platform_release_changes]]
+platform = "kylin"
+from_version = "0.3.0"
+to_version = "0.4.0"
+impact = "minor"
+compatibility = "Bootstrap lifecycle and wire protocol remain compatible; installer version is now independent of delivery version."
+evidence = "Migrate from effective unified installer version and enable independent platform publication and reuse."
+
+[[change_records]]
+id = "2026-10-10-independent-platform-releases"
+date = "2026-10-10"
+scope = "platform_versioning_and_delivery"
+summary = "拆分 Windows 与麒麟安装包版本、构建和发布；Windows 10/11 x64 共用一份 MSI 和一份 EXE。总交付包保留两平台，以总包版本和提交命名，清单记录平台版本、原始源码提交及复用依据，同步内部文档和测试。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确授权从默认分支创建新分支并修改实现、内部文档与测试。本次不修改已发布部署指南或北向协议，不执行安装包构建、远程发布或现场验收；平台版本从实际统一安装包版本迁移，避免退回已忽略的旧平台字段。"

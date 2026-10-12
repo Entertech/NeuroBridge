@@ -25,10 +25,8 @@ REASON_RE = re.compile(r'^\s+blocked_reason: "(.*)"\s*$')
 # The only combinations that the locked toolchain can build today: Windows 10/11
 # on x86_64.  See doc/tech/源码原生安装包构建.md.
 BUILDABLE = {
-    "windows-10-x86_64-exe",
-    "windows-10-x86_64-msi",
-    "windows-11-x86_64-exe",
-    "windows-11-x86_64-msi",
+    "windows-10-11-x86_64-exe",
+    "windows-10-11-x86_64-msi",
 }
 
 
@@ -77,7 +75,7 @@ class NativeInputsWorkflowTests(unittest.TestCase):
             "native-inputs.yml and release_matrix.toml disagree; both must list the "
             "supported Windows 10/11 x64 matrix",
         )
-        self.assertEqual(len(entries), 4)
+        self.assertEqual(len(entries), 2)
 
     def test_buildable_targets_are_the_ones_the_locked_toolchain_supports(self) -> None:
         buildable = {target_id for target_id, reason in windows_entries().items() if reason == ""}

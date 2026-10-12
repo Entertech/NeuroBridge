@@ -9,6 +9,7 @@
     "schemaVersion",
     "manifestType",
     "applicationVersion",
+    "platformVersions",
     "wireProtocolVersion",
     "releaseStatus",
     "trigger",
@@ -28,6 +29,7 @@
       "type": "string",
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     },
+    "platformVersions": {"type": "object", "additionalProperties": false, "required": ["windows", "kylin"], "properties": {"windows": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}, "kylin": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}}},
     "wireProtocolVersion": { "type": "string", "minLength": 1 },
     "releaseStatus": { "const": "candidate" },
     "trigger": {
@@ -79,7 +81,7 @@
       "additionalProperties": false,
       "required": ["tagStatus", "githubReleaseStatus"],
       "properties": {
-        "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "tag": { "type": "string", "pattern": "^delivery-v[0-9]+\\.[0-9]+\\.[0-9]+-[0-9a-f]{12}$" },
         "tagStatus": { "type": "string", "enum": ["pending", "created", "failed"] },
         "githubReleaseUrl": { "type": "string", "format": "uri" },
         "githubReleaseStatus": { "type": "string", "enum": ["pending", "created", "failed"] }
@@ -156,11 +158,13 @@
     "package": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["target", "osVersion", "edition", "architecture", "format", "status", "fileName", "sha256", "validation"],
+      "required": ["target", "platformVersion", "sourceCommit", "osVersion", "edition", "architecture", "format", "status", "fileName", "sha256", "validation"],
       "properties": {
+        "platformVersion": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
         "target": { "type": "string", "enum": ["windows", "kylin"] },
         "osVersion": { "type": "string", "minLength": 1 },
-        "edition": { "type": "string", "enum": ["server", "desktop", "none"] },
+        "edition": { "type": "string", "enum": ["server", "desktop", "none", "v10"] },
         "architecture": { "type": "string", "enum": ["x86", "x86_64", "arm64", "loongarch64", "mips64el", "sw64", "all"] },
         "format": { "type": "string", "enum": ["exe", "msi", "deb", "rpm"] },
         "status": { "const": "candidate" },
@@ -174,9 +178,9 @@
           "if": { "properties": { "target": { "const": "windows" } } },
           "then": {
             "properties": {
-              "osVersion": { "enum": ["7", "10", "11"] },
+              "osVersion": { "const": "10-11" },
               "edition": { "const": "none" },
-              "architecture": { "enum": ["x86", "x86_64"] },
+              "architecture": { "const": "x86_64" },
               "format": { "enum": ["exe", "msi"] }
             }
           }
@@ -186,7 +190,7 @@
           "then": {
             "properties": {
               "osVersion": { "const": "V10" },
-              "edition": { "enum": ["server", "desktop"] },
+              "edition": { "enum": ["server", "desktop", "v10"] },
               "architecture": { "enum": ["x86_64", "arm64", "loongarch64", "mips64el", "sw64", "all"] },
               "format": { "enum": ["deb", "rpm"] }
             }
@@ -197,8 +201,10 @@
     "platformArchive": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["platform", "fileName", "sha256", "status", "packageCount", "packages"],
+      "required": ["platform", "version", "sourceCommit", "fileName", "sha256", "status", "packageCount", "packages"],
       "properties": {
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "sourceCommit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
         "platform": { "type": "string", "enum": ["windows", "kylin"] },
         "fileName": { "type": "string", "minLength": 1 },
         "sha256": { "$ref": "#/$defs/sha256" },

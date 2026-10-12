@@ -104,7 +104,7 @@ class NativePackageBuilderTests(unittest.TestCase):
             self.assertNotEqual(before, BUILDER.digest_tree(root))
 
     def test_windows_service_uses_installed_script_path(self) -> None:
-        target = BUILDER.target_for("windows-10-x86_64-msi")
+        target = BUILDER.target_for("windows-10-11-x86_64-msi")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runtime = self.runtime(root, target["id"])
@@ -119,8 +119,23 @@ class NativePackageBuilderTests(unittest.TestCase):
             self.assertNotIn("Win64=", rendered)
             self.assertNotIn("-m windows.service", service)
 
+    def test_native_versions_follow_the_target_platform_not_the_build_host(self) -> None:
+        versions = {'windows': '5.6.7', 'kylin': '8.9.0'}
+        target = BUILDER.target_for('windows-10-11-x86_64-msi')
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(BUILDER, 'platform_version', side_effect=lambda platform: versions[platform]), mock.patch.object(BUILDER.shutil, 'which', return_value='wix'), mock.patch.object(BUILDER, 'command', return_value=''):
+            root = Path(directory)
+            stage = root / 'stage'
+            BUILDER.copy_source(stage, target, self.runtime(root, target['id']))
+            BUILDER.write_wix_msi(stage, target, root / 'gateway.msi', root / 'validation.log')
+            self.assertIn('Version="5.6.7"', (stage / 'neurobridge.wxs').read_text())
+            BUILDER.write_wix_bundle(root / 'gateway.msi', root / 'gateway.exe', root / 'validation.log')
+            self.assertIn('Version="5.6.7"', (root / 'neurobridge-bundle.wxs').read_text())
+            info = (stage / 'opt/neurobridge/build-info.txt').read_text()
+            self.assertIn('application_version=5.6.7', info)
+            self.assertIn('Version: 8.9.0', BUILDER.deb_control(BUILDER.target_from_id('kylin-desktop-x86_64-deb')))
+
     def test_missing_runtime_is_rejected(self) -> None:
-        target = BUILDER.target_for("windows-10-x86_64-msi")
+        target = BUILDER.target_for("windows-10-11-x86_64-msi")
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory) / "runtime"
             runtime.mkdir()
@@ -186,14 +201,14 @@ class NativePackageBuilderTests(unittest.TestCase):
         """
         shipped_version = "0.2.0"
         self.assertGreater(
-            tuple(int(part) for part in BUILDER.APPLICATION_VERSION.split(".")),
+            tuple(int(part) for part in BUILDER.platform_version('windows').split(".")),
             tuple(int(part) for part in shipped_version.split(".")),
         )
 
         # Windows MSI.  The upgrade code is derived, not stored, so a future
         # edit that rewords the URL would silently stop detecting the shipped
         # product.  Same-version replacement is off unless asked for.
-        target = BUILDER.target_for("windows-10-x86_64-msi")
+        target = BUILDER.target_for("windows-10-11-x86_64-msi")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stage = root / "stage"
@@ -211,7 +226,7 @@ class NativePackageBuilderTests(unittest.TestCase):
                 BUILDER.command = real_command
             wxs = (stage / "neurobridge.wxs").read_text(encoding="utf-8")
             upgrade_code = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge"))
-            self.assertIn(f'Version="{BUILDER.APPLICATION_VERSION}"', wxs)
+            self.assertIn(f'Version="{BUILDER.platform_version("windows")}"', wxs)
             self.assertIn(f'UpgradeCode="{upgrade_code}"', wxs)
             self.assertIn('AllowSameVersionUpgrades="yes"', wxs)
             self.assertNotIn("ProductCode=", wxs)
@@ -233,7 +248,7 @@ class NativePackageBuilderTests(unittest.TestCase):
                 BUILDER.command = real_command
             bundle = bundle_path.read_text(encoding="utf-8")
         bundle_upgrade = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge/bundle"))
-        self.assertIn(f'Version="{BUILDER.APPLICATION_VERSION}"', bundle)
+        self.assertIn(f'Version="{BUILDER.platform_version("windows")}"', bundle)
         self.assertIn(f'UpgradeCode="{bundle_upgrade}"', bundle)
         self.assertIn(f'<RelatedBundle Action="Upgrade" Id="{bundle_upgrade}" />', bundle)
 
@@ -242,7 +257,7 @@ class NativePackageBuilderTests(unittest.TestCase):
         for edition in ("desktop", "server"):
             target = BUILDER.target_from_id(f"kylin-{edition}-x86_64-deb")
             self.assertEqual(BUILDER.deb_control(target).splitlines()[0], f"Package: neurobridge-{edition}")
-            self.assertIn(f"Version: {BUILDER.APPLICATION_VERSION}", BUILDER.deb_control(target))
+            self.assertIn(f"Version: {BUILDER.platform_version('kylin')}", BUILDER.deb_control(target))
             with tempfile.TemporaryDirectory() as directory:
                 stage = Path(directory) / "stage"
                 stage.mkdir()
@@ -257,7 +272,7 @@ class NativePackageBuilderTests(unittest.TestCase):
         # The installed service copies this template to its data directory, and
         # the profile it declares selects the serial source and algorithm path.
         for target_id, expected in (
-            ("windows-10-x86_64-msi", 'profile = "windows_headset_local"'),
+            ("windows-10-11-x86_64-msi", 'profile = "windows_headset_local"'),
             ("kylin-server-x86_64-deb", 'profile = "kylin_headset_local"'),
         ):
             with self.subTest(target=target_id):
@@ -280,7 +295,7 @@ class NativePackageBuilderTests(unittest.TestCase):
         # while the Windows payload ships the windows/ directory as-is.
         for target_id, relative in (
             ("kylin-server-x86_64-deb", "opt/neurobridge/kylin/export-logs.sh"),
-            ("windows-10-x86_64-msi", "opt/neurobridge/windows/export-logs.ps1"),
+            ("windows-10-11-x86_64-msi", "opt/neurobridge/windows/export-logs.ps1"),
         ):
             with self.subTest(target=target_id):
                 target = BUILDER.target_from_id(target_id)
@@ -293,7 +308,7 @@ class NativePackageBuilderTests(unittest.TestCase):
                     self.assertTrue(exporter.is_file(), f"{relative} must ship inside {target_id}")
                     self.assertTrue((exporter.parent / ('diagnostic-context.sh' if target_id.startswith('kylin') else 'diagnostic-context.ps1')).is_file())
                     info = (stage / 'opt/neurobridge/build-info.txt').read_text()
-                    self.assertIn('application_version=' + BUILDER.APPLICATION_VERSION, info)
+                    self.assertIn('application_version=' + BUILDER.platform_version(target['platform']), info)
                     self.assertIn('source_commit=' + subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), info)
                     if target_id.startswith("kylin"):
                         self.assertTrue(os.access(exporter, os.X_OK))

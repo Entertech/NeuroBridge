@@ -25,12 +25,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = tomllib.loads((ROOT / "release/release_matrix.toml").read_text(encoding="utf-8"))
 REGISTRY = ROOT / "neurobridge/version_registry.toml"
-# A change under these paths makes an application version bump mandatory.  It
-# does not by itself produce a release: gate() decides that by comparing
-# [application].version against the base.  `doc/tech/对外/` is the only
-# documentation path that ships inside the user bundle, so editing a delivered
-# document has to force a bump like any product file; the rest of doc/ stays
-# releasable without one.
+# Shared product paths require both independent platform versions to advance.
+# Platform-specific paths and record-only documents are classified below.
 PRODUCT_PATHS = ("neurobridge/", "windows/", "linux/", "packaging/", "release/", "tools/build-product-candidate.py", "tools/build-native-package.py", "tools/release_pipeline.py", "tools/publish_release.py", "requirements.lock", "pyproject.toml", ".github/workflows/", "doc/tech/对外/")
 VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 FORMATS = {"exe", "msi", "deb", "rpm"}
@@ -121,33 +117,118 @@ def release_base(repository: str) -> str:
     raise ValueError("no public application Release or earlier application version found; cannot establish the initial release baseline")
 
 
-def gate(base: str) -> dict[str, object]:
-    current_registry = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))
-    try:
-        previous_registry = tomllib.loads(run("git", "show", f"{base}:neurobridge/version_registry.toml"))
-        changed = [name for name in subprocess.check_output(("git", "diff", "--name-only", "-z", f"{base}...HEAD"), cwd=ROOT).decode("utf-8").split("\0") if name]
-    except subprocess.CalledProcessError as error:
-        raise ValueError(f"cannot resolve release baseline {base}: {error.stderr.strip()}") from error
-    old = previous_registry["application"]["version"]
-    new = current_registry["application"]["version"]
-    old_parts, new_parts = version_tuple(old), version_tuple(new)
-    product_changed = any(path.startswith(PRODUCT_PATHS) for path in changed)
-    if new_parts < old_parts:
-        raise ValueError(f"application version regressed: {old} -> {new}")
-    if product_changed and new_parts == old_parts:
-        raise ValueError(f"product/deployment/package files changed without application version bump: {old}")
-    if new_parts > old_parts:
-        records = [item for item in current_registry.get("application_release_changes", []) if item.get("from_version") == old and item.get("to_version") == new]
-        if len(records) != 1:
-            raise ValueError(f"exactly one application_release_changes entry is required for {old} -> {new}")
-        record = records[0]
-        impact = record.get("impact")
-        expected = {"patch": (old_parts[0], old_parts[1], old_parts[2] + 1), "minor": (old_parts[0], old_parts[1] + 1, 0), "major": (old_parts[0] + 1, 0, 0)}.get(impact)
-        if new_parts != expected or not record.get("compatibility") or not record.get("evidence"):
-            raise ValueError(f"invalid {impact!r} version step or missing release evidence: {old} -> {new}")
-    result: dict[str, object] = {"baseVersion": old, "applicationVersion": new, "productChanged": product_changed, "shouldRelease": new_parts > old_parts, "changedFiles": changed, "reason": "version_advanced" if new_parts > old_parts else "same_version_no_product_change"}
-    log("version_gate", **result)
-    return result
+def platform_versions(registry: dict | None = None) -> dict[str, str]:
+    registry = registry or tomllib.loads(REGISTRY.read_text(encoding="utf-8"))
+    # Earlier installers used application.version; ignored legacy fields cannot
+    # be used as an upgrade baseline (that would downgrade installed packages).
+    independent = registry.get("release_version_policy", {}).get("independent_platforms", False)
+    return {p: registry["platform_releases"][p]["version"] if independent else registry["application"]["version"] for p in ("windows", "kylin")}
+
+
+def affected_platforms(path: str) -> set[str]:
+    if path in {"neurobridge/version_registry.toml", "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"}:
+        return set()
+    if path.startswith(("linux/", "packaging/kylin/", "config/kylin-", "tools/build-kylin-", "tools/prepare-kylin-", "tools/write-kylin-", "tools/kylin_inputs.py", "neurobridge/profiles/kylin_", "neurobridge/adapters/sources/serial_kylin", "doc/tech/对外/数据网关银河麒麟")):
+        return {"kylin"}
+    if path.startswith(("windows/", "packaging/windows/", "tools/prepare-windows-", "neurobridge/profiles/windows_", "neurobridge/adapters/sources/serial_windows", "doc/tech/对外/数据网关 Windows")):
+        return {"windows"}
+    if path.startswith(PRODUCT_PATHS + ("config/", "sdk/", "third_party/", "web/", "tools/build-", "tools/prepare-", "schemas/release-", "tools/platform_release.py", "tools/sync-version-registry.py", "tools/check-version-registry.py", "sdk.lock")):
+        return {"windows", "kylin"}
+    return set()
+
+
+def validate_step(old: str, new: str, records: list[dict], label: str) -> None:
+    before, after = version_tuple(old), version_tuple(new)
+    if after < before:
+        raise ValueError(f"{label} version regressed: {old} -> {new}")
+    if after == before:
+        return
+    matched = [r for r in records if r.get("from_version") == old and r.get("to_version") == new]
+    if len(matched) != 1:
+        raise ValueError(f"exactly one {label} release changes entry is required for {old} -> {new}")
+    record = matched[0]
+    expected = {"patch": (before[0], before[1], before[2] + 1), "minor": (before[0], before[1] + 1, 0), "major": (before[0] + 1, 0, 0)}.get(record.get("impact"))
+    if after != expected or not record.get("compatibility") or not record.get("evidence"):
+        raise ValueError(f"invalid {label} version step or missing release evidence: {old} -> {new}")
+
+
+def gate(base: str, *, only_platform: str | None = None) -> dict[str, object]:
+    current = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))
+    previous = tomllib.loads(run("git", "show", f"{base}:neurobridge/version_registry.toml"))
+    # Include staged/unstaged tracked changes so the local gate reviews edits.
+    changed = [n for n in subprocess.check_output(("git", "diff", "--name-only", "-z", base), cwd=ROOT).decode("utf-8").split("\0") if n]
+    changed = sorted(set(changed) | set(run('git', 'ls-files', '--others', '--exclude-standard').splitlines()))
+    # Updating only source-distribution metadata does not change installers.
+    if 'pyproject.toml' in changed:
+        try:
+            before_project = tomllib.loads(run('git', 'show', f'{base}:pyproject.toml'))
+            after_project = tomllib.loads((ROOT / 'pyproject.toml').read_text())
+            before_project['project'].pop('version', None)
+            after_project['project'].pop('version', None)
+            if before_project == after_project:
+                changed.remove('pyproject.toml')
+        except (OSError, subprocess.CalledProcessError):
+            pass
+    old_versions, new_versions = platform_versions(previous), platform_versions(current)
+    decisions = {}
+    for platform in ("windows", "kylin"):
+        if only_platform is not None and platform != only_platform:
+            continue
+        old, new = old_versions[platform], new_versions[platform]
+        product_changed = any(platform in affected_platforms(path) for path in changed)
+        validate_step(old, new, [r for r in current.get("platform_release_changes", []) if r.get("platform") == platform], platform)
+        if product_changed and old == new:
+            raise ValueError(f"{platform} files changed without platform version bump: {old}")
+        decisions[platform] = {"baseVersion": old, "version": new, "productChanged": product_changed, "shouldRelease": version_tuple(new) > version_tuple(old), "baseCommit": base}
+    if only_platform is None:
+        validate_step(previous["application"]["version"], current["application"]["version"], current.get("application_release_changes", []), "delivery")
+    value = {"baseVersion": previous["application"]["version"], "applicationVersion": current["application"]["version"], "platformVersions": new_versions, "platforms": decisions, "productChanged": any(d["productChanged"] for d in decisions.values()), "shouldRelease": any(d["shouldRelease"] for d in decisions.values()) or previous["application"]["version"] != current["application"]["version"], "changedFiles": changed}
+    log("version_gate", **value)
+    return value
+
+
+def repository_plan(repository: str) -> dict:
+    pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"))
+    public = [r for page in pages for r in page if not r["draft"] and not r["prerelease"] and r.get("published_at")]
+    current = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))
+    decisions = {}
+    for platform, version in platform_versions(current).items():
+        releases = [r for r in public if r["tag_name"].startswith(platform + "-v") and VERSION_RE.fullmatch(r["tag_name"][len(platform) + 2:]) and any(a.get("state") == "uploaded" and a["name"] == r["tag_name"] + ".zip" for a in r.get("assets", []))]
+        latest = max(releases, key=lambda r: version_tuple(r["tag_name"][len(platform) + 2:]), default=None)
+        if latest:
+            old = latest["tag_name"][len(platform) + 2:]
+            if version_tuple(version) < version_tuple(old):
+                raise ValueError(f"{platform} version is below its published release")
+            base = run("git", "rev-parse", f"refs/tags/{latest['tag_name']}^{{commit}}")
+            source = tomllib.loads(run("git", "show", f"{base}:neurobridge/version_registry.toml"))
+            if platform_versions(source)[platform] != old:
+                raise ValueError(f"published {platform} tag differs from its source version")
+            if version == old:
+                decisions[platform] = {**gate(base, only_platform=platform)["platforms"][platform], "releaseTag": latest["tag_name"]}
+                continue
+        else:
+            # Migration uses the last unified public release/version history.
+            base = release_base(repository)
+        decisions[platform] = gate(base, only_platform=platform)["platforms"][platform]
+    commit = run("git", "rev-parse", "HEAD")
+    delivered = False
+    deliveries = [r for r in public if r["tag_name"].startswith("delivery-v") and any(a.get("state") == "uploaded" and a["name"].startswith("neurobridge-v") and a["name"].endswith(".zip") for a in r.get("assets", []))]
+    for index, release in enumerate(sorted(deliveries, key=lambda r: r["published_at"], reverse=True)):
+        source_commit = run("git", "rev-parse", f"refs/tags/{release['tag_name']}^{{commit}}")
+        source_registry = tomllib.loads(run("git", "show", f"{source_commit}:neurobridge/version_registry.toml"))
+        if index == 0:
+            validate_step(source_registry['application']['version'], current['application']['version'], current.get('application_release_changes', []), 'delivery')
+        if source_registry["application"]["version"] == current["application"]["version"] and platform_versions(source_registry) == platform_versions(current):
+            delivered = True
+            break
+    return {"applicationVersion": current["application"]["version"], "platformVersions": platform_versions(current), "platforms": decisions, "shouldRelease": not delivered or any(d["shouldRelease"] for d in decisions.values())}
+
+
+def delivery_filename(version: str, commit: str) -> str:
+    version_tuple(version)
+    if re.fullmatch(r"[0-9a-f]{40,64}", commit) is None:
+        raise ValueError("delivery source commit must be a full Git SHA")
+    return f"neurobridge-v{version}-{commit[:12]}.zip"
 
 
 def target_result(target_id: str, input_root: Path, output_root: Path) -> dict[str, object]:
@@ -158,7 +239,7 @@ def target_result(target_id: str, input_root: Path, output_root: Path) -> dict[s
     output.mkdir(parents=True, exist_ok=True)
     source = input_root / target_id
     report_path = source / "verification.json"
-    result: dict[str, object] = {"target": target, "status": "blocked", "reason": "verified_offline_input_missing", "stage": "input", "checkedAt": datetime.now(timezone.utc).isoformat(), "sourceCommit": run("git", "rev-parse", "HEAD"), "runner": os.environ.get("RUNNER_IMAGE", os.environ.get("RUNNER_OS", sys.platform))}
+    result: dict[str, object] = {"target": target, "status": "blocked", "reason": "verified_offline_input_missing", "stage": "input", "checkedAt": datetime.now(timezone.utc).isoformat(), "platformVersion": platform_versions()[target["platform"]], "sourceCommit": run("git", "rev-parse", "HEAD"), "runner": os.environ.get("RUNNER_IMAGE", os.environ.get("RUNNER_OS", sys.platform))}
     fetch_log = output / "input-fetch.log"
     if fetch_log.is_file() and not report_path.is_file():
         summary = fetch_log.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -172,13 +253,15 @@ def target_result(target_id: str, input_root: Path, output_root: Path) -> dict[s
                 raise ValueError("package filename, path or format mismatch")
             if package.name == "result.json" or report["validationLog"] == "result.json":
                 raise ValueError("input cannot overwrite target result")
-            identity = (target["platform"], target["architecture"], tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["application"]["version"])
+            identity = (target["platform"], target["architecture"], platform_versions()[target["platform"]])
             # The bootstrap package names itself with a build timestamp rather
             # than the matrix target id, so "kylin" stands in for "kylin-v10".
             if CONFIG["kylin"].get("package_kind") == "bootstrap" and target["platform"] == "kylin":
                 identity = ("kylin", target["architecture"], identity[2])
             if not all(fragment in package.stem.lower() for fragment in identity):
                 raise ValueError("package filename must identify platform, architecture and application version")
+            if report.get("platformVersion") != identity[2]:
+                raise ValueError("platform version mismatch")
             if report["targetId"] != target_id or report["sourceCommit"] != result["sourceCommit"] or report.get("targetArchitecture") != target["architecture"]:
                 raise ValueError("target ID or source commit mismatch")
             if report.get("automatedValidation") != "passed" or not report.get("validationLog"):
@@ -243,8 +326,15 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
         if not path.is_file():
             raise ValueError(f"missing result for {target['id']}")
         result = json.loads(path.read_text(encoding="utf-8"))
-        if result.get("target") != target or result.get("sourceCommit") != commit or result.get("status") not in {"candidate", "failed", "blocked", "source-only"}:
+        if result.get("target") != target or not result.get("sourceCommit") or (result.get("sourceCommit") != commit and not result.get("reusedRelease")) or result.get("status") not in {"candidate", "failed", "blocked", "source-only"}:
             raise ValueError(f"invalid result identity/status for {target['id']}")
+        if result.get("platformVersion") != platform_versions()[target["platform"]]:
+            raise ValueError(f"result platform version mismatch: {target['id']}")
+        if result.get('reusedRelease'):
+            reused = result['reusedRelease']
+            if not isinstance(reused, dict) or reused.get('tag') != f"{target['platform']}-v{result['platformVersion']}" or reused.get('sourceCommit') != result['sourceCommit']:
+                raise ValueError('invalid reused platform release provenance')
+            require_digest(reused.get('archiveSha256'), 'reused platform archive digest')
         results.append(result)
     winners = {platform: [item for item in results if item["target"]["platform"] == platform and item["status"] == "candidate"] for platform in ("windows", "kylin")}
     counts = {platform: len(items) for platform, items in winners.items()}
@@ -253,12 +343,11 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
         raise ValueError(f"minimum package gate failed: {counts}; each platform requires {CONFIG['minimum_packages_per_platform']}")
     version = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["application"]["version"]
     built_times = sorted(datetime.fromisoformat(item.get("builtAt", commit_at.isoformat()).replace("Z", "+00:00")).astimezone(timezone.utc) for items in winners.values() for item in items) or [commit_at]
-    date = built_times[-1].strftime("%Y%m%d")
     zip_stamp = built_times[-1].timetuple()[:6]
     output.mkdir(parents=True, exist_ok=True)
     platform_archives = []
     for platform in ("windows", "kylin"):
-        archive = output / f"{platform}-v{version}-{date}.zip"
+        archive = output / f"{platform}-v{platform_versions()[platform]}-{commit[:12]}.zip"
         package_entries = []
         seen_packages: set[str] = set()
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
@@ -274,19 +363,19 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
                     raise ValueError(f"candidate bytes/log changed: {target['id']}")
                 add_zip_entry(bundle, package, f"packages/{package.name}", zip_stamp)
                 add_zip_entry(bundle, validation_log, f"validation/{target['id']}/{validation_log.name}", zip_stamp)
-                package_entries.append({"target": platform, "osVersion": target["osVersion"], "edition": target["edition"], "architecture": target["architecture"], "format": target["format"], "status": "candidate", "fileName": package.name, "sha256": item["sha256"], "validation": "pending", "validationLog": f"validation/{target['id']}/{validation_log.name}"})
-        platform_archives.append({"platform": platform, "fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": len(package_entries), "packages": package_entries})
+                package_entries.append({"target": platform, "platformVersion": platform_versions()[platform], "sourceCommit": item["sourceCommit"], "osVersion": target["osVersion"], "edition": target["edition"], "architecture": target["architecture"], "format": target["format"], "status": "candidate", "fileName": package.name, "sha256": item["sha256"], "validation": "pending", "validationLog": f"validation/{target['id']}/{validation_log.name}"})
+        platform_archives.append({"platform": platform, "version": platform_versions()[platform], "sourceCommit": winners[platform][0]["sourceCommit"] if winners[platform] else commit, "fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": len(package_entries), "packages": package_entries})
     coverage = {"requireAllMatrixTargets": False}
     for platform in ("windows", "kylin"):
         config = CONFIG[platform]
         coverage[platform] = {"expectedTargets": [item["id"] for item in targets if item["platform"] == platform], "expectedFormats": config["formats"], "expectedPackageCount": config["expected_package_count"], "builtPackageCount": counts[platform], "targetResults": [{"targetId": item["target"]["id"], "status": item["status"], "reason": item["reason"], **({"validationLog": item["validationLog"]} if item.get("validationLog") else {})} for item in results if item["target"]["platform"] == platform]}
-    internal_manifest = {"applicationVersion": version, "sourceCommit": commit, "coverage": coverage, "platformArchives": [{key: item[key] for key in ("platform", "fileName", "sha256", "packageCount")} for item in platform_archives]}
+    internal_manifest = {"applicationVersion": version, "platformVersions": platform_versions(), "sourceCommit": commit, "coverage": coverage, "platformArchives": [{key: item[key] for key in ("platform", "version", "sourceCommit", "fileName", "sha256", "packageCount")} for item in platform_archives]}
     internal_path = output / "build-manifest.json"
     save_json(internal_path, internal_manifest)
     release_log = output / "release-logs.jsonl"
-    stable_fields = ("target", "status", "reason", "sourceCommit", "fileName", "sha256", "validationLog", "toolchain", "runtimeSha256", "inputSha256", "sourceReferences", "builtAt")
+    stable_fields = ("target", "status", "reason", "sourceCommit", "platformVersion", "reusedRelease", "fileName", "sha256", "validationLog", "toolchain", "runtimeSha256", "inputSha256", "sourceReferences", "builtAt")
     release_log.write_text("".join(json.dumps({key: item[key] for key in stable_fields if key in item}, ensure_ascii=False, sort_keys=True) + "\n" for item in results), encoding="utf-8")
-    archive = output / f"neurobridge-v{version}-{date}.zip"
+    archive = output / delivery_filename(version, commit)
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
         for item in platform_archives:
             add_zip_entry(bundle, output / item["fileName"], item["fileName"], zip_stamp)
@@ -296,7 +385,7 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
         if bundle.testzip() is not None or set(bundle.namelist()) != {"build-manifest.json", "release-logs.jsonl", *(item["fileName"] for item in platform_archives)}:
             raise ValueError("aggregate ZIP verification failed")
     references = list({json.dumps(ref, sort_keys=True): ref for item in results if item["status"] == "candidate" for ref in item["sourceReferences"]}.values())
-    manifest = {"schemaVersion": "1.0", "manifestType": "neurobridge.release", "applicationVersion": version, "wireProtocolVersion": tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["northbound_wire_protocol"]["version"], "releaseStatus": "candidate", "trigger": trigger, "git": {"commit": commit, "ref": os.environ.get("GITHUB_REF", "refs/heads/master"), "dirty": bool(run("git", "status", "--porcelain", "--untracked-files=no"))}, "build": {"startedAt": built_times[0].isoformat(), "finishedAt": built_times[-1].isoformat(), "offline": True, "workflowRunId": os.environ.get("GITHUB_RUN_ID", "local"), "runner": os.environ.get("RUNNER_IMAGE", sys.platform)}, "coverage": coverage, "platformArchives": platform_archives, "aggregateArchive": {"fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": sum(counts.values())}, "release": {"tagStatus": "pending", "githubReleaseStatus": "pending"}, "validation": {"status": "pending", "automated": "passed", "physicalVerification": "pending", "logFiles": [release_log.name] + [entry["validationLog"] for item in platform_archives for entry in item["packages"]]}, "sourceReferences": references}
+    manifest = {"schemaVersion": "1.0", "manifestType": "neurobridge.release", "applicationVersion": version, "platformVersions": platform_versions(), "wireProtocolVersion": tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["northbound_wire_protocol"]["version"], "releaseStatus": "candidate", "trigger": trigger, "git": {"commit": commit, "ref": os.environ.get("GITHUB_REF", "refs/heads/master"), "dirty": bool(run("git", "status", "--porcelain", "--untracked-files=no"))}, "build": {"startedAt": built_times[0].isoformat(), "finishedAt": built_times[-1].isoformat(), "offline": True, "workflowRunId": os.environ.get("GITHUB_RUN_ID", "local"), "runner": os.environ.get("RUNNER_IMAGE", sys.platform)}, "coverage": coverage, "platformArchives": platform_archives, "aggregateArchive": {"fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": sum(counts.values())}, "release": {"tagStatus": "pending", "githubReleaseStatus": "pending"}, "validation": {"status": "pending", "automated": "passed", "physicalVerification": "pending", "logFiles": [release_log.name] + [entry["validationLog"] for item in platform_archives for entry in item["packages"]]}, "sourceReferences": references}
     save_json(output / "release-manifest.json", manifest)
     (output / f"{archive.name}.sha256").write_text(f"{sha256(archive)}  {archive.name}\n", encoding="utf-8")
     log("aggregate_verified", archive=archive.name, sha256=sha256(archive), packages=sum(counts.values()))
@@ -329,7 +418,7 @@ def main() -> int:
                 save_json(args.output, value)
             print(json.dumps(value, separators=(",", ":")))
         elif args.command == "gate":
-            value = gate(args.base or release_base(args.repository))
+            value = gate(args.base) if args.base else repository_plan(args.repository)
             if args.output:
                 save_json(args.output, value)
         elif args.command == "target":

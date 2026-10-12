@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       native_input_run_id:
-        description: "源码原生安装包 Workflow 的 Run ID；未填写时安装包输入记为 blocked"
+        description: "Windows 原生输入 Run ID；留空查找相同提交及分支的成功运行"
         required: false
         type: string
       external_document_mode:
@@ -109,58 +109,16 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  product-candidates:
-    name: Unsigned ${{ matrix.platform }} product candidate
-    needs: [release-plan]
-    if: needs.release-plan.outputs.should_release == 'true'
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: kylin
-            runner: ubuntu-latest
-          - platform: windows
-            runner: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_SHA }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Assemble installable Windows runtime
-        if: matrix.platform == 'windows'
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-windows-candidate-runtime.ps1
-      - name: Build unsigned candidate and metadata
-        shell: bash
-        run: |
-          runtime_args=()
-          if [[ "${{ matrix.platform }}" == "windows" ]]; then
-            runtime_args=(--runtime-dir artifacts/windows-runtime)
-          fi
-          python tools/build-product-candidate.py --platform ${{ matrix.platform }} --output-dir artifacts --require-clean "${runtime_args[@]}"
-      - name: Upload unsigned candidate
-        uses: actions/upload-artifact@v4
-        with:
-          name: neurobridge-${{ matrix.platform }}-unsigned-candidate
-          path: |
-            artifacts/*.zip
-            artifacts/*.tar.gz
-            artifacts/*.sha256
-            artifacts/*.release-manifest.json
-          if-no-files-found: error
-          retention-days: 30
-
   release-plan:
-    name: Release version gate and 32-target plan
+    name: Independent platform versions and delivery plan
     if: github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-22.04
     outputs:
       should_release: ${{ steps.plan.outputs.should_release }}
       version: ${{ steps.plan.outputs.version }}
       matrix: ${{ steps.plan.outputs.matrix }}
+      platform_matrix: ${{ steps.plan.outputs.platform_matrix }}
+      archive_name: ${{ steps.plan.outputs.archive_name }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -169,7 +127,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Validate application version and plan targets
+      - name: Validate independent platform versions and plan targets
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -193,7 +151,13 @@ jobs:
           matrix = json.loads((directory / 'release-matrix.json').read_text())
           print('should_release=' + str(gate['shouldRelease']).lower())
           print('version=' + gate['applicationVersion'])
+          from tools.release_pipeline import delivery_filename
+          for target in matrix['include']:
+              target['build'] = gate['platforms'][target['platform']]['shouldRelease']
+          platforms = {'include': [{'platform': p, 'build': d['shouldRelease'], 'version': d['version']} for p, d in gate['platforms'].items()]}
           print('matrix=' + json.dumps(matrix, separators=(',', ':')))
+          print('platform_matrix=' + json.dumps(platforms, separators=(',', ':')))
+          print('archive_name=' + delivery_filename(gate['applicationVersion'], os.environ['SOURCE_SHA']))
           PY
       - name: Explain a run that needs no release
         # `success()` matters: a gate failure leaves the output unset, and this
@@ -204,11 +168,11 @@ jobs:
         run: |
           {
             printf '## No release needed\n\n'
-            printf '`[application].version` is still `%s`, so nothing was packaged.\n\n' "$VERSION"
-            printf 'A push only produces a package once the application version advances. A change to\n'
+            printf 'No platform or delivery version needs publishing (delivery version `%s`).\n\n' "$VERSION"
+            printf 'Each platform advances independently. A change to\n'
             printf 'shipped files without a bump fails the gate instead of being skipped here.\n'
           } >> "$GITHUB_STEP_SUMMARY"
-          printf '::notice title=release skipped::application version is still %s; nothing was packaged\n' "$VERSION"
+          printf '::notice title=release skipped::no platform or delivery update; delivery version %s\n' "$VERSION"
       - uses: actions/upload-artifact@v4
         with:
           name: release-plan-${{ env.SOURCE_SHA }}
@@ -220,7 +184,7 @@ jobs:
 
   release-targets:
     name: Release target ${{ matrix.id }}
-    needs: [release-plan, external-documents]
+    needs: [release-plan]
     if: needs.release-plan.outputs.should_release == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -241,19 +205,19 @@ jobs:
       - name: Restore approved Kylin dependency cache
         id: kylin-cache
         continue-on-error: true
-        if: matrix.platform == 'kylin'
+        if: matrix.build && matrix.platform == 'kylin'
         uses: actions/cache/restore@v4
         with:
           path: .runtime/kylin-bootstrap-inputs
           key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
           fail-on-cache-miss: true
       - name: Record missing Kylin dependency cache
-        if: matrix.platform == 'kylin' && steps.kylin-cache.outputs.cache-hit != 'true'
+        if: matrix.build && matrix.platform == 'kylin' && steps.kylin-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p "artifacts/targets/${{ matrix.id }}"
           printf '%s\n' 'blocked: approved Kylin dependency cache missing; prepare and verify locked inputs first' > "artifacts/targets/${{ matrix.id }}/input-fetch.log"
       - name: Build the Kylin bootstrap package
-        if: matrix.platform == 'kylin' && steps.kylin-cache.outputs.cache-hit == 'true'
+        if: matrix.build && matrix.platform == 'kylin' && steps.kylin-cache.outputs.cache-hit == 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -267,7 +231,7 @@ jobs:
             --target "${{ matrix.id }}" \
             --input-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}"
       - name: Retrieve approved offline target input
-        if: matrix.platform != 'kylin'
+        if: matrix.build && matrix.platform != 'kylin'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -277,6 +241,10 @@ jobs:
           EXPECTED_BRANCH: ${{ env.SOURCE_BRANCH }}
         run: |
           mkdir -p "artifacts/targets/$TARGET_ID"
+          if [[ -z "$INPUT_RUN_ID" ]]; then
+            gh run list --workflow native-inputs.yml --commit "$EXPECTED_SOURCE_SHA" --status success --json databaseId,headBranch --limit 20 > "$RUNNER_TEMP/native-input-runs.json"
+            INPUT_RUN_ID=$(python -c 'import json,os,sys; runs=json.load(open(sys.argv[1])); print(next((str(r["databaseId"]) for r in runs if r["headBranch"]==os.environ["EXPECTED_BRANCH"]), ""))' "$RUNNER_TEMP/native-input-runs.json")
+          fi
           if [[ -z "$INPUT_RUN_ID" ]]; then
             printf '%s\n' 'blocked: native_input_run_id was not provided; specify it when manually dispatching Release' > "artifacts/targets/$TARGET_ID/input-fetch.log"
           else
@@ -294,7 +262,7 @@ jobs:
             fi
           fi
       - name: Verify target package and write result log
-        if: always()
+        if: always() && matrix.build
         shell: bash
         env:
           TARGET_ID: ${{ matrix.id }}
@@ -304,16 +272,86 @@ jobs:
             --input-root "$RUNNER_TEMP/release-inputs" \
             --output-root artifacts/targets
       - uses: actions/upload-artifact@v4
+        if: always() && matrix.build
         with:
           name: release-target-${{ matrix.id }}
           path: artifacts/targets/
           if-no-files-found: error
           retention-days: 30
 
+  platform-releases:
+    name: Verify and release ${{ matrix.platform }} independently
+    needs: [release-plan, release-targets]
+    if: always() && needs.release-plan.outputs.should_release == 'true'
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.release-plan.outputs.platform_matrix) }}
+    concurrency:
+      group: platform-release-${{ github.repository }}-${{ matrix.platform }}-${{ matrix.version }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        if: matrix.build
+        with:
+          pattern: release-target-${{ matrix.platform }}-*
+          path: artifacts/targets
+          merge-multiple: true
+      - name: Assemble the complete platform release input
+        if: matrix.build
+        run: python -m tools.platform_release build --platform ${{ matrix.platform }} --results-root artifacts/targets --output artifacts/platform
+      - name: Fetch the unchanged published platform
+        if: '!matrix.build'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tools.platform_release fetch --platform ${{ matrix.platform }} --results-root artifacts/targets --output artifacts/platform
+      - name: Recover immutable bytes on a platform publication retry
+        if: matrix.build && github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tools.platform_release recover --platform ${{ matrix.platform }} --results-root artifacts/targets --output artifacts/platform
+      - name: Record the digest before Artifact upload
+        id: digest
+        run: printf 'sha256=%s\n' "$(sha256sum artifacts/platform/${{ matrix.platform }}-v${{ matrix.version }}.zip | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: verified-platform-${{ matrix.platform }}-${{ env.SOURCE_SHA }}
+          path: artifacts/platform/*.zip
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/download-artifact@v4
+        if: matrix.build && github.event_name == 'workflow_run'
+        with:
+          artifact-ids: ${{ steps.upload.outputs.artifact-id }}
+          merge-multiple: true
+          path: artifacts/uploaded-platform
+      - name: Verify uploaded bytes and publish this platform
+        if: matrix.build && github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tools.platform_release publish --platform ${{ matrix.platform }} --archive artifacts/uploaded-platform/${{ matrix.platform }}-v${{ matrix.version }}.zip --expected-sha256 ${{ steps.digest.outputs.sha256 }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: delivery-input-${{ matrix.platform }}
+          path: artifacts/targets/
+          if-no-files-found: error
+          retention-days: 30
+
   release-aggregate:
     name: Verify packages and assemble one release ZIP
-    needs: [release-plan, release-targets]
-    if: always() && needs.release-plan.outputs.should_release == 'true' && needs.release-targets.result == 'success'
+    needs: [release-plan, platform-releases, external-documents]
+    if: always() && needs.release-plan.outputs.should_release == 'true' && needs.platform-releases.result == 'success' && needs.external-documents.result == 'success'
     runs-on: ubuntu-22.04
     outputs:
       archive_sha256: ${{ steps.bundle.outputs.archive_sha256 }}
@@ -327,7 +365,7 @@ jobs:
           python-version: '3.11'
       - uses: actions/download-artifact@v4
         with:
-          pattern: release-target-*
+          pattern: delivery-input-*
           path: artifacts/targets
           merge-multiple: true
       - uses: actions/download-artifact@v4
@@ -353,15 +391,15 @@ jobs:
           python tools/build-release-bundle.py \
             --release-dir artifacts/release \
             --documents-dir artifacts/documents \
-            --output artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
+            --output artifacts/release/${{ needs.release-plan.outputs.archive_name }}
           if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
-            python -m tools.publish_release --reuse-bundle artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
+            python -m tools.publish_release --reuse-bundle artifacts/release/${{ needs.release-plan.outputs.archive_name }}
           fi
-          printf 'archive_sha256=%s\n' "$(sha256sum artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          printf 'archive_sha256=%s\n' "$(sha256sum artifacts/release/${{ needs.release-plan.outputs.archive_name }} | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - name: Check directory PDF and render every page
         run: |
           mkdir -p "$RUNNER_TEMP/directory-guide" artifacts/directory-guide-preview
-          unzip -p artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip bundle-directory-guide.pdf > "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
+          unzip -p artifacts/release/${{ needs.release-plan.outputs.archive_name }} bundle-directory-guide.pdf > "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
           pdfinfo "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
           pdffonts "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" | tee "$RUNNER_TEMP/directory-guide/fonts.txt"
           if ! grep -Eqi "Noto.*(CJK|SansSC|SerifSC)" "$RUNNER_TEMP/directory-guide/fonts.txt"; then
@@ -387,7 +425,7 @@ jobs:
         id: upload
         with:
           name: verified-release-${{ env.SOURCE_SHA }}
-          path: artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
+          path: artifacts/release/${{ needs.release-plan.outputs.archive_name }}
           if-no-files-found: error
           retention-days: 30
 
@@ -397,7 +435,7 @@ jobs:
     if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && needs.release-aggregate.result == 'success'
     runs-on: ubuntu-22.04
     concurrency:
-      group: release-${{ github.repository }}-${{ needs.release-plan.outputs.version }}
+      group: delivery-${{ github.repository }}-${{ needs.release-plan.outputs.version }}-${{ github.event.workflow_run.head_sha || github.sha }}
       cancel-in-progress: false
     permissions:
       contents: write
@@ -421,29 +459,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_ARCHIVE_SHA256: ${{ needs.release-aggregate.outputs.archive_sha256 }}
         run: python -m tools.publish_release --dir artifacts/release --expected-sha256 "$EXPECTED_ARCHIVE_SHA256"
-
-  release-cleanup:
-    name: Keep only the user-facing release artifact
-    needs: [release-plan, release-aggregate, release-publish, product-candidates]
-    if: always() && needs.release-aggregate.result == 'success'
-    runs-on: ubuntu-22.04
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Delete intermediate artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-          KEEP_ARTIFACT: verified-release-${{ env.SOURCE_SHA }}
-        run: |
-          gh api --paginate \
-            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" \
-            --jq '.artifacts[] | [.id, .name] | @tsv' |
-          while IFS=$'\t' read -r artifact_id artifact_name; do
-            if [[ "$artifact_name" != "$KEEP_ARTIFACT" ]]; then
-              gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
-            fi
-          done
 
   report-skipped:
     name: Explain why nothing was packaged

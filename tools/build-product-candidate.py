@@ -21,7 +21,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from neurobridge.versioning import APPLICATION_VERSION, NORTHBOUND_PROTOCOL_VERSION
+from neurobridge.versioning import platform_version, NORTHBOUND_PROTOCOL_VERSION
 
 
 INCLUDE = ("neurobridge", "web", "requirements.lock", "pyproject.toml")
@@ -103,7 +103,7 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
         validate_runtime(platform_name, runtime)
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="neurobridge-candidate-") as temporary:
-        stage = Path(temporary) / f"neurobridge-{APPLICATION_VERSION}-{platform_name}-x86_64"
+        stage = Path(temporary) / f"neurobridge-{platform_version(platform_name)}-{platform_name}-x86_64"
         payload = stage / "payload"
         payload.mkdir(parents=True)
         copy_payload(payload, platform_name)
@@ -125,7 +125,7 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
         manifest = {
             "schemaVersion": 1,
             "product": "NeuroBridge",
-            "applicationVersion": APPLICATION_VERSION,
+            "applicationVersion": platform_version(platform_name),
             "northboundProtocolVersion": NORTHBOUND_PROTOCOL_VERSION,
             "sourceCommit": source_commit(),
             "sourceDirty": source_dirty(),
@@ -146,7 +146,7 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
             "bomFormat": "CycloneDX",
             "specVersion": "1.5",
             "version": 1,
-            "metadata": {"component": {"type": "application", "name": "NeuroBridge", "version": APPLICATION_VERSION}},
+            "metadata": {"component": {"type": "application", "name": "NeuroBridge", "version": platform_version(platform_name)}},
             "components": dependencies() + native_dependencies(platform_name),
         }
         (metadata / "sbom.cdx.json").write_text(json.dumps(sbom, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

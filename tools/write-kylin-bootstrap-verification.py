@@ -20,6 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from kylin_inputs import catalog, verified_input
+sys.path.insert(0, str(ROOT))
+from neurobridge.versioning import platform_version
 OFFLINE = ROOT / "packaging" / "kylin" / "offline"
 
 
@@ -68,6 +70,7 @@ def main() -> int:
     report = {
         "targetId": args.target,
         "targetArchitecture": "all",
+        "platformVersion": platform_version("kylin"),
         "sourceCommit": commit,
         "fileName": package.name,
         "sha256": digest(package),
