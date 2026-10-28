@@ -79,16 +79,16 @@ void processing_contract() {
 
 void dual_waveform_range_contract() {
     DeviceInfoFtV1 device;
-    for (double amplitude : {100.0, 100000.0}) {
+    for (double amplitude : {100.0, 30000.0, 1000000.0}) {
         auto left = signal(device, 4.0, 40.0, amplitude);
         auto right = signal(device, 4.0, 25.0, amplitude * 1.5);
         eeghandler::EEGHandlerTemp left_temp, right_temp;
         auto expected_left = eeghandler::handler(left, 4.0, 1.0, &device, left_temp);
         auto expected_right = eeghandler::handler(right, 4.0, 1.0, &device, right_temp);
-        if (amplitude > 1000) {
+        if (amplitude > 100000) {
             for (const auto* wave : {&expected_left.eegWave, &expected_right.eegWave}) {
-                check(*std::max_element(wave->begin(), wave->end()) > 500, "fixture must exceed +500");
-                check(*std::min_element(wave->begin(), wave->end()) < -500, "fixture must exceed -500");
+                check(*std::max_element(wave->begin(), wave->end()) > 2000, "fixture must exceed +2000");
+                check(*std::min_element(wave->begin(), wave->end()) < -2000, "fixture must exceed -2000");
             }
         }
         // Cover both SDK dual-channel modes; each instance starts with the same history.
@@ -99,10 +99,20 @@ void dual_waveform_range_contract() {
             check(result.eeglWave.size() == expected_left.eegWave.size(), "left length must be preserved");
             check(result.eegrWave.size() == expected_right.eegWave.size(), "right length must be preserved");
             for (size_t i = 0; i < result.eeglWave.size(); ++i) {
-                check(std::abs(result.eeglWave[i] - expected_left.eegWave[i]) <= 0.011,
-                      "left waveform must retain filtered amplitude, with existing rounding only");
-                check(std::abs(result.eegrWave[i] - expected_right.eegWave[i]) <= 0.011,
-                      "right waveform must retain filtered amplitude, with existing rounding only");
+                check(result.eeglWave[i] >= -2000 && result.eeglWave[i] <= 2000,
+                      "left waveform must stay within +/-2000");
+                check(result.eegrWave[i] >= -2000 && result.eegrWave[i] <= 2000,
+                      "right waveform must stay within +/-2000");
+                check(std::abs(result.eeglWave[i] - std::clamp(expected_left.eegWave[i], -2000.0, 2000.0)) <= 0.011,
+                      "left waveform must clip only outside +/-2000, preserving existing rounding");
+                check(std::abs(result.eegrWave[i] - std::clamp(expected_right.eegWave[i], -2000.0, 2000.0)) <= 0.011,
+                      "right waveform must clip only outside +/-2000, preserving existing rounding");
+            }
+            if (amplitude > 100000) {
+                for (const auto* wave : {&result.eeglWave, &result.eegrWave}) {
+                    check(*std::max_element(wave->begin(), wave->end()) == 2000, "positive overflow clips to +2000");
+                    check(*std::min_element(wave->begin(), wave->end()) == -2000, "negative overflow clips to -2000");
+                }
             }
             check(result.eegQuality == std::min(expected_left.quality, expected_right.quality),
                   "waveform range must not change quality grading");

@@ -22,8 +22,8 @@ evidence = "Replace the Kylin prebuilt matrix with a universal bootstrap; detect
 from_version = "0.3.0"
 to_version = "0.3.1"
 impact = "patch"
-compatibility = "EEG quality ratings, bridge fields, raw input grouping and wire protocol remain compatible; processed EEG waveforms and powers are no longer cleared solely because quality is NONE, and dual-channel waveform amplitudes are no longer clipped to +/-500."
-evidence = "Update the locked and vendored AffectiveCloud SDK to cd967c4f3d26ab1100c15b5e8c23604cc495dd23, preserve portability patches, align source-fetch scripts, and add synthetic native EEG regression checks. Pin the Windows get-pip bootstrap URL to an immutable upstream revision matching its existing SHA-256. Remove the dual-channel waveform output clamp as an explicit local patch and build all platform bridges from the vendored snapshot. Target-device algorithm comparison and acceptance remain pending."
+compatibility = "EEG quality ratings, bridge fields, raw input grouping and wire protocol remain compatible; processed EEG waveforms and powers are no longer cleared solely because quality is NONE, and dual-channel waveform output limits expand from +/-500 to +/-2000."
+evidence = "Update the locked and vendored AffectiveCloud SDK to cd967c4f3d26ab1100c15b5e8c23604cc495dd23, preserve portability patches, align source-fetch scripts, and add synthetic native EEG regression checks. Pin the Windows get-pip bootstrap URL to an immutable upstream revision matching its existing SHA-256. Apply the user-selected +/-2000 dual-channel waveform output limit as an explicit local patch and build all platform bridges from the vendored snapshot. Target-device algorithm comparison and acceptance remain pending."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
@@ -1844,3 +1844,14 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户明确要求移除算法左右脑波 500/-500 限制；沿用当前 PR 未合入发布的补丁版本。字段、原始输入、质量评级与能量计算不变，新算法波形允许超出原输出阈值；历史结果不重算，已发布及预发布协议正文不改。各目标机重建、真实录制算法比对和现场验收仍待完成。"
+
+[[change_records]]
+id = "2026-10-28-dual-eeg-output-limit-2000"
+date = "2026-10-28"
+scope = "algorithm_dual_eeg_waveform_output"
+summary = "用户修订为左右脑波限幅 [-2000, 2000]，取代此前完全移除限幅的实现；界内保留滤波幅值，超界截到相应上下限，保持既有两位小数舍入、质量和能量计算。同步 sdk.lock 本地补丁标识和边界回归。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确要求改成 -2000/2000，并要求不用打包；本次只更新源码、相关测试、内部说明和当前 PR，不再次触发打包。沿用同一未发布补丁版本，字段和原始输入不变，历史录制不重算，已发布及预发布协议正文不改；目标机真实数据验收仍待完成。"

@@ -34,6 +34,9 @@ namespace dp
         
         auto eeglWave = eeglRes.eegWave;
 
+        for (auto &sample : eeglWave)
+            sample = std::clamp(sample, -2000.0, 2000.0);
+
         auto eeglPower = mathtool::eegPowerSmoothAvg(eeglRes.power, temp.eeglPowerTmp, 0.7);
         if (isEar)
         {
@@ -54,6 +57,8 @@ namespace dp
             temp.eegrHandlerTmp
         );
         auto eegrWave = eegrRes.eegWave;
+        for (auto &sample : eegrWave)
+            sample = std::clamp(sample, -2000.0, 2000.0);
         auto eegrPower = mathtool::eegPowerSmoothAvg(eegrRes.power, temp.eegrPowerTmp, 0.7);
         if (isEar)
         {

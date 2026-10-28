@@ -20,8 +20,9 @@ The SDK snapshot retains four local portability patches: `<limits>` in
 headers plus `std::strcmp` in `WaveletTool.cpp`. These patches remain necessary for standalone
 headers and Linux/Windows compilation.
 
-The behavioral patch `dual_eeg_waveform_unclipped`, declared in `sdk.lock`,
-removes the +/-500 output clamp for both channels in `source/DP/EEG.cpp`.
+The behavioral patch `dual_eeg_waveform_limit_2000`, declared in `sdk.lock`,
+changes the output clamp for both channels in `source/DP/EEG.cpp` from +/-500
+to +/-2000. Values inside that interval are retained.
 Filtering, quality grading, power calculations and two-decimal output rounding
 are retained. All other package files match the locked upstream revision.
 macOS, Linux and Windows bridge builds use this vendored snapshot so the local
