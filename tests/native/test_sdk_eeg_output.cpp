@@ -76,6 +76,39 @@ void processing_contract() {
     check(single_result.eegQuality == NONE && single_cache.eegQuality == NONE, "single processing preserves NONE quality");
     check(has_signal(single_result.eegWave), "single processing retains waveform");
 }
+
+void dual_waveform_range_contract() {
+    DeviceInfoFtV1 device;
+    for (double amplitude : {100.0, 100000.0}) {
+        auto left = signal(device, 4.0, 40.0, amplitude);
+        auto right = signal(device, 4.0, 25.0, amplitude * 1.5);
+        eeghandler::EEGHandlerTemp left_temp, right_temp;
+        auto expected_left = eeghandler::handler(left, 4.0, 1.0, &device, left_temp);
+        auto expected_right = eeghandler::handler(right, 4.0, 1.0, &device, right_temp);
+        if (amplitude > 1000) {
+            for (const auto* wave : {&expected_left.eegWave, &expected_right.eegWave}) {
+                check(*std::max_element(wave->begin(), wave->end()) > 500, "fixture must exceed +500");
+                check(*std::min_element(wave->begin(), wave->end()) < -500, "fixture must exceed -500");
+            }
+        }
+        // Cover both SDK dual-channel modes; each instance starts with the same history.
+        for (bool is_ear : {false, true}) {
+            SessionCache cache{};
+            dp::EEGProgress process;
+            auto result = process.trigger(cache, left, right, is_ear);
+            check(result.eeglWave.size() == expected_left.eegWave.size(), "left length must be preserved");
+            check(result.eegrWave.size() == expected_right.eegWave.size(), "right length must be preserved");
+            for (size_t i = 0; i < result.eeglWave.size(); ++i) {
+                check(std::abs(result.eeglWave[i] - expected_left.eegWave[i]) <= 0.011,
+                      "left waveform must retain filtered amplitude, with existing rounding only");
+                check(std::abs(result.eegrWave[i] - expected_right.eegWave[i]) <= 0.011,
+                      "right waveform must retain filtered amplitude, with existing rounding only");
+            }
+            check(result.eegQuality == std::min(expected_left.quality, expected_right.quality),
+                  "waveform range must not change quality grading");
+        }
+    }
+}
 } // namespace
 
 int main() {
@@ -85,6 +118,7 @@ int main() {
         handler_contract(dual_device);
         handler_contract(single_device);
         processing_contract();
+        dual_waveform_range_contract();
         std::cout << "EEG output, quality, warmup and load checks passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

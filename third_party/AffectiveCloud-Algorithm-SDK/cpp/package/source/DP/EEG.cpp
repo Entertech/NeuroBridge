@@ -34,14 +34,6 @@ namespace dp
         
         auto eeglWave = eeglRes.eegWave;
 
-        for (auto &e : eeglWave)
-        {
-            if (e > 500) 
-                e = 500;
-            else if (e < -500)
-                e = -500;
-        }
-
         auto eeglPower = mathtool::eegPowerSmoothAvg(eeglRes.power, temp.eeglPowerTmp, 0.7);
         if (isEar)
         {
@@ -62,13 +54,6 @@ namespace dp
             temp.eegrHandlerTmp
         );
         auto eegrWave = eegrRes.eegWave;
-        for (auto &e : eegrWave)
-        {
-            if (e > 500) 
-                e = 500;
-            else if (e < -500)
-                e = -500;
-        }
         auto eegrPower = mathtool::eegPowerSmoothAvg(eegrRes.power, temp.eegrPowerTmp, 0.7);
         if (isEar)
         {

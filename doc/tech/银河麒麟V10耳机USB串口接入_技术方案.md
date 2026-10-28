@@ -141,6 +141,8 @@ Northbound.eegRaw     = sequence + ParsedSignal.eeg  # 保持既有 20 字节合
 
 2026-10-28 更新：算法 SDK 固定为 `sdk.lock` 中的新提交，内置 `EEGHandler` 完成处理后不再因质量评级 `NONE` 清零波形与能量，质量计算、佩戴检测失败、窗口预热和下游算法质量判断仍保留。当前 bridge 继续使用双通道 `appendEEG`，没有切换输入编码或算法入口。目标机须重建 bridge，并用同一授权录制数据对比升级前后结果；合成回归与完整影响说明见[算法 SDK 接入 POC](算法%20SDK%20接入%20POC.md#2026-10-28-sdk-更新影响)。串口离线拒绝录播、原始数据和算法结果分别保存的规则不变。
 
+左右脑波输出补丁：内置 SDK 双通道处理不再将波形压到 `[-500, 500]`，保留原滤波值和两位小数舍入。该本地补丁记录在 `sdk.lock`，目标机重建 bridge 后生效，原始帧和算法输入投影不变；已保存的历史算法结果不重算。
+
 ## 8. 算法状态广播
 
 Bootstrap 的 `device_ready()` 调用 `ApplicationService.prepare_session()` 初始化新算法会话，并通过 `GatewayApplication.update_status()` 广播：

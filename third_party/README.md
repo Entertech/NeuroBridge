@@ -17,6 +17,12 @@ the lock and vendored snapshot together on a controlled build machine.
 The SDK snapshot retains four local portability patches: `<limits>` in
 `DSPBCG.h`; `<cstdint>`, `<vector>` and `std::uint8_t` in `Affective.h`;
 `<cstring>` and `std::memset` in `FFTTool.cpp`; and the required standard
-headers plus `std::strcmp` in `WaveletTool.cpp`. Other package files match
-the locked upstream revision. These patches remain necessary for standalone
+headers plus `std::strcmp` in `WaveletTool.cpp`. These patches remain necessary for standalone
 headers and Linux/Windows compilation.
+
+The behavioral patch `dual_eeg_waveform_unclipped`, declared in `sdk.lock`,
+removes the +/-500 output clamp for both channels in `source/DP/EEG.cpp`.
+Filtering, quality grading, power calculations and two-decimal output rounding
+are retained. All other package files match the locked upstream revision.
+macOS, Linux and Windows bridge builds use this vendored snapshot so the local
+patch is included on each platform.

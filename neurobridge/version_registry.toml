@@ -22,8 +22,8 @@ evidence = "Replace the Kylin prebuilt matrix with a universal bootstrap; detect
 from_version = "0.3.0"
 to_version = "0.3.1"
 impact = "patch"
-compatibility = "EEG quality ratings, bridge fields, raw input grouping and wire protocol remain compatible; processed EEG waveforms and powers are no longer cleared solely because quality is NONE."
-evidence = "Update the locked and vendored AffectiveCloud SDK to cd967c4f3d26ab1100c15b5e8c23604cc495dd23, preserve portability patches, align source-fetch scripts, and add synthetic native EEG regression checks. Pin the Windows get-pip bootstrap URL to an immutable upstream revision matching its existing SHA-256. Target-device algorithm comparison and acceptance remain pending."
+compatibility = "EEG quality ratings, bridge fields, raw input grouping and wire protocol remain compatible; processed EEG waveforms and powers are no longer cleared solely because quality is NONE, and dual-channel waveform amplitudes are no longer clipped to +/-500."
+evidence = "Update the locked and vendored AffectiveCloud SDK to cd967c4f3d26ab1100c15b5e8c23604cc495dd23, preserve portability patches, align source-fetch scripts, and add synthetic native EEG regression checks. Pin the Windows get-pip bootstrap URL to an immutable upstream revision matching its existing SHA-256. Remove the dual-channel waveform output clamp as an explicit local patch and build all platform bridges from the vendored snapshot. Target-device algorithm comparison and acceptance remain pending."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
@@ -1833,3 +1833,14 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "Windows 打包运行 40644417375 在准备阶段因 get-pip.py 摘要不符失败，用户明确授权修复并提交到当前 PR 后重新打包；应用沿用本 PR 尚未发布的补丁版本，算法与依赖内容、北向报文、已发布和预发布协议正文不变。"
+
+[[change_records]]
+id = "2026-10-28-dual-eeg-output-remove-clamp"
+date = "2026-10-28"
+scope = "algorithm_dual_eeg_waveform_output"
+summary = "按用户要求移除 SDK 双通道左右脑波的正负 500 硬限幅，保留滤波结果和既有两位小数舍入；sdk.lock 显式登记本地行为补丁，macOS 与 Windows/麒麟统一使用内置 SDK 快照，新增界内及正负超界逐点回归。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确要求移除算法左右脑波 500/-500 限制；沿用当前 PR 未合入发布的补丁版本。字段、原始输入、质量评级与能量计算不变，新算法波形允许超出原输出阈值；历史结果不重算，已发布及预发布协议正文不改。各目标机重建、真实录制算法比对和现场验收仍待完成。"

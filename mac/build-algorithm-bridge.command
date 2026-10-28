@@ -1,22 +1,20 @@
 #!/usr/bin/env bash
-# Build the local macOS bridge against the exact C++ algorithm SDK revision.
+# Build the local macOS bridge from the locked vendored SDK and local patches.
 set -euo pipefail
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-sdk_repository="https://github.com/Entertech/AffectiveCloud-Algorithm-SDK.git"
-sdk_commit="cd967c4f3d26ab1100c15b5e8c23604cc495dd23"
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 numcpp_repository="https://github.com/dpilger26/NumCpp.git"
 numcpp_tag="Version_2.11.0"
 numcpp_commit="cd324a7f09ec1ec4ba2ef2d7bac4861c9a84ee47"
 runtime_root="/tmp/neurobridge-affective-runtime"
-sdk_dir="$runtime_root/AffectiveCloud-Algorithm-SDK"
+sdk_dir="$repo_root/third_party/AffectiveCloud-Algorithm-SDK"
 numcpp_dir="$runtime_root/NumCpp"
 numcpp_build_dir="$runtime_root/numcpp-build"
 numcpp_prefix="$runtime_root/numcpp-prefix"
 bridge_build_dir="$runtime_root/bridge-build"
 bridge_path="$runtime_root/affective_bridge"
-repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 if ! command -v brew >/dev/null 2>&1; then
   echo "需要 Homebrew 才能构建本地算法 bridge。请先安装 Homebrew 后重试。"
@@ -40,13 +38,10 @@ if (( ${#missing_formulae[@]} > 0 )); then
 fi
 
 mkdir -p "$runtime_root"
-if [[ ! -d "$sdk_dir/.git" ]]; then
-  git clone --quiet "$sdk_repository" "$sdk_dir"
+if [[ ! -f "$sdk_dir/cpp/package/CMakeLists.txt" ]]; then
+  echo "缺少仓库内算法 SDK 源码快照，请使用完整的 NeuroBridge checkout。"
+  exit 1
 fi
-if ! git -C "$sdk_dir" cat-file -e "$sdk_commit^{commit}" 2>/dev/null; then
-  git -C "$sdk_dir" fetch --tags --quiet
-fi
-git -C "$sdk_dir" checkout --detach --quiet "$sdk_commit"
 
 if [[ ! -d "$numcpp_dir/.git" ]]; then
   git clone --quiet --branch "$numcpp_tag" "$numcpp_repository" "$numcpp_dir"
