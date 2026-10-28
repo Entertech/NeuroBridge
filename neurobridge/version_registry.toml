@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.3.1"
+version = "0.3.2"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -24,6 +24,13 @@ to_version = "0.3.1"
 impact = "patch"
 compatibility = "EEG quality ratings, bridge fields, raw input grouping and wire protocol remain compatible; processed EEG waveforms and powers are no longer cleared solely because quality is NONE, and dual-channel waveform output limits expand from +/-500 to +/-2000."
 evidence = "Update the locked and vendored AffectiveCloud SDK to cd967c4f3d26ab1100c15b5e8c23604cc495dd23, preserve portability patches, align source-fetch scripts, and add synthetic native EEG regression checks. Pin the Windows get-pip bootstrap URL to an immutable upstream revision matching its existing SHA-256. Apply the user-selected +/-2000 dual-channel waveform output limit as an explicit local patch and build all platform bridges from the vendored snapshot. Target-device algorithm comparison and acceptance remain pending."
+
+[[application_release_changes]]
+from_version = "0.3.1"
+to_version = "0.3.2"
+impact = "patch"
+compatibility = "Retain the current SDK and +/-2000 dual-channel waveform output limits; no wire protocol or configuration schema change."
+evidence = "User explicitly requested application 0.3.2 and Windows/Kylin CI packages. Synchronize generated version consumers and validate the complete recorded version chain when a branch advances through multiple candidate versions."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
@@ -1855,3 +1862,14 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户明确要求改成 -2000/2000，并要求不用打包；本次只更新源码、相关测试、内部说明和当前 PR，不再次触发打包。沿用同一未发布补丁版本，字段和原始输入不变，历史录制不重算，已发布及预发布协议正文不改；目标机真实数据验收仍待完成。"
+
+[[change_records]]
+id = "2026-10-28-application-032-ci-packages"
+date = "2026-10-28"
+scope = "application_version_and_ci_packaging"
+summary = "用户明确指定应用版本 0.3.2 并重新要求 Windows/麒麟 CI 打包；同步派生版本字段，门禁按台账逐步验证连续候选版本，缺失、重复、跳步或缺少依据均拒绝。当前 SDK 和左右脑波正负 2000 限幅保留。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "本次请求取代此前不打包的要求；CI 使用新提交生成 Actions Artifacts，不创建正式 Release/tag，不修改已发布和预发布协议正文。应用版本与北向报文及协议文档版本分别管理，目标机现场验收仍待完成。"

@@ -136,15 +136,22 @@ def gate(base: str) -> dict[str, object]:
         raise ValueError(f"application version regressed: {old} -> {new}")
     if product_changed and new_parts == old_parts:
         raise ValueError(f"product/deployment/package files changed without application version bump: {old}")
-    if new_parts > old_parts:
-        records = [item for item in current_registry.get("application_release_changes", []) if item.get("from_version") == old and item.get("to_version") == new]
+    cursor = old
+    while version_tuple(cursor) < new_parts:
+        # Candidate branches may advance more than once before merging.
+        # Validate each step instead of accepting an unexplained version jump.
+        records = [item for item in current_registry.get("application_release_changes", []) if item.get("from_version") == cursor]
         if len(records) != 1:
-            raise ValueError(f"exactly one application_release_changes entry is required for {old} -> {new}")
+            raise ValueError(f"exactly one application_release_changes entry is required from {cursor} toward {new}")
         record = records[0]
         impact = record.get("impact")
-        expected = {"patch": (old_parts[0], old_parts[1], old_parts[2] + 1), "minor": (old_parts[0], old_parts[1] + 1, 0), "major": (old_parts[0] + 1, 0, 0)}.get(impact)
-        if new_parts != expected or not record.get("compatibility") or not record.get("evidence"):
-            raise ValueError(f"invalid {impact!r} version step or missing release evidence: {old} -> {new}")
+        parts = version_tuple(cursor)
+        next_version = record.get("to_version", "")
+        next_parts = version_tuple(next_version)
+        expected = {"patch": (parts[0], parts[1], parts[2] + 1), "minor": (parts[0], parts[1] + 1, 0), "major": (parts[0] + 1, 0, 0)}.get(impact)
+        if next_parts != expected or next_parts > new_parts or not record.get("compatibility") or not record.get("evidence"):
+            raise ValueError(f"invalid {impact!r} version step or missing release evidence: {cursor} -> {next_version}")
+        cursor = next_version
     result: dict[str, object] = {"baseVersion": old, "applicationVersion": new, "productChanged": product_changed, "shouldRelease": new_parts > old_parts, "changedFiles": changed, "reason": "version_advanced" if new_parts > old_parts else "same_version_no_product_change"}
     log("version_gate", **result)
     return result
