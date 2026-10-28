@@ -7,7 +7,7 @@ $Runtime = Join-Path $Root "artifacts\windows-runtime"
 $PythonVersion = "3.11.9"
 $PythonSha256 = "009d6bf7e3b2ddca3d784fa09f90fe54336d5b60f0e0f305c37f400bf83cfd3b"
 $EmbedUrl = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
-$GetPipUrl = "https://bootstrap.pypa.io/get-pip.py"
+$GetPipUrl = "https://raw.githubusercontent.com/pypa/get-pip/af54dfe793b24685f8dc4ebba0630d9f2d77653c/public/get-pip.py"
 $GetPipSha256 = "fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6"
 
 if (Test-Path $Runtime) {

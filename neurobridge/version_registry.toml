@@ -23,7 +23,7 @@ from_version = "0.3.0"
 to_version = "0.3.1"
 impact = "patch"
 compatibility = "EEG quality ratings, bridge fields, raw input grouping and wire protocol remain compatible; processed EEG waveforms and powers are no longer cleared solely because quality is NONE."
-evidence = "Update the locked and vendored AffectiveCloud SDK to cd967c4f3d26ab1100c15b5e8c23604cc495dd23, preserve portability patches, align source-fetch scripts, and add synthetic native EEG regression checks. Target-device algorithm comparison and acceptance remain pending."
+evidence = "Update the locked and vendored AffectiveCloud SDK to cd967c4f3d26ab1100c15b5e8c23604cc495dd23, preserve portability patches, align source-fetch scripts, and add synthetic native EEG regression checks. Pin the Windows get-pip bootstrap URL to an immutable upstream revision matching its existing SHA-256. Target-device algorithm comparison and acceptance remain pending."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
@@ -1822,3 +1822,14 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "用户要求更新本项目算法 SDK 并检查影响、运行测试；仅更新源码、内部说明和未锁定变更记录，未授权发布对外文档。字段、原始输入分组和报文版本保持兼容；macOS 合成测试不替代银河麒麟 V10 各架构或 Windows 目标机编译、真实录制数据算法比对及实时采集/离线不录播/拔插重连/服务重启/浏览器恢复验收。"
+
+[[change_records]]
+id = "2026-10-28-windows-pip-bootstrap-immutable-source"
+date = "2026-10-28"
+scope = "windows_ci_runtime_preparation"
+summary = "Windows CI 运行时准备的 get-pip.py 下载地址固定到 PyPA 历史提交 af54dfe793b24685f8dc4ebba0630d9f2d77653c，下载内容与现有锁定 SHA-256 完全一致，避免浮动地址升级后校验失败；保留摘要校验与原有失败策略。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "Windows 打包运行 40644417375 在准备阶段因 get-pip.py 摘要不符失败，用户明确授权修复并提交到当前 PR 后重新打包；应用沿用本 PR 尚未发布的补丁版本，算法与依赖内容、北向报文、已发布和预发布协议正文不变。"

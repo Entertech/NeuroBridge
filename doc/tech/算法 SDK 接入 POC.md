@@ -35,6 +35,8 @@ Python 完整回归命令为 `.venv/bin/python -m unittest discover -s tests -v`
 
 ### 进程消息
 
+Windows CI 打包修复（2026-10-28）：运行 `40644417375` 在准备嵌入式 Python 时因浮动 `get-pip.py` 地址内容变化而摘要不符。现固定至 PyPA 提交 `af54dfe793b24685f8dc4ebba0630d9f2d77653c` 的同一文件，独立下载核验仍匹配现有 `fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6`；没有跳过校验或升级安装器输入。重新构建的源码提交及包摘要以 CI Artifact 为准。
+
 网关通过标准输入输出与 bridge 通信，每行一个 UTF-8 JSON 对象。请求只含未经解包的窗口字节：
 
 ```json
