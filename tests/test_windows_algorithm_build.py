@@ -78,8 +78,13 @@ class WindowsAlgorithmBuildTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('original')
         initial = builder.source_fingerprint(self.root)
-        (self.root / 'mac/algorithm_bridge/bridge.cpp').write_text('changed')
-        self.assertNotEqual(initial, builder.source_fingerprint(self.root))
+        for relative in ('sdk.lock', 'mac/algorithm_bridge/bridge.cpp',
+                         'third_party/AffectiveCloud-Algorithm-SDK/sdk.cpp'):
+            with self.subTest(relative=relative):
+                path = self.root / relative
+                path.write_text('changed')
+                self.assertNotEqual(initial, builder.source_fingerprint(self.root))
+                path.write_text('original')
 
     def test_matching_manifest_reuses_binary_without_downloading(self):
         from types import SimpleNamespace

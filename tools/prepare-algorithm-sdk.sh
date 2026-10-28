@@ -20,5 +20,5 @@ clone_exact() {
 
 mkdir -p "$target_dir"
 clone_exact https://github.com/Entertech/Enter-Biomodule-BLE-PC-SDK.git 6870a6187d8cadd0759f8f5d1c5f81a90e2bacbd "$target_dir/Enter-Biomodule-BLE-PC-SDK"
-clone_exact https://github.com/Entertech/AffectiveCloud-Algorithm-SDK.git 5623c5a1a43c6b04c3907d84ba2b9b86f9b010a2 "$target_dir/AffectiveCloud-Algorithm-SDK"
+clone_exact https://github.com/Entertech/AffectiveCloud-Algorithm-SDK.git cd967c4f3d26ab1100c15b5e8c23604cc495dd23 "$target_dir/AffectiveCloud-Algorithm-SDK"
 echo "Sources are checked out. Follow doc/tech/算法 SDK 接入 POC.md before enabling algorithm.enabled."

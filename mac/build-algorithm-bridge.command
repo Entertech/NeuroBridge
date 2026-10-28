@@ -5,7 +5,7 @@ set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 sdk_repository="https://github.com/Entertech/AffectiveCloud-Algorithm-SDK.git"
-sdk_commit="5623c5a1a43c6b04c3907d84ba2b9b86f9b010a2"
+sdk_commit="cd967c4f3d26ab1100c15b5e8c23604cc495dd23"
 numcpp_repository="https://github.com/dpilger26/NumCpp.git"
 numcpp_tag="Version_2.11.0"
 numcpp_commit="cd324a7f09ec1ec4ba2ef2d7bac4861c9a84ee47"

@@ -20,6 +20,21 @@ Ubuntu 24.04 安装器以 `neurobridge` 服务账户调用 [`linux/build-algorit
 
 ## bridge 合同
 
+### 2026-10-28 SDK 更新影响
+
+- 锁定提交由 `5623c5a1a43c6b04c3907d84ba2b9b86f9b010a2` 更新至 `cd967c4f3d26ab1100c15b5e8c23604cc495dd23`。相对旧锁定提交，上游仅修改 `EEGHandler.cpp`；内置快照保留的四处编译补丁见 [`third_party/README.md`](../../third_party/README.md)。
+- `EEGHandler` 完成处理后，无论质量为 `NONE`、`POOR` 或 `GOOD`，均输出实际处理后的波形、特征波形与能量；质量评级继续按原算法输出 `0/1/2`，不会统一变为 `-1`。先前佩戴检测失败仍清空缓存并返回零，数据未满窗口仍返回零；注意力、放松度、睡眠等下游算法的质量判断未移除。
+- 当前耳机 bridge 使用双通道 `appendEEG`，并与 SDK 的单通道路径共用此处理器。输入的原始字节序、20 字节 EEG/1 字节 HR 分组、JSON 字段及录制格式不变；根对象的 `valid` 仍表示现有处理管线有效性，不因本次更新自动等同于 EEG 质量评级。不得仅凭非零波形认定佩戴正常或算法结果准确。
+- Linux、Windows 使用更新后的内置源码；Windows 的源码指纹包含 `sdk.lock` 和 SDK 文件，升级时会使旧自动管理 bridge 缓存失效。手工配置的外部 bridge 仍由操作者自行重建；macOS POC 和源码准备脚本同步固定提交。现有历史录制的结果仍直接读取，不重新计算。
+- 合成原生回归位于 [`tests/native/test_sdk_eeg_output.cpp`](../../tests/native/test_sdk_eeg_output.cpp)，覆盖 NONE/GOOD 评级、波形与能量、预热、佩戴失败清理、单双通道路径。配置现有 bridge CMake 工程时增加 `-DNEUROBRIDGE_BUILD_SDK_TESTS=ON`，构建后运行 `ctest --test-dir <构建目录> --output-on-failure`；默认生产构建不包含测试程序。
+- 结论级别仍为“源码支持”；合成测试不能替代真实录制数据比对。升级后须分别在银河麒麟 V10 对应架构与 Windows 目标机完成编译、算法对比、实时采集、存在历史录制时串口离线不录播、拔插重连、服务重启及浏览器断开/恢复验证。
+
+本次开发机验证环境为 macOS arm64、Apple Clang 15.0.0、CMake 3.31.1、Eigen 5.0.1、NumCpp 2.11.0。内置 SDK 与 bridge 构建、原生回归及进程自检通过；相同原生回归使用旧处理器时在“NONE 质量保留波形”断言失败。另以 SDK 定义生成的合成字节完成 8 组连续 EEG/心率 bridge 请求，确认 NONE 评级下双通道波形非零、频段能量有限且心率字段保留；这组字节不作为真实耳机采样率或算法准确性证据。Ubuntu CI 已增加独立原生回归任务，其结果须以实际 CI 执行为准。
+
+Python 完整回归命令为 `.venv/bin/python -m unittest discover -s tests -v`，本次共 426 项：418 通过、7 跳过、1 失败。失败项为 `test_kylin_uninstall_helper_purges_a_checkout_end_to_end`：macOS BSD `rm` 不支持卸载脚本的 GNU `--one-file-system` 参数；使用 `origin/master` 的原测试及原卸载脚本也复现相同失败，两个文件均未改动。算法配置/POC、进程隔离和 Windows 构建逻辑的 20 项专项测试全部通过；版本台账/对外协议检查、网页连接恢复检查和修改脚本语法检查通过。
+
+### 进程消息
+
 网关通过标准输入输出与 bridge 通信，每行一个 UTF-8 JSON 对象。请求只含未经解包的窗口字节：
 
 ```json

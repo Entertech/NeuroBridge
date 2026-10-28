@@ -139,6 +139,8 @@ Northbound.eegRaw     = sequence + ParsedSignal.eeg  # 保持既有 20 字节合
 
 算法兼容仅表示保持现有 20 字节 EEG 和 1 字节 HR 原始输入合同；最终算法正确性必须使用真实耳机数据验证。
 
+2026-10-28 更新：算法 SDK 固定为 `sdk.lock` 中的新提交，内置 `EEGHandler` 完成处理后不再因质量评级 `NONE` 清零波形与能量，质量计算、佩戴检测失败、窗口预热和下游算法质量判断仍保留。当前 bridge 继续使用双通道 `appendEEG`，没有切换输入编码或算法入口。目标机须重建 bridge，并用同一授权录制数据对比升级前后结果；合成回归与完整影响说明见[算法 SDK 接入 POC](算法%20SDK%20接入%20POC.md#2026-10-28-sdk-更新影响)。串口离线拒绝录播、原始数据和算法结果分别保存的规则不变。
+
 ## 8. 算法状态广播
 
 Bootstrap 的 `device_ready()` 调用 `ApplicationService.prepare_session()` 初始化新算法会话，并通过 `GatewayApplication.update_status()` 广播：
