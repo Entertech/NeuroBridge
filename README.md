@@ -6,7 +6,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。应用版本递增的 `master` 合入尝试全部 5 个包目标；Windows 和麒麟各至少一个合格包、两个平台 ZIP、总 ZIP、清单和日志本地校验成功后，先上传 Actions Artifact，回下载核对上传前总 ZIP 的 SHA-256 和内容，再创建 tag、draft GitHub Release，资产复验后公开。发布基线取带总 ZIP 的已公开正式应用 Release；孤立 tag 和 draft 不代表发布成功，首次发布沿版本历史寻找递增前基线。版本不变的合入记录跳过发布，未完成目标逐项列明。产品版本统一取版本台账的 `[application].version`；旧平台版本字段不参与新发布。当前不启用签名或公证，真机验证结果通过独立补充附件持续记录。
 
-发布实现及所需的离线安装包输入见[发布工作流技术方案](doc/tech/发布工作流技术方案.md)。当前仓库尚无全部 Windows 目标的正式安装包构建环境；CI 会把缺失输入记为 `blocked`，麒麟引导 DEB 由托管 runner 从源码和离线输入打包。PR 只执行校验，不打包；合入 `master` 后，两平台最低门槛未满足时发布失败。源码候选包不算正式安装包。
+发布实现见[发布工作流技术方案](doc/tech/发布工作流技术方案.md)。Release 默认在 Windows runner 从本次源码及锁定运行时构建 Windows 10/11 x64 EXE/MSI，通过原生格式、源码提交和摘要校验后纳入汇总；麒麟引导 DEB 从源码和离线输入打包。PR 只执行校验，不打包；合入 `master` 后，两平台最低门槛未满足时发布失败。源码候选包不算正式安装包，CI 构建通过也不代表目标机验收通过。
 
 原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。
 
@@ -14,7 +14,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 麒麟通用包只声明共用系统依赖；x86_64 不要求 Python 源码开发库。其余源码 Profile 在构建前检查 SSL/sqlite/bzip2/xz/ffi/zlib 头文件与链接库，失败日志列出缺项和补齐命令。旧候选包在 dpkg 依赖阶段失败时，恢复步骤见[内部手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md#安装前环境与依赖)。
 
-Windows 原生安装包工作流上传 Artifact 后，手动运行 `Release` 并填写 `native_input_run_id` 选择输入运行；已移除发布输入仓库变量的自动写入与读取。后续自动输入方案接入前，自动 Release 因缺少 Run ID 将 Windows 输入记为 `blocked`，无法完成发布；麒麟引导包不依赖该输入运行。
+手动运行 `Release` 时可留空 `native_input_run_id`，在本次运行直接构建 Windows 原生安装包；也可填写同分支、同源码提交且已成功的原生安装包运行 ID，复用其 `neurobridge-input-<targetId>` Artifact。自动 Release 使用直接构建路径；麒麟引导包独立构建。
 
 同提交的发布运行串行执行。若上一轮已上传总 ZIP，重试会先校验 Release 中登记的源码和原包摘要、下载检查包内容及安装包一致性，再复用原 ZIP 上传 Actions Artifact，继续公开 Release。PDF 重生成产生的时间差不会替换原资产；安装包或目标结果变化则拒绝复用。
 

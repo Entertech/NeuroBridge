@@ -19,6 +19,56 @@ SPEC.loader.exec_module(BUILDER)
 
 
 class NativePackageBuilderTests(unittest.TestCase):
+    def test_windows_native_build_output_reaches_strict_release_aggregate(self) -> None:
+        import json
+        from tools import release_pipeline as pipeline
+        from tools.publish_release import verify_nested_archives
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = BUILDER.target_for("windows-10-x86_64-msi")
+            runtime = self.runtime(root, target["id"])
+
+            def wix_fixture(stage, target, output, log):
+                # WiX itself is exercised on the Windows runner. Here exercise
+                # the real builder/report -> target verifier -> ZIP boundary.
+                output.write_bytes(pipeline.MAGIC["msi"] + b"native installer fixture")
+
+            inputs, results = root / "inputs", root / "results"
+            with mock.patch.object(BUILDER, "build_windows", side_effect=wix_fixture):
+                package = BUILDER.build(target, runtime, inputs / target["id"])
+            windows = pipeline.target_result(target["id"], inputs, results)
+            self.assertEqual(windows["status"], "candidate", windows)
+            for item in pipeline.matrix():
+                if item["id"] != target["id"]:
+                    pipeline.target_result(item["id"], inputs, results)
+            # Windows now counts as a native package, but Kylin is still required.
+            with self.assertRaisesRegex(ValueError, "minimum package gate failed"):
+                pipeline.assemble(results, root / "missing-kylin", "push_master")
+
+            kylin = next(item for item in pipeline.matrix() if item["platform"] == "kylin")
+            destination = inputs / kylin["id"]
+            destination.mkdir(parents=True)
+            deb = destination / f"neurobridge-{BUILDER.APPLICATION_VERSION}-kylin-all.deb"
+            deb.write_bytes(pipeline.MAGIC["deb"] + b"bootstrap fixture")
+            report = json.loads((inputs / target["id"] / "verification.json").read_text())
+            report.update(targetId=kylin["id"], targetArchitecture="all", fileName=deb.name,
+                          sha256=pipeline.sha256(deb))
+            (destination / "validation.log").write_text("bootstrap fixture validated\n")
+            pipeline.save_json(destination / "verification.json", report)
+            self.assertEqual(pipeline.target_result(kylin["id"], inputs, results)["status"], "candidate")
+            release = root / "release"
+            manifest = pipeline.assemble(results, release, "push_master")
+            self.assertEqual(manifest["coverage"]["windows"]["builtPackageCount"], 1)
+            self.assertEqual(manifest["coverage"]["kylin"]["builtPackageCount"], 1)
+            self.assertEqual(manifest["aggregateArchive"]["packageCount"], 2)
+            verify_nested_archives(release / manifest["aggregateArchive"]["fileName"], manifest)
+            # No bypass: a changed native installer is rejected by the same path.
+            package.write_bytes(package.read_bytes() + b"tampered")
+            self.assertEqual(pipeline.target_result(target["id"], inputs, results)["status"], "failed")
+            with self.assertRaisesRegex(ValueError, "minimum package gate failed"):
+                pipeline.assemble(results, root / "tampered-release", "push_master")
+
     def runtime(self, root: Path, target: str) -> Path:
         runtime = root / "runtime"
         if target.startswith("windows"):

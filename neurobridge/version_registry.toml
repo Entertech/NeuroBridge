@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.3.2"
+version = "0.3.3"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -31,6 +31,13 @@ to_version = "0.3.2"
 impact = "patch"
 compatibility = "Retain the current SDK and +/-2000 dual-channel waveform output limits; no wire protocol or configuration schema change."
 evidence = "User explicitly requested application 0.3.2 and Windows/Kylin CI packages. Synchronize generated version consumers and validate the complete recorded version chain when a branch advances through multiple candidate versions."
+
+[[application_release_changes]]
+from_version = "0.3.2"
+to_version = "0.3.3"
+impact = "patch"
+compatibility = "Release now builds Windows 10/11 x64 EXE/MSI inputs when no external input run is selected; gateway behavior, algorithm SDK and wire protocol remain unchanged."
+evidence = "Fix automatic Release runs blocked by missing native_input_run_id. Build native WiX installers from the checked-out source and locked runtime, feed their verification records into the existing target and aggregate gates, retain explicit external-run validation, and preserve failed-target diagnostics."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
@@ -1873,3 +1880,14 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "本次请求取代此前不打包的要求；CI 使用新提交生成 Actions Artifacts，不创建正式 Release/tag，不修改已发布和预发布协议正文。应用版本与北向报文及协议文档版本分别管理，目标机现场验收仍待完成。"
+
+[[change_records]]
+id = "2026-10-29-windows-native-release-aggregation"
+date = "2026-10-29"
+scope = "windows_native_release_input_and_aggregation"
+summary = "Release 未指定外部输入运行时直接构建 Windows 10/11 x64 EXE/MSI，使用现有原生包验证与双平台汇总门禁；保留显式输入的源码提交、分支和成功状态校验，失败时上传目标日志。忽略本地 IDE 配置和构建产物目录。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户授权从默认分支修复发布流程、测试并创建 PR；应用按发布策略递增补丁版本。仅修改构建链路与内部文档，不修改算法或 Issue #20，不修改已发布及预发布协议正文；Windows 安装与真实设备、麒麟现场验收仍须目标机完成。"
