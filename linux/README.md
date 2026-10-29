@@ -8,6 +8,8 @@ bash linux/neurobridge-kylin-bootstrap.sh
 
 `linux/neurobridge-kylin-bootstrap.sh` 是完整项目的一键入口。选择 `1` 时，助手先检查权限并以普通用户执行 fast-forward 更新，更新后停止旧网关，再继续准备环境、串口、算法并启动新版本 `neurobridge.service`；更新失败不会停止已有服务。已配置好时也可输入 `2` 直接启动，菜单 `3` 可单独更新源码。只有菜单 `9` 中显式选择非自启后，日常入口才以前台方式运行；重新启用会恢复默认自启。需要拆除这套源码部署时用菜单 `10` 一键退出：先停服务并移除 systemd 单元，可选择备份现场数据后删除整个源码目录。服务仍以当前桌面用户运行项目内配置、算法和数据。无法联网的旧设备由开发机运行 `./tools/build-kylin-offline-update.sh`，只传输生成的 `neurobridge-kylin-offline-update.run`，目标机执行一次后会自动打开菜单。保持耳机 USB 已连接即可，正常检测不要求拔插。完整现场流程见[银河麒麟 V10 内部手册](../doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
 
+从新系统开始安装时，先阅读[安装部署指南评审稿](../doc/tech/对外/头环数据网关安装部署指南/头环数据网关安装部署指南_v0.1.md)。该指南限定 `codex/linux-headband-ethernet-gateway`，明确首次安装先配置、使用 `install-ubuntu.sh` 后显式启动，以及联网准备停用默认 SSH、SSH 更新固定切换 `master` 的边界。本页的 `update-ubuntu.sh` 会立即重启网关；它不适用于需要等待确认再启动的首次安装步骤。
+
 本目录同时保存 Ubuntu x86_64 部署及银河麒麟项目运行脚本：
 
 - `update-ubuntu.sh`：目标机一键部署入口；只使用当前源码目录，不执行 Git 或网络操作。
