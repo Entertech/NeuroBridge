@@ -68,6 +68,14 @@ def job_block(name: str, workflow: Path = WORKFLOW) -> str:
 
 
 class NativeInputsWorkflowTests(unittest.TestCase):
+    def test_unchanged_version_blocks_every_packaging_and_publication_job(self) -> None:
+        workflow = WORKFLOW.with_name("release.yml")
+        for job in ("external-documents", "product-candidates", "release-targets", "release-aggregate", "release-publish"):
+            with self.subTest(job=job):
+                block = job_block(job, workflow)
+                job_if = next(line for line in block.splitlines() if line.startswith("    if:"))
+                self.assertIn("needs.release-plan.outputs.should_release == 'true'", job_if)
+
     def test_automatic_release_builds_native_windows_inputs_without_an_external_run(self) -> None:
         block = job_block("release-targets", WORKFLOW.with_name("release.yml"))
         condition = "if: matrix.platform == 'windows' && inputs.native_input_run_id == ''"

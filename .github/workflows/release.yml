@@ -206,7 +206,7 @@ jobs:
             printf '## No release needed\n\n'
             printf '`[application].version` is still `%s`, so nothing was packaged.\n\n' "$VERSION"
             printf 'A push only produces a package once the application version advances. A change to\n'
-            printf 'shipped files without a bump fails the gate instead of being skipped here.\n'
+            printf 'business code without a bump fails the gate instead of being skipped here.\n'
           } >> "$GITHUB_STEP_SUMMARY"
           printf '::notice title=release skipped::application version is still %s; nothing was packaged\n' "$VERSION"
       - uses: actions/upload-artifact@v4
@@ -408,7 +408,7 @@ jobs:
   release-publish:
     name: Publish verified release
     needs: [release-plan, release-aggregate]
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && needs.release-aggregate.result == 'success'
+    if: needs.release-plan.outputs.should_release == 'true' && github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && needs.release-aggregate.result == 'success'
     runs-on: ubuntu-22.04
     concurrency:
       group: release-${{ github.repository }}-${{ needs.release-plan.outputs.version }}

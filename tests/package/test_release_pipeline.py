@@ -120,9 +120,8 @@ class ReleasePipelineTests(unittest.TestCase):
 class ReleaseVersionGateTests(unittest.TestCase):
     """Pin how the gate decides that a push has to produce a package.
 
-    The decision compares [application].version only.  The changed-file list is
-    used to *require* a bump, never to trigger a release, so editing
-    PRODUCT_PATHS can silently turn a delivered-document edit into a no-op.
+    Publication compares [application].version only. Only software business
+    source changes require a bump; CI, packaging and docs can keep the version.
     Each branch of the decision is exercised against a real throwaway repo.
     """
 
@@ -171,11 +170,68 @@ class ReleaseVersionGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "without application version bump"):
             release_pipeline.gate("HEAD~1")
 
-    def test_a_delivered_document_change_requires_a_version_bump(self) -> None:
+    def test_a_delivered_document_change_needs_no_application_release(self) -> None:
         self.shipped_document().write_text("updated\n", encoding="utf-8")
         self.commit("delivered document change")
+        result = release_pipeline.gate("HEAD~1")
+        self.assertFalse(result["productChanged"])
+        self.assertFalse(result["shouldRelease"])
+
+    def test_ci_build_docs_and_metadata_changes_keep_the_published_version(self) -> None:
+        base = self.git("rev-parse", "HEAD")
+        for name in (".github/workflows/release.yml", "tools/release_pipeline.py", "tools/publish_release.py",
+                     "tools/build-native-package.py", "tools/build-product-candidate.py", "release/release_matrix.toml",
+                     "packaging/windows/install.ps1", "linux/setup-kylin-algorithm.sh", "windows/algorithm_build.py",
+                     "config/kylin-runtime-manifest.toml", "requirements.lock", "pyproject.toml", "AGENTS.md", ".gitignore"):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("CI or build metadata fixture\n", encoding="utf-8")
+        with (self.root / "neurobridge/version_registry.toml").open("a", encoding="utf-8") as stream:
+            stream.write("\n# New unpublished change record without an application bump\n")
+        self.commit("CI and metadata only")
+        result = release_pipeline.gate(base)
+        self.assertEqual(result["baseVersion"], result["applicationVersion"])
+        self.assertFalse(result["productChanged"])
+        self.assertFalse(result["shouldRelease"])
+        self.assertEqual(result["reason"], "same_version_no_business_code_change")
+
+    def test_runtime_frontend_bridge_and_algorithm_changes_still_require_bumps(self) -> None:
+        for name in ("neurobridge/application/service.py", "windows/service.py", "web/capture/app.js",
+                     "web/capture/index.html", "web/capture/styles.css", "mac/algorithm_bridge/affective_bridge.cpp",
+                     "third_party/AffectiveCloud-Algorithm-SDK/cpp/package/source/DP/EEG.cpp",
+                     "third_party/NumCpp/include/NumCpp/Methods/sum.hpp"):
+            with self.subTest(path=name):
+                base = self.git("rev-parse", "HEAD")
+                path = self.root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("business source fixture\n", encoding="utf-8")
+                self.commit("business change")
+                with self.assertRaisesRegex(ValueError, "business code changed without application version bump"):
+                    release_pipeline.gate(base)
+
+    def test_deleting_or_moving_business_code_out_of_runtime_still_requires_a_bump(self) -> None:
+        base = self.git("rev-parse", "HEAD")
+        destination = self.root / "doc/tech/内部/moved-gateway.py"
+        self.shipped_file().rename(destination)
+        self.commit("move business source outside the runtime")
         with self.assertRaisesRegex(ValueError, "without application version bump"):
-            release_pipeline.gate("HEAD~1")
+            release_pipeline.gate(base)
+
+    def test_same_version_ci_merge_skips_release_even_with_an_existing_public_tag(self) -> None:
+        version = tomllib.loads(release_pipeline.REGISTRY.read_text(encoding="utf-8"))["application"]["version"]
+        base = self.git("rev-parse", "HEAD")
+        self.git("tag", "-a", "v" + version, "-m", "published")
+        tool = self.root / "tools/release_pipeline.py"
+        tool.parent.mkdir()
+        tool.write_text("CI correction\n", encoding="utf-8")
+        self.commit("merge CI-only correction at same application version")
+        release = {"tag_name": "v" + version, "draft": False, "prerelease": False,
+                   "published_at": "2026-10-29T00:00:00Z", "assets": [{"name": f"neurobridge-v{version}.zip", "state": "uploaded"}]}
+        with self.public_releases([[release]]):
+            resolved = release_pipeline.release_base("example/repo")
+            self.assertEqual(resolved, base)
+            self.assertFalse(release_pipeline.gate(resolved)["shouldRelease"])
+        self.assertEqual(self.git("rev-parse", "v" + version + "^{commit}"), base)
 
     def test_an_internal_document_change_needs_no_release(self) -> None:
         self.internal_document().write_text("updated\n", encoding="utf-8")
@@ -203,6 +259,25 @@ class ReleaseVersionGateTests(unittest.TestCase):
         result = release_pipeline.gate("HEAD~1")
         self.assertEqual(result["applicationVersion"], bumped)
         self.assertTrue(result["shouldRelease"])
+
+    def test_business_change_with_a_valid_bump_releases(self) -> None:
+        base = self.git("rev-parse", "HEAD")
+        self.shipped_file().write_text("business fix\n", encoding="utf-8")
+        bumped = self.advance_version()
+        result = release_pipeline.gate(base)
+        self.assertTrue(result["productChanged"])
+        self.assertTrue(result["shouldRelease"])
+        self.assertEqual(result["applicationVersion"], bumped)
+
+    def test_version_regression_is_rejected_even_for_ci_only_changes(self) -> None:
+        base = self.git("rev-parse", "HEAD")
+        registry = release_pipeline.REGISTRY
+        text = registry.read_text(encoding="utf-8")
+        current = tomllib.loads(text)["application"]["version"]
+        registry.write_text(text.replace(f'[application]\nversion = "{current}"', '[application]\nversion = "0.0.0"', 1), encoding="utf-8")
+        self.commit("invalid application version rollback")
+        with self.assertRaisesRegex(ValueError, "application version regressed"):
+            release_pipeline.gate(base)
 
     def test_multiple_candidate_bumps_validate_every_step_from_the_base(self) -> None:
         base = self.git("rev-parse", "HEAD")

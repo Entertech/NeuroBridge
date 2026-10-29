@@ -19,9 +19,9 @@
 ### 2.1 应用版本门禁
 
 - 版本唯一来源为 `neurobridge/version_registry.toml` 的 `[application].version`；平台覆盖矩阵唯一来源为 [`release/release_matrix.toml`](../../release/release_matrix.toml)。
-- **是否产出发布包只由 `[application].version` 相对基线是否递增决定**，与改了哪些文件无关。变更文件列表只用于判定「是否必须升版本」：改了交付范围内的文件却没升版本时门禁**失败**，而不是安静跳过。因此「改了某个目录就等效于该变化」并不成立，必须落实为版本号递增。
+- **是否产出发布包只由 `[application].version` 相对基线是否递增决定**，与改了哪些文件无关。变更文件列表只用于判定「是否必须升版本」：修改软件业务源码却没升版本时门禁**失败**；纯 CI、构建/发布工具、安装脚本、依赖清单、文档、测试和版本台账记录可保持应用版本，同版本合入跳过打包和正式发布。
 - PR 门禁以 PR 目标分支（固定为 `master`）的提交为基线比较版本；打包运行以**最后一个已发布 tag**（`v<应用版本>`）为基线，仓库尚无 tag 时退回被处理提交的父提交。
-- 业务代码范围由配置维护（`tools/release_pipeline.py` 的 `PRODUCT_PATHS`），至少覆盖 `neurobridge/`、平台部署目录、运行依赖和打包配置，并包含**随包交付的对外文档目录 `doc/tech/对外/`**——改了交付给用户的文档必须升版本，否则该文档不会随包发出。只改其他文档、测试或网页资源不强制升应用版本。
+- 业务源码范围由 `tools/release_pipeline.py` 的 `BUSINESS_SOURCE_ROOTS`、`BUSINESS_SOURCE_SUFFIXES` 和构建工具排除项维护：包括网关核心与 Windows 运行侧 Python、Web 前端 JS/HTML/CSS、原生 bridge 和算法 SDK/NumCpp 的 C/C++ 源码及头文件。`windows/algorithm_build.py` 是构建工具，单独修改不强制升版。`.github/`、`tools/`、`release/`、`packaging/`、Linux 安装脚本、文档、依赖清单、配置及台账记录不属于业务源码；不得只因文件随包交付就提升应用版本。对外文档仍独立遵守其发布授权与版本锁定规则。
 - 应用版本使用三段数字格式 `MAJOR.MINOR.PATCH`。业务代码变化时，PR 版本不得低于 `master`：修复递增 `PATCH`，向后兼容功能递增 `MINOR` 并将 `PATCH` 归零，破坏兼容性的变化递增 `MAJOR` 并将 `MINOR`、`PATCH` 归零。未按影响级别递增、跳过必要的版本证据或发生版本回退时失败。
 - 未改业务代码时版本可不变，但不得低于 `master`。
 - 每次版本递增必须在变更记录中写明旧版本、新版本、影响级别、兼容性边界和依据。Actions summary 必须包含基线版本、PR 版本、变更文件和判定理由。
@@ -134,7 +134,7 @@ Windows 与麒麟的安装/运行导出均须携带独立诊断上下文：Windo
 
 - 业务代码变更且版本不变的 PR 必须失败并提示提升版本。
 - 版本高于 `master` 的 PR 通过，低于 `master` 的 PR 失败并说明回退原因。
-- 改了交付范围内的文件（含 `doc/tech/对外/` 的对外文档）但未升应用版本的 PR 必须失败；版本未递增时不产出任何发布包，运行页写明原因。
+- 纯 CI/构建/安装/文档/测试/台账改动在应用版本不变时通过版本门禁；运行页明确记录无需发布，打包、tag 和 GitHub Release 作业均跳过。业务源码变化但版本不变仍必须失败。
 - PR 只做校验，不产生任何候选包或 ZIP；打包由 `Release` workflow 承担，手动对分支触发时生成该分支最新提交的 Windows EXE/MSI 和麒麟引导包候选清单，状态与验证事实一致。
 - 应用版本递增的 `master` 构建在最低门槛通过时生成带 SHA-256 的包外 `release-manifest.json`、唯一总 ZIP 和 GitHub Release；版本未递增时跳过同版本发布；Actions Artifact 保留 30 天，GitHub Release 作为长期下载入口。
 - Artifact 可在无公网环境按清单校验。
@@ -188,7 +188,7 @@ Windows 与麒麟的安装/运行导出均须携带独立诊断上下文：Windo
 
 **重试与幂等：**发布 job 仅授予 `contents: write`，PR job 保持 `contents: read`；同一应用版本串行发布。重跑先检查远端 tag：不存在时在全部本地校验通过后创建；存在且指向同一 commit 时继续；指向不同 commit 时立即失败，绝不移动或删除。Release 不存在则创建 draft，已存在 draft 则只补齐缺失资产并校验同名资产的大小和 SHA-256；已公开且资产完全一致时视为幂等成功，已公开但内容不一致时失败并要求新应用版本。上传失败保留 draft 供同 commit 重试，公开前校验唯一总 ZIP 与包外清单一致。公开成功后生成符合 [`schemas/release-receipt.schema.json`](../../schemas/release-receipt.schema.json) 的回执并保存为 Actions Artifact；不能把 draft 或仅有 tag 记为 `published`。
 
-**版本关系：**正式包名、tag、GitHub Release 和清单统一使用台账 `[application].version`。`[platform_releases.windows]` 与 `[platform_releases.kylin]` 是旧流程元数据，本次 Workflow 不读取、不自动递增，也不作为安装器显示版本；后续迁移清理需单独变更台账。仅某个平台的安装器或依赖变化时仍按应用版本影响规则升级 `[application].version`，全部 5 个目标使用相同应用版本。重跑同一 commit 的 `GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT` 只作为构建追踪号，不改变产品版本。
+**版本关系：**正式包名、tag、GitHub Release 和清单统一使用台账 `[application].version`。`[platform_releases.windows]` 与 `[platform_releases.kylin]` 是旧流程元数据，本次 Workflow 不读取、不自动递增，也不作为安装器显示版本；后续迁移清理需单独变更台账。仅某个平台的安装器、构建工具或依赖清单变化不强制升级应用版本；业务源码变化才要求按影响级别升级 `[application].version`，全部 5 个目标使用相同应用版本。重跑同一 commit 的 `GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT` 只作为构建追踪号，不改变产品版本。
 
 **待真机补录：**银河麒麟 V10 x86_64 的安装/升级/卸载、真实采集、耳机离线与拔插、服务/整机重启、浏览器恢复，以及 Windows 10/11 x64 的安装和采集结果，由对应目标机日志补充。未完成验收时 `physicalVerification` 保持 `pending`，不得把 CI 或模拟回归写成现场验收通过。
 

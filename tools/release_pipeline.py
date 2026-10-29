@@ -25,13 +25,14 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = tomllib.loads((ROOT / "release/release_matrix.toml").read_text(encoding="utf-8"))
 REGISTRY = ROOT / "neurobridge/version_registry.toml"
-# A change under these paths makes an application version bump mandatory.  It
-# does not by itself produce a release: gate() decides that by comparing
-# [application].version against the base.  `doc/tech/对外/` is the only
-# documentation path that ships inside the user bundle, so editing a delivered
-# document has to force a bump like any product file; the rest of doc/ stays
-# releasable without one.
-PRODUCT_PATHS = ("neurobridge/", "windows/", "linux/", "packaging/", "release/", "tools/build-product-candidate.py", "tools/build-native-package.py", "tools/release_pipeline.py", "tools/publish_release.py", "requirements.lock", "pyproject.toml", ".github/workflows/", "doc/tech/对外/")
+# Only software business source requires an application bump. CI, packaging,
+# installation scripts, dependency manifests, docs and registry bookkeeping
+# may change at the same version. Publication still requires a version advance.
+BUSINESS_SOURCE_ROOTS = ("neurobridge/", "windows/", "web/", "mac/algorithm_bridge/",
+                         "third_party/AffectiveCloud-Algorithm-SDK/cpp/package/",
+                         "third_party/NumCpp/include/")
+BUSINESS_SOURCE_SUFFIXES = {".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".c", ".cc", ".cpp", ".h", ".hpp"}
+BUILD_ONLY_SOURCES = {"windows/algorithm_build.py"}
 VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 FORMATS = {"exe", "msi", "deb", "rpm"}
 MAGIC = {"exe": b"MZ", "msi": bytes.fromhex("d0cf11e0a1b11ae1"), "deb": b"!<arch>\n", "rpm": bytes.fromhex("edabeedb")}
@@ -42,8 +43,8 @@ def log(event: str, **data: object) -> None:
 
 
 def run(*args: str) -> str:
-    # git prints paths as raw UTF-8 under -z, and PRODUCT_PATHS contains a
-    # non-ASCII prefix, so decode explicitly instead of trusting the locale.
+    # Git paths and the version registry may contain Chinese text. Decode
+    # explicitly instead of trusting the platform's locale.
     return subprocess.check_output(args, cwd=ROOT, text=True, encoding="utf-8", stderr=subprocess.PIPE).strip()
 
 
@@ -87,6 +88,10 @@ def version_tuple(value: str) -> tuple[int, int, int]:
     return tuple(map(int, match.groups()))
 
 
+def is_business_source(path: str) -> bool:
+    return path not in BUILD_ONLY_SOURCES and path.startswith(BUSINESS_SOURCE_ROOTS) and Path(path).suffix in BUSINESS_SOURCE_SUFFIXES
+
+
 def release_base(repository: str) -> str:
     """Use public application Releases, never orphan tags or drafts, as state."""
     pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"))
@@ -125,17 +130,18 @@ def gate(base: str) -> dict[str, object]:
     current_registry = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))
     try:
         previous_registry = tomllib.loads(run("git", "show", f"{base}:neurobridge/version_registry.toml"))
-        changed = [name for name in subprocess.check_output(("git", "diff", "--name-only", "-z", f"{base}...HEAD"), cwd=ROOT).decode("utf-8").split("\0") if name]
+        changed = [name for name in subprocess.check_output(("git", "diff", "--no-renames", "--name-only", "-z", f"{base}...HEAD"), cwd=ROOT).decode("utf-8").split("\0") if name]
     except subprocess.CalledProcessError as error:
         raise ValueError(f"cannot resolve release baseline {base}: {error.stderr.strip()}") from error
     old = previous_registry["application"]["version"]
     new = current_registry["application"]["version"]
     old_parts, new_parts = version_tuple(old), version_tuple(new)
-    product_changed = any(path.startswith(PRODUCT_PATHS) for path in changed)
+    # Keep the existing report field productChanged, now scoped to business code.
+    product_changed = any(is_business_source(path) for path in changed)
     if new_parts < old_parts:
         raise ValueError(f"application version regressed: {old} -> {new}")
     if product_changed and new_parts == old_parts:
-        raise ValueError(f"product/deployment/package files changed without application version bump: {old}")
+        raise ValueError(f"software business code changed without application version bump: {old}")
     cursor = old
     while version_tuple(cursor) < new_parts:
         # Candidate branches may advance more than once before merging.
@@ -152,7 +158,7 @@ def gate(base: str) -> dict[str, object]:
         if next_parts != expected or next_parts > new_parts or not record.get("compatibility") or not record.get("evidence"):
             raise ValueError(f"invalid {impact!r} version step or missing release evidence: {cursor} -> {next_version}")
         cursor = next_version
-    result: dict[str, object] = {"baseVersion": old, "applicationVersion": new, "productChanged": product_changed, "shouldRelease": new_parts > old_parts, "changedFiles": changed, "reason": "version_advanced" if new_parts > old_parts else "same_version_no_product_change"}
+    result: dict[str, object] = {"baseVersion": old, "applicationVersion": new, "productChanged": product_changed, "shouldRelease": new_parts > old_parts, "changedFiles": changed, "reason": "version_advanced" if new_parts > old_parts else "same_version_no_business_code_change"}
     log("version_gate", **result)
     return result
 
