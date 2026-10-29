@@ -19,7 +19,7 @@ class WindowsReleaseBuildTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.inputs, self.results = self.root / "inputs", self.root / "results"
         self.commit = pipeline.run("git", "rev-parse", "HEAD")
-        self.version = pipeline.tomllib.loads(pipeline.REGISTRY.read_text())["application"]["version"]
+        self.version = pipeline.tomllib.loads(pipeline.REGISTRY.read_text(encoding="utf-8"))["application"]["version"]
         self.target = "windows-10-x86_64-msi"
 
     def steps(self, target_id, source, fail=None):
@@ -63,14 +63,14 @@ class WindowsReleaseBuildTests(unittest.TestCase):
                 self.assertIn(phase, result["reason"])
                 self.assertIn("17", result["reason"])
                 directory = self.results / self.target
-                outcome = json.loads((directory / "build-outcome.json").read_text())
+                outcome = json.loads((directory / "build-outcome.json").read_text(encoding="utf-8"))
                 self.assertEqual(outcome["exitCode"], 17)
-                log = (directory / "windows-build.log").read_text()
+                log = (directory / "windows-build.log").read_text(encoding="utf-8")
                 self.assertIn("stderr failure detail", log)
                 if phase != "package":
                     self.assertNotIn("phase=package", log)
                 else:
-                    self.assertIn("WIX error: detailed compiler failure", (directory / "native-validation.log").read_text())
+                    self.assertIn("WIX error: detailed compiler failure", (directory / "native-validation.log").read_text(encoding="utf-8"))
 
     def test_missing_tool_is_reported_and_a_later_attempt_replaces_old_failure(self):
         with mock.patch.object(pipeline, "windows_build_steps", return_value=[("toolchain", [str(self.root / "missing-tool")])]):
