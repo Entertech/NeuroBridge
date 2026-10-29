@@ -91,6 +91,25 @@ jobs:
           path: .runtime/logs/windows-algorithm-build*.log
           retention-days: 14
 
+  native-sdk-regression:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native test prerequisites
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libeigen3-dev
+      - name: Build the vendored SDK, bridge and synthetic regression tests
+        run: |
+          cmake -S third_party/NumCpp -B "$RUNNER_TEMP/numcpp-build" \
+            -DNUMCPP_NO_USE_BOOST=ON -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/numcpp-prefix"
+          cmake --install "$RUNNER_TEMP/numcpp-build"
+          cmake -S mac/algorithm_bridge -B "$RUNNER_TEMP/sdk-tests" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAFFECTIVE_SDK_SOURCE_DIR="$GITHUB_WORKSPACE/third_party/AffectiveCloud-Algorithm-SDK" \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/numcpp-prefix" \
+            -DNUMCPP_NO_USE_BOOST=ON -DNEUROBRIDGE_BUILD_SDK_TESTS=ON
+          cmake --build "$RUNNER_TEMP/sdk-tests" --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/sdk-tests" --output-on-failure
+
   unit-and-websocket:
     runs-on: ubuntu-latest
     steps:

@@ -94,29 +94,17 @@ namespace basic
                 auto epochFeatureWave = denoiseWaveSoftNc[nc::Slice(denoiseWaveSoftNc.size()-waveDenoiseLen, denoiseWaveSoftNc.size())].copy();
 
                 // 输出结果
-                // ---根据信号质量输出不同结果
+                // ---保留质量评级，不再按评级清零波形与能量
                 auto vecEpochWave = epochWave.toStlVector();
                 auto eegPower = eegPowerCal(vecEpochWave, deviceInfo);
                 auto vecEpochFeatureWave = epochFeatureWave.toStlVector();
                 auto featurePower = eegPowerCal(vecEpochFeatureWave, deviceInfo);
 
                 res.quality = eegQuality;
-                if (eegQuality == EEGQuality::GOOD || eegQuality == EEGQuality::POOR)
-                {
-                    res.eegWave = eegWave;
-                    res.featureWave = featureWave;
-                    res.power = eegPower;
-                    res.featurePower = featurePower;
-                }
-                else
-                {
-                    res.eegWave = nc::zeros<double>(1,eegWave.size());
-                    res.featureWave = nc::zeros<double>(1,featureWave.size());
-                    EEGPower eegPowerTmp;
-                    EEGPower featurePowerTmp;
-                    res.power = eegPowerTmp;
-                    res.featurePower = featurePowerTmp;
-                }
+                res.eegWave = eegWave;
+                res.featureWave = featureWave;
+                res.power = eegPower;
+                res.featurePower = featurePower;
 
                 return res;
 

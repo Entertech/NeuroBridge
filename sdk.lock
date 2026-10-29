@@ -7,9 +7,10 @@ version = "1.1.6"
 
 [affective_algorithm_sdk]
 repository = "https://github.com/Entertech/AffectiveCloud-Algorithm-SDK.git"
-commit = "5623c5a1a43c6b04c3907d84ba2b9b86f9b010a2"
+commit = "cd967c4f3d26ab1100c15b5e8c23604cc495dd23"
 version = "2.0.0"
 vendor_path = "third_party/AffectiveCloud-Algorithm-SDK"
+local_patches = ["dual_eeg_waveform_limit_2000"]
 
 [affective_algorithm_sdk.build]
 cmake_minimum_version = "3.22"

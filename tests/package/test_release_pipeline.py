@@ -204,6 +204,40 @@ class ReleaseVersionGateTests(unittest.TestCase):
         self.assertEqual(result["applicationVersion"], bumped)
         self.assertTrue(result["shouldRelease"])
 
+    def test_multiple_candidate_bumps_validate_every_step_from_the_base(self) -> None:
+        base = self.git("rev-parse", "HEAD")
+        self.advance_version()
+        final = self.advance_version()
+        result = release_pipeline.gate(base)
+        self.assertEqual(result["applicationVersion"], final)
+        self.assertTrue(result["shouldRelease"])
+
+    def test_candidate_chain_rejects_missing_duplicate_and_invalid_steps(self) -> None:
+        base = self.git("rev-parse", "HEAD")
+        registry = release_pipeline.REGISTRY
+        initial = tomllib.loads(registry.read_text())["application"]["version"]
+        middle = self.advance_version()
+        final = self.advance_version()
+        original = registry.read_text()
+        duplicate = (f'\n[[application_release_changes]]\nfrom_version = "{middle}"\n'
+                     f'to_version = "{final}"\nimpact = "patch"\n'
+                     'compatibility = "duplicate"\nevidence = "duplicate"\n')
+        cases = {
+            "missing": original.replace(f'from_version = "{middle}"', 'from_version = "9.9.9"'),
+            "duplicate": original + duplicate,
+            "skip": original.replace(f'to_version = "{middle}"', f'to_version = "{final}"'),
+            "backward": original.replace(f'to_version = "{final}"', f'to_version = "{initial}"'),
+            "missing evidence": original.replace('evidence = "gate fixture"', 'evidence = ""'),
+        }
+        try:
+            for name, text in cases.items():
+                with self.subTest(name=name):
+                    registry.write_text(text)
+                    with self.assertRaises(ValueError):
+                        release_pipeline.gate(base)
+        finally:
+            registry.write_text(original)
+
     def public_releases(self, pages: list):
         real_run = release_pipeline.run
 
