@@ -269,33 +269,16 @@ jobs:
       # Automatic releases have no workflow_dispatch inputs. Build real native
       # installers here instead of waiting for a native_input_run_id that can
       # never be supplied by workflow_run. Source ZIP candidates are unrelated.
-      - name: Prepare Windows installer runtime
-        if: matrix.platform == 'windows' && inputs.native_input_run_id == ''
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-windows-candidate-runtime.ps1
-      - name: Install Windows installer toolchain
-        if: matrix.platform == 'windows' && inputs.native_input_run_id == ''
-        shell: powershell
-        run: |
-          dotnet tool install --global wix --version 7.0.0
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "${env:USERPROFILE}\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          wix eula accept wix7
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          wix extension add WixToolset.BootstrapperApplications.wixext/7.0.0 --global
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          wix --version
       - name: Build Windows native release input
         if: matrix.platform == 'windows' && inputs.native_input_run_id == ''
-        shell: powershell
+        shell: bash
         env:
           TARGET_ID: ${{ matrix.id }}
         run: |
-          python tools/build-native-package.py `
-            --target "$env:TARGET_ID" `
-            --runtime-dir artifacts/windows-runtime `
-            --output-dir "$env:RUNNER_TEMP/release-inputs/$env:TARGET_ID"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/release_pipeline.py build-windows \
+            --target "$TARGET_ID" \
+            --input-root "$RUNNER_TEMP/release-inputs" \
+            --output-root artifacts/targets
       - name: Retrieve approved offline target input
         if: matrix.platform == 'windows' && inputs.native_input_run_id != ''
         shell: bash

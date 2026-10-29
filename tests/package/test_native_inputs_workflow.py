@@ -71,18 +71,23 @@ class NativeInputsWorkflowTests(unittest.TestCase):
     def test_automatic_release_builds_native_windows_inputs_without_an_external_run(self) -> None:
         block = job_block("release-targets", WORKFLOW.with_name("release.yml"))
         condition = "if: matrix.platform == 'windows' && inputs.native_input_run_id == ''"
-        # An automatic workflow_run has no dispatch inputs. Runtime, WiX and
-        # native packaging must all be reachable without an external run ID.
-        self.assertEqual(block.count(condition + "\n"), 3)
-        self.assertIn("tools/prepare-windows-candidate-runtime.ps1", block)
-        self.assertIn("wix --version 7.0.0", block)
-        self.assertIn("python tools/build-native-package.py", block)
-        self.assertIn('--output-dir "$env:RUNNER_TEMP/release-inputs/$env:TARGET_ID"', block)
+        # The coordinator records subprocess failures, so they don't bypass
+        # the aggregate's configured minimum-package decision.
+        self.assertEqual(block.count(condition + "\n"), 1)
+        self.assertIn("python tools/release_pipeline.py build-windows", block)
         self.assertIn('--input-root "$RUNNER_TEMP/release-inputs"', block)
+        self.assertIn('--output-root artifacts/targets', block)
         self.assertNotIn("tools/build-product-candidate.py", block)
         # Failures must retain the target report even when native packaging fails.
         self.assertRegex(block, r"(?s)Verify target package and write result log\s+if: always\(\)")
         self.assertRegex(block, r"(?s)uses: actions/upload-artifact@v4\s+if: always\(\)")
+
+    def test_release_collects_every_record_before_deciding_platform_minimums(self) -> None:
+        targets = job_block("release-targets", WORKFLOW.with_name("release.yml"))
+        aggregate = job_block("release-aggregate", WORKFLOW.with_name("release.yml"))
+        self.assertIn("fail-fast: false", targets)
+        self.assertIn("pattern: release-target-*", aggregate)
+        self.assertIn("tools/release_pipeline.py aggregate", aggregate)
 
     def test_explicit_windows_input_keeps_source_and_branch_validation(self) -> None:
         block = job_block("release-targets", WORKFLOW.with_name("release.yml"))

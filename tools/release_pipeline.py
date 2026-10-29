@@ -157,6 +157,69 @@ def gate(base: str) -> dict[str, object]:
     return result
 
 
+def windows_build_steps(target_id: str, source: Path) -> list[tuple[str, list[str]]]:
+    wix = str(Path.home() / ".dotnet/tools/wix.exe")
+    return [
+        ("runtime", ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "tools/prepare-windows-candidate-runtime.ps1")]),
+        ("toolchain", ["dotnet", "tool", "install", "--global", "wix", "--version", "7.0.0"]),
+        ("license", [wix, "eula", "accept", "wix7"]),
+        ("extension", [wix, "extension", "add", "WixToolset.BootstrapperApplications.wixext/7.0.0", "--global"]),
+        ("toolchain-version", [wix, "--version"]),
+        ("package", [sys.executable, str(ROOT / "tools/build-native-package.py"), "--target", target_id,
+                     "--runtime-dir", str(ROOT / "artifacts/windows-runtime"), "--output-dir", str(source)]),
+    ]
+
+
+def build_windows_input(target_id: str, input_root: Path, output_root: Path) -> None:
+    """Record per-target build failures without bypassing the aggregate gate.
+
+    Build subprocess failures are data, while inability to persist that data
+    remains a job failure. Successful outputs still go through target_result().
+    """
+    if not any(item["id"] == target_id and item["platform"] == "windows" for item in matrix()):
+        raise ValueError(f"not a Windows release target: {target_id}")
+    source, output = input_root.resolve() / target_id, output_root.resolve() / target_id
+    source.mkdir(parents=True, exist_ok=True)
+    output.mkdir(parents=True, exist_ok=True)
+    # A repeated local attempt must never accept an earlier verification record.
+    for path in (source / "verification.json", source / "validation.log", output / "native-validation.log"):
+        path.unlink(missing_ok=True)
+    outcome = {"targetId": target_id, "sourceCommit": run("git", "rev-parse", "HEAD"), "status": "building"}
+    save_json(output / "build-outcome.json", outcome)
+    with (output / "windows-build.log").open("w", encoding="utf-8") as stream:
+        for phase, args in windows_build_steps(target_id, source):
+            log("windows_build_phase", targetId=target_id, phase=phase)
+            stream.write(f"phase={phase}\n$ {subprocess.list2cmdline(args)}\n")
+            stream.flush()
+            try:
+                with subprocess.Popen(args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      text=True, encoding="utf-8", errors="replace",
+                                      env={**os.environ, "PYTHONIOENCODING": "utf-8",
+                                           "PATH": str(Path.home() / ".dotnet/tools") + os.pathsep + os.environ.get("PATH", "")}) as process:
+                    assert process.stdout is not None
+                    for line in process.stdout:
+                        stream.write(line)
+                        stream.flush()
+                    code = process.wait()
+                reason = f"Windows {phase} failed with exit code {code}"
+            except OSError as error:
+                code, reason = None, f"Windows {phase} could not start: {error}"
+                stream.write(reason + "\n")
+            stream.write(f"exit_code={code}\n")
+            stream.flush()
+            if code != 0:
+                outcome.update(status="failed", phase=phase, exitCode=code, reason=reason)
+                print(f"::warning title={target_id}::{reason}; see windows-build.log", flush=True)
+                break
+        else:
+            outcome.update(status="completed")
+    # WiX stdout/stderr are captured by the native builder, not its console.
+    native_log = source / "validation.log"
+    if native_log.is_file():
+        shutil.copy2(native_log, output / "native-validation.log")
+    save_json(output / "build-outcome.json", outcome)
+
+
 def target_result(target_id: str, input_root: Path, output_root: Path) -> dict[str, object]:
     target = next((item for item in matrix() if item["id"] == target_id), None)
     if target is None:
@@ -166,6 +229,24 @@ def target_result(target_id: str, input_root: Path, output_root: Path) -> dict[s
     source = input_root / target_id
     report_path = source / "verification.json"
     result: dict[str, object] = {"target": target, "status": "blocked", "reason": "verified_offline_input_missing", "stage": "input", "checkedAt": datetime.now(timezone.utc).isoformat(), "sourceCommit": run("git", "rev-parse", "HEAD"), "runner": os.environ.get("RUNNER_IMAGE", os.environ.get("RUNNER_OS", sys.platform))}
+    outcome_path = output / "build-outcome.json"
+    if outcome_path.is_file():
+        try:
+            outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
+            if outcome["targetId"] != target_id or outcome["sourceCommit"] != result["sourceCommit"]:
+                raise ValueError("build outcome belongs to another source commit or target")
+            if outcome["status"] != "completed":
+                result.update(status="failed", reason=outcome.get("reason", "Windows build did not complete"),
+                              stage="build", validationLog="windows-build.log")
+                save_json(output / "result.json", result)
+                log("target_result", targetId=target_id, status=result["status"], reason=result["reason"])
+                return result
+            if not report_path.is_file():
+                raise ValueError("Windows build completed without verification.json; see windows-build.log")
+        except (KeyError, OSError, ValueError, json.JSONDecodeError) as error:
+            result.update(status="failed", reason=str(error), stage="build")
+            save_json(output / "result.json", result)
+            return result
     fetch_log = output / "input-fetch.log"
     if fetch_log.is_file() and not report_path.is_file():
         summary = fetch_log.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -324,6 +405,10 @@ def main() -> int:
     target.add_argument("--target", required=True)
     target.add_argument("--input-root", type=Path, required=True)
     target.add_argument("--output-root", type=Path, required=True)
+    windows = commands.add_parser("build-windows")
+    windows.add_argument("--target", required=True)
+    windows.add_argument("--input-root", type=Path, required=True)
+    windows.add_argument("--output-root", type=Path, required=True)
     aggregate = commands.add_parser("aggregate")
     aggregate.add_argument("--results-root", type=Path, required=True)
     aggregate.add_argument("--output", type=Path, required=True)
@@ -341,6 +426,8 @@ def main() -> int:
                 save_json(args.output, value)
         elif args.command == "target":
             target_result(args.target, args.input_root, args.output_root)
+        elif args.command == "build-windows":
+            build_windows_input(args.target, args.input_root, args.output_root)
         else:
             assemble(args.results_root, args.output, args.trigger)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:

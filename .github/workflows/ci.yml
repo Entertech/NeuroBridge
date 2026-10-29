@@ -61,6 +61,8 @@ jobs:
             if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
           }
       - run: python -m unittest discover -s tests -p test_windows_launcher.py -v
+      - name: Verify release target failure isolation and retained logs on Windows
+        run: python -m unittest tests.package.test_windows_release_build -v
       - name: Verify installation failure logs without an installed gateway
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/test_windows_install_logging.ps1
