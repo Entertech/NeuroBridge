@@ -91,6 +91,37 @@ jobs:
               --stage "$PROTOCOL_STAGE" \
               --version "$PROTOCOL_VERSION"
           fi
+      - name: Build installation guide review PDF and page previews
+        run: |
+          python - <<'PY'
+          from hashlib import sha256
+          import os
+          from pathlib import Path
+          import subprocess
+          import tomllib
+
+          registry = tomllib.loads(Path("neurobridge/version_registry.toml").read_text(encoding="utf-8"))
+          document = registry["documents"]["external_installation_draft"]
+          assert document["status"] == "unpublished" and document["delivery"] == "review_only"
+          source = Path(document["markdown_path"])
+          text = source.read_text(encoding="utf-8")
+          assert sha256(source.read_bytes()).hexdigest() == document["markdown_sha256"]
+          assert text.splitlines()[0] == f'# {document["title"]} v{document["version"]}'
+          assert f'日期：{document["created_date"]}' in text and "状态：未发布（评审稿）" in text
+          output = Path(os.environ["RUNNER_TEMP"]) / "installation-guide-review"
+          output.mkdir(parents=True, exist_ok=True)
+          pdf = output / document["pdf_artifact_name"]
+          subprocess.run(["bash", "tools/render-protocol-pdf.sh", str(source), str(pdf)], check=True)
+          subprocess.run(["pdfinfo", str(pdf)], check=True)
+          subprocess.run(["pdftoppm", "-png", "-r", "144", str(pdf), str(output / "page")], check=True)
+          PY
+      - name: Upload installation guide review artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installation-guide-review
+          path: ${{ runner.temp }}/installation-guide-review/
+          if-no-files-found: error
+          retention-days: 90
       - name: Upload external document ZIP artifact
         uses: actions/upload-artifact@v4
         with:

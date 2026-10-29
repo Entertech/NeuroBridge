@@ -1,5 +1,7 @@
 # Ubuntu 网关部署与运行教程
 
+从新系统开始安装时，先阅读[安装部署指南评审稿](../doc/tech/对外/头环数据网关安装部署指南/头环数据网关安装部署指南_v0.1.md)。该指南限定 `codex/linux-headband-ethernet-gateway`，明确首次安装先配置、使用 `install-ubuntu.sh` 后显式启动，以及联网准备停用默认 SSH、SSH 更新固定切换 `master` 的边界。本页的 `update-ubuntu.sh` 会立即重启网关；它不适用于需要等待确认再启动的首次安装步骤。
+
 本目录保存 Ubuntu x86_64 网关的部署专属内容：
 
 - `update-ubuntu.sh`：目标机一键部署入口；只使用当前源码目录，不执行 Git 或网络操作。

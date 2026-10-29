@@ -75,6 +75,20 @@ published_date = "2026-08-05"
 markdown_sha256 = "1c9ff5c543150e3cd7504328c2c4da5b76afc0954f04a7bd4fd1f63d79f21260"
 publication_record = "2026-08-05-public-northbound-v0.2"
 
+[documents.external_installation_draft]
+version = "0.1"
+status = "unpublished"
+audience = "operator"
+delivery = "review_only"
+title = "头环数据网关安装部署指南"
+markdown_path = "doc/tech/对外/头环数据网关安装部署指南/头环数据网关安装部署指南_v0.1.md"
+pdf_artifact_name = "头环数据网关安装部署指南_v0.1-评审稿.pdf"
+created_date = "2026-10-29"
+source_branch = "codex/linux-headband-ethernet-gateway"
+source_commit = "e1906e8fc2c74a55c896c0b1376025b01ba02cf3"
+markdown_sha256 = "2b7828f9c2f25cc2600e70e4cb9fbddcb36af99b9deb3bead97e5229d7b1540c"
+reason = "用户要求补充从新系统开始的部署流程；本轮授权编写独立评审稿，尚未授权正式发布。CI 单独生成评审 PDF 和页面预览，不进入现有正式四文档 ZIP，也不改写已锁定文档。"
+
 [[release_locks]]
 id = "northbound-v0.1-to-v0.2"
 scope = "external_northbound_document"
@@ -115,6 +129,17 @@ locked_at = "2026-08-10"
 external_documents_require_explicit_user_request = true
 default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
+
+[[change_records]]
+id = "2026-10-29-installation-guide-draft"
+date = "2026-10-29"
+scope = "installation_guide_draft"
+summary = "新增头环数据网关安装部署指南评审稿，串联 Mac 制作启动盘、Ubuntu 24.04 x86_64 安装、批准源码核对、本地控制台联网准备、先配置再安装启动、专用网络、SSH 与 B 端验收；明确默认 SSH 停用、更新立即重启、SSH 更新固定 master 和 ZIP 导出附加依赖，并增加独立 CI 评审 PDF 与页面预览。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户已授权新增部署指南草稿；尚未正式发布，不修改既有已发布文档、协议正文、应用版本和报文版本。指南独立登记于 documents.external_installation_draft，目标机首次部署、真实采集和故障恢复仍待验证。"
 
 [[change_records]]
 id = "2026-08-10-public-ssh-operations-v1.0"
