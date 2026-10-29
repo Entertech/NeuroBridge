@@ -21,7 +21,7 @@ The password must contain at least six ASCII digits supplied as one line on stan
 input; it is never an argument, configuration value, or log entry. This command restricts SSH to the
 named local operator account, disables root and public-key login, and binds
 sshd only to the specified gateway address. The account receives NeuroBridge
-project-path, status, log, update, start, stop, and restart operations. Setup
+project-path, branch, status, log, update, start, stop, and restart operations. Setup
 copies the current checkout to the operator's ~/NeuroBridge directory; later
 updates run directly from that fixed project working tree.
 EOF
@@ -93,7 +93,7 @@ for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/in
   [[ -f "$setup_source_dir/$required" ]] || fail "SSH setup must run from a complete NeuroBridge checkout: missing $required"
 done
 /usr/bin/git -C "$setup_source_dir" rev-parse --is-inside-work-tree 2>/dev/null | grep -qx true \
-  || fail "SSH setup requires a Git working tree so neurobridge-ops can switch to master and pull approved updates."
+  || fail "SSH setup requires a Git working tree so neurobridge-ops can fetch an explicitly selected branch from origin."
 if id -u "$operator_user" >/dev/null 2>&1; then
   operator_home=$(getent passwd "$operator_user" | cut -d: -f6)
 else
@@ -457,20 +457,21 @@ Usage: neurobridge-ops <command>
 
 Commands:
   project                Show the fixed NeuroBridge project working directory.
+  branch                 Show the current branch of the managed project.
   status                 Show current service state and the latest 200 logs.
   logs [--lines N]       Show recent logs (default 200, maximum 1000).
   logs --follow           Follow new gateway logs in real time; Ctrl-C stops it.
   audit [--lines N]      Show SSH operations audit events (default 200, maximum 1000).
-  update                 Switch to master, fast-forward approved source, and reload the gateway.
+  update [--branch NAME] Fetch NAME (default: current branch) from origin and reload.
   start | stop | restart  Control the NeuroBridge gateway service.
   help                   Show this help.
 USAGE
 }
 
 case "${1:-help}" in
-  project)
+  project|branch)
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }
-    exec sudo -- /usr/local/sbin/neurobridge-ops-command project
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command "$1"
     ;;
   status)
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }
@@ -485,8 +486,9 @@ case "${1:-help}" in
     exec sudo -- /usr/local/sbin/neurobridge-ops-command audit "$@"
     ;;
   update)
-    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
-    exec sudo -- /usr/local/sbin/neurobridge-ops-command update
+    [[ $# -eq 1 || ( $# -eq 3 && $2 == --branch ) ]] || { usage >&2; exit 2; }
+    shift
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command update "$@"
     ;;
   start|stop|restart)
     [[ $# -eq 1 ]] || { usage >&2; exit 2; }
@@ -530,10 +532,11 @@ run_and_audit() {
   if "$@"; then
     audit "$action" "$request" success
     return 0
+  else
+    local status=$?
+    audit "$action" "$request" "failed:$status"
+    return "$status"
   fi
-  local status=$?
-  audit "$action" "$request" "failed:$status"
-  return "$status"
 }
 
 lines=200
@@ -550,6 +553,10 @@ case "${1:-}" in
   project)
     [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops project"
     run_and_audit project path /usr/local/sbin/neurobridge-ops-update --print-project
+    ;;
+  branch)
+    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops branch"
+    run_and_audit branch current /usr/local/sbin/neurobridge-ops-update --print-branch
     ;;
   status)
     [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops status"
@@ -573,15 +580,25 @@ case "${1:-}" in
     run_and_audit audit "lines:$lines" /usr/bin/journalctl -t neurobridge-ops-audit -n "$lines" --no-pager
     ;;
   update)
-    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops update"
-    run_and_audit update master-pull-and-deploy /usr/local/sbin/neurobridge-ops-update
+    if [[ $# -eq 1 ]]; then
+      branch=$(/usr/local/sbin/neurobridge-ops-update --print-branch) \
+        || fail "Cannot determine the current branch; specify update --branch <branch>."
+    elif [[ $# -eq 3 && $2 == --branch ]]; then
+      branch=$3
+    else
+      fail "Usage: neurobridge-ops update [--branch <branch>]"
+    fi
+    [[ -n "$branch" && "$branch" != -* && "$branch" != HEAD ]] \
+      && /usr/bin/git check-ref-format "refs/heads/$branch" \
+      || fail "--branch requires a valid branch name."
+    run_and_audit update "branch:$branch" /usr/local/sbin/neurobridge-ops-update --branch "$branch"
     ;;
   start|stop|restart)
     [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops start|stop|restart"
     run_and_audit "$1" neurobridge.service /usr/bin/systemctl "$1" neurobridge.service
     ;;
   *)
-    fail "Usage: neurobridge-ops {project|status|logs|audit|update|start|stop|restart}"
+    fail "Usage: neurobridge-ops {project|branch|status|logs|audit|update|start|stop|restart}"
     ;;
 esac
 EOF
@@ -608,7 +625,16 @@ if [[ ${1:-} == --print-project && $# -eq 1 ]]; then
   printf '%s\n' "$source_dir"
   exit 0
 fi
-[[ $# -eq 0 ]] || fail "This helper does not accept a source path."
+print_branch=false
+branch=
+if [[ $# -eq 1 && $1 == --print-branch ]]; then
+  print_branch=true
+elif [[ $# -eq 2 && $1 == --branch ]]; then
+  branch=$2
+  [[ -n "$branch" ]] || fail "--branch requires a valid branch name."
+elif [[ $# -ne 0 ]]; then
+  fail "Usage: neurobridge-ops update [--branch <branch>] (no source path accepted)"
+fi
 [[ -d "$source_dir" ]] || fail "Missing NeuroBridge project directory: $source_dir"
 
 run_as_project_owner() {
@@ -619,16 +645,49 @@ if ! is_work_tree=$(run_as_project_owner rev-parse --is-inside-work-tree 2>/dev/
   fail "Cannot inspect the managed source repository."
 fi
 [[ "$is_work_tree" == true ]] || fail "Managed source directory is not a Git working tree."
+if [[ -z "$branch" ]]; then
+  current_ref=$(run_as_project_owner symbolic-ref --quiet HEAD) \
+    || fail "Managed source has detached HEAD; specify update --branch <branch>."
+  [[ "$current_ref" == refs/heads/* ]] || fail "Managed source has no current local branch."
+  branch=${current_ref#refs/heads/}
+fi
+[[ -n "$branch" && "$branch" != -* && "$branch" != HEAD ]] \
+  && /usr/bin/git check-ref-format "refs/heads/$branch" \
+  || fail "--branch requires a valid branch name."
+if [[ "$print_branch" == true ]]; then
+  printf '%s\n' "$branch"
+  exit 0
+fi
 if ! work_tree_changes=$(run_as_project_owner status --porcelain); then
   fail "Cannot check managed source changes."
 fi
 [[ -z "$work_tree_changes" ]] || fail "Managed source has local changes. Resolve them through the approved delivery process before updating."
-if ! run_as_project_owner switch master; then
-  fail "Cannot switch the managed source to master."
+if ! run_as_project_owner fetch --no-tags origin "refs/heads/$branch"; then
+  fail "Cannot fetch branch '$branch' from origin. No deployment was started."
 fi
-if ! run_as_project_owner pull --ff-only; then
-  fail "Cannot fast-forward master from its approved upstream."
+if ! target_commit=$(run_as_project_owner rev-parse --verify 'FETCH_HEAD^{commit}'); then
+  fail "Cannot resolve the fetched branch commit."
 fi
+if run_as_project_owner show-ref --verify --quiet "refs/heads/$branch"; then
+  # An ahead or divergent local branch must never deploy local-only commits.
+  if ! run_as_project_owner merge-base --is-ancestor "refs/heads/$branch" "$target_commit"; then
+    fail "Local branch '$branch' is ahead of or diverged from origin; cannot fast-forward."
+  fi
+  run_as_project_owner switch --no-guess "$branch" \
+    || fail "Cannot switch the managed source to branch '$branch'."
+else
+  run_as_project_owner switch --no-track -c "$branch" "$target_commit" \
+    || fail "Cannot create the local branch '$branch' from origin."
+fi
+checked_out_ref=$(run_as_project_owner symbolic-ref --quiet HEAD) \
+  || fail "Cannot verify the selected branch."
+[[ "$checked_out_ref" == "refs/heads/$branch" ]] || fail "The checked-out branch does not match '$branch'."
+if ! run_as_project_owner merge --ff-only "$target_commit"; then
+  fail "Cannot fast-forward branch '$branch' to the fetched commit."
+fi
+deployed_commit=$(run_as_project_owner rev-parse --verify HEAD) \
+  || fail "Cannot verify the deployment commit."
+[[ "$deployed_commit" == "$target_commit" ]] || fail "The working tree does not match the fetched commit."
 
 for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/install-ubuntu.sh; do
   [[ -f "$source_dir/$required" ]] || fail "Project working tree is incomplete: missing $required"
@@ -646,7 +705,7 @@ unsafe_path=$(find "$source_dir" -xdev \
   \( -type f -o -type d \) \( ! -user "$project_owner" -o -perm -0022 \) -print -quit)
 [[ -z "$unsafe_path" ]] || fail "Project working tree must be owned by $project_owner and not group/world writable: $unsafe_path"
 
-echo "Deploying NeuroBridge project from $source_dir ..."
+echo "Deploying NeuroBridge branch=$branch commit=$target_commit from $source_dir ..."
 exec /bin/bash "$source_dir/linux/reload-ubuntu.sh"
 EOF
 } >"$update_tmp"
@@ -704,7 +763,7 @@ usermod --unlock "$operator_user"
 
 # Keep one canonical Git working tree under the SSH operator's home.
 # neurobridge-ops update is the only supported SSH update entry point: it
-# switches this checkout to master, fast-forwards it, then deploys it.
+# fetches the explicitly selected origin branch, fast-forwards it, then deploys it.
 install -d -o "$operator_user" -g "$operator_user" -m 0750 "$project_dir"
 if [[ "$setup_source_dir" != "$project_dir" ]]; then
   rsync -a --delete \
@@ -726,4 +785,4 @@ transaction_active=false
 echo "SSH operations access is ready: ssh -p $port $operator_user@$listen_address"
 echo "Project directory: $project_dir"
 echo "Allowed source: $allow_from. Root and public-key login are disabled."
-echo "After login, use 'neurobridge-ops status', 'neurobridge-ops audit', or 'neurobridge-ops update'."
+echo "After login, use 'neurobridge-ops status', 'neurobridge-ops audit', or 'neurobridge-ops update --branch <branch>'."

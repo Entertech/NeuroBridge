@@ -1,6 +1,6 @@
 # Ubuntu 网关部署与运行教程
 
-从新系统开始安装时，先阅读[安装部署指南评审稿](../doc/tech/对外/头环数据网关安装部署指南/头环数据网关安装部署指南_v0.1.md)。该指南限定 `codex/linux-headband-ethernet-gateway`，明确首次安装先配置、使用 `install-ubuntu.sh` 后显式启动，以及联网准备停用默认 SSH、SSH 更新固定切换 `master` 的边界。本页的 `update-ubuntu.sh` 会立即重启网关；它不适用于需要等待确认再启动的首次安装步骤。
+从新系统开始安装时，先阅读[安装部署指南评审稿](../doc/tech/对外/头环数据网关安装部署指南/头环数据网关安装部署指南_v0.1.md)。该指南限定 `codex/linux-headband-ethernet-gateway`，明确首次安装先配置、使用 `install-ubuntu.sh` 后显式启动，以及联网准备停用默认 SSH、SSH 默认更新当前分支、可用 `--branch` 选择分支和 `branch` 查询分支的规则。本页的 `update-ubuntu.sh` 会立即重启网关；它不适用于需要等待确认再启动的首次安装步骤。
 
 本目录保存 Ubuntu x86_64 网关的部署专属内容：
 
@@ -185,7 +185,9 @@ neurobridge-ops logs --lines 500   # 查询指定数量的历史日志，最大 
 neurobridge-ops logs --follow      # 实时追踪新日志，Ctrl-C 停止
 neurobridge-ops audit --lines 500  # 查询 SSH 运维操作审计，最大 1000 条
 watch -n 2 neurobridge-ops status  # 每 2 秒刷新一次实时服务状态
-neurobridge-ops update             # 切换至 master、快进拉取并重新加载
+neurobridge-ops branch             # 查询当前分支，不拉取或部署
+neurobridge-ops update             # 从 origin 快进更新当前分支并重新加载
+neurobridge-ops update --branch codex/linux-headband-ethernet-gateway
 neurobridge-ops restart            # 重启网关
 neurobridge-ops stop
 neurobridge-ops start
@@ -193,15 +195,17 @@ neurobridge-ops start
 
 每次 `status`、`logs`、`audit`、`update`、`start`、`stop` 或 `restart` 都会写入系统日志标识 `neurobridge-ops-audit`，记录系统时间、`sudo` 确认的运维账户、受限动作、参数摘要和开始/成功/失败结果；`logs --follow` 是持续命令，只记录开始。日志不包含账号密码、SSH 会话内容、网关配置或业务原始数据。使用 `neurobridge-ops audit` 查询；SSH 认证来源仍以系统 `sshd` 日志为准。
 
-SSH 运维时，源码更新由 `neurobridge-ops update` 统一执行：它只使用固定项目目录，确认没有本地修改后固定切换至 `master`、执行仅快进拉取并部署。运维人员不应直接运行 Git、替换源码目录或传入临时路径。取得变更授权且网关能访问批准代码源后，SSH 登录执行：
+SSH 运维时，源码更新由 `neurobridge-ops update` 统一执行：它只使用固定项目目录，确认没有本地修改后，从 `origin` 获取指定分支并仅快进部署；不传 `--branch` 时使用当前分支。运维人员不应直接运行 Git、替换源码目录或传入临时路径。取得变更授权且网关能访问批准代码源后，SSH 登录执行：
 
 ```bash
 neurobridge-ops update
 ```
 
-若工作树有本地修改、无法切换 `master`、无法快进拉取，或现场隔离而无法访问批准代码源，`update` 会失败。不要通过手工 Git、`rsync` 或未知文件绕过检查；应联系网关交付方按批准流程处理。因为该账号维护的脚本随后会以 root 安装，所以该账号在权限意义上属于网关管理员账号；密码和允许来源 IP 必须按管理员凭据管理。
+可用 `neurobridge-ops branch` 查询当前分支，或执行 `neurobridge-ops update --branch <分支名>` 切换到批准的远端分支；仅远端存在时自动建立本地同名分支。detached HEAD 必须显式指定分支。若工作树有本地修改、远端分支不存在、本地领先或分叉而无法快进，或现场隔离而无法访问批准代码源，`update` 会失败。不要通过手工 Git、`rsync` 或未知文件绕过检查；应联系网关交付方按批准流程处理。因为该账号维护的脚本随后会以 root 安装，所以该账号在权限意义上属于网关管理员账号；密码和允许来源 IP 必须按管理员凭据管理。
 
 已经启用旧版 SSH 运维的网关升级到本方案后，需要从当前完整源码目录在网关本地重新运行一次 `sudo ./linux/setup-ssh-operations.sh`，脚本会初始化 `~/NeuroBridge`；之后直接维护这个项目目录。
+
+分支查询和可选 `--branch` 参数也需要通过上述本地配置重新安装命令；仅更新 `/opt/neurobridge` 或源码不会自动升级已安装的运维入口。重新配置后，先执行 `neurobridge-ops branch` 和 `neurobridge-ops help` 验证。查询当前分支不会拉取或部署，工作树有修改时也可查询；detached HEAD 没有当前分支，须显式指定更新目标。更新审计记录实际分支及成功或失败结果。
 
 `restart`、`stop` 或 `update` 会断开 B 端 WebSocket 连接；恢复后 B 端必须重新连接、调用 `getStatus` 并重新订阅。
 

@@ -86,7 +86,8 @@ pdf_artifact_name = "头环数据网关安装部署指南_v0.1-评审稿.pdf"
 created_date = "2026-10-29"
 source_branch = "codex/linux-headband-ethernet-gateway"
 source_commit = "e1906e8fc2c74a55c896c0b1376025b01ba02cf3"
-markdown_sha256 = "2b7828f9c2f25cc2600e70e4cb9fbddcb36af99b9deb3bead97e5229d7b1540c"
+required_features = ["ssh_current_branch_query", "ssh_optional_branch_update"]
+markdown_sha256 = "e69e2c449dac02704b2ce935f1f68debc812bafd91279cc106c918c2c4c0db07"
 reason = "用户要求补充从新系统开始的部署流程；本轮授权编写独立评审稿，尚未授权正式发布。CI 单独生成评审 PDF 和页面预览，不进入现有正式四文档 ZIP，也不改写已锁定文档。"
 
 [[release_locks]]
@@ -129,6 +130,17 @@ locked_at = "2026-08-10"
 external_documents_require_explicit_user_request = true
 default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
+
+[[change_records]]
+id = "2026-10-29-ssh-optional-update-branch"
+date = "2026-10-29"
+scope = "gateway_deployment"
+summary = "SSH 更新新增可选 --branch 参数：省略时使用固定项目目录的当前分支，显式指定时从 origin 获取对应分支并仅快进更新，支持仅远端存在的分支；新增 neurobridge-ops branch 只读查询，detached HEAD 要求显式分支；拒绝脏工作树、缺失远端分支、本地领先或分叉，修复更新失败退出码和审计结果丢失，补充执行测试、升级步骤与部署评审稿。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确要求 SSH 支持任意指定分支、省略时更新当前分支及查询当前分支；只更新源码、内部说明和未发布部署评审稿，不修改已锁定 SSH/北向正式文档、应用版本或报文版本。既有网关须用批准源码在本地重新配置 SSH 入口；Ubuntu 目标机验证待完成。"
 
 [[change_records]]
 id = "2026-10-29-installation-guide-draft"

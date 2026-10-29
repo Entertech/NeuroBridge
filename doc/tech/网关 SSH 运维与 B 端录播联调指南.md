@@ -29,7 +29,7 @@ SSH 运维入口由下列文件提供：
 
 一键 SSH 配置会把执行配置时的完整源码同步到 SSH 运维账号固定的 `~/NeuroBridge` 项目目录。SSH 登录后可通过 `neurobridge-ops project` 查看实际绝对路径，后续代码更新、部署、状态和日志操作都以该目录为准，不再创建单独的版本暂存目录。
 
-若网关仅部署 `master`，确认该分支已经包含上述文件；否则应先合入对应的 SSH 运维变更，再部署到现场。部署后使用以下命令确认文件存在：
+确认网关部署的批准分支已经包含上述文件；否则应先合入对应的 SSH 运维变更，再部署到现场。部署后使用以下命令确认文件存在：
 
 ```bash
 test -x linux/setup-ssh-operations.sh
@@ -322,7 +322,9 @@ neurobridge-ops logs --lines 500   # 查询历史日志，最多 1000 条
 neurobridge-ops logs --follow      # 实时追踪运行日志；Ctrl-C 停止
 neurobridge-ops audit --lines 500  # 查询 SSH 运维操作审计，最多 1000 条
 watch -n 2 neurobridge-ops status  # 每 2 秒刷新服务状态
-neurobridge-ops update             # 切换至 master、快进拉取并重新加载
+neurobridge-ops branch             # 查询当前分支，不拉取或部署
+neurobridge-ops update             # 从 origin 快进更新当前分支并重新加载
+neurobridge-ops update --branch codex/linux-headband-ethernet-gateway
 neurobridge-ops restart            # 重启网关服务
 neurobridge-ops stop
 neurobridge-ops start
@@ -336,7 +338,7 @@ neurobridge-ops start
 
 ## 5.1 一键更新代码并重新加载
 
-`neurobridge-ops update` 不接收任意源码路径，只操作 `neurobridge-ops project` 显示的固定 Git 工作目录。它先确认工作树没有本地修改，再固定切换至 `master`、执行仅快进的拉取，最后验证项目完整性、文件归属、组/其他用户写权限和符号链接，并调用其中的 `linux/reload-ubuntu.sh` 重新加载网关。
+`neurobridge-ops update` 不接收任意源码路径，只操作 `neurobridge-ops project` 显示的固定 Git 工作目录。它先确认工作树没有本地修改，默认读取当前分支，或使用 `--branch <分支名>` 显式选择 `origin` 上的分支；获取该分支并只允许快进更新，最后验证项目完整性、文件归属、组/其他用户写权限和符号链接，并调用其中的 `linux/reload-ubuntu.sh` 重新加载网关。
 
 取得变更授权且网关能访问批准的代码源后，SSH 登录只执行：
 
@@ -344,7 +346,9 @@ neurobridge-ops start
 neurobridge-ops update
 ```
 
-该命令不会创建合并提交，也不会接受临时路径或覆盖现场修改。若工作树有修改、无法切换至 `master`、无法从批准上游快进拉取，或网关处于隔离网络，命令会失败；不要改用手工 Git、`rsync` 或未知文件绕过检查，应联系网关交付方按批准流程处理。更新成功后会安装源码、更新 Python 包、重新加载 systemd 单元并重启网关。B 端 WebSocket 会断开，恢复后必须重新连接、调用 `getStatus` 并重新订阅。更新失败时，同一个运维账号执行 `neurobridge-ops logs --lines 500` 和 `neurobridge-ops audit --lines 100`，保留错误摘要后联系交付方。
+该命令不会创建合并提交，也不会接受临时路径或覆盖现场修改。若工作树有修改、指定远端分支不存在、本地领先或分叉而无法从 `origin` 快进更新，或网关处于隔离网络，命令会失败；不要改用手工 Git、`rsync` 或未知文件绕过检查，应联系网关交付方按批准流程处理。更新成功后会安装源码、更新 Python 包、重新加载 systemd 单元并重启网关。B 端 WebSocket 会断开，恢复后必须重新连接、调用 `getStatus` 并重新订阅。更新失败时，同一个运维账号执行 `neurobridge-ops logs --lines 500` 和 `neurobridge-ops audit --lines 100`，保留错误摘要后联系交付方。
+
+旧版入口升级到分支参数版时，由交付方在网关本地控制台，从包含新功能的批准源码重新运行 `sudo ./linux/setup-ssh-operations.sh`，再验证 `neurobridge-ops branch` 和 `neurobridge-ops help`。仅更新业务源码不会自动安装新版 SSH 命令。`branch` 为只读查询，工作树有修改时仍可执行；detached HEAD 无当前分支，无参数更新会失败，须使用 `update --branch <分支名>`。只在远端存在的分支可自动建立本地同名分支；原分支不会被删除或重置。更新日志和审计记录实际分支与结果。
 
 ## 6. B 端录播联调步骤
 
