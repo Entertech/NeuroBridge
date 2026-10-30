@@ -291,6 +291,70 @@ class GitSourceTests(unittest.TestCase):
             self.assertFalse(result['shouldRelease'])
             fetch.assert_called_once_with('refs/heads/master')
 
+    def test_push_with_missing_before_uses_verified_default(self):
+        (self.root/'docs.txt').write_text('rebased documentation')
+        self.commit('rebased requirement')
+        for before in ('f'*40, '0'*40):
+            with self.subTest(before=before), \
+                 mock.patch.object(train, 'api', return_value={'default_branch': 'master'}), \
+                 mock.patch.object(train.Train, 'fetch', return_value=self.baseline) as fetch:
+                result = train.source_check('codex/rebased', before, event='push')
+                self.assertEqual(result['reason'], 'requirement_validation')
+                fetch.assert_called_once_with('refs/heads/master')
+
+    def test_force_push_with_available_nonancestor_still_uses_default(self):
+        self.registry('0.3.3'); self.commit('abandoned version bump')
+        before = self.git('rev-parse', 'HEAD')
+        self.git('reset', '--hard', self.baseline)
+        (self.root/'docs.txt').write_text('rewritten requirement')
+        self.commit('replacement')
+        with mock.patch.object(train, 'api', return_value={'default_branch': 'master'}), \
+             mock.patch.object(train.Train, 'fetch', return_value=self.baseline) as fetch:
+            result = train.source_check('feature/rewritten', before, event='push')
+            self.assertFalse(result['shouldRelease'])
+            fetch.assert_called_once_with('refs/heads/master')
+
+    def test_fast_forward_push_keeps_before_without_remote_lookup(self):
+        (self.root/'docs.txt').write_text('ordinary push'); self.commit('docs')
+        with mock.patch.object(train, 'api') as api, mock.patch.object(train.Train, 'fetch') as fetch:
+            self.assertFalse(train.source_check('codex/ordinary', self.baseline, event='push')['shouldRelease'])
+            api.assert_not_called(); fetch.assert_not_called()
+
+    def test_rebased_requirement_cannot_hide_illegal_version_initialization(self):
+        self.registry('0.3.3'); self.commit('illegal requirement bump')
+        with mock.patch.object(train, 'api', return_value={'default_branch': 'master'}), \
+             mock.patch.object(train.Train, 'fetch', return_value=self.baseline):
+            with self.assertRaisesRegex(ValueError, 'must not initialize'):
+                train.source_check('codex/rebased', 'f'*40, event='push')
+
+    def test_pr_and_explicit_cli_baselines_never_fall_back(self):
+        for event in ('pull_request', None):
+            with self.subTest(event=event), mock.patch.object(train, 'api') as api:
+                with self.assertRaises(RuntimeError):
+                    train.source_check('feature/pr', 'f'*40, event=event)
+                api.assert_not_called()
+        with self.assertRaisesRegex(ValueError, 'requires its target baseline'):
+            train.source_check('feature/pr', '0'*40, event='pull_request')
+        with mock.patch.object(train, 'api') as api:
+            self.assertFalse(train.source_check('feature/pr', self.baseline, event='pull_request')['shouldRelease'])
+            api.assert_not_called()
+
+    def test_default_push_cannot_fall_back_to_its_own_tip(self):
+        with mock.patch.object(train, 'api', return_value={'default_branch': 'master'}), \
+             mock.patch.object(train.Train, 'fetch') as fetch:
+            with self.assertRaisesRegex(ValueError, 'available ancestor baseline'):
+                train.source_check('master', 'f'*40, event='push')
+            fetch.assert_not_called()
+
+    def test_fallback_rejects_default_mismatch_and_fetch_failure(self):
+        with mock.patch.object(train, 'api', return_value={'default_branch': 'unexpected'}):
+            with self.assertRaisesRegex(ValueError, 'configuration mismatch'):
+                train.source_check('codex/rebased', 'f'*40, event='push')
+        with mock.patch.object(train, 'api', return_value={'default_branch': 'master'}), \
+             mock.patch.object(train.Train, 'fetch', side_effect=RuntimeError('fetch unavailable')):
+            with self.assertRaisesRegex(RuntimeError, 'fetch unavailable'):
+                train.source_check('codex/rebased', 'f'*40, event='push')
+
     def test_rebase_changes_candidate_but_does_not_rewrite_publication(self):
         self.git('branch', 'default')
         self.registry('0.3.3'); self.commit('initialize train')

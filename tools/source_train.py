@@ -712,18 +712,34 @@ class Train:
         return record
 
 
-def source_check(branch: str, base: str, head: str = 'HEAD'):
+def source_check(branch: str, base: str, head: str = 'HEAD', event: str | None = None):
     """Code-only gates on every stage; requirement versions stay at fork baseline."""
     config = tomllib.loads(CONFIG_PATH.read_text())
     current = version_at('HEAD')
     numeric(current)
-    # New branch pushes have an all-zero before SHA. Resolve the real default
-    # for fork comparison instead of failing the first dev/candidate checks.
+    # A force push can remove the before object from the fetched history, or
+    # leave it on an unrelated line. Only push events may replace that baseline;
+    # a missing PR target or an explicitly supplied CLI base remains an error.
+    if event == 'push' and base not in (None, '', '0'*40):
+        require_sha(base)
+        try:
+            run('git', 'merge-base', '--is-ancestor', base, head)
+        except RuntimeError:
+            print(f'push baseline {base} is missing or not an ancestor; resolving default branch', file=sys.stderr)
+            base = None
+    if event == 'pull_request' and base in (None, '', '0'*40):
+        raise ValueError('pull request requires its target baseline')
+    # New branches and rewritten requirement histories use the verified remote
+    # default. Never compare a rewritten default branch with itself and silently
+    # approve changes whose prior baseline cannot be recovered.
     if base in (None, '', '0'*40):
         default = api(f"repos/{config['repository']['name']}")['default_branch']
         if default != config['repository']['default_branch']:
             raise ValueError('default branch configuration mismatch')
+        if event == 'push' and branch == default:
+            raise ValueError('default branch push requires an available ancestor baseline')
         base = Train(current).fetch('refs/heads/'+default)
+        print(f'comparison baseline resolved to {base} from {default}', file=sys.stderr)
     require_sha(base)
     from tools.release_pipeline import gate
     if branch.startswith(tuple(config['branches']['requirement_prefixes'])):
@@ -768,11 +784,12 @@ def main():
     p.add_argument('--version'); p.add_argument('--execute', action='store_true')
     p.add_argument('--requirements', default=''); p.add_argument('--promotion', type=int)
     p.add_argument('--candidate'); p.add_argument('--branch'); p.add_argument('--base'); p.add_argument('--head', default='HEAD')
+    p.add_argument('--event', choices=['push', 'pull_request'])
     p.add_argument('--directory', type=Path); p.add_argument('--artifact-id', type=int)
     args = p.parse_args()
     try:
         if args.operation == 'check':
-            result = source_check(args.branch, args.base, args.head)
+            result = source_check(args.branch, args.base, args.head, args.event)
         elif args.operation == 'verify-package':
             from tools.release_pipeline import matrix
             archives = list(args.directory.glob('*.zip'))
