@@ -51,11 +51,11 @@ def windows_entries() -> dict[str, str]:
 JOB_RE = re.compile(r"^  ([a-z][a-z0-9-]*):\s*$")
 
 
-def job_block(name: str) -> str:
+def job_block(name: str, workflow: Path = WORKFLOW) -> str:
     """Return the text of one job, so a contract can be asserted per job."""
     collected: list[str] = []
     inside = False
-    for line in WORKFLOW.read_text(encoding="utf-8").splitlines():
+    for line in workflow.read_text(encoding="utf-8").splitlines():
         match = JOB_RE.match(line)
         if match:
             if inside:
@@ -68,6 +68,44 @@ def job_block(name: str) -> str:
 
 
 class NativeInputsWorkflowTests(unittest.TestCase):
+    def test_unchanged_version_blocks_every_packaging_and_publication_job(self) -> None:
+        workflow = WORKFLOW.with_name("release.yml")
+        for job in ("external-documents", "product-candidates", "release-targets", "release-aggregate", "release-publish"):
+            with self.subTest(job=job):
+                block = job_block(job, workflow)
+                job_if = next(line for line in block.splitlines() if line.startswith("    if:"))
+                self.assertIn("needs.release-plan.outputs.should_release == 'true'", job_if)
+
+    def test_automatic_release_builds_native_windows_inputs_without_an_external_run(self) -> None:
+        block = job_block("release-targets", WORKFLOW.with_name("release.yml"))
+        condition = "if: matrix.platform == 'windows' && inputs.native_input_run_id == ''"
+        # The coordinator records subprocess failures, so they don't bypass
+        # the aggregate's configured minimum-package decision.
+        self.assertEqual(block.count(condition + "\n"), 1)
+        self.assertIn("python tools/release_pipeline.py build-windows", block)
+        self.assertIn('--input-root "$RUNNER_TEMP/release-inputs"', block)
+        self.assertIn('--output-root artifacts/targets', block)
+        self.assertNotIn("tools/build-product-candidate.py", block)
+        # Failures must retain the target report even when native packaging fails.
+        self.assertRegex(block, r"(?s)Verify target package and write result log\s+if: always\(\)")
+        self.assertRegex(block, r"(?s)uses: actions/upload-artifact@v4\s+if: always\(\)")
+
+    def test_release_collects_every_record_before_deciding_platform_minimums(self) -> None:
+        targets = job_block("release-targets", WORKFLOW.with_name("release.yml"))
+        aggregate = job_block("release-aggregate", WORKFLOW.with_name("release.yml"))
+        self.assertIn("fail-fast: false", targets)
+        self.assertIn("pattern: release-target-*", aggregate)
+        self.assertIn("tools/release_pipeline.py aggregate", aggregate)
+
+    def test_explicit_windows_input_keeps_source_and_branch_validation(self) -> None:
+        block = job_block("release-targets", WORKFLOW.with_name("release.yml"))
+        retrieval = block.split("- name: Retrieve approved offline target input", 1)[1]
+        self.assertIn("if: matrix.platform == 'windows' && inputs.native_input_run_id != ''", retrieval)
+        self.assertIn('d.get("headSha")==os.environ["EXPECTED_SOURCE_SHA"]', retrieval)
+        self.assertIn('d.get("headBranch")==os.environ["EXPECTED_BRANCH"]', retrieval)
+        self.assertIn('d.get("conclusion")=="success"', retrieval)
+        self.assertIn('--name "neurobridge-input-$TARGET_ID"', retrieval)
+
     def test_workflow_matrix_matches_the_release_contract(self) -> None:
         declared = {target["id"] for target in matrix() if target["platform"] == "windows"}
         entries = windows_entries()

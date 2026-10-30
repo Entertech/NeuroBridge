@@ -17,3 +17,5 @@ config/gateway.toml
 config/ssh-operations.txt
 .workbuddy/
 .workbuddy-ai/
+/.idea/
+/artifacts/

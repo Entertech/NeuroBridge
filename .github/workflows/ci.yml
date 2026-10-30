@@ -17,7 +17,7 @@ jobs:
   version-gate:
     name: Application version gate
     # release.yml only runs after a push to master, so the gate has to run here
-    # too, or a PR could merge a shipped-file change with no version bump.  This
+    # too, or a PR could merge business code changes with no version bump.  This
     # is a check, not packaging: it produces no artifact.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-22.04
@@ -30,7 +30,7 @@ jobs:
           # The gate reads the registry with tomllib, which needs Python 3.11;
           # this runner's default python3 is older.
           python-version: '3.11'
-      - name: Require a version bump when shipped files change
+      - name: Require a version bump when business code changes
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: python tools/release_pipeline.py gate --base "$BASE_SHA" --output "$RUNNER_TEMP/release-gate.json"
@@ -61,6 +61,8 @@ jobs:
             if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
           }
       - run: python -m unittest discover -s tests -p test_windows_launcher.py -v
+      - name: Verify release target failure isolation and retained logs on Windows
+        run: python -m unittest tests.package.test_windows_release_build -v
       - name: Verify installation failure logs without an installed gateway
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/test_windows_install_logging.ps1

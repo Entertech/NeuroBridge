@@ -25,13 +25,14 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = tomllib.loads((ROOT / "release/release_matrix.toml").read_text(encoding="utf-8"))
 REGISTRY = ROOT / "neurobridge/version_registry.toml"
-# A change under these paths makes an application version bump mandatory.  It
-# does not by itself produce a release: gate() decides that by comparing
-# [application].version against the base.  `doc/tech/对外/` is the only
-# documentation path that ships inside the user bundle, so editing a delivered
-# document has to force a bump like any product file; the rest of doc/ stays
-# releasable without one.
-PRODUCT_PATHS = ("neurobridge/", "windows/", "linux/", "packaging/", "release/", "tools/build-product-candidate.py", "tools/build-native-package.py", "tools/release_pipeline.py", "tools/publish_release.py", "requirements.lock", "pyproject.toml", ".github/workflows/", "doc/tech/对外/")
+# Only software business source requires an application bump. CI, packaging,
+# installation scripts, dependency manifests, docs and registry bookkeeping
+# may change at the same version. Publication still requires a version advance.
+BUSINESS_SOURCE_ROOTS = ("neurobridge/", "windows/", "web/", "mac/algorithm_bridge/",
+                         "third_party/AffectiveCloud-Algorithm-SDK/cpp/package/",
+                         "third_party/NumCpp/include/")
+BUSINESS_SOURCE_SUFFIXES = {".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".c", ".cc", ".cpp", ".h", ".hpp"}
+BUILD_ONLY_SOURCES = {"windows/algorithm_build.py"}
 VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 FORMATS = {"exe", "msi", "deb", "rpm"}
 MAGIC = {"exe": b"MZ", "msi": bytes.fromhex("d0cf11e0a1b11ae1"), "deb": b"!<arch>\n", "rpm": bytes.fromhex("edabeedb")}
@@ -42,8 +43,8 @@ def log(event: str, **data: object) -> None:
 
 
 def run(*args: str) -> str:
-    # git prints paths as raw UTF-8 under -z, and PRODUCT_PATHS contains a
-    # non-ASCII prefix, so decode explicitly instead of trusting the locale.
+    # Git paths and the version registry may contain Chinese text. Decode
+    # explicitly instead of trusting the platform's locale.
     return subprocess.check_output(args, cwd=ROOT, text=True, encoding="utf-8", stderr=subprocess.PIPE).strip()
 
 
@@ -87,6 +88,10 @@ def version_tuple(value: str) -> tuple[int, int, int]:
     return tuple(map(int, match.groups()))
 
 
+def is_business_source(path: str) -> bool:
+    return path not in BUILD_ONLY_SOURCES and path.startswith(BUSINESS_SOURCE_ROOTS) and Path(path).suffix in BUSINESS_SOURCE_SUFFIXES
+
+
 def release_base(repository: str) -> str:
     """Use public application Releases, never orphan tags or drafts, as state."""
     pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"))
@@ -125,17 +130,18 @@ def gate(base: str) -> dict[str, object]:
     current_registry = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))
     try:
         previous_registry = tomllib.loads(run("git", "show", f"{base}:neurobridge/version_registry.toml"))
-        changed = [name for name in subprocess.check_output(("git", "diff", "--name-only", "-z", f"{base}...HEAD"), cwd=ROOT).decode("utf-8").split("\0") if name]
+        changed = [name for name in subprocess.check_output(("git", "diff", "--no-renames", "--name-only", "-z", f"{base}...HEAD"), cwd=ROOT).decode("utf-8").split("\0") if name]
     except subprocess.CalledProcessError as error:
         raise ValueError(f"cannot resolve release baseline {base}: {error.stderr.strip()}") from error
     old = previous_registry["application"]["version"]
     new = current_registry["application"]["version"]
     old_parts, new_parts = version_tuple(old), version_tuple(new)
-    product_changed = any(path.startswith(PRODUCT_PATHS) for path in changed)
+    # Keep the existing report field productChanged, now scoped to business code.
+    product_changed = any(is_business_source(path) for path in changed)
     if new_parts < old_parts:
         raise ValueError(f"application version regressed: {old} -> {new}")
     if product_changed and new_parts == old_parts:
-        raise ValueError(f"product/deployment/package files changed without application version bump: {old}")
+        raise ValueError(f"software business code changed without application version bump: {old}")
     cursor = old
     while version_tuple(cursor) < new_parts:
         # Candidate branches may advance more than once before merging.
@@ -152,9 +158,72 @@ def gate(base: str) -> dict[str, object]:
         if next_parts != expected or next_parts > new_parts or not record.get("compatibility") or not record.get("evidence"):
             raise ValueError(f"invalid {impact!r} version step or missing release evidence: {cursor} -> {next_version}")
         cursor = next_version
-    result: dict[str, object] = {"baseVersion": old, "applicationVersion": new, "productChanged": product_changed, "shouldRelease": new_parts > old_parts, "changedFiles": changed, "reason": "version_advanced" if new_parts > old_parts else "same_version_no_product_change"}
+    result: dict[str, object] = {"baseVersion": old, "applicationVersion": new, "productChanged": product_changed, "shouldRelease": new_parts > old_parts, "changedFiles": changed, "reason": "version_advanced" if new_parts > old_parts else "same_version_no_business_code_change"}
     log("version_gate", **result)
     return result
+
+
+def windows_build_steps(target_id: str, source: Path) -> list[tuple[str, list[str]]]:
+    wix = str(Path.home() / ".dotnet/tools/wix.exe")
+    return [
+        ("runtime", ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "tools/prepare-windows-candidate-runtime.ps1")]),
+        ("toolchain", ["dotnet", "tool", "install", "--global", "wix", "--version", "7.0.0"]),
+        ("license", [wix, "eula", "accept", "wix7"]),
+        ("extension", [wix, "extension", "add", "WixToolset.BootstrapperApplications.wixext/7.0.0", "--global"]),
+        ("toolchain-version", [wix, "--version"]),
+        ("package", [sys.executable, str(ROOT / "tools/build-native-package.py"), "--target", target_id,
+                     "--runtime-dir", str(ROOT / "artifacts/windows-runtime"), "--output-dir", str(source)]),
+    ]
+
+
+def build_windows_input(target_id: str, input_root: Path, output_root: Path) -> None:
+    """Record per-target build failures without bypassing the aggregate gate.
+
+    Build subprocess failures are data, while inability to persist that data
+    remains a job failure. Successful outputs still go through target_result().
+    """
+    if not any(item["id"] == target_id and item["platform"] == "windows" for item in matrix()):
+        raise ValueError(f"not a Windows release target: {target_id}")
+    source, output = input_root.resolve() / target_id, output_root.resolve() / target_id
+    source.mkdir(parents=True, exist_ok=True)
+    output.mkdir(parents=True, exist_ok=True)
+    # A repeated local attempt must never accept an earlier verification record.
+    for path in (source / "verification.json", source / "validation.log", output / "native-validation.log"):
+        path.unlink(missing_ok=True)
+    outcome = {"targetId": target_id, "sourceCommit": run("git", "rev-parse", "HEAD"), "status": "building"}
+    save_json(output / "build-outcome.json", outcome)
+    with (output / "windows-build.log").open("w", encoding="utf-8") as stream:
+        for phase, args in windows_build_steps(target_id, source):
+            log("windows_build_phase", targetId=target_id, phase=phase)
+            stream.write(f"phase={phase}\n$ {subprocess.list2cmdline(args)}\n")
+            stream.flush()
+            try:
+                with subprocess.Popen(args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      text=True, encoding="utf-8", errors="replace",
+                                      env={**os.environ, "PYTHONIOENCODING": "utf-8",
+                                           "PATH": str(Path.home() / ".dotnet/tools") + os.pathsep + os.environ.get("PATH", "")}) as process:
+                    assert process.stdout is not None
+                    for line in process.stdout:
+                        stream.write(line)
+                        stream.flush()
+                    code = process.wait()
+                reason = f"Windows {phase} failed with exit code {code}"
+            except OSError as error:
+                code, reason = None, f"Windows {phase} could not start: {error}"
+                stream.write(reason + "\n")
+            stream.write(f"exit_code={code}\n")
+            stream.flush()
+            if code != 0:
+                outcome.update(status="failed", phase=phase, exitCode=code, reason=reason)
+                print(f"::warning title={target_id}::{reason}; see windows-build.log", flush=True)
+                break
+        else:
+            outcome.update(status="completed")
+    # WiX stdout/stderr are captured by the native builder, not its console.
+    native_log = source / "validation.log"
+    if native_log.is_file():
+        shutil.copy2(native_log, output / "native-validation.log")
+    save_json(output / "build-outcome.json", outcome)
 
 
 def target_result(target_id: str, input_root: Path, output_root: Path) -> dict[str, object]:
@@ -166,6 +235,24 @@ def target_result(target_id: str, input_root: Path, output_root: Path) -> dict[s
     source = input_root / target_id
     report_path = source / "verification.json"
     result: dict[str, object] = {"target": target, "status": "blocked", "reason": "verified_offline_input_missing", "stage": "input", "checkedAt": datetime.now(timezone.utc).isoformat(), "sourceCommit": run("git", "rev-parse", "HEAD"), "runner": os.environ.get("RUNNER_IMAGE", os.environ.get("RUNNER_OS", sys.platform))}
+    outcome_path = output / "build-outcome.json"
+    if outcome_path.is_file():
+        try:
+            outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
+            if outcome["targetId"] != target_id or outcome["sourceCommit"] != result["sourceCommit"]:
+                raise ValueError("build outcome belongs to another source commit or target")
+            if outcome["status"] != "completed":
+                result.update(status="failed", reason=outcome.get("reason", "Windows build did not complete"),
+                              stage="build", validationLog="windows-build.log")
+                save_json(output / "result.json", result)
+                log("target_result", targetId=target_id, status=result["status"], reason=result["reason"])
+                return result
+            if not report_path.is_file():
+                raise ValueError("Windows build completed without verification.json; see windows-build.log")
+        except (KeyError, OSError, ValueError, json.JSONDecodeError) as error:
+            result.update(status="failed", reason=str(error), stage="build")
+            save_json(output / "result.json", result)
+            return result
     fetch_log = output / "input-fetch.log"
     if fetch_log.is_file() and not report_path.is_file():
         summary = fetch_log.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -324,6 +411,10 @@ def main() -> int:
     target.add_argument("--target", required=True)
     target.add_argument("--input-root", type=Path, required=True)
     target.add_argument("--output-root", type=Path, required=True)
+    windows = commands.add_parser("build-windows")
+    windows.add_argument("--target", required=True)
+    windows.add_argument("--input-root", type=Path, required=True)
+    windows.add_argument("--output-root", type=Path, required=True)
     aggregate = commands.add_parser("aggregate")
     aggregate.add_argument("--results-root", type=Path, required=True)
     aggregate.add_argument("--output", type=Path, required=True)
@@ -341,6 +432,8 @@ def main() -> int:
                 save_json(args.output, value)
         elif args.command == "target":
             target_result(args.target, args.input_root, args.output_root)
+        elif args.command == "build-windows":
+            build_windows_input(args.target, args.input_root, args.output_root)
         else:
             assemble(args.results_root, args.output, args.trigger)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
