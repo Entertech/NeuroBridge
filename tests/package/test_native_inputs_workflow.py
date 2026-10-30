@@ -70,7 +70,7 @@ def job_block(name: str, workflow: Path = WORKFLOW) -> str:
 class NativeInputsWorkflowTests(unittest.TestCase):
     def test_unchanged_version_blocks_every_packaging_and_publication_job(self) -> None:
         workflow = WORKFLOW.with_name("release.yml")
-        for job in ("external-documents", "product-candidates", "release-targets", "release-aggregate", "release-publish"):
+        for job in ("external-documents", "product-candidates", "release-targets", "release-aggregate"):
             with self.subTest(job=job):
                 block = job_block(job, workflow)
                 job_if = next(line for line in block.splitlines() if line.startswith("    if:"))

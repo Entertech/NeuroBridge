@@ -31,7 +31,9 @@ platform_archives = ["windows", "kylin"]
 file_name_pattern = "neurobridge-v<applicationVersion>-<buildDate>.zip"
 
 [release]
-trigger = "push_master"
+# push_master remains the internal strict-coverage manifest enum for compatibility.
+# Live source publication is orchestrated by .release/code-release-train.toml.
+trigger = "source_train"
 tag_pattern = "v<applicationVersion>"
 github_release_required = true
 github_release_starts_as_draft = true
@@ -39,7 +41,7 @@ release_receipt_schema = "schemas/release-receipt.schema.json"
 existing_tag_policy = "same_commit_only"
 published_asset_policy = "exact_match_or_fail"
 signing = "disabled"
-actions_artifact_retention_days = 30
+actions_artifact_retention_days = 90
 
 [build]
 windows_coordinator = "windows-2022"
@@ -52,7 +54,7 @@ missing_verified_input = "blocked"
 public_version_source = "application.version"
 platform_release_fields = "legacy_ignored"
 retry_identity = "github_run_id_and_attempt"
-same_version_master_push = "skip_release"
+same_version_master_push = "validate_only"
 
 [validation]
 physical_verification = "pending_until_logs_uploaded"

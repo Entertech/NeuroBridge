@@ -1,0 +1,47 @@
+# Adapted from source-version-train/assets/code-release-train.yml.
+# Source orchestration only; packaging stays in release.yml.
+schema_version = 1
+
+[repository]
+name = "Entertech/NeuroBridge"
+default_branch = "master"
+app_id_secret = "RELEASE_BOT_APP_ID"
+private_key_secret = "RELEASE_BOT_PRIVATE_KEY"
+
+[branches]
+requirement_prefixes = ["feature/", "bugfix/", "codex/"]
+integration_template = "dev_{version}"
+publish_template = "publish_{version}"
+finalization_template = "finalize_{version}"
+release_candidate_template = "release-candidate/{version}/{attempt}"
+state_template = "release-state/{version}"
+tag_prefix = "v"
+
+[source]
+version_source = "neurobridge/version_registry.toml"
+version_key = "application.version"
+version_policy = "release/release_matrix.toml#versioning"
+synchronize_command = ["python3", "tools/sync-version-registry.py"]
+validate_command = ["python3", "tools/check-version-registry.py"]
+metadata = ".release/train.json"
+# The existing platform fields are legacy, not independent release counters.
+build_number_adjustment = "none"
+
+[code_gates]
+checks = ["Application version gate", "windows-launcher", "native-sdk-regression", "unit-and-websocket"]
+required_reviewers = 1
+candidate_review = "explicit-human-sha-approval"
+
+[source_release]
+package_workflow = ".github/workflows/release.yml"
+package_matrix = "release/release_matrix.toml"
+require_all_defined_packages = true
+publish_destinations = ["github-actions-artifacts"]
+publish_success_policy = "all"
+github_release_after_tag = true
+merge_method = "merge"
+require_finalization_pr = true
+preserve_visible_publish = true
+resume_recorded_candidate = true
+state_storage = "git-ref-with-candidate-parent"
+package_retention_days = 90

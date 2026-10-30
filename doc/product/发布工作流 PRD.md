@@ -6,7 +6,7 @@
 
 ## 1. 背景与目标
 
-当前仓库已有单元测试、北向协议文档 PDF 和部分外部文档打包流程，但缺少统一的应用版本门禁和跨平台发布产物流程。本 PRD 目标是让合入 `master` 的变更可审计、可复现，并避免业务代码变化却沿用旧版本号。
+当前仓库已有单元测试、北向协议文档 PDF 和部分外部文档打包流程，但缺少统一的应用版本门禁和跨平台发布产物流程。本 PRD 目标是让用户选定版本的源码集成、审核、候选、发布和最终合入可审计、可复现。
 
 目标：
 
@@ -19,10 +19,10 @@
 ### 2.1 应用版本门禁
 
 - 版本唯一来源为 `neurobridge/version_registry.toml` 的 `[application].version`；平台覆盖矩阵唯一来源为 [`release/release_matrix.toml`](../../release/release_matrix.toml)。
-- **是否产出发布包只由 `[application].version` 相对基线是否递增决定**，与改了哪些文件无关。变更文件列表只用于判定「是否必须升版本」：修改软件业务源码却没升版本时门禁**失败**；纯 CI、构建/发布工具、安装脚本、依赖清单、文档、测试和版本台账记录可保持应用版本，同版本合入跳过打包和正式发布。
-- PR 门禁以 PR 目标分支（固定为 `master`）的提交为基线比较版本；打包运行以**最后一个已发布 tag**（`v<应用版本>`）为基线，仓库尚无 tag 时退回被处理提交的父提交。
+- **版本唯一来源不变，初始化时机改为明确选定版本的 dev_B 创建时**。需求分支保持开发基线版本；需求集成后保留初始化的目标版本，不在每个需求或打包任务中重复升版。普通 PR 和默认分支合入均只运行代码验证，不自动产出发布包；正式发布须走经审核的 publication、候选和发布接口。
+- 源码阶段按配置解析 dev_B、publish_B 和 finalize_B，需求 PR 只进入用户选定的 dev_B。dev/publish 与初始化时记录的默认分支 SHA 比较版本；候选和最终合入再校验精确 SHA、代码检查和 tag 祖先关系。包接口保留正式已发布版本基线校验，基线不确定时失败。
 - 业务源码范围由 `tools/release_pipeline.py` 的 `BUSINESS_SOURCE_ROOTS`、`BUSINESS_SOURCE_SUFFIXES` 和构建工具排除项维护：包括网关核心与 Windows 运行侧 Python、Web 前端 JS/HTML/CSS、原生 bridge 和算法 SDK/NumCpp 的 C/C++ 源码及头文件。`windows/algorithm_build.py` 是构建工具，单独修改不强制升版。`.github/`、`tools/`、`release/`、`packaging/`、Linux 安装脚本、文档、依赖清单、配置及台账记录不属于业务源码；不得只因文件随包交付就提升应用版本。对外文档仍独立遵守其发布授权与版本锁定规则。
-- 应用版本使用三段数字格式 `MAJOR.MINOR.PATCH`。业务代码变化时，PR 版本不得低于 `master`：修复递增 `PATCH`，向后兼容功能递增 `MINOR` 并将 `PATCH` 归零，破坏兼容性的变化递增 `MAJOR` 并将 `MINOR`、`PATCH` 归零。未按影响级别递增、跳过必要的版本证据或发生版本回退时失败。
+- 应用版本使用三段数字格式 `MAJOR.MINOR.PATCH`。初始化版本列车时，所选目标须高于记录的默认分支版本：修复递增 `PATCH`，向后兼容功能递增 `MINOR` 并将 `PATCH` 归零，破坏兼容性的变化递增 `MAJOR` 并将 `MINOR`、`PATCH` 归零。未按影响级别递增、跳过必要的版本证据或发生版本回退时失败。
 - 未改业务代码时版本可不变，但不得低于 `master`。
 - 每次版本递增必须在变更记录中写明旧版本、新版本、影响级别、兼容性边界和依据。Actions summary 必须包含基线版本、PR 版本、变更文件和判定理由。
 
@@ -108,17 +108,17 @@ Windows 与麒麟的安装/运行导出均须携带独立诊断上下文：Windo
 
 版本字段描述磁盘上部署文件，不宣称正在运行的旧进程已加载新版本；服务状态另行导出。Windows 安装摘要保存安装开始时的上下文，导出时另采集当前上下文，升级失败可据时间及两个版本字段区分旧部署与新安装包。麒麟安装日志保留本次包版本/提交，导出同时读取当前部署和引导包身份。OS 查询失败应保留原因，不能因此丢弃已有安装错误日志。只采集这些必要字段，不导出全部环境变量、配置正文、令牌、密钥或人体录制数据。
 
-## 3. 工作流与门禁
+## 3. 源码版本列车与发布门禁
 
-打包链路与 PR 解耦，由独立的 `Release` workflow 承担；PR 只做校验，不产出任何包。
-
-1. `pull_request -> master`：只运行版本门禁与测试（含对外文档发布状态门禁），**不构建候选包、平台 ZIP 或总 ZIP**，也不创建 GitHub Release 或 tag。
-2. 打包有两个入口，二者之外不触发：(a) PR 合入 `master` 后，`Test` 确认本次 push 相对 push 前应用版本递增，且全部测试通过，才调用可复用的 Release；同版本不调用 Release，也不自动触发独立 Kylin bootstrap package；(b) 在 Actions 上手动触发，对**所选分支的最新提交**打包。手动触发属于非正式构建，只产出候选包，不创建 tag 或 GitHub Release。
-3. 打包触发后，若应用版本未递增，记录跳过原因而不重发同版本；若版本递增，尝试全部矩阵目标并记录逐项结果；Windows 和麒麟各至少一个可执行且通过自动校验的包时，生成两个平台 ZIP 和唯一总 ZIP。
-4. 两个平台达到最小成功条件，且平台 ZIP、总 ZIP、清单和日志构建并校验通过后，创建指向本次 `master` commit 的注释 tag `v<applicationVersion>`；随后创建 draft GitHub Release，上传唯一总 ZIP、包外清单和验证日志并复验，最后公开 Release。未完成的矩阵组合在 Release 说明中逐项列明；tag 创建后的网络失败按 §7.2 原地恢复，不移动 tag 或覆盖已有正式 Release。手动触发的非正式构建不进入本步。
-5. 正式 Artifact 保留 **30 天**，下载权限为**所有能够访问仓库 Actions 的用户**，不做额外权限限制。
-6. 当前版本暂不进行代码签名、安装包签名或公证；清单中的 SHA-256 仅用于完整性校验。后续启用签名时必须新增版本规则和受保护凭据流程。
-7. 任一平台无合格包、成功包的校验值不一致、成功包缺日志或发布资产上传失败时，工作流失败并说明原因。其他矩阵组合失败或来源数据缺失时，记录该组合为 `failed`/`blocked`，不隐藏缺口。
+1. 生命周期固定为需求分支、`dev_B`、可见 `publish_B`、独立候选、打包与发布验证、不可变 `vB`、独立 `finalize_B → 默认分支` PR。`B` 必须为规范的 major.minor.patch，不自动选择版本或创建新 train。
+2. 需求开发不升版；选定版本与需求后从最新默认分支初始化 dev_B，并同步全部维护的版本表示。publication 分支从初始化前基线建立；其内容只能通过有批准与检查的 PR 更新，合入 publication 本身不发版。
+3. publication 合入后 rebase 到新取回的默认分支，生成独立候选 SHA，原 publication 历史不变。候选重新执行代码检查，并显式人工审核完整 SHA 后才可发布。
+4. 打包接口消费精确候选 SHA，必须获得矩阵定义的全部 5 个真实安装包；缺失、失败、跳过、只有源码 ZIP 或来源不符均失败。旧的两平台最低数量门槛只适用于手动诊断候选。
+5. 先上传包身份/摘要回执和唯一总 ZIP，再按 Artifact ID 回下载验证；以验证成功的 Actions Artifacts 为发布凭据。只有源码流程可以在此后打 tag；GitHub Release 在 tag 后提供下载入口，打包和上传工具不创建或替换 tag。
+6. 最终合入通过 finalize_B 的受保护 PR，显式采用 merge commit 保留已发布候选。不得 squash、rebase-and-merge、cherry-pick 或移动 tag。取回远端 tag 和默认分支，确认 peeled tag 等于候选且候选确为祖先后才完成和清理临时分支。
+7. 普通 Test、PR 或 master push 都不启动发布。Source version train 的 release 是经选择和审核后的显式操作；手动 Release/Kylin bootstrap package 只构建诊断候选，不打 tag。
+8. 发布回执由独立 release-state/B ref 持久保存，并保留候选 Git 对象；重试使用相同 SHA 和已验证包，成功发送不重复。网络查询不确定、记录丢失、Artifact 过期或 tag 不符均阻断，不能当作首次发布。
+9. 总 ZIP 和上传前回执保留 90 天，GitHub Release 为长期下载入口。当前不启用签名或公证，CI 不代替目标机验收。
 
 ## 4. 非功能要求
 
@@ -133,10 +133,10 @@ Windows 与麒麟的安装/运行导出均须携带独立诊断上下文：Windo
 ## 5. 验收标准
 
 - 业务代码变更且版本不变的 PR 必须失败并提示提升版本。
-- 版本高于 `master` 的 PR 通过，低于 `master` 的 PR 失败并说明回退原因。
-- 纯 CI/构建/安装/文档/测试/台账改动在应用版本不变时通过版本门禁；运行页明确记录无需发布，打包、tag 和 GitHub Release 作业均跳过。业务源码变化但版本不变仍必须失败。
+- dev_B 初始化严格验证所选版本递增、版本表示一致和基线；需求分支不提前修改应用版本。
+- 需求开发和非业务工具改动可保持开发基线版本；未选择版本列车或未经候选审核时，不打包、创建 tag 或 GitHub Release。
 - PR 只做校验，不产生任何候选包或 ZIP；打包由 `Release` workflow 承担，手动对分支触发时生成该分支最新提交的 Windows EXE/MSI 和麒麟引导包候选清单，状态与验证事实一致。
-- 应用版本递增的 `master` 构建在最低门槛通过时生成带 SHA-256 的包外 `release-manifest.json`、唯一总 ZIP 和 GitHub Release；版本未递增时跳过同版本发布；Actions Artifact 保留 30 天，GitHub Release 作为长期下载入口。
+- 所选候选必须获得全部 5 个安装包、同 SHA 证据和上传回下载验证；tag 必须指向该候选，最终 PR 合入后远端祖先检查通过；Actions Artifact 保留 90 天。
 - Artifact 可在无公网环境按清单校验。
 - 现有单元测试和协议兼容性检查全部通过。
 
@@ -147,7 +147,7 @@ Windows 与麒麟的安装/运行导出均须携带独立诊断上下文：Windo
 - Windows 每个适配组合都尝试生成 EXE 和 MSI；麒麟尝试生成一个引导包，并记录安装与回滚结果。全部 5 个包目标均属于支持矩阵；某目标未形成合格包时必须在清单和 Release 说明中写明状态、原因与后续验证项。
 - “各个版本”专指操作系统版本适配性，不要求回溯构建历史应用版本。
 - 构建、测试、打包和校验默认离线；官网版本信息、依赖和安装源先缓存并校验，正式构建只读取缓存。
-- PR 合入 `master` 且 `Test` workflow 通过后触发发布；也可在 Actions 手动触发，对所选分支的最新提交打包（非正式构建，不创建 tag 或 Release）。包与总 ZIP 校验通过后创建 tag，随后创建 draft GitHub Release，上传和复验成功后公开。Actions Artifact 保留 30 天，GitHub Release 长期保留；当前不做签名或公证。
+- 经审核的独立候选通过代码、全部包和 Artifact 回下载校验后，由源码流程创建 tag、GitHub Release 和最终合入 PR；普通 master 合入不发版。诊断候选仍可手动构建，Artifacts 保留 90 天，GitHub Release 长期保留；当前不做签名或公证。
 - Windows 和麒麟支持矩阵以本 PRD 与仓库配置为准；官网新增版本不会自动进入 CI，需人工审阅后更新配置。
 - 先分别生成 `windows-v<version>-<date>.zip` 和 `kylin-v<version>-<date>.zip`，再将两个平台 ZIP、构建清单和验证日志压缩为唯一交付物 `neurobridge-v<version>-<date>.zip`。麒麟平台 ZIP 只含一个引导包。每个平台 ZIP 至少包含一个可执行且通过自动校验的包才允许进入汇总；5 个目标的未完成项随包透明列示。
 - 总 ZIP 内的构建清单记录 Git commit、构建时间、目标矩阵和包/平台 ZIP 的 SHA-256；总 ZIP 自身的 SHA-256 只能写入包外 `release-manifest.json` 和 `.sha256` 文件，避免文件校验值包含自身。公开 Release 后另生成 `release-receipt.json` 记录实际 tag、Release URL、总 ZIP SHA-256 和 `published` 状态；不回写已上传 ZIP。
@@ -186,7 +186,7 @@ Windows 与麒麟的安装/运行导出均须携带独立诊断上下文：Windo
 
 **Windows 支持范围：**Windows 10/11 使用锁定的 Python 3.11 x64 运行时与 WiX Toolset v7 / Burn 构建 MSI/EXE。仅四个受支持目标参与构建；Windows 7 和 32 位目标不运行、不生成空目录或占位归档，清单拒绝过期的矩阵外输入。静默安装、升级、卸载和版本查询仍须验证。安装入口附带 MSI/Burn 日志及安装失败导出能力，尚未创建网关程序或服务时也能取证。
 
-**重试与幂等：**发布 job 仅授予 `contents: write`，PR job 保持 `contents: read`；同一应用版本串行发布。重跑先检查远端 tag：不存在时在全部本地校验通过后创建；存在且指向同一 commit 时继续；指向不同 commit 时立即失败，绝不移动或删除。Release 不存在则创建 draft，已存在 draft 则只补齐缺失资产并校验同名资产的大小和 SHA-256；已公开且资产完全一致时视为幂等成功，已公开但内容不一致时失败并要求新应用版本。上传失败保留 draft 供同 commit 重试，公开前校验唯一总 ZIP 与包外清单一致。公开成功后生成符合 [`schemas/release-receipt.schema.json`](../../schemas/release-receipt.schema.json) 的回执并保存为 Actions Artifact；不能把 draft 或仅有 tag 记为 `published`。
+**重试与幂等：**源码写操作使用发布 GitHub App，不修改或绕过分支保护；整个仓库的源码操作串行。打包前检查持久状态与远端 tag；同输入重用同一候选 SHA 和既有 Artifact，绝不重建已打 tag 的源版本。Artifact 发布先有上传前回执，再回下载验证，之后才创建 tag。GitHub Release 发布器只校验现有 source tag，按同提交/同摘要恢复 draft 或不确定发送，已成功目标不重复发送。tag 后任何失败保留全部相关分支；远端 tag 身份与默认分支祖先检查通过后才清理 dev、隐藏候选及 finalize。publication 分支和状态记录保留。
 
 **版本关系：**正式包名、tag、GitHub Release 和清单统一使用台账 `[application].version`。`[platform_releases.windows]` 与 `[platform_releases.kylin]` 是旧流程元数据，本次 Workflow 不读取、不自动递增，也不作为安装器显示版本；后续迁移清理需单独变更台账。仅某个平台的安装器、构建工具或依赖清单变化不强制升级应用版本；业务源码变化才要求按影响级别升级 `[application].version`，全部 5 个目标使用相同应用版本。重跑同一 commit 的 `GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT` 只作为构建追踪号，不改变产品版本。
 
@@ -202,7 +202,7 @@ Windows 与麒麟的安装/运行导出均须携带独立诊断上下文：Windo
 - Windows 10/11、x86_64 的 EXE 与 MSI 产物；
 - 银河麒麟 V10 通用引导包（DEB all）；安装时在目标机器上构建运行时；
 - 离线优先的官方版本信息、依赖和安装源缓存；
-- 手动触发的分支候选构建、合入 `master` 且 `Test` 通过后的发布、GitHub Release、tag、30 天 Artifact 保留和统一发布清单；
+- 手动诊断候选、源码版本列车、精确候选打包与 Artifact 发布验证、源码 tag、受保护的最终合入及祖先证明、90 天 Artifact 保留和统一清单；
 - 失败原因、来源 URL、版本、架构、格式和 SHA-256 的可审计记录。
 
 交付 PDF 使用 ASCII 副本文件名避免解压编码歧义，并保留台账原名对照。麒麟安装日志持久化于 `/var/log/neurobridge-bootstrap`；Windows 交付附带安装与失败日志导出脚本。安装失败须提供退出码、源码提交/安装包摘要与阶段，不依赖已运行的网页才能导出。

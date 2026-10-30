@@ -1,12 +1,11 @@
 name: Test
 
-# PRs and unchanged-version pushes only validate. A version-advancing push to
-# master calls release.yml after every test job succeeds.
+# Code checks only. Source train publication is an explicit, separately reviewed operation.
 on:
   pull_request:
-    branches: [master]
+    branches: [master, 'feature/**', 'bugfix/**', 'codex/**', 'dev_*', 'publish_*', 'release-candidate/**', 'finalize_*']
   push:
-    branches: [master]
+    branches: [master, 'feature/**', 'bugfix/**', 'codex/**', 'dev_*', 'publish_*', 'release-candidate/**', 'finalize_*']
   workflow_dispatch:
 
 permissions:
@@ -16,8 +15,6 @@ jobs:
   version-gate:
     name: Application version gate
     if: github.event_name == 'pull_request' || github.event_name == 'push'
-    outputs:
-      should_release: ${{ steps.gate.outputs.should_release }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -32,17 +29,12 @@ jobs:
         id: gate
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python tools/release_pipeline.py gate --base "$BASE_SHA" --output "$RUNNER_TEMP/release-gate.json"
-          python - <<'PYCODE' >> "$GITHUB_OUTPUT"
-          import json, os
-          from pathlib import Path
-          gate = json.loads((Path(os.environ['RUNNER_TEMP']) / 'release-gate.json').read_text())
-          print('should_release=' + str(gate['shouldRelease']).lower())
-          PYCODE
-          if ! grep -qx 'should_release=true' "$GITHUB_OUTPUT"; then
-            echo 'Application version unchanged; no automatic release or Kylin bootstrap build.' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          python -m tools.source_train check --branch "$SOURCE_BRANCH" --base "$BASE_SHA" --head "$SOURCE_HEAD" > "$RUNNER_TEMP/release-gate.json"
+          echo 'Code validation only; package publication requires an approved source train.' >> "$GITHUB_STEP_SUMMARY"
 
   windows-launcher:
     runs-on: windows-2022
@@ -150,12 +142,3 @@ jobs:
           echo "External documents must be promoted and locked on this PR branch before it can merge." >&2
           echo "Run: python3 tools/mark-external-documents-published.py --date YYYY-MM-DD" >&2
           exit 1
-
-  release:
-    name: Release upgraded application
-    needs: [version-gate, windows-launcher, native-sdk-regression, unit-and-websocket]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.version-gate.outputs.should_release == 'true'
-    permissions:
-      contents: write
-      actions: write
-    uses: ./.github/workflows/release.yml

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from hashlib import sha256 as hashlib_sha256
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,27 +21,26 @@ ARCHIVE_CHECKPOINT = "<!-- neurobridge-verified-archive\n"
 
 
 def command(*args: str, allow_missing: bool = False) -> str | None:
-    result = subprocess.run(args, cwd=ROOT, text=True, capture_output=True)
+    environment = os.environ.copy()
+    environment.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
+    result = subprocess.run(args, cwd=ROOT, text=True, capture_output=True, env=environment)
     if result.returncode:
-        if allow_missing:
+        if allow_missing and ('HTTP 404' in result.stderr or 'release not found' in result.stderr.lower()):
             return None
         raise ValueError(f"{args[0]} {args[1] if len(args) > 1 else ''} failed ({result.returncode}): {result.stderr.strip()}")
     return result.stdout.strip()
 
 
 def ensure_tag(tag: str, commit: str) -> None:
-    remote = command("git", "ls-remote", "--tags", "--refs", "origin", f"refs/tags/{tag}")
-    if remote:
-        command("git", "fetch", "origin", f"refs/tags/{tag}:refs/tags/{tag}")
-        actual = command("git", "rev-list", "-n", "1", tag)
-        kind = command("git", "cat-file", "-t", tag)
-        if actual != commit or kind != "tag":
-            raise ValueError(f"existing tag {tag} is not an annotated tag for {commit}")
-        log("tag_reused", tag=tag, commit=commit)
-        return
-    command("git", "tag", "-a", tag, "-m", f"NeuroBridge {tag}", commit)
-    command("git", "push", "origin", f"refs/tags/{tag}")
-    log("tag_created", tag=tag, commit=commit)
+    """Require the immutable source tag created by source_train, never create it."""
+    version_tuple(tag.removeprefix('v'))
+    remote = command('git', 'ls-remote', '--refs', 'origin', f'refs/tags/{tag}')
+    if not remote:
+        raise ValueError('source tag must exist before GitHub Release publication')
+    command('git', 'fetch', '--no-tags', '--refmap=', 'origin', f'refs/tags/{tag}')
+    if command('git', 'rev-parse', 'FETCH_HEAD^{commit}') != commit:
+        raise ValueError('remote source tag differs from published candidate')
+    log('source_tag_verified', tag=tag, commit=commit)
 
 
 def release_info(tag: str) -> dict | None:

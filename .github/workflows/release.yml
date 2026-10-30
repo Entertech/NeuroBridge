@@ -1,17 +1,30 @@
 name: Release
 
-# Called by Test only for a version-advancing master push after all tests pass.
-# Manual dispatch remains available for candidate builds. Both entrances also
-# check the last successful public release before any packaging starts.
+# Packaging interface only. Source train owns publication receipts, tags and finalization.
+# Manual dispatch builds candidates without creating a tag or GitHub Release.
 on:
   workflow_call:
     inputs:
+      source_sha:
+        type: string
+        required: true
+      source_branch:
+        type: string
+        required: true
+      source_train:
+        type: boolean
+        default: false
       native_input_run_id:
         type: string
         default: ''
       external_document_mode:
         type: string
         default: publish
+    outputs:
+      artifact_id:
+        value: ${{ jobs.release-aggregate.outputs.artifact_id }}
+      archive_sha256:
+        value: ${{ jobs.release-aggregate.outputs.archive_sha256 }}
   workflow_dispatch:
     inputs:
       native_input_run_id:
@@ -31,11 +44,11 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: ${{ github.sha }}
-  SOURCE_BRANCH: ${{ github.ref_name }}
+  SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+  SOURCE_BRANCH: ${{ inputs.source_branch || github.ref_name }}
 
 concurrency:
-  group: release-source-${{ github.repository }}-${{ github.sha }}
+  group: package-source-${{ github.repository }}-${{ inputs.source_sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -63,7 +76,7 @@ jobs:
           test "$state" = true || test "$state" = false
           echo "has_unpublished=$state" >> "$GITHUB_OUTPUT"
       - name: Require publication state before release
-        if: steps.external-document-state.outputs.has_unpublished == 'true' && (github.event_name == 'push' || inputs.external_document_mode == 'publish')
+        if: steps.external-document-state.outputs.has_unpublished == 'true' && (inputs.source_train || inputs.external_document_mode == 'publish')
         run: |
           echo "External documents must be promoted and locked before a release package is built." >&2
           echo "Run: python3 tools/mark-external-documents-published.py --date YYYY-MM-DD" >&2
@@ -145,7 +158,7 @@ jobs:
 
   release-plan:
     name: Release version gate and 32-target plan
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    if: github.event_name == 'workflow_dispatch' || inputs.source_train
     runs-on: ubuntu-22.04
     outputs:
       should_release: ${{ steps.plan.outputs.should_release }}
@@ -170,7 +183,7 @@ jobs:
           gate_args=(--repository "$GITHUB_REPOSITORY")
           # A manual feature-branch bundle uses the same baseline as its PR;
           # unpublished intermediate versions are not public release state.
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$SOURCE_BRANCH" != "$DEFAULT_BRANCH" ]]; then
+          if [[ "${{ inputs.source_train }}" != true && "$SOURCE_BRANCH" != "$DEFAULT_BRANCH" ]]; then
             gate_args=(--base "origin/$DEFAULT_BRANCH")
           fi
           python tools/release_pipeline.py gate "${gate_args[@]}" --output "$RUNNER_TEMP/release-gate.json"
@@ -342,7 +355,7 @@ jobs:
         env:
           # `push_master` is the only trigger that enforces the minimum-package
           # gate, so a manual branch build is deliberately the relaxed mode.
-          RELEASE_TRIGGER: ${{ github.event_name == 'push' && 'push_master' || 'pull_request' }}
+          RELEASE_TRIGGER: ${{ inputs.source_train && 'push_master' || 'pull_request' }}
         run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER"
       - name: Install delivery directory PDF renderer
         run: |
@@ -358,9 +371,6 @@ jobs:
             --release-dir artifacts/release \
             --documents-dir artifacts/documents \
             --output artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
-          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
-            python -m tools.publish_release --reuse-bundle artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
-          fi
           printf 'archive_sha256=%s\n' "$(sha256sum artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - name: Check directory PDF and render every page
         run: |
@@ -387,48 +397,30 @@ jobs:
           path: artifacts/directory-guide-preview/
           if-no-files-found: error
           retention-days: 30
+      - name: Verify every defined installer and persist the pre-upload receipt
+        if: inputs.source_train
+        run: |
+          python -m tools.source_train verify-package \
+            --version "${{ needs.release-plan.outputs.version }}" --candidate "$SOURCE_SHA" \
+            --directory artifacts/release > "$RUNNER_TEMP/package-receipt.json"
+      - uses: actions/upload-artifact@v4
+        if: inputs.source_train
+        with:
+          name: train-package-receipt-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/package-receipt.json
+          if-no-files-found: error
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         id: upload
         with:
           name: verified-release-${{ env.SOURCE_SHA }}
           path: artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
           if-no-files-found: error
-          retention-days: 30
-
-  release-publish:
-    name: Publish verified release
-    needs: [release-plan, release-aggregate]
-    if: needs.release-plan.outputs.should_release == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.release-aggregate.result == 'success'
-    runs-on: ubuntu-22.04
-    concurrency:
-      group: release-${{ github.repository }}-${{ needs.release-plan.outputs.version }}
-      cancel-in-progress: false
-    permissions:
-      contents: write
-      actions: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_SHA }}
-          fetch-depth: 0
-          persist-credentials: true
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ needs.release-aggregate.outputs.artifact_id }}
-          merge-multiple: true
-          path: artifacts/release
-      - name: Verify uploaded Artifact, create tag and publish Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_ARCHIVE_SHA256: ${{ needs.release-aggregate.outputs.archive_sha256 }}
-        run: python -m tools.publish_release --dir artifacts/release --expected-sha256 "$EXPECTED_ARCHIVE_SHA256"
+          retention-days: 90
 
   release-cleanup:
     name: Remove release intermediate artifacts
-    needs: [release-plan, release-aggregate, release-publish, product-candidates]
+    needs: [release-plan, release-aggregate, product-candidates]
     if: always() && needs.release-aggregate.result == 'success'
     runs-on: ubuntu-22.04
     permissions:
