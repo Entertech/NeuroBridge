@@ -88,7 +88,7 @@ class NativeInputsWorkflowTests(unittest.TestCase):
         self.assertNotIn("tools/build-product-candidate.py", block)
         # Failures must retain the target report even when native packaging fails.
         self.assertRegex(block, r"(?s)Verify target package and write result log\s+if: always\(\)")
-        self.assertRegex(block, r"(?s)uses: actions/upload-artifact@v4\s+if: always\(\)")
+        self.assertRegex(block, r"uses: actions/upload-artifact@[a-f0-9]{40}[^\n]*\n\s+if: always\(\)")
 
     def test_release_collects_every_record_before_deciding_platform_minimums(self) -> None:
         targets = job_block("release-targets", WORKFLOW.with_name("release.yml"))

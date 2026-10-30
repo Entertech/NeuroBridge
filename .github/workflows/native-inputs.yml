@@ -40,17 +40,19 @@ jobs:
           - id: windows-11-x86_64-msi
             blocked_reason: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.source_ref }}
       - name: Prepare artifact directory
         shell: powershell
         run: New-Item -ItemType Directory -Force -Path artifacts\input | Out-Null
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         if: matrix.blocked_reason == ''
         with:
-          python-version: "3.11"
+          python-version: "${{ runner.os == 'Windows' && '3.11.9' || '3.11.17' }}"
           architecture: x64
+      - name: Check locked build host
+        run: python tools/build_environment.py check-host
       - name: Prepare the locked Windows runtime
         if: matrix.blocked_reason == ''
         shell: powershell
@@ -59,11 +61,8 @@ jobs:
         if: matrix.blocked_reason == ''
         shell: powershell
         run: |
-          dotnet tool install --global wix --version 7.0.0
-          "${env:USERPROFILE}\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          wix eula accept wix7
-          wix extension add WixToolset.BootstrapperApplications.wixext/7.0.0 --global
-          wix --version
+          python tools/build_environment.py windows-tools
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build native installer from source
         id: build
         if: matrix.blocked_reason == ''
@@ -118,20 +117,30 @@ jobs:
           } elseif ($outcome -eq 'blocked') {
             Write-Host "::notice title=$($env:TARGET_ID)::$reason"
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: neurobridge-input-${{ matrix.id }}
           path: artifacts/input/
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: neurobridge-status-${{ matrix.id }}
           path: status/
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Retain Windows build environment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-environment-native-input-${{ matrix.id }}-${{ github.run_attempt }}
+          path: .runtime/build-environment/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
 
   kylin:
     name: Kylin native input ${{ matrix.id }}
@@ -151,7 +160,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(inputs.platforms == 'all' && '[{"id":"kylin-server-x86_64-deb","architecture":"x86_64"},{"id":"kylin-server-x86_64-rpm","architecture":"x86_64"},{"id":"kylin-desktop-x86_64-deb","architecture":"x86_64"},{"id":"kylin-desktop-x86_64-rpm","architecture":"x86_64"},{"id":"kylin-server-arm64-deb","architecture":"arm64"},{"id":"kylin-server-arm64-rpm","architecture":"arm64"},{"id":"kylin-server-loongarch64-deb","architecture":"loongarch64"},{"id":"kylin-server-loongarch64-rpm","architecture":"loongarch64"},{"id":"kylin-server-mips64el-deb","architecture":"mips64el"},{"id":"kylin-server-mips64el-rpm","architecture":"mips64el"},{"id":"kylin-server-sw64-deb","architecture":"sw64"},{"id":"kylin-server-sw64-rpm","architecture":"sw64"},{"id":"kylin-desktop-arm64-deb","architecture":"arm64"},{"id":"kylin-desktop-arm64-rpm","architecture":"arm64"},{"id":"kylin-desktop-loongarch64-deb","architecture":"loongarch64"},{"id":"kylin-desktop-loongarch64-rpm","architecture":"loongarch64"},{"id":"kylin-desktop-mips64el-deb","architecture":"mips64el"},{"id":"kylin-desktop-mips64el-rpm","architecture":"mips64el"},{"id":"kylin-desktop-sw64-deb","architecture":"sw64"},{"id":"kylin-desktop-sw64-rpm","architecture":"sw64"}]' || '[{"id":"kylin-server-x86_64-deb","architecture":"x86_64"},{"id":"kylin-server-x86_64-rpm","architecture":"x86_64"},{"id":"kylin-desktop-x86_64-deb","architecture":"x86_64"},{"id":"kylin-desktop-x86_64-rpm","architecture":"x86_64"}]') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.source_ref }}
       - name: Build the native Kylin installer from source
@@ -255,14 +264,14 @@ jobs:
             printf '::notice title=%s::%s\n' "$TARGET_ID" "$reason"
           fi
           exit 0
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: neurobridge-input-${{ matrix.id }}
           path: artifacts/input/
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: neurobridge-status-${{ matrix.id }}
@@ -281,8 +290,8 @@ jobs:
     steps:
       # The renderer comes from the ref that runs the workflow, not from
       # source_ref, so the record format always matches the workflow itself.
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         continue-on-error: true
         with:
           pattern: neurobridge-status-*

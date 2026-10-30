@@ -140,8 +140,8 @@ class NativeServiceTests(unittest.TestCase):
             subprocess.run([sys.executable, '-m', 'venv',
                             str(root / '.runtime/windows-venv')], check=True, timeout=60)
             venv_python = root / '.runtime/windows-venv/Scripts/python.exe'
-            subprocess.run([str(venv_python), '-m', 'pip', 'install', '--disable-pip-version-check',
-                            '-r', str(ROOT / 'requirements.lock')], check=True, timeout=180)
+            subprocess.run([str(venv_python), str(ROOT / 'tools/build_environment.py'),
+                            'python', '--runtime'], check=True, timeout=180)
             python = Path(sys._base_executable)
             url = subprocess.check_output([str(venv_python), str(root / 'windows/gateway_helper.py'), 'url'],
                                           text=True, timeout=10).strip()

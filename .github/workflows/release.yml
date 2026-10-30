@@ -57,17 +57,17 @@ jobs:
     # Both automatic and manual builds must pass the public-release gate.
     needs: [release-plan]
     if: needs.release-plan.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.SOURCE_SHA }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.12"
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.lock
-      - run: python -m pip install --no-deps -e .
+          python-version: "3.12.15"
+      - name: Check locked build host
+        run: python tools/build_environment.py check-host
+      - run: python tools/build_environment.py python --runtime --editable
       - run: bash tools/check-external-protocol.sh
       - name: Detect unpublished external documents
         id: external-document-state
@@ -83,8 +83,7 @@ jobs:
           exit 1
       - name: Install protocol PDF renderer
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
+          python tools/build_environment.py docs
           fc-cache -f
           fc-match "Noto Sans CJK SC" | grep -Eqi "Noto.*CJK"
       - name: Build external document PDF package and page previews
@@ -105,11 +104,21 @@ jobs:
             pdftoppm -png -r 144 "$pdf_path" "artifacts/document-preview/$name"
           done
           test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 6
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: external-document-package
           path: artifacts/
           if-no-files-found: error
+          retention-days: 90
+
+      - name: Retain build environment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-environment-external-documents-${{ strategy.job-index || '0' }}-${{ github.run_attempt }}
+          path: .runtime/build-environment/
+          include-hidden-files: true
+          if-no-files-found: warn
           retention-days: 90
 
   product-candidates:
@@ -122,16 +131,18 @@ jobs:
       matrix:
         include:
           - platform: kylin
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
           - platform: windows
-            runner: windows-latest
+            runner: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.SOURCE_SHA }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.11"
+          python-version: "${{ runner.os == 'Windows' && '3.11.9' || '3.11.17' }}"
+      - name: Check locked build host
+        run: python tools/build_environment.py check-host
       - name: Assemble installable Windows runtime
         if: matrix.platform == 'windows'
         shell: powershell
@@ -145,7 +156,7 @@ jobs:
           fi
           python tools/build-product-candidate.py --platform ${{ matrix.platform }} --output-dir artifacts --require-clean "${runtime_args[@]}"
       - name: Upload unsigned candidate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: neurobridge-${{ matrix.platform }}-unsigned-candidate
           path: |
@@ -156,6 +167,16 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Retain build environment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-environment-product-candidates-${{ strategy.job-index || '0' }}-${{ github.run_attempt }}
+          path: .runtime/build-environment/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
+
   release-plan:
     name: Release version gate and 32-target plan
     if: github.event_name == 'workflow_dispatch' || inputs.source_train
@@ -165,13 +186,15 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.11'
+          python-version: "${{ runner.os == 'Windows' && '3.11.9' || '3.11.17' }}"
+      - name: Check locked build host
+        run: python tools/build_environment.py check-host
       - name: Validate application version and plan targets
         id: plan
         env:
@@ -212,7 +235,7 @@ jobs:
             printf 'business code without a bump fails the gate instead of being skipped here.\n'
           } >> "$GITHUB_STEP_SUMMARY"
           printf '::notice title=release skipped::application version is still %s; nothing was packaged\n' "$VERSION"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-plan-${{ env.SOURCE_SHA }}
           path: |
@@ -220,6 +243,16 @@ jobs:
             ${{ runner.temp }}/release-matrix.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Retain build environment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-environment-release-plan-${{ strategy.job-index || '0' }}-${{ github.run_attempt }}
+          path: .runtime/build-environment/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
 
   release-targets:
     name: Release target ${{ matrix.id }}
@@ -233,19 +266,21 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.SOURCE_SHA }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.11'
+          python-version: "${{ runner.os == 'Windows' && '3.11.9' || '3.11.17' }}"
       # The Kylin deliverable is the bootstrap package. It is built here from
       # the checked-out source and does not consume a prebuilt runtime input.
+      - name: Check locked build host
+        run: python tools/build_environment.py check-host
       - name: Restore approved Kylin dependency cache
         id: kylin-cache
         continue-on-error: true
         if: matrix.platform == 'kylin'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .runtime/kylin-bootstrap-inputs
           key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
@@ -263,7 +298,7 @@ jobs:
           mkdir -p "artifacts/targets/${{ matrix.id }}"
           exec > >(tee "artifacts/targets/${{ matrix.id }}/input-fetch.log") 2>&1
           trap 'status=$?; if [[ $status -ne 0 ]]; then printf "blocked: Kylin dependency/package build failed exit_code=%s; see this log\n" "$status"; fi' EXIT
-          sudo apt-get update && sudo apt-get install -y dpkg-dev
+          python tools/build_environment.py deb
           python tools/prepare-kylin-bootstrap-inputs.py
           python tools/build-kylin-bootstrap-package.py --format deb --output-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}"
           python tools/write-kylin-bootstrap-verification.py \
@@ -319,13 +354,23 @@ jobs:
             --target "$TARGET_ID" \
             --input-root "$RUNNER_TEMP/release-inputs" \
             --output-root artifacts/targets
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: release-target-${{ matrix.id }}
           path: artifacts/targets/
           if-no-files-found: error
           retention-days: 30
+
+      - name: Retain build environment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-environment-release-targets-${{ strategy.job-index || '0' }}-${{ github.run_attempt }}
+          path: .runtime/build-environment/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
 
   release-aggregate:
     name: Verify packages and assemble one release ZIP
@@ -336,18 +381,20 @@ jobs:
       archive_sha256: ${{ steps.bundle.outputs.archive_sha256 }}
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.SOURCE_SHA }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.11'
-      - uses: actions/download-artifact@v4
+          python-version: "${{ runner.os == 'Windows' && '3.11.9' || '3.11.17' }}"
+      - name: Check locked build host
+        run: python tools/build_environment.py check-host
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: release-target-*
           path: artifacts/targets
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: external-document-package
           path: artifacts/documents
@@ -359,8 +406,7 @@ jobs:
         run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER"
       - name: Install delivery directory PDF renderer
         run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
+          python tools/build_environment.py docs
           fc-cache -f
       - name: Assemble one user-facing release bundle
         id: bundle
@@ -391,7 +437,7 @@ jobs:
           PY
           fi
           pdftoppm -png -r 144 "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" artifacts/directory-guide-preview/page
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: delivery-directory-guide-preview-${{ env.SOURCE_SHA }}
           path: artifacts/directory-guide-preview/
@@ -403,19 +449,29 @@ jobs:
           python -m tools.source_train verify-package \
             --version "${{ needs.release-plan.outputs.version }}" --candidate "$SOURCE_SHA" \
             --directory artifacts/release > "$RUNNER_TEMP/package-receipt.json"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: inputs.source_train
         with:
           name: train-package-receipt-${{ env.SOURCE_SHA }}
           path: ${{ runner.temp }}/package-receipt.json
           if-no-files-found: error
           retention-days: 90
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         id: upload
         with:
           name: verified-release-${{ env.SOURCE_SHA }}
           path: artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
           if-no-files-found: error
+          retention-days: 90
+
+      - name: Retain build environment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-environment-release-aggregate-${{ strategy.job-index || '0' }}-${{ github.run_attempt }}
+          path: .runtime/build-environment/
+          include-hidden-files: true
+          if-no-files-found: warn
           retention-days: 90
 
   release-cleanup:

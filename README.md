@@ -16,6 +16,8 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 手动运行 `Release` 可直接构建 Windows 原生安装包，或复用同分支、同提交并通过校验的 `native_input_run_id`。正式发版从 `Source version train` 的显式 `release` 操作进入；重试恢复原候选 SHA 和已验证的 Artifact，不重新初始化版本、移动 tag 或重复发送成功的发布结果。
 
+构建环境由 [`config/build-environment.lock.json`](config/build-environment.lock.json) 和带 wheel 哈希的构建依赖清单锁定。CI 校验托管镜像版本、完整 Python/Node 版本和 Actions 提交；APT 使用固定快照及包版本，Windows 使用独立的 .NET/WiX 输入，PDF 使用固定 Chrome。镜像漂移、下载摘要不符或快照缺失会停止，不回退到最新版本。维护步骤与托管镜像保留限制见[构建环境锁定说明](doc/tech/源码原生安装包构建.md#构建环境和依赖锁定)。源码检查不表示新环境已完成目标机安装验收。
+
 ## 可运行网关与部署
 
 2026-09-09 用户确认：Windows 10 专业版 22H2（OS 内部版本 19045.6466，x64；Inspiron 7559、i7-6700HQ、16 GB RAM）与银河麒麟 V10 SP1 2503 均已运行联调成功。系统与硬件信息已由用户截图确认；具体证据范围和仍待补齐的专项验收记录见[内部运行手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md#已验证环境2026-09-09-用户确认)。

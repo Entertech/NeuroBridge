@@ -23,15 +23,17 @@ jobs:
     name: Build the Kylin bootstrap deb
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ env.SOURCE_SHA }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.11"
+          python-version: "${{ runner.os == 'Windows' && '3.11.9' || '3.11.17' }}"
+      - name: Check locked build host
+        run: python tools/build_environment.py check-host
       - name: Install dpkg-deb
-        run: sudo apt-get update && sudo apt-get install -y dpkg-dev
-      - uses: actions/cache/restore@v4
+        run: python tools/build_environment.py deb
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: kylin-cache
         with:
           path: .runtime/kylin-bootstrap-inputs
@@ -39,7 +41,7 @@ jobs:
       - name: Prepare missing locked dependency cache
         if: steps.kylin-cache.outputs.cache-hit != 'true'
         run: python tools/prepare-kylin-bootstrap-inputs.py --download
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         if: steps.kylin-cache.outputs.cache-hit != 'true'
         with:
           path: .runtime/kylin-bootstrap-inputs
@@ -75,9 +77,18 @@ jobs:
             printf '%s\n' "$listing" | grep -q "$required" || { echo "missing: $required"; exit 1; }
           done
           dpkg-deb --info artifacts/*.deb
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: neurobridge-kylin-bootstrap-deb
           path: artifacts/*
           if-no-files-found: error
           retention-days: 30
+      - name: Retain build environment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-environment-deb-${{ strategy.job-index || '0' }}-${{ github.run_attempt }}
+          path: .runtime/build-environment/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90

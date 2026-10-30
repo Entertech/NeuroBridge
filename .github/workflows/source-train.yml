@@ -53,19 +53,21 @@ jobs:
           APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
         run: |
           test -n "$APP_ID" && test -n "$APP_KEY" || { echo 'Configure the repository release GitHub App before enabling source mutations.' >&2; exit 1; }
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         id: app
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           token: ${{ steps.app.outputs.token }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.11'
+          python-version: "${{ runner.os == 'Windows' && '3.11.9' || '3.11.17' }}"
+      - name: Check locked build host
+        run: python tools/build_environment.py check-host
       - name: Configure source commit identity
         run: |
           git config user.name 'NeuroBridge release automation'
@@ -115,6 +117,16 @@ jobs:
           esac
           python -m tools.source_train "${args[@]}"
 
+      - name: Retain build environment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-environment-source-${{ strategy.job-index || '0' }}-${{ github.run_attempt }}
+          path: .runtime/build-environment/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
+
   packages:
     # The reusable workflow cleans intermediate Artifacts with this token.
     # Called workflows cannot elevate the caller job's permissions.
@@ -135,20 +147,22 @@ jobs:
     if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.complete != 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         id: app
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.repository.default_branch }}
           token: ${{ steps.app.outputs.token }}
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.11'
-      - uses: actions/download-artifact@v4
+          python-version: "${{ runner.os == 'Windows' && '3.11.9' || '3.11.17' }}"
+      - name: Check locked build host
+        run: python tools/build_environment.py check-host
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           artifact-ids: ${{ needs.packages.outputs.artifact_id || needs.source.outputs.artifact_id }}
           run-id: ${{ needs.source.outputs.package_run_id }}
@@ -167,24 +181,36 @@ jobs:
           python -m tools.source_train record-artifact --version "$TRAIN_VERSION" --artifact-id "$TRAIN_ARTIFACT" --directory artifacts/source-train --execute
           python -m tools.source_train finalize --version "$TRAIN_VERSION" --directory artifacts/source-train --execute
 
+      - name: Retain build environment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-environment-finalize-${{ strategy.job-index || '0' }}-${{ github.run_attempt }}
+          path: .runtime/build-environment/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
+
   retain-failed-attempt:
     needs: [source, packages, finalize]
     if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && (needs.packages.result == 'failure' || needs.packages.result == 'cancelled' || needs.finalize.result == 'failure' || needs.finalize.result == 'cancelled')
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         id: app
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.repository.default_branch }}
           token: ${{ steps.app.outputs.token }}
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.11'
+          python-version: "${{ runner.os == 'Windows' && '3.11.9' || '3.11.17' }}"
+      - name: Check locked build host
+        run: python tools/build_environment.py check-host
       - name: Keep retry checkpoint and preserve every tagged candidate
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -195,3 +221,12 @@ jobs:
           git config user.name 'NeuroBridge release automation'
           git config user.email 'release-automation@users.noreply.github.com'
           python -m tools.source_train fail --version "$TRAIN_VERSION" --execute
+      - name: Retain build environment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-environment-retain-failed-attempt-${{ strategy.job-index || '0' }}-${{ github.run_attempt }}
+          path: .runtime/build-environment/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90

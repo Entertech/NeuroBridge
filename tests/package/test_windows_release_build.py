@@ -130,6 +130,9 @@ class WindowsReleaseBuildTests(unittest.TestCase):
     def test_windows_toolchain_and_native_builder_use_locked_inputs(self):
         steps = dict(pipeline.windows_build_steps(self.target, self.inputs / self.target))
         self.assertIn("tools/prepare-windows-candidate-runtime.ps1", " ".join(steps["runtime"]).replace("\\", "/"))
-        self.assertIn("7.0.0", steps["toolchain"])
-        self.assertIn("WixToolset.BootstrapperApplications.wixext/7.0.0", steps["extension"])
+        self.assertIn("tools/build_environment.py", " ".join(steps["toolchain"]).replace("\\", "/"))
+        self.assertIn("windows-tools", steps["toolchain"])
+        from tools.build_environment import load_lock
+        self.assertEqual(load_lock()["downloads"]["wix"]["version"], "7.0.0")
+        self.assertEqual(load_lock()["downloads"]["wixtoolset.bootstrapperapplications.wixext"]["version"], "7.0.0")
         self.assertIn("tools/build-native-package.py", " ".join(steps["package"]).replace("\\", "/"))

@@ -164,12 +164,11 @@ def gate(base: str) -> dict[str, object]:
 
 
 def windows_build_steps(target_id: str, source: Path) -> list[tuple[str, list[str]]]:
-    wix = str(Path.home() / ".dotnet/tools/wix.exe")
+    from tools.build_environment import TOOLS
+    wix = str(TOOLS / "wix/wix.exe")
     return [
         ("runtime", ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "tools/prepare-windows-candidate-runtime.ps1")]),
-        ("toolchain", ["dotnet", "tool", "install", "--global", "wix", "--version", "7.0.0"]),
-        ("license", [wix, "eula", "accept", "wix7"]),
-        ("extension", [wix, "extension", "add", "WixToolset.BootstrapperApplications.wixext/7.0.0", "--global"]),
+        ("toolchain", [sys.executable, str(ROOT / "tools/build_environment.py"), "windows-tools"]),
         ("toolchain-version", [wix, "--version"]),
         ("package", [sys.executable, str(ROOT / "tools/build-native-package.py"), "--target", target_id,
                      "--runtime-dir", str(ROOT / "artifacts/windows-runtime"), "--output-dir", str(source)]),
@@ -192,6 +191,7 @@ def build_windows_input(target_id: str, input_root: Path, output_root: Path) -> 
         path.unlink(missing_ok=True)
     outcome = {"targetId": target_id, "sourceCommit": run("git", "rev-parse", "HEAD"), "status": "building"}
     save_json(output / "build-outcome.json", outcome)
+    from tools.build_environment import windows_environment
     with (output / "windows-build.log").open("w", encoding="utf-8") as stream:
         for phase, args in windows_build_steps(target_id, source):
             log("windows_build_phase", targetId=target_id, phase=phase)
@@ -200,8 +200,7 @@ def build_windows_input(target_id: str, input_root: Path, output_root: Path) -> 
             try:
                 with subprocess.Popen(args, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, encoding="utf-8", errors="replace",
-                                      env={**os.environ, "PYTHONIOENCODING": "utf-8",
-                                           "PATH": str(Path.home() / ".dotnet/tools") + os.pathsep + os.environ.get("PATH", "")}) as process:
+                                      env={**windows_environment(), "PYTHONIOENCODING": "utf-8"}) as process:
                     assert process.stdout is not None
                     for line in process.stdout:
                         stream.write(line)
