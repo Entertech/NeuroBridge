@@ -1,0 +1,2 @@
+# CI-only workflow parser; do not include in gateway deployment dependencies.
+PyYAML==6.0.2

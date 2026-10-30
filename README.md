@@ -4,9 +4,9 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于 M1 验收范围。
 
-发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。应用版本递增的 `master` 合入尝试全部 5 个包目标；Windows 和麒麟各至少一个合格包、两个平台 ZIP、总 ZIP、清单和日志本地校验成功后，先上传 Actions Artifact，回下载核对上传前总 ZIP 的 SHA-256 和内容，再创建 tag、draft GitHub Release，资产复验后公开。发布基线取带总 ZIP 的已公开正式应用 Release；孤立 tag 和 draft 不代表发布成功，首次发布沿版本历史寻找递增前基线。版本不变的合入记录跳过发布，未完成目标逐项列明。只有软件业务源码变更强制升版；纯 CI、构建/发布工具、安装脚本、文档、测试、依赖清单和台账记录可保持版本，同版本合入跳过打包、发布和打 tag。产品版本统一取版本台账的 `[application].version`；旧平台版本字段不参与新发布。当前不启用签名或公证，真机验证结果通过独立补充附件持续记录。
+源码发布采用 `需求分支 → dev_B → publish_B → 独立候选提交 → 打包与发布验证 → vB → finalize_B → master`。需求开发不升版，用户选定版本和需求范围后才初始化版本；各阶段 PR 和 push 只做代码检查，合入 `master` 不再自动发版。源码流程通过 GitHub App 编排，配置见 [code-release-train.toml](.release/code-release-train.toml)，操作和启用条件见[发布技术方案](doc/tech/发布工作流技术方案.md)。
 
-发布实现见[发布工作流技术方案](doc/tech/发布工作流技术方案.md)。Release 默认在 Windows runner 从本次源码及锁定运行时构建 Windows 10/11 x64 EXE/MSI，通过原生格式、源码提交和摘要校验后纳入汇总；麒麟引导 DEB 从源码和离线输入打包。PR 只执行校验，不打包；单个 Windows 构建失败时记录 `failed`、阶段、退出码和诊断日志，继续收集其他目标；合入 `master` 后，两平台最低门槛未满足时发布失败。日志位于 `release-target-<targetId>` Artifact。源码候选包不算正式安装包，CI 构建通过也不代表目标机验收通过。
+已有 Windows 10/11 x64 EXE/MSI 和麒麟 DEB 构建由 `Release` 提供打包接口。训练发布要求全部 5 个安装包通过校验；总 ZIP 上传 Actions Artifacts 并回下载验证后，由源码流程给同一候选提交打不可变 tag，再创建 GitHub Release 下载入口和最终合入 PR。只有远端 tag 身份及默认分支祖先校验通过，才算发布完成。手动 `Release` 与 `Kylin bootstrap package` 仍可构建诊断候选，不创建 tag。应用版本仍以台账 `[application].version` 为准；旧平台字段不自动递增，不改变协议版本或目标机验收状态。
 
 原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。
 
@@ -14,9 +14,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 麒麟通用包只声明共用系统依赖；x86_64 不要求 Python 源码开发库。其余源码 Profile 在构建前检查 SSL/sqlite/bzip2/xz/ffi/zlib 头文件与链接库，失败日志列出缺项和补齐命令。旧候选包在 dpkg 依赖阶段失败时，恢复步骤见[内部手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md#安装前环境与依赖)。
 
-手动运行 `Release` 时可留空 `native_input_run_id`，在本次运行直接构建 Windows 原生安装包；也可填写同分支、同源码提交且已成功的原生安装包运行 ID，复用其 `neurobridge-input-<targetId>` Artifact。自动 Release 使用直接构建路径；麒麟引导包独立构建。
-
-同提交的发布运行串行执行。若上一轮已上传总 ZIP，重试会先校验 Release 中登记的源码和原包摘要、下载检查包内容及安装包一致性，再复用原 ZIP 上传 Actions Artifact，继续公开 Release。PDF 重生成产生的时间差不会替换原资产；安装包或目标结果变化则拒绝复用。
+手动运行 `Release` 可直接构建 Windows 原生安装包，或复用同分支、同提交并通过校验的 `native_input_run_id`。正式发版从 `Source version train` 的显式 `release` 操作进入；重试恢复原候选 SHA 和已验证的 Artifact，不重新初始化版本、移动 tag 或重复发送成功的发布结果。
 
 ## 可运行网关与部署
 

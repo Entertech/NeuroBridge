@@ -1,25 +1,37 @@
 name: Test
 
-# This workflow only validates.  Packaging lives in release.yml, which runs
-# after this workflow succeeds on master or on a manual dispatch, so a pull
-# request never produces a package.
+# Code checks only. Source train publication is an explicit, separately reviewed operation.
 on:
   pull_request:
-    branches: [master]
+    branches: [master, 'feature/**', 'bugfix/**', 'codex/**', 'dev_*', 'publish_*', 'release-candidate/**', 'finalize_*']
   push:
-    branches: [master]
+    branches: [master, 'feature/**', 'bugfix/**', 'codex/**', 'dev_*', 'publish_*', 'release-candidate/**', 'finalize_*']
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  source-train-checks:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-ci.lock
+      - name: Lint workflow syntax and expressions
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color -shellcheck= -pyflakes= .github/workflows/ci.yml .github/workflows/source-train.yml .github/workflows/release.yml .github/workflows/kylin-bootstrap.yml
+      - name: Check source stages, required jobs and reusable workflow permissions
+        run: python -m tools.check_source_train_workflows
+      - name: Exercise source recovery and protected finalization
+        run: python -m unittest discover -s tests/source_train_contracts -v
+
   version-gate:
     name: Application version gate
-    # release.yml only runs after a push to master, so the gate has to run here
-    # too, or a PR could merge business code changes with no version bump.  This
-    # is a check, not packaging: it produces no artifact.
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -31,9 +43,15 @@ jobs:
           # this runner's default python3 is older.
           python-version: '3.11'
       - name: Require a version bump when business code changes
+        id: gate
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python tools/release_pipeline.py gate --base "$BASE_SHA" --output "$RUNNER_TEMP/release-gate.json"
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m tools.source_train check --branch "$SOURCE_BRANCH" --base "$BASE_SHA" --head "$SOURCE_HEAD" > "$RUNNER_TEMP/release-gate.json"
+          echo 'Code validation only; package publication requires an approved source train.' >> "$GITHUB_STEP_SUMMARY"
 
   windows-launcher:
     runs-on: windows-2022
@@ -44,6 +62,9 @@ jobs:
           python-version: "3.11"
           architecture: x64
       - run: python -m pip install -r requirements.lock
+      - run: python -m pip install -r requirements-ci.lock
+      - name: Verify source train contracts with Windows Git and Python
+        run: python -m unittest discover -s tests/source_train_contracts -v
       - name: Validate Windows PowerShell 5.1 syntax
         shell: powershell
         run: |
@@ -121,6 +142,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.lock
+      - run: python -m pip install -r requirements-ci.lock
       - run: python -m pip install --no-deps -e .
       - run: python -m unittest discover -s tests -v
       - uses: actions/setup-node@v4

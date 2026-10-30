@@ -1,26 +1,30 @@
 name: Release
 
-# Packaging is deliberately kept out of the pull-request pipeline: a PR only
-# validates, it never produces a package.  There are exactly two ways in:
-#
-#   * after the "Test" workflow completes successfully on master, so a release
-#     stays gated on the test suite without putting the release jobs back into
-#     ci.yml; and
-#   * a manual dispatch, which packages the latest commit of any branch.
-#
-# `workflow_run` reports the default-branch tip in github.sha, so every
-# reference to the source commit goes through SOURCE_SHA / SOURCE_BRANCH.
-#
-# A workflow_run fires for *every* completion of "Test" — a failed run and a
-# hand-dispatched run included — so release-plan gates on a push-triggered,
-# successful run.  Every other packaging job hangs off release-plan, which
-# propagates that guard (a skipped job yields empty outputs) and keeps a push
-# that needs no release from producing anything.
+# Packaging interface only. Source train owns publication receipts, tags and finalization.
+# Manual dispatch builds candidates without creating a tag or GitHub Release.
 on:
-  workflow_run:
-    workflows: ["Test"]
-    types: [completed]
-    branches: [master]
+  workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      source_branch:
+        type: string
+        required: true
+      source_train:
+        type: boolean
+        default: false
+      native_input_run_id:
+        type: string
+        default: ''
+      external_document_mode:
+        type: string
+        default: publish
+    outputs:
+      artifact_id:
+        value: ${{ jobs.release-aggregate.outputs.artifact_id }}
+      archive_sha256:
+        value: ${{ jobs.release-aggregate.outputs.archive_sha256 }}
   workflow_dispatch:
     inputs:
       native_input_run_id:
@@ -40,18 +44,17 @@ permissions:
   contents: read
 
 env:
-  SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-  SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+  SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+  SOURCE_BRANCH: ${{ inputs.source_branch || github.ref_name }}
 
 concurrency:
-  group: release-source-${{ github.repository }}-${{ github.event.workflow_run.head_sha || github.sha }}
+  group: package-source-${{ github.repository }}-${{ inputs.source_sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
   external-documents:
     name: Build the external document package
-    # Hangs off release-plan, so a failed Test run, a hand-dispatched Test run
-    # and a push that needs no release all skip it without repeating the guard.
+    # Both automatic and manual builds must pass the public-release gate.
     needs: [release-plan]
     if: needs.release-plan.outputs.should_release == 'true'
     runs-on: ubuntu-latest
@@ -73,7 +76,7 @@ jobs:
           test "$state" = true || test "$state" = false
           echo "has_unpublished=$state" >> "$GITHUB_OUTPUT"
       - name: Require publication state before release
-        if: steps.external-document-state.outputs.has_unpublished == 'true' && (github.event_name == 'workflow_run' || inputs.external_document_mode == 'publish')
+        if: steps.external-document-state.outputs.has_unpublished == 'true' && (inputs.source_train || inputs.external_document_mode == 'publish')
         run: |
           echo "External documents must be promoted and locked before a release package is built." >&2
           echo "Run: python3 tools/mark-external-documents-published.py --date YYYY-MM-DD" >&2
@@ -155,7 +158,7 @@ jobs:
 
   release-plan:
     name: Release version gate and 32-target plan
-    if: github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
+    if: github.event_name == 'workflow_dispatch' || inputs.source_train
     runs-on: ubuntu-22.04
     outputs:
       should_release: ${{ steps.plan.outputs.should_release }}
@@ -180,7 +183,7 @@ jobs:
           gate_args=(--repository "$GITHUB_REPOSITORY")
           # A manual feature-branch bundle uses the same baseline as its PR;
           # unpublished intermediate versions are not public release state.
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$SOURCE_BRANCH" != "$DEFAULT_BRANCH" ]]; then
+          if [[ "${{ inputs.source_train }}" != true && "$SOURCE_BRANCH" != "$DEFAULT_BRANCH" ]]; then
             gate_args=(--base "origin/$DEFAULT_BRANCH")
           fi
           python tools/release_pipeline.py gate "${gate_args[@]}" --output "$RUNNER_TEMP/release-gate.json"
@@ -268,7 +271,7 @@ jobs:
             --input-dir "$RUNNER_TEMP/release-inputs/${{ matrix.id }}"
       # Automatic releases have no workflow_dispatch inputs. Build real native
       # installers here instead of waiting for a native_input_run_id that can
-      # never be supplied by workflow_run. Source ZIP candidates are unrelated.
+      # never be supplied by the automatic call. Source ZIP candidates are unrelated.
       - name: Build Windows native release input
         if: matrix.platform == 'windows' && inputs.native_input_run_id == ''
         shell: bash
@@ -352,7 +355,7 @@ jobs:
         env:
           # `push_master` is the only trigger that enforces the minimum-package
           # gate, so a manual branch build is deliberately the relaxed mode.
-          RELEASE_TRIGGER: ${{ github.event_name == 'workflow_run' && 'push_master' || 'pull_request' }}
+          RELEASE_TRIGGER: ${{ inputs.source_train && 'push_master' || 'pull_request' }}
         run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER"
       - name: Install delivery directory PDF renderer
         run: |
@@ -368,9 +371,6 @@ jobs:
             --release-dir artifacts/release \
             --documents-dir artifacts/documents \
             --output artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
-            python -m tools.publish_release --reuse-bundle artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
-          fi
           printf 'archive_sha256=%s\n' "$(sha256sum artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - name: Check directory PDF and render every page
         run: |
@@ -397,48 +397,30 @@ jobs:
           path: artifacts/directory-guide-preview/
           if-no-files-found: error
           retention-days: 30
+      - name: Verify every defined installer and persist the pre-upload receipt
+        if: inputs.source_train
+        run: |
+          python -m tools.source_train verify-package \
+            --version "${{ needs.release-plan.outputs.version }}" --candidate "$SOURCE_SHA" \
+            --directory artifacts/release > "$RUNNER_TEMP/package-receipt.json"
+      - uses: actions/upload-artifact@v4
+        if: inputs.source_train
+        with:
+          name: train-package-receipt-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/package-receipt.json
+          if-no-files-found: error
+          retention-days: 90
       - uses: actions/upload-artifact@v4
         id: upload
         with:
           name: verified-release-${{ env.SOURCE_SHA }}
           path: artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
           if-no-files-found: error
-          retention-days: 30
-
-  release-publish:
-    name: Publish verified release
-    needs: [release-plan, release-aggregate]
-    if: needs.release-plan.outputs.should_release == 'true' && github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && needs.release-aggregate.result == 'success'
-    runs-on: ubuntu-22.04
-    concurrency:
-      group: release-${{ github.repository }}-${{ needs.release-plan.outputs.version }}
-      cancel-in-progress: false
-    permissions:
-      contents: write
-      actions: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.SOURCE_SHA }}
-          fetch-depth: 0
-          persist-credentials: true
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ needs.release-aggregate.outputs.artifact_id }}
-          merge-multiple: true
-          path: artifacts/release
-      - name: Verify uploaded Artifact, create tag and publish Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_ARCHIVE_SHA256: ${{ needs.release-aggregate.outputs.archive_sha256 }}
-        run: python -m tools.publish_release --dir artifacts/release --expected-sha256 "$EXPECTED_ARCHIVE_SHA256"
+          retention-days: 90
 
   release-cleanup:
-    name: Keep only the user-facing release artifact
-    needs: [release-plan, release-aggregate, release-publish, product-candidates]
+    name: Remove release intermediate artifacts
+    needs: [release-plan, release-aggregate, product-candidates]
     if: always() && needs.release-aggregate.result == 'success'
     runs-on: ubuntu-22.04
     permissions:
@@ -448,38 +430,14 @@ jobs:
       - name: Delete intermediate artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-          KEEP_ARTIFACT: verified-release-${{ env.SOURCE_SHA }}
         run: |
           gh api --paginate \
             "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts?per_page=100" \
             --jq '.artifacts[] | [.id, .name] | @tsv' |
           while IFS=$'\t' read -r artifact_id artifact_name; do
-            if [[ "$artifact_name" != "$KEEP_ARTIFACT" ]]; then
-              gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id"
-            fi
+            # Reusable Release shares the Test run; keep its diagnostic artifacts.
+            case "$artifact_name" in
+              release-plan-*|release-target-*|external-document-package|neurobridge-*-unsigned-candidate|delivery-directory-guide-preview-*)
+                gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id" ;;
+            esac
           done
-
-  report-skipped:
-    name: Explain why nothing was packaged
-    # Without this the run page is a wall of skipped jobs with no stated reason.
-    if: github.event_name == 'workflow_run' && !(github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Report the triggering run
-        env:
-          TEST_RUN_ID: ${{ github.event.workflow_run.id }}
-          TEST_RUN_URL: ${{ github.event.workflow_run.html_url }}
-          TEST_EVENT: ${{ github.event.workflow_run.event }}
-          TEST_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-        run: |
-          if [[ "$TEST_CONCLUSION" != "success" ]]; then
-            reason="the triggering Test run concluded $TEST_CONCLUSION"
-          else
-            reason="the triggering Test run was a $TEST_EVENT run rather than a push to master"
-          fi
-          {
-            printf '## No package was built\n\n'
-            printf 'Because %s, every packaging job was skipped.\n\n' "$reason"
-            printf 'Triggering run: [%s](%s)\n' "$TEST_RUN_ID" "$TEST_RUN_URL"
-          } >> "$GITHUB_STEP_SUMMARY"
-          printf '::notice title=release skipped::%s; nothing was packaged\n' "$reason"

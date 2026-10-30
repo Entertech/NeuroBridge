@@ -1,0 +1,197 @@
+name: Source version train
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        required: true
+        options: [initialize, select, promote, prepare, review, release, merge, verify]
+      version:
+        description: "明确选择 major.minor.patch；不默认创建版本"
+        type: string
+        required: true
+      requirements:
+        description: "initialize/select：选定的需求分支，以逗号分隔"
+        type: string
+      promotion_pr:
+        description: "prepare：已合并的 dev_B -> publish_B PR 编号"
+        type: string
+      candidate:
+        description: "review：人工审核通过的完整候选 SHA"
+        type: string
+  pull_request:
+    types: [closed]
+    branches: ['publish_*', master]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  # Repository-wide serialization also covers automatic prepare/verify events.
+  group: source-train-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged && github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'dev_') || startsWith(github.head_ref, 'finalize_')))
+    runs-on: ubuntu-22.04
+    outputs:
+      complete: ${{ steps.source.outputs.complete }}
+      operation: ${{ steps.route.outputs.operation }}
+      version: ${{ steps.route.outputs.version }}
+      candidate: ${{ steps.source.outputs.candidate }}
+      candidate_branch: ${{ steps.source.outputs.candidate_branch }}
+      should_package: ${{ steps.source.outputs.should_package }}
+      artifact_id: ${{ steps.source.outputs.artifact_id }}
+      package_run_id: ${{ steps.source.outputs.package_run_id }}
+    steps:
+      - name: Require the automation identity
+        env:
+          APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+          APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+        run: |
+          test -n "$APP_ID" && test -n "$APP_KEY" || { echo 'Configure the repository release GitHub App before enabling source mutations.' >&2; exit 1; }
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Configure source commit identity
+        run: |
+          git config user.name 'NeuroBridge release automation'
+          git config user.email 'release-automation@users.noreply.github.com'
+      - name: Resolve the selected train operation
+        id: route
+        env:
+          TRAIN_OPERATION: ${{ inputs.operation }}
+          TRAIN_VERSION: ${{ inputs.version }}
+          TRAIN_BASE: ${{ github.event.pull_request.base.ref }}
+          TRAIN_HEAD: ${{ github.event.pull_request.head.ref }}
+        run: |
+          python - <<'PY'
+          import os
+          from tools.source_train import numeric
+          operation, version = os.environ['TRAIN_OPERATION'], os.environ['TRAIN_VERSION']
+          if not operation:
+              base, head = os.environ['TRAIN_BASE'], os.environ['TRAIN_HEAD']
+              if base.startswith('publish_') and head.startswith('dev_') and base[8:] == head[4:]:
+                  operation, version = 'prepare', base[8:]
+              elif head.startswith('finalize_'):
+                  operation, version = 'verify', head[9:]
+              else:
+                  raise SystemExit('Unexpected source promotion route')
+          numeric(version)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('operation='+operation+'\nversion='+version+'\n')
+          PY
+      - name: Run source orchestration
+        id: source
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TRAIN_APP_TOKEN_USED: 'true'
+          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          TRAIN_OPERATION: ${{ steps.route.outputs.operation }}
+          TRAIN_VERSION: ${{ steps.route.outputs.version }}
+          TRAIN_REQUIREMENTS: ${{ inputs.requirements }}
+          TRAIN_PROMOTION: ${{ inputs.promotion_pr || github.event.pull_request.number }}
+          TRAIN_CANDIDATE: ${{ inputs.candidate }}
+        run: |
+          args=("$TRAIN_OPERATION" --version "$TRAIN_VERSION" --execute)
+          case "$TRAIN_OPERATION" in
+            initialize|select) args+=(--requirements "$TRAIN_REQUIREMENTS") ;;
+            prepare) args+=(--promotion "$TRAIN_PROMOTION") ;;
+            review) args+=(--candidate "$TRAIN_CANDIDATE") ;;
+            release) args=(begin-release --version "$TRAIN_VERSION" --execute) ;;
+          esac
+          python -m tools.source_train "${args[@]}"
+
+  packages:
+    # The reusable workflow cleans intermediate Artifacts with this token.
+    # Called workflows cannot elevate the caller job's permissions.
+    permissions:
+      contents: read
+      actions: write
+    needs: [source]
+    if: needs.source.outputs.operation == 'release' && needs.source.outputs.should_package == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      source_sha: ${{ needs.source.outputs.candidate }}
+      source_branch: ${{ needs.source.outputs.candidate_branch }}
+      source_train: true
+    secrets: inherit
+
+  finalize:
+    needs: [source, packages]
+    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.complete != 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ steps.app.outputs.token }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.packages.outputs.artifact_id || needs.source.outputs.artifact_id }}
+          run-id: ${{ needs.source.outputs.package_run_id }}
+          github-token: ${{ steps.app.outputs.token }}
+          path: artifacts/source-train
+      - name: Record verified Artifact, tag exact source, and open finalization PR
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TRAIN_APP_TOKEN_USED: 'true'
+          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          TRAIN_VERSION: ${{ needs.source.outputs.version }}
+          TRAIN_ARTIFACT: ${{ needs.packages.outputs.artifact_id || needs.source.outputs.artifact_id }}
+        run: |
+          git config user.name 'NeuroBridge release automation'
+          git config user.email 'release-automation@users.noreply.github.com'
+          python -m tools.source_train record-artifact --version "$TRAIN_VERSION" --artifact-id "$TRAIN_ARTIFACT" --directory artifacts/source-train --execute
+          python -m tools.source_train finalize --version "$TRAIN_VERSION" --directory artifacts/source-train --execute
+
+  retain-failed-attempt:
+    needs: [source, packages, finalize]
+    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && (needs.packages.result == 'failure' || needs.packages.result == 'cancelled' || needs.finalize.result == 'failure' || needs.finalize.result == 'cancelled')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ steps.app.outputs.token }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Keep retry checkpoint and preserve every tagged candidate
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TRAIN_APP_TOKEN_USED: 'true'
+          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          TRAIN_VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          git config user.name 'NeuroBridge release automation'
+          git config user.email 'release-automation@users.noreply.github.com'
+          python -m tools.source_train fail --version "$TRAIN_VERSION" --execute
