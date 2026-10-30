@@ -8,3 +8,16 @@ recordings/
 *.log
 config/gateway.toml
 config/ssh-operations.txt
+
+# Local IDE, agent state and diagnostic scratch files.
+/.idea/
+/.runtime/
+/.workbuddy-ai/
+/.workbuddy/
+.DS_Store
+
+# Generated delivery files, downloaded runtimes and dependency caches.
+/artifacts/
+/output/
+/python-runtime/
+/wheelhouse/

@@ -132,6 +132,28 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-10-30-b-client-probe-and-local-artifact-ignore"
+date = "2026-10-30"
+scope = "development_tooling"
+summary = "保留独立 B 端 WebSocket 收数检测工具至 tools，覆盖状态查询、按可用流订阅、有效实时/录播判别、退订和摘要输出；为 IDE/Agent 本地状态、运行缓存、下载依赖、ZIP/PDF 生成物增加目录级忽略规则，保留源码与配套说明。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求筛选必要文件提交并忽略本地产物；仅整理开发与交付辅助文件，不删除本地数据，不修改应用版本、报文版本、网关采集行为或已锁定对外协议。"
+
+[[change_records]]
+id = "2026-10-29-b-client-default-wired-endpoint"
+date = "2026-10-29"
+scope = "b_side_test_client"
+summary = "B 端联调网页预填与网关示例配置一致的 ws://192.168.88.10:8765/neurobridge/v1/ws，保留手动修改及采集服务注入地址的优先级，不自动建连；更新使用说明并重新生成独立网页 ZIP。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确要求先设置下载网页包的 WS 地址；本次仅调整联调页初始值，不修改网关监听配置、报文契约或已发布协议正文。默认地址为既有示例，现场其他地址仍需自行确认。"
+
+[[change_records]]
 id = "2026-10-29-ssh-optional-update-branch"
 date = "2026-10-29"
 scope = "gateway_deployment"

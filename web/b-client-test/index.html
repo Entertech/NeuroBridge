@@ -32,12 +32,12 @@
         <div class="connect-row">
           <label class="field endpoint-field" for="endpoint">
             <span>WebSocket 地址</span>
-            <input id="endpoint" type="url" value="ws://127.0.0.1:8080/neurobridge/v1/ws" spellcheck="false" />
+            <input id="endpoint" type="url" value="ws://192.168.88.10:8765/neurobridge/v1/ws" spellcheck="false" />
           </label>
           <button id="connectButton" class="button button-primary" type="button">连接</button>
           <button id="disconnectButton" class="button button-quiet" type="button" disabled>断开</button>
         </div>
-        <p class="hint">请替换为现场网关的 <code>ws://IP:端口/neurobridge/v1/ws</code>。仅限专用有线网络使用。</p>
+        <p class="hint">已预填网关默认地址；现场 IP 或端口不同时请修改。仅限专用有线网络使用。</p>
       </section>
 
       <div class="workspace">
