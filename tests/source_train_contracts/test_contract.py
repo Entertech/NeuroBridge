@@ -19,6 +19,15 @@ OTHER = '2'*40
 
 
 class ContractTests(unittest.TestCase):
+    def test_git_plumbing_stdin_uses_exact_utf8_bytes_without_newline_translation(self):
+        entry = '100644 blob '+GOOD+'\tattempt.json\n'
+        result = subprocess.CompletedProcess([], 0, stdout=b'tree-oid\n', stderr=b'')
+        with mock.patch.object(train.subprocess, 'run', return_value=result) as process:
+            self.assertEqual(train.run('git', 'mktree', data=entry), 'tree-oid')
+        self.assertEqual(process.call_args.kwargs['input'], entry.encode('utf-8'))
+        self.assertNotIn('text', process.call_args.kwargs)
+        self.assertNotIn('encoding', process.call_args.kwargs)
+
     def test_every_direct_entry_rejects_noncanonical_versions(self):
         for bad in ('latest', 'dev', 'release', '1', '1.4', '01.2.3', '1.02.3', '1.2.03', '1.2.3-rc.1', '1.2.3+build', '1.2.3.4', '1.2.3\n', '-1.2.3'):
             with self.subTest(bad=bad):

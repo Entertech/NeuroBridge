@@ -63,8 +63,9 @@ class RecoveryTests(unittest.TestCase):
         self.before_cleanup = None
 
     def git(self, *args, data=None):
-        return subprocess.check_output(['git', *args], cwd=self.root, input=data,
-                                       text=True, encoding='utf-8', stderr=subprocess.STDOUT).strip()
+        return subprocess.check_output(['git', *args], cwd=self.root,
+                                       input=data.encode('utf-8') if data is not None else None,
+                                       stderr=subprocess.STDOUT).decode('utf-8').strip()
 
     def identity(self):
         self.git('config', 'user.name', 'Fixture')

@@ -35,12 +35,14 @@ class WorkflowContractTests(unittest.TestCase):
                     policy.validate(self.config, workflows)
 
     def test_missing_renamed_or_skipped_required_check_is_rejected(self):
-        for mutation in ('missing', 'renamed', 'skipped'):
+        for mutation in ('missing', 'renamed', 'skipped', 'false', 'version-gate-skipped'):
             with self.subTest(mutation=mutation):
                 workflows = copy.deepcopy(self.workflows)
                 jobs = workflows['ci.yml']['jobs']
                 if mutation == 'missing': del jobs['unit-and-websocket']
                 elif mutation == 'renamed': jobs['unit-and-websocket']['name'] = 'unrecognized check'
+                elif mutation == 'false': jobs['unit-and-websocket']['if'] = False
+                elif mutation == 'version-gate-skipped': jobs['version-gate']['if'] = False
                 else: jobs['unit-and-websocket']['if'] = "github.ref == 'refs/heads/master'"
                 with self.assertRaisesRegex(ValueError, 'required code check'):
                     policy.validate(self.config, workflows)

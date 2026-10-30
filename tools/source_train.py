@@ -42,11 +42,13 @@ def names(config: dict, version: str) -> dict[str, str]:
 def run(*args: str, cwd: Path = ROOT, data: str | None = None) -> str:
     env = os.environ.copy()
     env.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
-    result = subprocess.run(args, cwd=cwd, input=data, env=env, text=True, encoding='utf-8',
+    # Git plumbing consumes a byte protocol. Text-mode stdin translates LF to
+    # CRLF on Windows, making mktree store a literal CR in "attempt.json\r".
+    result = subprocess.run(args, cwd=cwd, input=data.encode('utf-8') if data is not None else None, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
-        raise RuntimeError(f"{args[0]} {args[1]} failed: {result.stderr.strip()}")
-    return result.stdout.strip()
+        raise RuntimeError(f"{args[0]} {args[1]} failed: {result.stderr.decode('utf-8', errors='replace').strip()}")
+    return result.stdout.decode('utf-8').strip()
 
 
 def api(path: str, payload: dict | None = None, method: str | None = None):
