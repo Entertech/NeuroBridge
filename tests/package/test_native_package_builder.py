@@ -272,6 +272,11 @@ class NativePackageBuilderTests(unittest.TestCase):
             bundle_path = Path(directory) / "neurobridge-bundle.wxs"
             msi = Path(directory) / "neurobridge.msi"
             msi.write_bytes(b"")
+            real_tools = BUILDER.TOOLS
+            BUILDER.TOOLS = Path(directory) / "locked-tools"
+            extension = BUILDER.TOOLS / "wix-extension/wixext7/WixToolset.BootstrapperApplications.wixext.dll"
+            extension.parent.mkdir(parents=True)
+            extension.write_bytes(b"verified extension fixture")
             real_which = BUILDER.shutil.which
             BUILDER.shutil.which = lambda name: name if name == "wix" else real_which(name)
             real_command = BUILDER.command
@@ -281,6 +286,7 @@ class NativePackageBuilderTests(unittest.TestCase):
             finally:
                 BUILDER.shutil.which = real_which
                 BUILDER.command = real_command
+                BUILDER.TOOLS = real_tools
             bundle = bundle_path.read_text(encoding="utf-8")
         bundle_upgrade = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge/bundle"))
         self.assertIn(f'Version="{BUILDER.APPLICATION_VERSION}"', bundle)

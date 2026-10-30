@@ -7,20 +7,31 @@ jobs:
   prepare:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.11'
+          python-version: "${{ runner.os == 'Windows' && '3.11.9' || '3.11.17' }}"
+      - name: Check locked build host
+        run: python tools/build_environment.py check-host
       - name: Download and verify locked dependency inputs
         run: python tools/prepare-kylin-bootstrap-inputs.py --download
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .runtime/kylin-bootstrap-inputs
           key: kylin-inputs-${{ hashFiles('config/kylin-bootstrap-inputs.toml') }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: kylin-verified-dependency-inputs
           path: .runtime/kylin-bootstrap-inputs
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
+      - name: Retain build environment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-environment-prepare-${{ strategy.job-index || '0' }}-${{ github.run_attempt }}
+          path: .runtime/build-environment/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90

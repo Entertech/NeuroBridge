@@ -23,7 +23,7 @@ class ReleaseTriggerTests(unittest.TestCase):
         self.assertIn('source_sha: ${{ needs.source.outputs.candidate }}', block)
         self.assertIn('source_train: true', block)
         source = (WORKFLOWS/'source-train.yml').read_text()
-        self.assertIn('actions/create-github-app-token@v2', source)
+        self.assertRegex(source, r'actions/create-github-app-token@[a-f0-9]{40}')
         self.assertIn('secrets.RELEASE_BOT_APP_ID', source)
         self.assertNotIn('token: ${{ github.token }}', source)
         self.assertIn('group: source-train-${{ github.repository }}\n', source)

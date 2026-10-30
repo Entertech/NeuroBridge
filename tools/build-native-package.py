@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 from neurobridge.versioning import APPLICATION_VERSION
 from tools.release_pipeline import matrix
+from tools.build_environment import TOOLS, append_evidence
 
 
 EXCLUDED_DIRS = {".git", ".github", ".runtime", "__pycache__", ".pytest_cache", ".venv", "build", "dist"}
@@ -267,7 +268,10 @@ def write_wix_bundle(msi: Path, output: Path, log: Path) -> None:
         </Bundle>
       </Wix>
     '''), encoding="utf-8")
-    command(["wix", "build", "-acceptEula", "wix7", str(bundle), "-ext", "WixToolset.BootstrapperApplications.wixext/7.0.0", "-o", str(output)], cwd=msi.parent, log=log)
+    extension = TOOLS / "wix-extension/wixext7/WixToolset.BootstrapperApplications.wixext.dll"
+    if not extension.is_file():
+        raise ValueError("Locked WiX extension is missing; run tools/build_environment.py windows-tools")
+    command(["wix", "build", "-acceptEula", "wix7", str(bundle), "-ext", str(extension), "-o", str(output)], cwd=msi.parent, log=log)
 
 
 def build_windows(stage: Path, target: dict[str, str], output: Path, log: Path) -> None:
@@ -526,6 +530,7 @@ def build(target: dict[str, str], runtime: Path, output_dir: Path) -> Path:
         else:
             build_rpm(stage, target, output, log)
         validate_native(output, target, log)
+        append_evidence(log)
         runtime_sha = digest_tree(runtime)
     commit = command(["git", "rev-parse", "HEAD"])
     report = {
