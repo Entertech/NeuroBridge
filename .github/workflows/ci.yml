@@ -1,8 +1,7 @@
 name: Test
 
-# This workflow only validates.  Packaging lives in release.yml, which runs
-# after this workflow succeeds on master or on a manual dispatch, so a pull
-# request never produces a package.
+# PRs and unchanged-version pushes only validate. A version-advancing push to
+# master calls release.yml after every test job succeeds.
 on:
   pull_request:
     branches: [master]
@@ -16,10 +15,9 @@ permissions:
 jobs:
   version-gate:
     name: Application version gate
-    # release.yml only runs after a push to master, so the gate has to run here
-    # too, or a PR could merge business code changes with no version bump.  This
-    # is a check, not packaging: it produces no artifact.
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    outputs:
+      should_release: ${{ steps.gate.outputs.should_release }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -31,9 +29,20 @@ jobs:
           # this runner's default python3 is older.
           python-version: '3.11'
       - name: Require a version bump when business code changes
+        id: gate
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python tools/release_pipeline.py gate --base "$BASE_SHA" --output "$RUNNER_TEMP/release-gate.json"
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python tools/release_pipeline.py gate --base "$BASE_SHA" --output "$RUNNER_TEMP/release-gate.json"
+          python - <<'PYCODE' >> "$GITHUB_OUTPUT"
+          import json, os
+          from pathlib import Path
+          gate = json.loads((Path(os.environ['RUNNER_TEMP']) / 'release-gate.json').read_text())
+          print('should_release=' + str(gate['shouldRelease']).lower())
+          PYCODE
+          if ! grep -qx 'should_release=true' "$GITHUB_OUTPUT"; then
+            echo 'Application version unchanged; no automatic release or Kylin bootstrap build.' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   windows-launcher:
     runs-on: windows-2022
@@ -141,3 +150,12 @@ jobs:
           echo "External documents must be promoted and locked on this PR branch before it can merge." >&2
           echo "Run: python3 tools/mark-external-documents-published.py --date YYYY-MM-DD" >&2
           exit 1
+
+  release:
+    name: Release upgraded application
+    needs: [version-gate, windows-launcher, native-sdk-regression, unit-and-websocket]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.version-gate.outputs.should_release == 'true'
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/release.yml

@@ -6,6 +6,8 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 发布矩阵和唯一总 ZIP 的规则见[发布工作流 PRD](doc/product/发布工作流%20PRD.md)与[`release/release_matrix.toml`](release/release_matrix.toml)。应用版本递增的 `master` 合入尝试全部 5 个包目标；Windows 和麒麟各至少一个合格包、两个平台 ZIP、总 ZIP、清单和日志本地校验成功后，先上传 Actions Artifact，回下载核对上传前总 ZIP 的 SHA-256 和内容，再创建 tag、draft GitHub Release，资产复验后公开。发布基线取带总 ZIP 的已公开正式应用 Release；孤立 tag 和 draft 不代表发布成功，首次发布沿版本历史寻找递增前基线。版本不变的合入记录跳过发布，未完成目标逐项列明。只有软件业务源码变更强制升版；纯 CI、构建/发布工具、安装脚本、文档、测试、依赖清单和台账记录可保持版本，同版本合入跳过打包、发布和打 tag。产品版本统一取版本台账的 `[application].version`；旧平台版本字段不参与新发布。当前不启用签名或公证，真机验证结果通过独立补充附件持续记录。
 
+自动发布由 `Test` 内的版本门禁控制：仅本次 `master` push 相对 push 前版本递增且全部测试通过，才调用可复用的 `Release`；同版本合入不调用发布流程。`Kylin bootstrap package` 仅保留手动诊断打包，自动麒麟包随 Release 构建。
+
 发布实现见[发布工作流技术方案](doc/tech/发布工作流技术方案.md)。Release 默认在 Windows runner 从本次源码及锁定运行时构建 Windows 10/11 x64 EXE/MSI，通过原生格式、源码提交和摘要校验后纳入汇总；麒麟引导 DEB 从源码和离线输入打包。PR 只执行校验，不打包；单个 Windows 构建失败时记录 `failed`、阶段、退出码和诊断日志，继续收集其他目标；合入 `master` 后，两平台最低门槛未满足时发布失败。日志位于 `release-target-<targetId>` Artifact。源码候选包不算正式安装包，CI 构建通过也不代表目标机验收通过。
 
 原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。

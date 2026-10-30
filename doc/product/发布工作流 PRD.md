@@ -113,7 +113,7 @@ Windows 与麒麟的安装/运行导出均须携带独立诊断上下文：Windo
 打包链路与 PR 解耦，由独立的 `Release` workflow 承担；PR 只做校验，不产出任何包。
 
 1. `pull_request -> master`：只运行版本门禁与测试（含对外文档发布状态门禁），**不构建候选包、平台 ZIP 或总 ZIP**，也不创建 GitHub Release 或 tag。
-2. 打包有两个入口，二者之外不触发：(a) PR 合入 `master` 后，`Test` workflow 成功完成时自动触发发布流程——发布仍以测试通过为前提；(b) 在 Actions 上手动触发，对**所选分支的最新提交**打包。手动触发属于非正式构建，只产出候选包，不创建 tag 或 GitHub Release。
+2. 打包有两个入口，二者之外不触发：(a) PR 合入 `master` 后，`Test` 确认本次 push 相对 push 前应用版本递增，且全部测试通过，才调用可复用的 Release；同版本不调用 Release，也不自动触发独立 Kylin bootstrap package；(b) 在 Actions 上手动触发，对**所选分支的最新提交**打包。手动触发属于非正式构建，只产出候选包，不创建 tag 或 GitHub Release。
 3. 打包触发后，若应用版本未递增，记录跳过原因而不重发同版本；若版本递增，尝试全部矩阵目标并记录逐项结果；Windows 和麒麟各至少一个可执行且通过自动校验的包时，生成两个平台 ZIP 和唯一总 ZIP。
 4. 两个平台达到最小成功条件，且平台 ZIP、总 ZIP、清单和日志构建并校验通过后，创建指向本次 `master` commit 的注释 tag `v<applicationVersion>`；随后创建 draft GitHub Release，上传唯一总 ZIP、包外清单和验证日志并复验，最后公开 Release。未完成的矩阵组合在 Release 说明中逐项列明；tag 创建后的网络失败按 §7.2 原地恢复，不移动 tag 或覆盖已有正式 Release。手动触发的非正式构建不进入本步。
 5. 正式 Artifact 保留 **30 天**，下载权限为**所有能够访问仓库 Actions 的用户**，不做额外权限限制。
