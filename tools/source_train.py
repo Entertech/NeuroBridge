@@ -97,6 +97,12 @@ def preserving_updates(candidate: str, head: str, default_tip: str):
     for extra in run('git', 'rev-list', head, '^'+candidate, '^'+default_tip).splitlines():
         if len(run('git', 'rev-list', '--parents', '-n', '1', extra).split()) < 3:
             raise ValueError('finalization permits preserving merge updates only')
+    # Parent counts alone allow a hand-crafted merge carrying unbuilt edits.
+    # Compare the resulting merge so an unchanged candidate PR can also merge
+    # into a default branch that advanced through unrelated reviewed changes.
+    expected = run('git', 'merge-tree', '--write-tree', candidate, default_tip)
+    if run('git', 'merge-tree', '--write-tree', head, default_tip) != expected:
+        raise ValueError('finalization contains an unpackaged tree change')
 
 
 def artifact_receipt(archive: Path, version: str, candidate: str, matrix: list[dict]) -> dict:
@@ -273,6 +279,41 @@ class Train:
             return None
         return self.fetch(ref)
 
+    def ensure_candidate(self, record: dict):
+        ref = 'refs/heads/'+record['candidateBranch']
+        existing = self.ref(ref)
+        if existing is None:
+            run('git', 'push', 'origin', record['candidate']+':'+ref)
+        elif existing != record['candidate']:
+            raise ValueError('candidate branch changed; preserve it for reconciliation')
+
+    def delete_refs(self, expected: dict[str, str]):
+        if not expected:
+            return
+        # GitHub updateRefs compares every beforeOid and deletes atomically.
+        # A concurrent update preserves all refs instead of deleting new work.
+        # https://docs.github.com/en/graphql/reference/git#updaterefs
+        repository_id = api(f'repos/{self.repository}')['node_id']
+        payload = {'query': 'mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }',
+                   'variables': {'input': {'repositoryId': repository_id, 'refUpdates': [
+                       {'name': 'refs/heads/'+branch, 'beforeOid': require_sha(sha),
+                        'afterOid': '0'*40, 'force': False} for branch, sha in expected.items()]}}}
+        result = api('graphql', payload)
+        if result.get('errors'):
+            raise ValueError('atomic branch cleanup rejected; preserve refs for reconciliation')
+
+    def fail(self):
+        self.mutable()
+        record = self.required_record()
+        if self.tag() is None:
+            branch = record['candidateBranch']
+            existing = self.ref('refs/heads/'+branch)
+            if existing is not None and existing != record['candidate']:
+                raise ValueError('candidate branch changed; preserve it for reconciliation')
+            record['phase'] = 'failed'; self.save(record)
+            self.delete_refs({branch: existing} if existing else {})
+        return record
+
     def checks(self, sha: str):
         pages = json.loads(run('gh', 'api', '--paginate', '--slurp', f'repos/{self.repository}/commits/{sha}/check-runs?per_page=100'))
         check_results([check for page in pages for check in page['check_runs']], self.config['code_gates']['checks'])
@@ -321,6 +362,8 @@ class Train:
         if existing:
             self.metadata(self.fetch(f"refs/heads/{self.names['integration']}"))
             return self.select(requirements)
+        if self.ref(f"refs/heads/{self.names['publish']}"):
+            raise ValueError('publication branch already exists without integration metadata; preserve it')
         if numeric(self.version) <= numeric(version_at(baseline)):
             raise ValueError('integration version must advance from default baseline')
         for branch in requirements:
@@ -422,6 +465,8 @@ class Train:
             if tag and tag != record['candidate']:
                 raise ValueError("existing tag differs from durable candidate")
             self.fetch(f"refs/heads/{self.names['state']}")
+            if record.get('phase') != 'complete':
+                self.ensure_candidate(record)
             return record
         if tag:
             raise ValueError("existing tag has no trustworthy train record; reconcile before proceeding")
@@ -525,8 +570,7 @@ class Train:
         record['phase'] = 'packaging'
         self.save(record)
         # Restore the SAME candidate and rerun gates on a retry; never rebase it.
-        if not self.ref('refs/heads/'+record['candidateBranch']):
-            run('git', 'push', 'origin', f"{record['candidate']}:refs/heads/{record['candidateBranch']}")
+        self.ensure_candidate(record)
         return record
 
     def record_artifact(self, directory: Path, artifact_id: int):
@@ -641,12 +685,28 @@ class Train:
         if len(parents) != 3:
             raise ValueError('finalization PR must use a preserving merge commit')
         preserving_updates(record['candidate'], pr['headRefOid'], parents[1])
-        record['phase'] = 'complete'; record['verifiedDefault'] = tip; self.save(record)
-        # Delete only after the fresh remote tag/ancestry check. Keep publish_B
-        # and the durable state ref so future retries remain verifiable.
+        preserving_updates(record['candidate'], merge_commit, parents[1])
+        # Inspect all branch tips before any deletion or completion checkpoint.
+        # Integration may contain only commits already included in publication.
+        expected = {}
         for branch in (self.names['integration'], record['candidateBranch'], self.names['finalization']):
-            if self.ref('refs/heads/'+branch):
-                run('git', 'push', 'origin', '--delete', branch)
+            ref = 'refs/heads/'+branch
+            if self.ref(ref) is None:
+                continue
+            current = self.fetch(ref)
+            if branch == self.names['integration']:
+                # A rebased candidate need not retain the original publication
+                # merge object. Fetch its protected ref before checking dev.
+                publication = self.fetch('refs/heads/'+self.names['publish'])
+                run('git', 'merge-base', '--is-ancestor', record['publication'], publication)
+                run('git', 'merge-base', '--is-ancestor', current, record['publication'])
+            elif current != (record['candidate'] if branch == record['candidateBranch'] else pr['headRefOid']):
+                raise ValueError('train branch changed after publication; preserve every branch')
+            expected[branch] = current
+        record['phase'] = 'complete'; record['verifiedDefault'] = tip; self.save(record)
+        # Keep publish_B and the durable state ref. Compare the inspected tips
+        # again on the server so concurrent work cannot be deleted.
+        self.delete_refs(expected)
         return record
 
 
@@ -734,12 +794,7 @@ def main():
             elif args.operation == 'begin-release': result = train.begin_release()
             elif args.operation == 'record-artifact': result = train.record_artifact(args.directory, args.artifact_id)
             elif args.operation == 'finalize': result = train.finalize(args.directory)
-            elif args.operation == 'fail':
-                train.mutable(); result = train.required_record()
-                if train.tag() is None:
-                    result['phase'] = 'failed'; train.save(result)
-                    if train.ref('refs/heads/'+result['candidateBranch']):
-                        run('git', 'push', 'origin', '--delete', result['candidateBranch'])
+            elif args.operation == 'fail': result = train.fail()
             else: result = getattr(train, args.operation)()
         print(json.dumps(result, ensure_ascii=False, indent=2))
         output = os.environ.get('GITHUB_OUTPUT')

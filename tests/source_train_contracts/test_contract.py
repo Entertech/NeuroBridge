@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -86,13 +87,77 @@ class ContractTests(unittest.TestCase):
     def test_unchanged_retry_returns_exact_candidate_without_rebase(self):
         obj = train.Train('1.2.3', True)
         pr = {'state': 'MERGED', 'headRefName': 'dev_1.2.3', 'baseRefName': 'publish_1.2.3', 'mergeCommit': {'oid': GOOD}, 'reviews': [{'author': {'login': 'alice'}, 'state': 'APPROVED'}]}
-        record = {'publication': GOOD, 'candidate': OTHER, 'policyFingerprint': obj.fingerprint()}
+        record = {'publication': GOOD, 'candidate': OTHER, 'candidateBranch': 'release-candidate/1.2.3/fixture', 'policyFingerprint': obj.fingerprint()}
         with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'default', return_value=('master', '3'*40)), \
              mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'pr', return_value=pr), \
              mock.patch.object(obj, 'fetch', return_value=GOOD), mock.patch.object(obj, 'metadata', return_value={}), \
              mock.patch.object(obj, 'load', return_value=record), mock.patch.object(obj, 'tag', return_value=None), \
-             mock.patch.object(train, 'run') as run:
+             mock.patch.object(obj, 'ref', return_value=OTHER), mock.patch.object(train, 'run') as run:
             self.assertIs(obj.prepare(12), record)
+            run.assert_not_called()
+
+    def test_retry_restores_recorded_candidate_after_interrupted_push(self):
+        obj = train.Train('1.2.3', True)
+        pr = {'state': 'MERGED', 'headRefName': 'dev_1.2.3', 'baseRefName': 'publish_1.2.3',
+              'mergeCommit': {'oid': GOOD}, 'reviews': [{'author': {'login': 'alice'}, 'state': 'APPROVED'}]}
+        record = {'publication': GOOD, 'candidate': OTHER, 'candidateBranch': 'release-candidate/1.2.3/fixture',
+                  'policyFingerprint': obj.fingerprint()}
+        for remote in (None, GOOD):
+            with self.subTest(remote=remote), mock.patch.object(obj, 'mutable'), \
+                 mock.patch.object(obj, 'default', return_value=('master', '3'*40)), \
+                 mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'pr', return_value=pr), \
+                 mock.patch.object(obj, 'fetch', return_value=GOOD), mock.patch.object(obj, 'metadata', return_value={}), \
+                 mock.patch.object(obj, 'load', return_value=record), mock.patch.object(obj, 'tag', return_value=None), \
+                 mock.patch.object(obj, 'ref', return_value=remote), mock.patch.object(train, 'run') as run:
+                if remote is None:
+                    self.assertIs(obj.prepare(12), record)
+                    run.assert_called_once_with('git', 'push', 'origin', OTHER+':refs/heads/'+record['candidateBranch'])
+                else:
+                    with self.assertRaisesRegex(ValueError, 'candidate branch changed'): obj.prepare(12)
+                    run.assert_not_called()
+
+    def test_discovery_survives_tools_module_loaded_first(self):
+        root = Path(__file__).resolve().parents[2]
+        script = """
+import sys, unittest
+from pathlib import Path
+root = Path.cwd()
+sys.path.insert(0, str(root/'tools'))
+import source_train
+loader = unittest.TestLoader()
+suite = loader.discover(str(root/'tests'), pattern='test_contract.py')
+assert not loader.errors, loader.errors
+assert suite.countTestCases() > 0
+"""
+        subprocess.run([sys.executable, '-c', script], cwd=root, check=True, capture_output=True, text=True)
+
+    def test_cleanup_uses_atomic_expected_tips_without_forcing(self):
+        obj = train.Train('1.2.3', True)
+        expected = {'dev_1.2.3': GOOD, 'finalize_1.2.3': OTHER}
+        with mock.patch.object(train, 'api', side_effect=[{'node_id': 'repository-id'}, {'data': {'updateRefs': {}}}]) as api:
+            obj.delete_refs(expected)
+        path, payload = api.call_args.args
+        self.assertEqual(path, 'graphql')
+        updates = payload['variables']['input']['refUpdates']
+        self.assertEqual(updates, [{'name': 'refs/heads/'+branch, 'beforeOid': sha,
+                                   'afterOid': '0'*40, 'force': False} for branch, sha in expected.items()])
+
+    def test_failed_attempt_never_deletes_a_changed_candidate_branch(self):
+        obj = train.Train('1.2.3', True)
+        record = {'candidate': GOOD, 'candidateBranch': 'release-candidate/1.2.3/fixture'}
+        with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'required_record', return_value=record), \
+             mock.patch.object(obj, 'tag', return_value=None), mock.patch.object(obj, 'ref', return_value=OTHER), \
+             mock.patch.object(obj, 'save') as save, mock.patch.object(obj, 'delete_refs') as delete:
+            with self.assertRaisesRegex(ValueError, 'candidate branch changed'): obj.fail()
+            save.assert_not_called(); delete.assert_not_called()
+
+    def test_orphan_publication_branch_is_preserved_before_initialization(self):
+        obj = train.Train('1.2.3', True)
+        with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'fetch', return_value=GOOD), \
+             mock.patch.object(obj, 'default', return_value=('master', GOOD)), \
+             mock.patch.object(obj, 'ref', side_effect=[None, OTHER]), mock.patch.object(train, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'publication branch already exists'):
+                obj.initialize(['feature/fixture'])
             run.assert_not_called()
 
     def test_missing_recorded_immutable_tag_is_not_recreated(self):
@@ -202,6 +267,25 @@ class GitSourceTests(unittest.TestCase):
         self.assertEqual(self.git('rev-parse', 'publish_0.3.3'), publication)
         self.git('merge-base', '--is-ancestor', default, candidate)
         self.assertEqual(train.version_at(candidate), '0.3.3')
+
+    def test_forged_merge_with_unbuilt_edits_is_rejected(self):
+        self.registry('0.3.3'); self.commit('candidate'); candidate = self.git('rev-parse', 'HEAD')
+        (self.root/'unbuilt.txt').write_text('unverified source')
+        self.git('add', '-A'); tree = self.git('write-tree')
+        forged = self.git('commit-tree', tree, '-p', candidate, '-p', self.baseline, '-m', 'forged merge')
+        with self.assertRaisesRegex(ValueError, 'unpackaged tree'):
+            train.preserving_updates(candidate, forged, self.baseline)
+
+    def test_clean_default_merge_preserves_packaged_candidate(self):
+        self.git('branch', 'parallel-default')
+        self.registry('0.3.3'); self.commit('candidate'); candidate = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-q', 'parallel-default')
+        (self.root/'default.txt').write_text('reviewed parallel default change'); self.commit('default advance')
+        default = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-q', '--detach', candidate)
+        self.git('merge', '--no-ff', '-qm', 'preserving update', default)
+        train.preserving_updates(candidate, self.git('rev-parse', 'HEAD'), default)
+
 
 
 class ArtifactTests(unittest.TestCase):
@@ -321,15 +405,20 @@ class RemoteAncestryTests(GitSourceTests):
         self.git('tag', 'v0.3.3', self.baseline)  # stale local tag must not count
         self.git('replace', candidate, self.baseline)
         obj = train.Train('0.3.3', True)
-        record = {'candidate': candidate, 'finalizationPR': 10, 'candidateBranch': 'release-candidate/0.3.3/fixture'}
+        record = {'candidate': candidate, 'publication': candidate, 'finalizationPR': 10,
+                  'candidateBranch': 'release-candidate/0.3.3/fixture'}
+        expected = {'dev_0.3.3': candidate, record['candidateBranch']: candidate, 'finalize_0.3.3': candidate}
+        for branch, sha in (expected | {'publish_0.3.3': candidate}).items():
+            self.git('push', '-q', 'origin', sha+':refs/heads/'+branch)
         with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'required_record', return_value=record), \
-             mock.patch.object(obj, 'save') as save, \
+             mock.patch.object(obj, 'save') as save, mock.patch.object(obj, 'delete_refs') as delete, \
              mock.patch.object(obj, 'pr', return_value={'state': 'MERGED', 'headRefOid': candidate, 'mergeCommit': {'oid': merged}}), \
              mock.patch.object(train, 'api', return_value={'default_branch': 'master', 'allow_merge_commit': True}):
             result = obj.verify()
         self.assertEqual(result['phase'], 'complete')
         self.assertEqual(result['verifiedDefault'], merged)
         self.assertEqual(save.call_count, 1)
+        delete.assert_called_once_with(expected)
         # Fetch with --refmap= updates FETCH_HEAD, not the stale local tag.
         self.assertEqual(self.git('rev-parse', 'v0.3.3'), self.baseline)
 
@@ -339,3 +428,30 @@ class RemoteAncestryTests(GitSourceTests):
         head = self.git('rev-parse', 'HEAD')
         with self.assertRaisesRegex(ValueError, 'merge updates only'):
             train.preserving_updates(candidate, head, self.baseline)
+
+    def test_cleanup_preserves_advanced_train_branches(self):
+        self.registry('0.3.3'); self.commit('candidate'); candidate = self.git('rev-parse', 'HEAD')
+        publication = candidate
+        self.git('branch', 'candidate')
+        self.git('merge', '--no-ff', '-qm', 'nothing to merge', 'candidate')
+        merged = self.git('commit-tree', self.git('rev-parse', 'HEAD^{tree}'), '-p', self.baseline,
+                          '-p', candidate, '-m', 'finalization')
+        (self.root/'next.txt').write_text('unreleased work'); self.commit('next train work')
+        advanced = self.git('rev-parse', 'HEAD')
+        obj = train.Train('0.3.3', True)
+        record = {'candidate': candidate, 'publication': publication, 'finalizationPR': 10,
+                  'candidateBranch': 'release-candidate/0.3.3/fixture'}
+        for changed in ('dev_0.3.3', record['candidateBranch'], 'finalize_0.3.3'):
+            refs = {'dev_0.3.3': publication, 'publish_0.3.3': publication,
+                    record['candidateBranch']: candidate, 'finalize_0.3.3': candidate}
+            refs[changed] = advanced
+            with self.subTest(changed=changed), mock.patch.object(obj, 'mutable'), \
+                 mock.patch.object(obj, 'required_record', return_value=copy.deepcopy(record)), \
+                 mock.patch.object(obj, 'default', return_value=('master', merged)), \
+                 mock.patch.object(obj, 'tag', return_value=candidate), \
+                 mock.patch.object(obj, 'pr', return_value={'state': 'MERGED', 'headRefOid': candidate, 'mergeCommit': {'oid': merged}}), \
+                 mock.patch.object(obj, 'ref', side_effect=lambda ref: refs[ref.removeprefix('refs/heads/')]), \
+                 mock.patch.object(obj, 'fetch', side_effect=lambda ref: refs[ref.removeprefix('refs/heads/')]), \
+                 mock.patch.object(obj, 'delete_refs') as delete, mock.patch.object(obj, 'save') as save:
+                with self.assertRaises((ValueError, RuntimeError)): obj.verify()
+                save.assert_not_called(); delete.assert_not_called()

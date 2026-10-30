@@ -116,6 +116,11 @@ jobs:
           python -m tools.source_train "${args[@]}"
 
   packages:
+    # The reusable workflow cleans intermediate Artifacts with this token.
+    # Called workflows cannot elevate the caller job's permissions.
+    permissions:
+      contents: read
+      actions: write
     needs: [source]
     if: needs.source.outputs.operation == 'release' && needs.source.outputs.should_package == 'true'
     uses: ./.github/workflows/release.yml
