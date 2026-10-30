@@ -291,6 +291,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-10-30-headset-e0-hardware-issue-fixed"
+date = "2026-10-30"
+scope = "headset_serial_device_behavior_evidence"
+summary = "用户确认 2026-10-27 记录的 E0 后再次 E1 无数据属于硬件问题，已修复；关闭该硬件风险，同步 README、串口 PRD、技术方案和内部联调手册，保留原实测证据，将耳机本体重新上电标注为修复前的临时恢复办法。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确要求切回问题记录分支并标注硬件问题已修复；本记录解决 2026-10-27-windows11-headset-e0-restart-risk，旧记录保留为历史证据。硬件修复细节与修复后专项测试记录尚未提供，不据此宣称 Windows/银河麒麟网关现场验收通过。本次仅更新内部文档与台账，不修改启停代码、应用/报文版本或已发布及预发布北向正文。"
+
+[[change_records]]
 id = "2026-10-27-windows11-headset-e0-restart-risk"
 date = "2026-10-27"
 scope = "headset_serial_device_behavior_evidence"
