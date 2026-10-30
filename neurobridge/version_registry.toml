@@ -291,28 +291,6 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
-id = "2026-10-30-headset-e0-hardware-issue-fixed"
-date = "2026-10-30"
-scope = "headset_serial_device_behavior_evidence"
-summary = "用户确认 2026-10-27 记录的 E0 后再次 E1 无数据属于硬件问题，已修复；关闭该硬件风险，同步 README、串口 PRD、技术方案和内部联调手册，保留原实测证据，将耳机本体重新上电标注为修复前的临时恢复办法。"
-external_document_action = "record_only"
-change_state = "unlocked"
-base_locked_release = "0.2"
-target_external_release = "0.3"
-reason = "用户明确要求切回问题记录分支并标注硬件问题已修复；本记录解决 2026-10-27-windows11-headset-e0-restart-risk，旧记录保留为历史证据。硬件修复细节与修复后专项测试记录尚未提供，不据此宣称 Windows/银河麒麟网关现场验收通过。本次仅更新内部文档与台账，不修改启停代码、应用/报文版本或已发布及预发布北向正文。"
-
-[[change_records]]
-id = "2026-10-27-windows11-headset-e0-restart-risk"
-date = "2026-10-27"
-scope = "headset_serial_device_behavior_evidence"
-summary = "记录 Windows 11 串口助手实测：E1 出数、E0 停止后再次 E1 无数据，耳机本体断电再供电后恢复；同步 README、串口 PRD、技术方案和内部联调手册，明确正常停止、断线清理和已尝试 E1 的失败探测可能触发后续无法恢复风险，撤销 E0 后仅靠服务重启即可恢复的假设。"
-external_document_action = "record_only"
-change_state = "unlocked"
-base_locked_release = "0.2"
-target_external_release = "0.3"
-reason = "用户提供测试反馈并明确系统为 Windows 11、重新上电对象为耳机本体。固件版本、重复次数、命令间隔及数据帧合法性待补充；不能据此认定网关 409 的根因、所有固件行为或银河麒麟已复现。本次仅更新内部证据、恢复步骤与验收限制，保留既有 E0 停止要求和代码，不新增 ACK、USB 复位或跳过停止命令策略，不修改应用/报文版本、已发布或预发布北向正文，不生成安装包/PDF，不把人工断电恢复算作自动重连验收通过。"
-
-[[change_records]]
 id = "2026-10-10-headset-absent-bootstrap-and-bundle-prd"
 date = "2026-10-10"
 scope = "kylin_installation_and_delivery_structure"
