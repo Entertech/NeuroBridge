@@ -12,6 +12,23 @@ permissions:
   contents: read
 
 jobs:
+  source-train-checks:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-ci.lock
+      - name: Lint workflow syntax and expressions
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color -shellcheck= -pyflakes= .github/workflows/ci.yml .github/workflows/source-train.yml .github/workflows/release.yml .github/workflows/kylin-bootstrap.yml
+      - name: Check source stages, required jobs and reusable workflow permissions
+        run: python -m tools.check_source_train_workflows
+      - name: Exercise source recovery and protected finalization
+        run: python -m unittest discover -s tests/source_train_contracts -v
+
   version-gate:
     name: Application version gate
     if: github.event_name == 'pull_request' || github.event_name == 'push'
@@ -45,6 +62,9 @@ jobs:
           python-version: "3.11"
           architecture: x64
       - run: python -m pip install -r requirements.lock
+      - run: python -m pip install -r requirements-ci.lock
+      - name: Verify source train contracts with Windows Git and Python
+        run: python -m unittest discover -s tests/source_train_contracts -v
       - name: Validate Windows PowerShell 5.1 syntax
         shell: powershell
         run: |
@@ -122,6 +142,7 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.lock
+      - run: python -m pip install -r requirements-ci.lock
       - run: python -m pip install --no-deps -e .
       - run: python -m unittest discover -s tests -v
       - uses: actions/setup-node@v4

@@ -28,7 +28,7 @@ metadata = ".release/train.json"
 build_number_adjustment = "none"
 
 [code_gates]
-checks = ["Application version gate", "windows-launcher", "native-sdk-regression", "unit-and-websocket"]
+checks = ["Application version gate", "windows-launcher", "native-sdk-regression", "unit-and-websocket", "source-train-checks"]
 required_reviewers = 1
 candidate_review = "explicit-human-sha-approval"
 

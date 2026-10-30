@@ -188,6 +188,34 @@ assert suite.countTestCases() > 0
             self.assertIs(obj.begin_release(), record)
             save.assert_not_called()
 
+    def test_uncertain_or_lost_package_evidence_never_starts_another_build(self):
+        cases = [
+            ({'artifacts': []}, {'status': 'in_progress'}, 'active or uncertain'),
+            ({'artifacts': []}, {'status': 'completed', 'conclusion': 'success'}, 'active or uncertain'),
+            ({'artifacts': [{'name': 'verified-release-'+GOOD, 'expired': True}]}, {}, 'expired'),
+            ({'artifacts': [{'name': 'train-package-receipt-'+GOOD}]}, {}, 'cannot be recovered'),
+        ]
+        for artifacts, status, reason in cases:
+            with self.subTest(reason=reason):
+                obj = train.Train('1.2.3', True)
+                record = {'candidate': GOOD, 'review': {'sha': GOOD}, 'artifact': None, 'packageRunId': '17'}
+                with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'default', return_value=('master', OTHER)), \
+                     mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'required_record', return_value=record), \
+                     mock.patch.object(obj, 'checks'), mock.patch.object(obj, 'save') as save, \
+                     mock.patch.object(train, 'api', side_effect=lambda path: artifacts if path.endswith('/artifacts?per_page=100') else status):
+                    with self.assertRaisesRegex(ValueError, reason): obj.begin_release()
+                    save.assert_not_called()
+
+    def test_failed_candidate_code_check_prevents_packaging_checkpoint(self):
+        obj = train.Train('1.2.3', True)
+        record = {'candidate': GOOD, 'review': {'sha': GOOD}}
+        with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'default', return_value=('master', OTHER)), \
+             mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'required_record', return_value=record), \
+             mock.patch.object(obj, 'checks', side_effect=ValueError('required code check failed')), \
+             mock.patch.object(obj, 'save') as save, mock.patch.object(train, 'api') as api:
+            with self.assertRaisesRegex(ValueError, 'required code check failed'): obj.begin_release()
+            save.assert_not_called(); api.assert_not_called()
+
     def test_merge_uses_preserving_method_and_expected_head_without_bypass(self):
         obj = train.Train('1.2.3', True)
         pr = {'number': 10, 'state': 'OPEN', 'isDraft': False, 'headRefName': 'finalize_1.2.3',
