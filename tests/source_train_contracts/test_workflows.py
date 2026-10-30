@@ -17,6 +17,13 @@ class WorkflowContractTests(unittest.TestCase):
     def test_repository_workflows_satisfy_contract(self):
         policy.validate(self.config, self.workflows)
 
+    def test_version_gate_passes_event_context_for_push_baseline_recovery(self):
+        steps = self.workflows['ci.yml']['jobs']['version-gate']['steps']
+        gate = next(step for step in steps if step.get('id') == 'gate')
+        self.assertEqual(gate['env']['SOURCE_EVENT'], '${{ github.event_name }}')
+        self.assertEqual(gate['env']['BASE_SHA'], '${{ github.event.pull_request.base.sha || github.event.before }}')
+        self.assertIn('--event "$SOURCE_EVENT"', gate['run'])
+
     def test_yaml_on_key_and_real_booleans_are_preserved(self):
         value = yaml.load('on: [push]\nflag: false\n', Loader=policy.WorkflowLoader)
         self.assertEqual(value['on'], ['push'])

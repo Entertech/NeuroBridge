@@ -48,9 +48,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
           SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_EVENT: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          python -m tools.source_train check --branch "$SOURCE_BRANCH" --base "$BASE_SHA" --head "$SOURCE_HEAD" > "$RUNNER_TEMP/release-gate.json"
+          python -m tools.source_train check --event "$SOURCE_EVENT" --branch "$SOURCE_BRANCH" --base "$BASE_SHA" --head "$SOURCE_HEAD" > "$RUNNER_TEMP/release-gate.json"
           echo 'Code validation only; package publication requires an approved source train.' >> "$GITHUB_STEP_SUMMARY"
 
   windows-launcher:
