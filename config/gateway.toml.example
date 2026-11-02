@@ -105,6 +105,10 @@ enabled = true
 host = "127.0.0.1"
 port = 8766
 path = "/downloads"
+# Operator capture API and the same static console at /capture/index.html.
+# Local file pages have Origin "null"; hosted same-origin pages also work.
+capture_control_enabled = true
+capture_allowed_origins = ["null"]
 
 # Size archives use UTC timestamps and unique suffixes; active filename stays fixed.
 [logging]

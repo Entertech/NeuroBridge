@@ -307,6 +307,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-11-02-static-remote-capture-console"
+date = "2026-11-02"
+scope = "gateway_operator_tooling"
+summary = "采集控制台支持完整静态包直接打开，远程查看状态与有界诊断摘要、开始扫描、停止采集、完成会话后保存 ZIP；新增独立于 B 端 WebSocket 的内部 HTTP 控制接口、配置化精确来源检查、停采失败诊断和重复启停保护，停止设备任务保留网关服务。提供同源托管回退、Mac POC 兼容与完整静态 ZIP 构建入口。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确要求 capture 与 B 端页一样静态化，并保留全部功能远程操作网关；本次仅变更内部运维接口、部署说明和静态工具，不改已锁定对外文档、报文或应用版本。模拟设备和浏览器回归与真实头环、Ubuntu 现场验收分别记录。"
+
+[[change_records]]
 id = "2026-11-02-startup-wired-static-alias-and-ready-client"
 date = "2026-11-02"
 scope = "gateway_deployment"

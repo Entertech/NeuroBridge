@@ -41,6 +41,9 @@ const elements = {
 
 if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
   elements.endpoint.value = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
+} else if (window.location.search) {
+  const linkedEndpoint = new URLSearchParams(window.location.search).get("endpoint");
+  if (linkedEndpoint) elements.endpoint.value = linkedEndpoint;
 }
 
 function isConnected() {

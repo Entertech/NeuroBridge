@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 import re
 import tomllib
+from urllib.parse import urlsplit
 
 from .configuration.migration import migrate
 
@@ -108,6 +109,8 @@ class DownloadConfig:
     host: str = "127.0.0.1"
     port: int = 8766
     path: str = "/downloads"
+    capture_control_enabled: bool = True
+    capture_allowed_origins: tuple[str, ...] = ("null",)
 
 
 @dataclass(frozen=True)
@@ -271,6 +274,20 @@ def load(
         raise ValueError("download.host must be a static IP address, not a DNS name or wildcard") from exc
     if not (download_address.is_private or download_address.is_loopback) or not 1 <= download_port <= 65535 or not download_path.startswith("/"):
         raise ValueError("download host must be private/loopback; port and HTTP path are invalid")
+    capture_control_enabled = download.get("capture_control_enabled", True)
+    capture_origins = download.get("capture_allowed_origins", ["null"])
+    if type(capture_control_enabled) is not bool:
+        raise ValueError("download.capture_control_enabled must be boolean")
+    if not isinstance(capture_origins, list) or any(not isinstance(origin, str) for origin in capture_origins):
+        raise ValueError("download.capture_allowed_origins must be an origin array")
+    for origin in capture_origins:
+        if origin == "null":
+            continue
+        parsed_origin = urlsplit(origin)
+        if parsed_origin.scheme not in {"http", "https"} or not parsed_origin.hostname or parsed_origin.username or parsed_origin.password or parsed_origin.path or parsed_origin.query or parsed_origin.fragment or "*" in origin:
+            raise ValueError("download.capture_allowed_origins must contain exact HTTP origins or null")
+        if parsed_origin.port is not None and not 1 <= parsed_origin.port <= 65535:
+            raise ValueError("download.capture_allowed_origins has an invalid port")
     log_directory = Path(logging.get("directory", "/var/log/neurobridge"))
     log_filename = str(logging.get("filename", "neurobridge.log"))
     log_level = str(logging.get("level", "INFO")).upper()
@@ -463,7 +480,7 @@ def load(
             tuple(algorithm.get("command") or DEFAULT_ALGORITHM_COMMAND),
             algorithm_timeout_ms,
         ),
-        download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path),
+        download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path, capture_control_enabled, tuple(capture_origins)),
         logging=LoggingConfig(log_directory, log_filename, log_level, rotation_mode, max_bytes, backup_count, diagnostics_interval),
         network=NetworkConfig(network_mode, interface, subnet_cidr, dhcp_range_start, dhcp_range_end, dhcp_lease_time, ensure_static_address, address_check_interval),
         access=AccessConfig(access_mode),

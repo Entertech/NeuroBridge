@@ -333,6 +333,10 @@ sudo systemctl restart neurobridge
 - `GET /downloads/recordings/<recordingId>.zip`：按需导出一个已结束录播会话；
 - `GET /downloads/logs/neurobridge-logs.zip`：下载当前与轮转后的运行日志快照。
 
+采集控制台可直接双击静态包的 `capture/index.html`，默认访问 `http://192.168.88.10:8766`；也可打开网关托管的 `http://192.168.88.10:8766/capture/index.html`。电脑无需本地服务。需启用 `[download].enabled`、`capture_control_enabled`，并在设备接入验证后启用 `[ble].enabled`。页面支持开始扫描、停止采集、诊断摘要和保存 ZIP；停止只结束设备任务与当前录制，HTTP/WS 继续监听，保存当前会话会先执行停止。关闭页面不会停止采集。
+
+`[download].capture_allowed_origins` 默认 `["null"]`，允许本地文件页面；配置的 HTTP 监听同源自动允许，其他静态服务器须填写精确 origin，不支持通配。来源检查在启停前执行，不代替操作员授权。`capture_control_enabled=false` 关闭控制 API 和页面托管，完成会话下载仍可用。完整契约和错误码见 [内部联调指南](../doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md)，使用步骤见 [采集页说明](../web/capture/README.md)。本次未更改已发布 B 端 WebSocket 契约。
+
 正在采集的会话不能导出，避免得到不完整的录播文件。可用 `systemctl status neurobridge`、`journalctl -u neurobridge` 和持久化日志排查运行情况。
 
 ## 8. 日常运行、升级与停机

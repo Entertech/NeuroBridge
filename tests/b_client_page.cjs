@@ -18,7 +18,7 @@ class Element {
   get firstElementChild() { return this.children[0]; }
 }
 
-function page(injected) {
+function page(injected, search = '') {
   const nodes = new Map();
   function node(selector) {
     if (!nodes.has(selector)) nodes.set(selector, new Element());
@@ -40,11 +40,11 @@ function page(injected) {
     open() { this.readyState = Socket.OPEN; this.emit("open"); }
   }
   const context = {
-    window: { NEUROBRIDGE_VERSION: { protocolVersion: "1.0" }, location: { protocol: "file:" }, crypto: { randomUUID: () => "request-id" } },
+    window: { NEUROBRIDGE_VERSION: { protocolVersion: "1.0" }, location: { protocol: "file:", search }, crypto: { randomUUID: () => "request-id" } },
     document: { querySelector: node, querySelectorAll: () => [], createElement: () => new Element() },
     Option: function(text, value) { this.text = text; this.value = value; },
     navigator: { clipboard: { writeText: async () => {} } },
-    WebSocket: Socket, console,
+    WebSocket: Socket, URLSearchParams, console,
   };
   if (injected) context.window.NEUROBRIDGE_B_CLIENT_ENDPOINT = injected;
   vm.runInNewContext(fs.readFileSync(path.join(root, "web/b-client-test/app.js"), "utf8"), context);
@@ -80,4 +80,6 @@ assert.equal(client.node("#log").children.length, 500);
 assert.equal(second.sent.length, 1); // No automatic stream subscription or heartbeat.
 const hosted = page("ws://127.0.0.1:9999/neurobridge/v1/ws");
 assert.equal(hosted.sockets[0].url, "ws://127.0.0.1:9999/neurobridge/v1/ws");
+const linked = page(null, '?endpoint=ws%3A%2F%2F127.0.0.1%3A9999%2Fneurobridge%2Fv1%2Fws');
+assert.equal(linked.sockets[0].url, "ws://127.0.0.1:9999/neurobridge/v1/ws");
 console.log("B-side page: static default, autoconnect/status, reconnect, safe bounded logs passed");

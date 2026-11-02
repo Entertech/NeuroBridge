@@ -159,6 +159,12 @@ jobs:
       - run: node tests/capture_connection_order.cjs
       - run: python -m compileall -q neurobridge
       - run: bash tools/check-external-protocol.sh
+      - name: Build static capture and B-side consoles
+        run: python tools/build-static-console.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neurobridge-static-console
+          path: output/neurobridge-static-console.zip
       - name: Detect unpublished external documents
         id: external-document-state
         run: |
