@@ -17,6 +17,8 @@ class ServerConfig:
     host: str
     port: int
     path: str
+    send_timeout_seconds: float = 5.0
+    delivery_queue_size: int = 16
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,7 @@ class LoggingConfig:
     rotation_mode: str = "size"
     max_bytes: int = 10 * 1024**2
     backup_count: int = 14
+    diagnostics_interval_seconds: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -245,6 +248,12 @@ def load(
     if replay_speed <= 0:
         raise ValueError("recording.replay_speed must be greater than zero")
     host, port, endpoint = str(server.get("host", "127.0.0.1")), int(server.get("port", 8765)), str(server.get("path", "/neurobridge/v1/ws"))
+    send_timeout = float(server.get("send_timeout_seconds", 5))
+    queue_size = server.get("delivery_queue_size", 16)
+    if not math.isfinite(send_timeout) or send_timeout <= 0:
+        raise ValueError("server.send_timeout_seconds must be finite and greater than zero")
+    if type(queue_size) is not int or not 1 <= queue_size <= 1024:
+        raise ValueError("server.delivery_queue_size must be an integer between 1 and 1024")
     try:
         address = ipaddress.ip_address(host)
     except ValueError as exc:
@@ -263,6 +272,9 @@ def load(
     log_directory = Path(logging.get("directory", "/var/log/neurobridge"))
     log_filename = str(logging.get("filename", "neurobridge.log"))
     log_level = str(logging.get("level", "INFO")).upper()
+    diagnostics_interval = float(logging.get("diagnostics_interval_seconds", 30))
+    if not math.isfinite(diagnostics_interval) or diagnostics_interval < 0:
+        raise ValueError("logging.diagnostics_interval_seconds must be finite and non-negative")
     if Path(log_filename).name != log_filename or not log_filename.endswith(".log"):
         raise ValueError("logging.filename must be a plain .log filename")
     rotation_mode = logging.get("rotation_mode", "size")
@@ -431,7 +443,7 @@ def load(
     if any(type(value) is not int or value <= 0 for value in pipeline_values.values()):
         raise ValueError("pipeline limits and intervals must be positive integers")
     config = GatewayConfig(
-        server=ServerConfig(host, port, endpoint),
+        server=ServerConfig(host, port, endpoint, send_timeout, queue_size),
         ble=ble_config,
         recording=RecordingConfig(recording_directory, recording.get("subject_id") or None, replay_recording_id, replay_speed, recording.get("transport_trace_enabled", False), trace_limit),
         # Ubuntu installation places the locked native bridge at this fixed path.
@@ -444,7 +456,7 @@ def load(
             algorithm_timeout_ms,
         ),
         download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path),
-        logging=LoggingConfig(log_directory, log_filename, log_level, rotation_mode, max_bytes, backup_count),
+        logging=LoggingConfig(log_directory, log_filename, log_level, rotation_mode, max_bytes, backup_count, diagnostics_interval),
         network=NetworkConfig(network_mode, interface, subnet_cidr, dhcp_range_start, dhcp_range_end, dhcp_lease_time),
         access=AccessConfig(access_mode),
         local_ui=LocalUiConfig(

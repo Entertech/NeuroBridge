@@ -468,8 +468,11 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             gateway = Gateway(config(Path(directory)))
             await gateway.update_status("connectionState", "connected")
             sent: list[dict] = []
+            delivered = asyncio.Event()
             async def send(item: dict) -> None:
                 sent.append(item)
+                if item["data"].get("event") == "data":
+                    delivered.set()
             session = ClientSession()
             gateway.sessions.add(session)
             await gateway.handle(session, '{"protocolVersion":"1.0","messageType":"request","requestId":"1","action":"subscribe","params":{"streams":["eeg.raw"]}}', send)
@@ -477,6 +480,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             window = DataWindow(600, 1200)
             window.append(RawPacket("ff31", 1000, b"x" * EEG_PACKET_BYTES))
             await gateway.publish_window(window)
+            await asyncio.wait_for(delivered.wait(), timeout=1)
             event = next(item for item in sent if item["data"].get("event") == "data")
             self.assertEqual(set(event), {"protocolVersion", "code", "data", "message"})
             self.assertEqual(event["data"]["subscriptionId"], subscription_id)

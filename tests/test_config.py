@@ -15,6 +15,28 @@ BLUETOOTH_DATA_SOURCE = '[data_source]\ntype = "bluetooth"\n'
 
 
 class AlgorithmConfigurationTests(unittest.TestCase):
+    def test_delivery_and_diagnostic_settings_are_backward_compatible_and_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            path.write_text("", encoding="utf-8")
+            config = load(path)
+            self.assertEqual(config.server.send_timeout_seconds, 5)
+            self.assertEqual(config.server.delivery_queue_size, 16)
+            self.assertEqual(config.logging.diagnostics_interval_seconds, 30)
+            for content in (
+                '[server]\nsend_timeout_seconds = 0\n',
+                '[server]\nsend_timeout_seconds = nan\n',
+                '[server]\ndelivery_queue_size = 0\n',
+                '[server]\ndelivery_queue_size = true\n',
+                '[server]\ndelivery_queue_size = 1025\n',
+                '[logging]\ndiagnostics_interval_seconds = -1\n',
+                '[logging]\ndiagnostics_interval_seconds = inf\n',
+            ):
+                with self.subTest(content=content):
+                    path.write_text(content, encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        load(path)
+
     def test_algorithm_is_enabled_and_uses_installed_bridge_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gateway.toml"

@@ -6,6 +6,10 @@ profile = "kylin_headset_local"
 host = "127.0.0.1"
 port = 8765
 path = "/neurobridge/v1/ws"
+# Per-send deadline and bounded per-subscription delivery queue. A failed or
+# stalled client is closed; acquisition continues, without retransmission.
+send_timeout_seconds = 5.0
+delivery_queue_size = 16
 
 [access]
 # local_browser: the default single-machine strategy. The bundled browser UI,
@@ -111,6 +115,9 @@ backup_count = 14
 directory = "/var/log/neurobridge"
 filename = "neurobridge.log"
 level = "INFO"
+# Linux read-only network polling and BLE/capture summaries; 0 disables these
+# periodic diagnostics. Failures and connection transitions are still logged.
+diagnostics_interval_seconds = 30.0
 
 [algorithm]
 # The product candidate requires the locked bridge inside its bundled runtime.

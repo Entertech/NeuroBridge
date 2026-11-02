@@ -307,6 +307,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-11-02-network-delivery-isolation-and-runtime-diagnostics"
+date = "2026-11-02"
+scope = "gateway_reliability"
+summary = "实时、状态和录播事件统一使用有上限的独立订阅队列，发送失败、超时或积压仅关闭故障 B 端连接，隔离网络错误对蓝牙回调、采集和落盘的影响；请求发送失败不再递归发送错误。补充网关版本、网络连接关联、错误与队列上下文、Linux 链路地址路由邻居快照、蓝牙阶段与收包摘要、持久化运行异常及默认 72 小时的只读诊断包采集入口，增加故障隔离与恢复回归。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求先修复网络发送异常影响蓝牙和采集并补充诊断日志；本次为可靠性修复与内部运维诊断，不修改报文结构、动作、应用/报文版本或已锁定对外文档，不开启心跳或补传。发送失败后的连接清理行为在此登记，尚未授权发布新对外文档；Ubuntu 实机和现场验收待完成。"
+
+[[change_records]]
 id = "2026-10-30-b-client-probe-and-local-artifact-ignore"
 date = "2026-10-30"
 scope = "development_tooling"
