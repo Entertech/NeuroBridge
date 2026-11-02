@@ -57,6 +57,8 @@ Windows B 端将静态包完整解压后，双击 `b-client-test/configure-wired
 - `linux/`：Ubuntu 部署脚本、systemd 单元与日志轮转配置。
 - `windows/`：Windows 平台接入说明；当前没有经过验证的 Windows 服务启动器或部署脚本。
 
+采集控制台也可直接双击 [`web/capture/index.html`](web/capture/index.html)，默认访问 `http://192.168.88.10:8766`；开始扫描、停止采集和保存 ZIP 全部由网关执行，本机无需运行 Python。保存当前会话会先停止采集并完成录制，HTTP/WS 服务继续运行。需更新网关并启用采集控制与 BLE 配置，详见 [采集控制台说明](web/capture/README.md)。可用 `python3 tools/build-static-console.py` 生成包含两个页面及 Windows 配置脚本的独立 ZIP。
+
 网页不再放入平台目录。macOS POC 仍通过同样的 `/capture/` 与 `/b-client/` URL 提供页面，因此已有书签和使用流程不受影响。
 
 ## 按平台使用
@@ -66,7 +68,7 @@ Windows B 端将静态包完整解压后，双击 `b-client-test/configure-wired
 | Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 首期部署入口；安装为 systemd 服务。 |
 | macOS 真实头环 POC | [`mac/start-poc.command`](mac/start-poc.command) | 一键启动本机采集、算法 bridge 和控制台；详见 [`mac/README.md`](mac/README.md)。 |
 | Windows 网关 | [`windows/README.md`](windows/README.md) | 尚未完成设备、算法和后台服务验证，不能作为交付部署入口。 |
-| 采集控制台网页 | [`web/capture/`](web/capture/) | 平台无关静态资源；由本地采集服务挂载到 `/capture/`。 |
+| 采集控制台网页 | [`web/capture/`](web/capture/) | 直接打开静态页，远程查看网关状态、启停采集和保存 ZIP。 |
 | B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 平台无关纯静态资源；直接打开 `index.html` 即可使用。 |
 
 仅使用 B 端联调网页时，直接双击 [`web/b-client-test/index.html`](web/b-client-test/index.html) 或将其拖入浏览器；无需启动 HTTP 服务。然后填写专用有线网络内的网关 WebSocket 地址。该网页不代替网关进程，也不会访问本机蓝牙。

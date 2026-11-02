@@ -165,7 +165,7 @@ class FlowtimeAdapter:
             else:
                 await self.packet({FF31: "ff31", FF51: "ff51"}[characteristic], value)
         def schedule(characteristic: str, value: bytearray) -> None:
-            if self._client is not client:
+            if self._stopping or self._client is not client:
                 return
             label = {FF31: "ff31", FF32: "ff32", FF51: "ff51", BATTERY: "battery"}[characteristic]
             self._last_packet_at = time.monotonic()
@@ -202,7 +202,12 @@ class FlowtimeAdapter:
         if self._client and self._client.is_connected:
             try:
                 await self._client.write_gatt_char(FF21, b"\x06", response=True)
+            except Exception:
+                LOG.exception("Failed to send Flowtime stop command; attempting link disconnect")
+            try:
                 await self._client.disconnect()
             except Exception:
-                LOG.exception("Failed to stop Flowtime collection")
+                LOG.exception("Failed to disconnect Flowtime during stop")
         await self._drain_callbacks()
+        if self._client and self._client.is_connected:
+            raise RuntimeError("Flowtime device link is still connected after stop")

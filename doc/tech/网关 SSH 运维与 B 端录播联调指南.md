@@ -374,6 +374,25 @@ neurobridge-ops update
 
 ### 网络与蓝牙分别诊断
 
+#### 静态 capture 页的运维 HTTP 契约
+
+此接口供已授权现场操作员使用，属于网关采集运维接口，不替代已发布的 B 端 WS 取数契约。使用 `[download]` 的监听地址和端口，默认 `http://192.168.88.10:8766`。仅在专用有线或受控现场网络使用，无 TLS/Token；不允许公网或不受控网络。`[download].capture_control_enabled` 默认开启，可单独禁用；禁用后原下载接口仍保留。`[ble].enabled=false` 时开始请求返回 `503`，不得绕过部署中的设备启用开关。
+
+| 方法、路径 | 行为 |
+| --- | --- |
+| `GET /api/status` | 读取采集状态，不切换录播或自动订阅。 |
+| `GET /api/logs` | 返回本次运行的有界诊断日志缓冲，最多 200 条，每条消息最多 2048 字符；原始字节和连续波形不进入此缓冲。 |
+| `POST /api/capture/start` | 无请求体；幂等启动扫描任务。重复请求不会创建第二个设备连接。 |
+| `POST /api/capture/stop` | 无请求体；停止设备采集，完成当前会话，保留 WS 和 HTTP 监听。重复停止成功。 |
+
+新运维 JSON 响应采用 `{protocolVersion, code, data, message}` 包络，`protocolVersion` 使用台账中的报文版本。成功 `code=200`；`400` 请求格式错误、`403` 浏览器来源未授权、`404` 未启用控制接口、`405` 方法错误、`503` 设备接入未启用或控制服务正在关闭、`500` 内部操作失败，失败时 `message` 给出原因。既有 `/downloads` 索引和 ZIP 契约保持原样。
+
+状态响应 `data` 在既有网关状态字段之外包含：`captureRunning`（布尔，扫描/连接任务存活，不代表头环已连接）、`recordingId`（当前录制会话 ID 或 `null`）、`connectionError`（最近设备接入错误或 `null`）、`exportRecordingId`（当前或本次运行最近会话 ID，可能 `null`）、`exportUrl`（已结束会话的相对下载路径或 `null`）、`websocketUrl`（部署配置中的 WS 地址）。`connectionState`、`algorithmState` 与现有网关状态一致；`serverTimeMs` 为毫秒 Unix 时间。页面每 1500 ms 读取状态和日志，日志条目为 `{timestampMs, level, message}`，其中 `timestampMs` 是毫秒 Unix 时间，`level` 为日志级别；HTTP 读取延迟取决于网络和本次请求耗时，不表示设备采样频率或算法刷新频率。
+
+本地 `file://` 页的浏览器来源为 `null`，默认允许；同源托管页也允许。其他来源必须在 `[download].capture_allowed_origins` 显式登记，禁止通配来源。未授权来源在执行控制动作前即被拒绝。仅对允许来源返回 CORS 和本地网络预检头；浏览器仍可能要求用户允许本地网络访问。可直接访问网关 `/capture/index.html` 使用同源托管的同一套静态文件。
+
+保存顺序固定为：页面显示“停止并保存 ZIP” → `POST /api/capture/stop` → 确认 `recordingId=null` 且有 `exportUrl` → 下载该已完成会话。仍在采集的会话下载继续返回 `409`，不导出未完成数据。状态/日志不可达或操作失败时页面显示错误，不把浏览器网络故障解释为设备掉线，也不自动重试开始/停止操作。
+
 部署默认地址为 `192.168.88.10/24`。安装和每次 systemd 启动时检查专用物理以太网口，缺少此地址则追加；已有受控局域网地址、DHCP、默认路由和 DNS 保留。无网线或无 DHCP 也能配置，辅助服务会补回网络重连后被移除的地址；决策与失败原因见 `neurobridge.service`、`neurobridge-wired-address.service` 的 journal，详见 [默认有线地址配置](../../linux/README.md#3-专用有线网络的默认自动配置)。此功能不探测公网，不修改 SSH 原有监听地址或允许来源规则。
 
 B 端网卡配置同网段不同地址（例如 `192.168.88.20/24`）后，直接打开最新的 `web/b-client-test/index.html`，页面默认连接部署地址并自动查询状态；连接失败时显示目标、耗时、关闭码等诊断信息，可手动重试。订阅仍由 B 端按所选流启动。使用新的静态 ZIP 时须整体解压，不能只替换 HTML 或继续打开旧包。

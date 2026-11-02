@@ -7,6 +7,11 @@ h1 { margin: 0; font-size: clamp(2.3rem, 7vw, 4.8rem); letter-spacing: -.06em; l
 .intro { max-width: 650px; margin: 24px 0 36px; color: #b8cdc9; font-size: 1.05rem; line-height: 1.7; }
 .card { border: 1px solid #2a4d51; border-radius: 18px; background: rgba(13, 40, 45, .75); box-shadow: 0 16px 48px rgba(0, 0, 0, .22); }
 .status-card { padding: 28px; }
+.endpoint-card { padding: 20px; margin-bottom: 20px; }
+.endpoint-card label { display: block; color: #82a9a3; font-size: .82rem; font-weight: 700; }
+.endpoint-row { display: flex; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+.endpoint-row input { flex: 1 1 270px; min-width: 0; padding: 12px; border: 1px solid #3f6766; border-radius: 10px; background: #041014; color: #eff8f6; font: .9rem ui-monospace, monospace; }
+.endpoint-card p { margin: 12px 0 0; color: #b8cdc9; font-size: .82rem; }
 .status-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .label, dt { margin: 0; color: #82a9a3; font-size: .82rem; font-weight: 700; letter-spacing: .06em; }
 .state { margin: 6px 0 0; font-size: clamp(1.45rem, 5vw, 2rem); font-weight: 750; }

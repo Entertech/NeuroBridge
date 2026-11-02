@@ -18,7 +18,7 @@
 
 同一台 Mac 只允许一个采集实例。重复双击时，启动器会打开已有控制台而不打断当前采集；若 `8090` 被其他程序占用，会在启动前明确提示。
 
-采集过程中可在网页点击“一键保存 ZIP”。导出包把原始 EEG、原始心率和每类算法指标分别保存，并带有清单和校验和；文件字段见 [头环数据采集包格式说明 v0.1](../doc/tech/对外/头环数据采集包格式说明/头环数据采集包格式说明_v0.1.md)。
+采集过程中可在网页点击“停止并保存 ZIP”（先停止采集再下载完整会话）。导出包把原始 EEG、原始心率和每类算法指标分别保存，并带有清单和校验和；文件字段见 [头环数据采集包格式说明 v0.1](../doc/tech/对外/头环数据采集包格式说明/头环数据采集包格式说明_v0.1.md)。
 
 ## 一键停止
 
@@ -64,7 +64,7 @@ cp mac/gateway.capture.toml.example /tmp/neurobridge-gateway.capture.toml
 /tmp/neurobridge-mac-venv/bin/python mac/poc_server.py --config /tmp/neurobridge-gateway.capture.toml
 ```
 
-浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载会立即发起本机扫描；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51` 与电量通知，随后向 `FF21` 写入 `0x05` 启动采集。模板默认不启动算法 bridge，直到真实录制数据已验证其输入分组。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
+浏览器打开终端提示的 `http://127.0.0.1:8090/`。页面加载先读取状态，点击“开始扫描”后发起本机扫描；网关会扫描名称和 Model Number UUID 均匹配的头环，订阅 `FF31`、`FF32`、`FF51` 与电量通知，随后向 `FF21` 写入 `0x05` 启动采集。模板默认不启动算法 bridge，直到真实录制数据已验证其输入分组。按 `Ctrl-C` 结束时会尝试写入 `0x06` 停止采集并断开。
 
 成功连接后的记录会保存到 `/tmp/neurobridge-headband-poc/sessions/rec-.../`，其中原始 EEG、原始心率和各算法指标分别位于 `raw/`、`algorithm/` 子目录。目录名中的 `rec-...` 是后续录播所需的 recording ID。请只记录 ID，不要复制 JSONL 中的 Base64 原始字节。
 
