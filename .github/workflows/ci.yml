@@ -32,6 +32,14 @@ permissions:
   contents: read
 
 jobs:
+  windows-b-side-ip:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate B-side script with Windows PowerShell and mocked network commands
+        shell: powershell
+        run: .\tests\test-b-side-ip.ps1
+
   unit-and-websocket:
     runs-on: ubuntu-latest
     steps:

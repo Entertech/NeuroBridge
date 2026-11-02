@@ -49,7 +49,7 @@ capture time.txt date -Is
 capture system.txt uname -a
 capture neurobridge-journal.log journalctl -u neurobridge.service --since "$since" --no-pager -o short-iso-precise
 capture bluetooth.log journalctl -u bluetooth.service --since "$since" --no-pager -o short-iso-precise
-capture network.log journalctl -u NetworkManager.service -u systemd-networkd.service -u neurobridge-dhcp.service --since "$since" --no-pager -o short-iso-precise
+capture network.log journalctl -u NetworkManager.service -u systemd-networkd.service -u neurobridge-dhcp.service -u neurobridge-wired-address.service --since "$since" --no-pager -o short-iso-precise
 capture kernel.log journalctl -k --since "$since" --no-pager -o short-iso-precise
 capture operations.log journalctl -t neurobridge-ops-audit --since "$since" --no-pager -o short-iso-precise
 capture journal-boots.txt journalctl --list-boots --no-pager

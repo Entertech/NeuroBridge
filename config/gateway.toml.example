@@ -9,16 +9,20 @@ send_timeout_seconds = 5.0
 delivery_queue_size = 16
 
 [network]
-# static: the installer automatically configures this dedicated Ethernet link.
+# static: startup appends this dedicated address, preserving existing LAN state.
 # dhcp: the gateway retains server.host as its static link address and uses the
 # optional DHCP unit to assign the B-side address and advertise server.host as
 # the default gateway. The B-side then connects to the configured fixed port.
 mode = "static"
 # `auto` is safe only when this host has one physical Ethernet NIC. With more
 # than one NIC, set the dedicated B-side interface explicitly (for example,
-# `enp1s0`) and rerun the installer. The link remains private and route-free.
+# `enp1s0`) and rerun the installer. No new default route or DNS is configured.
 interface = "auto"
 subnet_cidr = "192.168.88.0/24"
+# At every systemd start, append this fixed address while preserving existing
+# LAN/DHCP addresses, routes and DNS. Repair an alias removed on reconnect.
+ensure_static_address = true
+address_check_interval_seconds = 5.0
 # The following fields are required only when mode = "dhcp". DHCP requires an
 # explicit interface name; it never accepts `auto`.
 # dhcp_range_start = "192.168.88.20"

@@ -385,11 +385,16 @@ class DeploymentTests(unittest.TestCase):
         example = (ROOT / "config" / "gateway.toml.example").read_text(encoding="utf-8")
         self.assertIn('interface = "auto"', example)
         self.assertIn('subnet_cidr = "192.168.88.0/24"', example)
-        self.assertIn('neurobridge-network-config" --config "$config_dir/gateway.toml" --apply', install_script)
+        setup_command = '"$install_dir/venv/bin/python" -m neurobridge.wired_address --config "$config_dir/gateway.toml"'
+        self.assertIn(setup_command, install_script)
         self.assertLess(
             install_script.index('if [[ ! -e "$config_dir/gateway.toml" ]]'),
-            install_script.index('neurobridge-network-config" --config "$config_dir/gateway.toml" --apply'),
+            install_script.index(setup_command),
         )
+        service = (ROOT / "linux/systemd/neurobridge.service").read_text()
+        self.assertIn("ExecStartPre=+/opt/neurobridge/venv/bin/python -m neurobridge.wired_address", service)
+        self.assertIn("neurobridge-wired-address.service", service)
+        self.assertNotIn("network-online.target", service)
 
     def test_web_assets_are_not_in_a_platform_directory(self) -> None:
         self.assertTrue((ROOT / "web" / "capture" / "index.html").is_file())

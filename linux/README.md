@@ -63,11 +63,13 @@ cd NeuroBridge
 
 ## 3. 专用有线网络的默认自动配置
 
-安装脚本会从 `/etc/neurobridge/gateway.toml` 读取网关地址并自动写入独立的 `/etc/netplan/99-neurobridge-b-side.yaml`，随后执行 `netplan apply`。这一操作不需要网线已连接、DHCP、DNS 或任何局域网；Netplan 配置会在下次开机继续生效。
+安装及每次 `neurobridge.service` 启动时，辅助程序从 `/etc/neurobridge/gateway.toml` 读取 `[server].host` 与 `[network].subnet_cidr`，检查所选有线口的链路、现有地址和路由；缺少固定地址时只追加该地址，不清空已有地址，不改 DHCP、默认路由或 DNS，也不覆盖 Netplan 文件。不以公网 ping、DNS 或互联网可达性判断专用网络是否可用。
 
-首次安装的默认值仅用于封闭直连链路，不代表双方已确认的现场参数：网关为 `192.168.88.10/24`，且不配置默认路由、DNS、IPv6 或链路本地地址。B 端应配置为同网段不同的固定地址（例如 `192.168.88.20/24`），再连接 `ws://192.168.88.10:8765/neurobridge/v1/ws`。现场确认了不同的地址、网段或端口时，必须先修改 `gateway.toml` 中对应值，并保证 `[download].host` 与 `[server].host` 一致。
+默认部署固定地址为 `192.168.88.10/24`。即使未插网线或没有 DHCP，也会将专用口启用并配置此地址；如果该口已有局域网地址，固定地址作为附加地址存在，保留原有地址、默认路由、DNS 和 IPv6。只为固定地址增加系统所需的直连子网路由，不增加默认路由。B 端仍须配置同网段、不同地址（例如 `192.168.88.20/24`），再使用 `ws://192.168.88.10:8765/neurobridge/v1/ws`。现场不同的地址、网段或端口以部署配置为准，且 `[download].host` 应与 `[server].host` 一致。局域网验证仅限受控现场，正式交付仍使用专用有线直连。
 
-`[network].interface = "auto"` 只在主机上恰有一个物理以太网口时自动选中它，即使网线未插入也可以完成配置。配置器还会检查该口是否已有全局 IPv4 地址或默认路由；发现当前网关正在通过该口联网时，安装会停止且不改动网络。存在多个物理网口、找不到网口，或其他 Netplan 文件已明确配置该网口时也会停止。请在本地控制台指定 B 端专用网口，例如：
+Windows B 端可将最新静态包完整解压，双击 `b-client-test/configure-wired-ip.bat`，允许管理员权限并按需选择有线网卡，追加默认 B 端地址；再双击 `index.html` 自动连接并查询状态。具体限制和日志位置见 [B 端文件夹说明](../web/b-client-test/README.md)。该脚本在 B 端执行，不在 Ubuntu 网关执行。
+
+`[network].interface = "auto"` 只在恰有一个物理以太网口时自动选中；已有局域网地址不再阻止追加固定地址。多个物理口必须显式指定；Wi-Fi、虚拟口、其他接口已占用目标地址、已有目标地址掩码不同，或固定子网与其他接口路由/已有经网关路由重叠时，拒绝改写并输出原因。请在本地控制台指定专用网口，例如：
 
 ```toml
 [network]
@@ -83,16 +85,26 @@ sudo ./linux/update-ubuntu.sh
 ip -br addr show enp1s0
 ```
 
-从早期版本升级时，已有 `gateway.toml` 未包含 `network.interface` 和 `network.subnet_cidr` 的，安装器会跳过自动网络配置，继续保留现场原有 Netplan；需要采用此功能时，显式加入上述两个字段后再执行安装入口。
+地址准备由 systemd 的 root 启动前置命令执行，网关业务进程仍以 `neurobridge` 普通账户运行。`neurobridge-wired-address.service` 随网关启动，默认每 5 秒检查一次，重连导致固定地址被移除时自动补回；启动后固定所选端口，不因后来出现其他网口而自动迁移。网关停止时辅助服务停止，已追加的地址保留到系统网络重配或重启，下次启动重新检查。因此该功能不依赖把静态地址写进 Netplan，也不等待 `network-online.target` 的 DHCP/公网判断。
 
-也可以只重新应用网络配置，不重建网关：
+已有现场配置默认启用上述追加行为；缺少网口配置时仅在一个物理以太网口上自动选择，缺少子网时使用默认专用子网。自定义地址请显式配置子网。可用 `[network].ensure_static_address = false` 禁用自动追加，或以 `address_check_interval_seconds` 调整维护间隔（`1..3600` 秒，默认 `5.0`）。手动运行 Python 网关不具备改系统地址的权限；部署入口是 systemd 服务。
+
+地址准备与修复的决策、原有地址、链路状态、默认路由、操作耗时和失败原因记录在 journal：
+
+```bash
+sudo journalctl -u neurobridge.service -u neurobridge-wired-address.service --since '72 hours ago' --no-pager
+```
+
+前置失败会阻止本次业务启动并由 systemd 重试；运行中的辅助服务遇到暂时网卡消失时记录错误并继续检查，采集进程继续。现有诊断包也会包含此服务日志。回退时，在本地控制台将 `ensure_static_address` 设为 `false` 并重启网关；如确认该地址由本功能追加，可手动删除这一个地址，保留原有局域网地址和路由。
+
+如果现场明确需要永久采用独占专线的 Netplan 配置，可继续手动使用旧配置器；这与默认的运行时附加地址模式不同，它仍拒绝覆盖活跃网络：
 
 ```bash
 sudo /opt/neurobridge/venv/bin/neurobridge-network-config \
   --config /etc/neurobridge/gateway.toml --apply
 ```
 
-配置器只改写带有 NeuroBridge 管理标识的上述 Netplan 文件；不会覆盖其他 Netplan 文件或选择管理网口。若现场启用了 UFW 或其他防火墙，只允许该专用网卡访问已确认的 TCP WebSocket 端口；若启用下载服务，也只放行其 HTTP 端口。
+手动 Netplan 配置器只改写带 NeuroBridge 标识的 `/etc/netplan/99-neurobridge-b-side.yaml`，保留其他文件；历史已存在的此文件也不会被运行时追加功能重写。若现场启用了防火墙，只允许专用网卡访问已确认的 WS/下载端口。
 
 若已确认需要把已由配置器管理的 B 端专用网口从一个物理接口迁移到另一个接口，必须由现场运维人员在本地控制台显式执行 `--replace-managed-interface`。旧接口仍有 IPv4 地址或默认路由时，还必须同时确认 `--replace-active`；安装器不会自动迁移接口。
 

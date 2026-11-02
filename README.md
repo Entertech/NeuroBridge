@@ -30,7 +30,7 @@ git pull --ff-only
 
 需要远程运维时，Ubuntu 环境准备会安装但不启用 OpenSSH；部署后执行 `sudo ./linux/setup-ssh-operations.sh` 即可交互式完成运维账号密码、私有监听地址和来源网段配置。一键配置会把当前源码同步为运维账号自己的固定项目目录 `~/NeuroBridge`。SSH 场景中的源码更新只能使用 `neurobridge-ops update`：该命令默认从 `origin` 更新当前分支，也可使用 `neurobridge-ops update --branch <分支名>` 选择批准分支，使用 `neurobridge-ops branch` 查询当前分支；仅快进更新后部署重启，运维人员不应直接运行 Git。还可使用 `status`、`logs --follow`、`audit` 和 `restart`。`audit` 不记录密码或业务原始数据。由于该账号维护的代码随后会以 root 安装，必须把它作为网关管理员凭据管理。完整命令和回滚步骤见 [Ubuntu 网关部署与运行教程](linux/README.md#41-启用-ssh-运维入口可选) 与 [SSH 运维和录播联调指南](doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md)。
 
-部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。首次安装会自动给唯一且未在使用的物理以太网口设置默认的封闭直连地址 `192.168.88.10/24`；无网口、多网口、已有 IPv4/IPv6 地址或默认路由、或 Netplan 冲突时会安全停止，需指定 `[network].interface` 或断开原网络后重试。专用链路地址仅接受 RFC1918 IPv4 网段。该默认值不替代双方现场确认：静态 IP、网段、端口、Flowtime 扫描匹配条件、录播目录和回放倍率均可在 `/etc/neurobridge/gateway.toml` 覆盖；`replay_recording_id` 可留空，网关离线时会自动选择目录中最新的非空历史会话。示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
+部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。安装和每次 systemd 启动时，在确认的物理以太网口追加默认直连地址 `192.168.88.10/24`，已有局域网/DHCP 地址、默认路由、DNS 和 IPv6 均保留；无网线或无 DHCP 也可准备地址。独立辅助服务默认每 5 秒检查并补回被网络重连移除的固定地址。无网口、多网口未明确选择、地址或其他网口路由冲突时拒绝猜测并记录原因。专用地址仅接受 RFC1918 IPv4 网段，现场不同参数仍须在 `/etc/neurobridge/gateway.toml` 确认配置。B 端网卡需设置同网段地址，例如 `192.168.88.20/24`；双击静态联调页后默认连接 `ws://192.168.88.10:8765/neurobridge/v1/ws` 并查询状态。`replay_recording_id` 可留空，网关离线时会自动选择最新的非空历史会话。示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
 
 ```bash
 python3 -m venv .venv
@@ -46,6 +46,8 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 运行时代码按职责组织：`neurobridge/ble/` 负责 Flowtime 扫描、连接、通知与原始字节窗口；`neurobridge/algorithm/` 隔离算法 SDK bridge；`neurobridge/business/` 负责订阅、状态、录制与录播；`neurobridge/northbound/` 仅负责 WS/WebSocket 传输。
 
 订阅事件通过有上限的独立队列发送，实时采集、落盘、蓝牙状态更新和录播时钟均不等待网络发送。发送失败、超时或积压时关闭对应 B 端连接，其他连接和采集继续；恢复后须重新连接、查询状态并订阅，不自动补传。发送期限与队列上限可在 `[server]` 配置。运行日志增加连接关联标识、发送失败/积压、蓝牙阶段与收包摘要；Linux 还会只读采集网卡、地址、路由与邻居状态变化。网关本地执行 `sudo ./linux/collect-runtime-diagnostics.sh` 可打包最近 72 小时系统日志和现有轮转日志，详见 [运行诊断](linux/README.md#运行诊断与日志采集)。自动回归覆盖故障隔离；Ubuntu 实机蓝牙及拔插网线验收仍需现场完成。
+
+Windows B 端将静态包完整解压后，双击 `b-client-test/configure-wired-ip.bat`，允许 UAC 并按需选择有线网卡，追加 `192.168.88.20/24`，再打开 `index.html` 自动连接默认网关。脚本记录本地配置日志，DHCP 共存检查失败时停止，不以重置原网络作为回退；详见 [B 端文件夹说明](web/b-client-test/README.md)。
 
 ## 仓库结构
 

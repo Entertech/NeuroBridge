@@ -132,6 +132,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-11-02-startup-wired-static-alias-and-ready-client"
+date = "2026-11-02"
+scope = "gateway_deployment"
+summary = "安装及每次 systemd 启动时在已确认物理有线口追加部署固定地址，保留已有局域网/DHCP 地址、路由、DNS 和 IPv6；新增独立辅助服务补回重连丢失的地址，拒绝多网口猜测、地址及路由冲突，记录决策和失败原因并纳入诊断包。静态 B 端页面默认使用部署 WS 地址并自动连接查询状态，补充有界连接日志与原始波形脱敏；B 端文件夹新增 Windows 双击配置有线 IP 的 BAT/PowerShell 入口、UAC 提权、DHCP 共存检查、失败回退和本地诊断日志，纳入静态 ZIP 交付白名单。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求运行时补齐部署固定 IP、静态页面直接使用部署 WS 地址、补充日志及 Windows B 端双击配置脚本，且明确授权已有局域网地址时保留原网络并追加固定地址。本次改变内部部署与联调工具，不更新已锁定对外文档、应用/报文版本，不启用公网探测、心跳、自动订阅或补传；Ubuntu 容器验证与 Windows/现场硬件验收分开记录。"
+
+[[change_records]]
 id = "2026-11-02-network-delivery-isolation-and-runtime-diagnostics"
 date = "2026-11-02"
 scope = "gateway_reliability"

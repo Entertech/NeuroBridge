@@ -71,7 +71,7 @@ class ExternalDocumentPackageTests(unittest.TestCase):
 
         self.assertEqual(
             [path.name for path in files],
-            ["README.md", "app.js", "index.html", "styles.css", "version.js"],
+            ["README.md", "app.js", "configure-wired-ip.bat", "configure-wired-ip.ps1", "index.html", "styles.css", "version.js"],
         )
 
     def test_zip_contains_all_pdfs_and_a_directly_openable_b_side_page(self) -> None:

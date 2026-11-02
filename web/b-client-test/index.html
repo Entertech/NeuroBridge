@@ -37,7 +37,7 @@
           <button id="connectButton" class="button button-primary" type="button">连接</button>
           <button id="disconnectButton" class="button button-quiet" type="button" disabled>断开</button>
         </div>
-        <p class="hint">已预填网关默认地址；现场 IP 或端口不同时请修改。仅限专用有线网络使用。</p>
+        <p class="hint">打开页面后自动连接部署默认地址并查询状态；现场地址不同时可修改后重新连接。订阅按所选流启动，仅限专用有线网络使用。</p>
       </section>
 
       <div class="workspace">
@@ -133,7 +133,7 @@
             <p class="section-index">04</p>
             <div>
               <h2 id="logTitle">协议日志</h2>
-              <p>显示连接状态、发送请求和接收帧。原始字节只显示长度，不展开 Base64 内容。</p>
+              <p>保留最近 500 条日志，含完整时间、连接耗时与关闭信息。原始字节和波形内容不展开。</p>
             </div>
           </div>
           <div class="button-row">
