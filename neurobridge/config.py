@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import ipaddress
+import math
 from pathlib import Path
 import re
 import tomllib
@@ -14,6 +15,8 @@ class ServerConfig:
     host: str
     port: int
     path: str
+    send_timeout_seconds: float = 5.0
+    delivery_queue_size: int = 16
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,7 @@ class LoggingConfig:
     directory: Path = Path("/var/log/neurobridge")
     filename: str = "neurobridge.log"
     level: str = "INFO"
+    diagnostics_interval_seconds: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -87,6 +91,12 @@ def load(path: str | Path) -> GatewayConfig:
     if replay_speed <= 0:
         raise ValueError("recording.replay_speed must be greater than zero")
     host, port, endpoint = str(server.get("host", "127.0.0.1")), int(server.get("port", 8765)), str(server.get("path", "/neurobridge/v1/ws"))
+    send_timeout = float(server.get("send_timeout_seconds", 5))
+    queue_size = server.get("delivery_queue_size", 16)
+    if not math.isfinite(send_timeout) or send_timeout <= 0:
+        raise ValueError("server.send_timeout_seconds must be finite and greater than zero")
+    if type(queue_size) is not int or not 1 <= queue_size <= 1024:
+        raise ValueError("server.delivery_queue_size must be an integer between 1 and 1024")
     try:
         address = ipaddress.ip_address(host)
     except ValueError as exc:
@@ -105,6 +115,9 @@ def load(path: str | Path) -> GatewayConfig:
     log_directory = Path(logging.get("directory", "/var/log/neurobridge"))
     log_filename = str(logging.get("filename", "neurobridge.log"))
     log_level = str(logging.get("level", "INFO")).upper()
+    diagnostics_interval = float(logging.get("diagnostics_interval_seconds", 30))
+    if not math.isfinite(diagnostics_interval) or diagnostics_interval < 0:
+        raise ValueError("logging.diagnostics_interval_seconds must be finite and non-negative")
     if Path(log_filename).name != log_filename or not log_filename.endswith(".log"):
         raise ValueError("logging.filename must be a plain .log filename")
     if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
@@ -144,7 +157,7 @@ def load(path: str | Path) -> GatewayConfig:
         if not dhcp_lease_time[:-1].isdigit() or dhcp_lease_time[-1:] not in {"m", "h", "d"} or int(dhcp_lease_time[:-1]) <= 0:
             raise ValueError("network.dhcp_lease_time must use a positive m, h, or d duration")
     return GatewayConfig(
-        server=ServerConfig(host, port, endpoint),
+        server=ServerConfig(host, port, endpoint, send_timeout, queue_size),
         ble=BleConfig(bool(ble.get("enabled", False)), ble.get("device_name") or None, str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(), int(ble.get("scan_timeout_seconds", 5)), int(ble.get("reconnect_delay_seconds", 3))),
         recording=RecordingConfig(Path(recording.get("directory", "./recordings")), recording.get("subject_id") or None, recording.get("replay_recording_id") or None, replay_speed),
         # Ubuntu installation places the locked native bridge at this fixed path.
@@ -156,6 +169,6 @@ def load(path: str | Path) -> GatewayConfig:
             tuple(algorithm.get("command") or DEFAULT_ALGORITHM_COMMAND),
         ),
         download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path),
-        logging=LoggingConfig(log_directory, log_filename, log_level),
+        logging=LoggingConfig(log_directory, log_filename, log_level, diagnostics_interval),
         network=NetworkConfig(network_mode, interface, subnet_cidr, dhcp_range_start, dhcp_range_end, dhcp_lease_time),
     )

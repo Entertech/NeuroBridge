@@ -45,6 +45,8 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 运行时代码按职责组织：`neurobridge/ble/` 负责 Flowtime 扫描、连接、通知与原始字节窗口；`neurobridge/algorithm/` 隔离算法 SDK bridge；`neurobridge/business/` 负责订阅、状态、录制与录播；`neurobridge/northbound/` 仅负责 WS/WebSocket 传输。
 
+订阅事件通过有上限的独立队列发送，实时采集、落盘、蓝牙状态更新和录播时钟均不等待网络发送。发送失败、超时或积压时关闭对应 B 端连接，其他连接和采集继续；恢复后须重新连接、查询状态并订阅，不自动补传。发送期限与队列上限可在 `[server]` 配置。运行日志增加连接关联标识、发送失败/积压、蓝牙阶段与收包摘要；Linux 还会只读采集网卡、地址、路由与邻居状态变化。网关本地执行 `sudo ./linux/collect-runtime-diagnostics.sh` 可打包最近 72 小时系统日志和现有轮转日志，详见 [运行诊断](linux/README.md#运行诊断与日志采集)。自动回归覆盖故障隔离；Ubuntu 实机蓝牙及拔插网线验收仍需现场完成。
+
 ## 仓库结构
 
 - `neurobridge/`：跨平台网关核心，不依赖 macOS、Windows 或 Linux 的启动方式。

@@ -3,6 +3,10 @@
 host = "192.168.88.10" # Default gateway static IP; replace only with a deployment-approved value.
 port = 8765            # To be confirmed with B-end host.
 path = "/neurobridge/v1/ws"
+# Per-send deadline and bounded per-subscription delivery queue. A failed or
+# stalled client is closed; acquisition continues, without retransmission.
+send_timeout_seconds = 5.0
+delivery_queue_size = 16
 
 [network]
 # static: the installer automatically configures this dedicated Ethernet link.
@@ -53,6 +57,9 @@ path = "/downloads"
 directory = "/var/log/neurobridge"
 filename = "neurobridge.log"
 level = "INFO"
+# Linux read-only network polling and BLE/capture summaries; 0 disables these
+# periodic diagnostics. Failures and connection transitions are still logged.
+diagnostics_interval_seconds = 30.0
 
 [algorithm]
 # Ubuntu installation builds the locked bridge automatically at

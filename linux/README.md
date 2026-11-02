@@ -324,6 +324,39 @@ git pull --ff-only
 
 ## 9. 常见问题排查
 
+### 运行诊断与日志采集
+
+网关本地控制台使用包含本次改动的源码执行（不需要 Git 工作区或 SSH）：
+
+```bash
+sudo ./linux/collect-runtime-diagnostics.sh
+# 也可指定起点与导出目录：
+sudo ./linux/collect-runtime-diagnostics.sh --since '72 hours ago' --output-dir /tmp
+```
+
+命令打印 `neurobridge-runtime-*.tar.gz` 的完整路径。包内包括所选时间范围内的网关、BlueZ、网络管理器、内核和运维审计日志，已有启动记录、当前服务重启状态、网卡/地址/路由/邻居/监听端口及蓝牙控制器状态，以及 `/var/log/neurobridge/` 中全部现存轮转日志。持久化日志不按时间裁剪；自定义日志位置时传 `--log-dir <目录>`。不复制配置文件、密码、私钥、录制会话或业务原始数据文件。使用 `sudo` 时导出包归发起用户所有，权限为 `0600`；日志可能含现场网络地址，应在受控渠道传递，禁止提交 Git。
+
+脚本只读查询，不改地址、不重启服务、不启动扫描或发送探测包。某项命令失败仍继续采集，结果见包内 `collection-status.txt`。若 journal 只保留本次启动，`--since` 无法找回已经丢失的历史；`journal-boots.txt` 可用于核对覆盖范围，运行文件轮转日志用于补充应用侧历史。
+
+新增运维配置向后兼容，已有 `gateway.toml` 不增加字段也会采用以下默认值：
+
+| 配置 | 默认值 | 含义 |
+| --- | --- | --- |
+| `[server].send_timeout_seconds` | `5.0` 秒 | 单次发送（含等待同连接发送锁）的期限，必须大于零且有限。 |
+| `[server].delivery_queue_size` | `16` 条消息 | 每个订阅的事件队列上限，可设置 `1..1024`；用于隔离慢客户端，不提供断网补传。 |
+| `[logging].diagnostics_interval_seconds` | `30.0` 秒 | Linux 网络状态轮询与蓝牙/采集摘要间隔；`0` 关闭周期诊断，错误与连接变化日志继续保留。 |
+
+发送失败、超时或队列满时，只清理并关闭故障 B 端连接及其订阅；采集、原始字节/算法结果落盘、其他连接和头环重连继续。B 端恢复后重新连接，调用 `getStatus` 并重新订阅。没有新增 WebSocket Ping/Pong、JSON 心跳或补传。
+
+定位时以 `bootId` 关联一次网关运行，以 `sessionId`/`subscriptionId` 关联 B 端连接和订阅，以 `attempt` 关联一次蓝牙扫描连接过程：
+
+- 网络：`B-side delivery failed` 包含事件模式、时间戳、队列深度、耗时、错误类型、`errno` 和可用的关闭码；`backlog exceeded` 区分积压与发送异常；`Network diagnostic` 记录启动、网络状态变化和发送故障后的快照（故障触发最多每 5 秒一次）。快照的 `carrier`、IPv4 地址、路由、邻居 `state` 和 `hostAssigned` 用于判断链路/地址问题，不等同于双方互通验证；周期采样可能漏掉短暂变化，需要对照内核日志。
+- 蓝牙：扫描结果包含发现/匹配数量和候选扫描 RSSI；失败记录 `scan/connect/subscribe/initialize_capture/start_capture/capture` 阶段；`BLE link disconnected` 包含连接持续时间、最后收包距今时间、分类型包数及主动停机/初始化失败清理上下文。Bleak 回调未提供 HCI 原因时明确记录 `backendReason=unavailable`，不推断头环关机或硬件故障。扫描未命中不再以一次真实连接断开计数。
+- 采集：`Capture progress` 包含录制会话、窗口时间范围、当前窗口包数和有效性，`BLE receive summary` 为本次连接累计通知包数；二者均不打印人体原始字节或算法值。回调处理错误有独立日志，后续通知继续处理；底层库的 DEBUG 数据帧追踪限制为 INFO，避免完整原始数据进入诊断日志。
+- 启动：网关版本和运行配置上限在启动日志中记录；TaskGroup 内启动/运行异常同时写入持久化日志，避免轮转文件只有重复启停而没有原因。
+
+源码回归须覆盖实时、录播、头环断开重连、客户端不可达与重新接入，并检查故障客户端不会阻止另一客户端收数、原始数据与算法结果继续落盘、旧订阅不会复用。模拟通过不等于 Ubuntu 蓝牙实机或现场验收通过。
+
 | 现象 | 检查与处理 |
 | --- | --- |
 | 服务启动失败或不断重启 | 运行 `sudo journalctl -u neurobridge.service -n 100 --no-pager`。优先检查 TOML 语法、`server.host` 是否已配置在网卡上、端口是否被占用，以及 `/etc/neurobridge/gateway.toml` 是否可由 `neurobridge` 读取。 |

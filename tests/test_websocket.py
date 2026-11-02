@@ -6,11 +6,13 @@ from pathlib import Path
 import socket
 import tempfile
 import unittest
+from unittest.mock import AsyncMock
 
 import websockets
 
 from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, RecordingConfig, ServerConfig
 from neurobridge.business.gateway import Gateway
+from neurobridge.ble.packets import DataWindow, RawPacket
 from neurobridge.northbound.websocket import SUBPROTOCOL, create_server
 
 
@@ -63,3 +65,31 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(websockets.exceptions.ConnectionClosedError) as error:
                 await client.recv()
             self.assertEqual(error.exception.code, 1003)
+
+    async def test_failed_sender_is_closed_and_new_connection_can_resubscribe(self) -> None:
+        await self.gateway.update_status("connectionState", "connected")
+        async def request(client, action, params):
+            await client.send(json.dumps({"protocolVersion": "1.0", "messageType": "request", "requestId": action, "action": action, "params": params}))
+            return json.loads(await asyncio.wait_for(client.recv(), timeout=1))
+        async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None) as failed, websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None) as healthy:
+            self.assertTrue(all(protocol.ping_interval is None for protocol in self.server.websockets))
+            confirmation = await request(failed, "subscribe", {"streams": ["eeg.raw"]})
+            old_id = confirmation["data"]["result"]["subscriptionId"]
+            await request(healthy, "subscribe", {"streams": ["eeg.raw"]})
+            session = next(item for item in self.gateway.sessions if old_id in item.subscriptions)
+            session.subscriptions[old_id].send = AsyncMock(side_effect=OSError(101, "network unreachable"))
+            window = DataWindow(0, 600)
+            window.append(RawPacket("ff31", 1, b"x" * 20))
+            await self.gateway.publish_window(window)
+            event = json.loads(await asyncio.wait_for(healthy.recv(), timeout=1))
+            self.assertEqual(event["data"]["event"], "data")
+            await asyncio.wait_for(failed.wait_closed(), timeout=1)
+            self.assertEqual(failed.close_code, 1011)
+            self.assertTrue(self.gateway.live)
+            async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None) as restored:
+                status = await request(restored, "getStatus", {})
+                self.assertEqual(status["data"]["result"]["connectionState"], "connected")
+                confirmation = await request(restored, "subscribe", {"streams": ["eeg.raw"]})
+                self.assertNotEqual(confirmation["data"]["result"]["subscriptionId"], old_id)
+                await self.gateway.publish_window(window)
+                self.assertEqual(json.loads(await asyncio.wait_for(restored.recv(), timeout=1))["data"]["event"], "data")
