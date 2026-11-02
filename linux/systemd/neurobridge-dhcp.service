@@ -1,7 +1,7 @@
 [Unit]
 Description=NeuroBridge optional DHCP service for the dedicated B-side Ethernet link
-After=network-online.target
-Wants=network-online.target
+After=network.target
+Wants=network.target
 
 [Service]
 Type=simple
@@ -9,6 +9,7 @@ Type=simple
 ExecCondition=/opt/neurobridge/venv/bin/neurobridge-dhcp-config --config /etc/neurobridge/gateway.toml --check-enabled
 RuntimeDirectory=neurobridge
 RuntimeDirectoryMode=0750
+ExecStartPre=/opt/neurobridge/venv/bin/python -m neurobridge.wired_address --config /etc/neurobridge/gateway.toml
 ExecStartPre=/opt/neurobridge/venv/bin/neurobridge-dhcp-config --config /etc/neurobridge/gateway.toml --output /run/neurobridge/dnsmasq.conf
 ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/run/neurobridge/dnsmasq.conf
 Restart=on-failure

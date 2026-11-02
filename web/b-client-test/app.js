@@ -2,6 +2,7 @@
 
 const PROTOCOL_VERSION = window.NEUROBRIDGE_VERSION.protocolVersion;
 const SUBPROTOCOL = "neurobridge.v1";
+const LOG_LIMIT = 500;
 let socket = null;
 let subscriptions = new Map();
 let logEntries = [];
@@ -61,11 +62,11 @@ function setConnectionState(state, label) {
 }
 
 function timeLabel(date = new Date()) {
-  return date.toLocaleTimeString("zh-CN", { hour12: false });
+  return date.toISOString();
 }
 
 function appendLog(kind, label, body) {
-  const entry = { time: timeLabel(), kind, label, body: typeof body === "string" ? body : JSON.stringify(body, null, 2) };
+  const entry = { time: timeLabel(), kind, label, body: typeof body === "string" ? body : JSON.stringify(body, (key, value) => ["bytesBase64", "wave"].includes(key) ? "[原始波形已省略]" : value, 2) };
   logEntries.push(entry);
   const node = document.createElement("div");
   node.className = `log-entry ${kind}`;
@@ -80,6 +81,10 @@ function appendLog(kind, label, body) {
   content.textContent = entry.body;
   node.append(time, tag, content);
   elements.log.append(node);
+  if (logEntries.length > LOG_LIMIT) {
+    logEntries.shift();
+    elements.log.firstElementChild.remove();
+  }
   elements.log.scrollTop = elements.log.scrollHeight;
 }
 
@@ -200,7 +205,12 @@ function sendPayload(payload) {
     appendLog("error", "ERROR", "尚未建立 WebSocket 连接，无法发送请求。");
     return false;
   }
-  socket.send(JSON.stringify(payload));
+  try {
+    socket.send(JSON.stringify(payload));
+  } catch (error) {
+    appendLog("error", "ERROR", `发送失败：${error.message}`);
+    return false;
+  }
   appendLog("out", "OUT →", payload);
   return true;
 }
@@ -217,6 +227,7 @@ function sendRequest(action, params) {
 }
 
 function connect() {
+  if (socket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(socket.readyState)) return;
   const endpoint = elements.endpoint.value.trim();
   if (!endpoint.startsWith("ws://") && !endpoint.startsWith("wss://")) {
     appendLog("error", "ERROR", "地址必须以 ws:// 或 wss:// 开头。");
@@ -224,31 +235,39 @@ function connect() {
   }
   try {
     setConnectionState("wait", "正在连接");
-    appendLog("system", "SYSTEM", `连接 ${endpoint}（子协议 ${SUBPROTOCOL}）`);
+    appendLog("system", "SYSTEM", `连接 ${endpoint}（子协议 ${SUBPROTOCOL}，页面来源 ${window.location.protocol}）`);
     socket = new WebSocket(endpoint, SUBPROTOCOL);
   } catch (error) {
     setConnectionState("off", "未连接");
     appendLog("error", "ERROR", error.message);
     return;
   }
-  socket.addEventListener("open", () => {
+  const connection = socket;
+  const startedAt = Date.now();
+  connection.addEventListener("open", () => {
+    if (socket !== connection) return;
     setConnectionState("on", "已连接");
     appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。" );
     sendRequest("getStatus", {});
   });
-  socket.addEventListener("message", (event) => {
+  connection.addEventListener("message", (event) => {
+    if (socket !== connection) return;
     try {
       handleGatewayMessage(JSON.parse(event.data));
     } catch {
-      appendLog("error", "ERROR", `收到非 JSON 文本帧：${event.data}`);
+      appendLog("error", "ERROR", `收到无法处理的消息（字符数 ${String(event.data).length}）。`);
     }
   });
-  socket.addEventListener("error", () => appendLog("error", "ERROR", "WebSocket 发生网络错误或网关拒绝了子协议。"));
-  socket.addEventListener("close", (event) => {
+  connection.addEventListener("error", () => {
+    if (socket !== connection) return;
+    appendLog("error", "ERROR", `连接 ${endpoint} 失败或中断；浏览器不提供底层原因，请对照网关网络日志、两端 IP/掩码、端口和子协议。`);
+  });
+  connection.addEventListener("close", (event) => {
+    if (socket !== connection) return;
     setConnectionState("off", "已断开");
     subscriptions.clear();
     refreshSubscriptionSelect();
-    appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`);
+    appendLog("system", "SYSTEM", `连接已关闭（地址=${endpoint}，code=${event.code}，clean=${event.wasClean}，持续=${Date.now() - startedAt} ms${event.reason ? `，${event.reason}` : ""}）。重新连接后需重新订阅。`);
     socket = null;
   });
 }

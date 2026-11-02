@@ -131,6 +131,8 @@ class NetworkConfig:
     dhcp_range_start: str | None = None
     dhcp_range_end: str | None = None
     dhcp_lease_time: str = "12h"
+    ensure_static_address: bool = True
+    address_check_interval_seconds: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -306,6 +308,12 @@ def load(
     dhcp_range_start = network.get("dhcp_range_start") or None
     dhcp_range_end = network.get("dhcp_range_end") or None
     dhcp_lease_time = str(network.get("dhcp_lease_time", "12h"))
+    ensure_static_address = network.get("ensure_static_address", True)
+    address_check_interval = float(network.get("address_check_interval_seconds", 5))
+    if type(ensure_static_address) is not bool:
+        raise ValueError("network.ensure_static_address must be boolean")
+    if not math.isfinite(address_check_interval) or not 1 <= address_check_interval <= 3600:
+        raise ValueError("network.address_check_interval_seconds must be between 1 and 3600")
     if network_mode not in {"static", "dhcp"}:
         raise ValueError("network.mode must be static or dhcp")
     if interface is not None and interface != "auto" and (
@@ -457,7 +465,7 @@ def load(
         ),
         download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path),
         logging=LoggingConfig(log_directory, log_filename, log_level, rotation_mode, max_bytes, backup_count, diagnostics_interval),
-        network=NetworkConfig(network_mode, interface, subnet_cidr, dhcp_range_start, dhcp_range_end, dhcp_lease_time),
+        network=NetworkConfig(network_mode, interface, subnet_cidr, dhcp_range_start, dhcp_range_end, dhcp_lease_time, ensure_static_address, address_check_interval),
         access=AccessConfig(access_mode),
         local_ui=LocalUiConfig(
             local_ui_enabled,

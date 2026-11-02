@@ -43,14 +43,9 @@ else
   chown root:neurobridge "$config_dir/gateway.toml"
   chmod 0640 "$config_dir/gateway.toml"
 fi
-# The local-browser strategy intentionally has no dedicated Ethernet fields,
-# so the configurator exits without changing Netplan. The legacy wired strategy
-# keeps the existing guarded dedicated-link behavior.
-access_mode=$("$install_dir/venv/bin/python" -c 'from neurobridge.config import load; print(load("/etc/neurobridge/gateway.toml").access.mode)')
-if [[ $access_mode == wired_b_side ]]; then
-  command -v netplan >/dev/null 2>&1 || { echo "Missing system prerequisite: netplan (required by wired_b_side)." >&2; exit 1; }
-fi
-"$install_dir/venv/bin/neurobridge-network-config" --config "$config_dir/gateway.toml" --apply
+# Append the configured dedicated-link alias without replacing an active LAN,
+# DHCP, routes, DNS, or administrator-owned Netplan configuration.
+"$install_dir/venv/bin/python" -m neurobridge.wired_address --config "$config_dir/gateway.toml"
 # Build the same locked C++ bridge used by the macOS POC, but do it as the
 # unprivileged service account.  The service never needs a per-host command in
 # gateway.toml: config.py resolves the installed fixed path automatically.
@@ -58,6 +53,7 @@ runuser -u neurobridge -- "$install_dir/linux/build-algorithm-bridge.sh" "$insta
 install -d -o root -g root -m 0755 "$algorithm_bridge_dir"
 install -o root -g root -m 0755 "$algorithm_build_dir/output/neurobridge_affective_bridge" "$algorithm_bridge_path"
 install -m 0644 "$install_dir/linux/systemd/neurobridge.service" /etc/systemd/system/neurobridge.service
+install -m 0644 "$install_dir/linux/systemd/neurobridge-wired-address.service" /etc/systemd/system/neurobridge-wired-address.service
 install -m 0644 "$install_dir/linux/systemd/neurobridge-dhcp.service" /etc/systemd/system/neurobridge-dhcp.service
 install -m 0644 "$install_dir/linux/logrotate/neurobridge" /etc/logrotate.d/neurobridge
 # Do not allow the distribution-wide dnsmasq unit to serve an unintended

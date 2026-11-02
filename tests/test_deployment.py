@@ -1241,10 +1241,15 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('stats_interval_seconds = 10', example)
         self.assertNotIn('\ninterface = "auto"', example)
         self.assertIn('neurobridge-network-config" --config "$config_dir/gateway.toml" --apply', install_script)
+        setup_command = '"$install_dir/venv/bin/python" -m neurobridge.wired_address --config "$config_dir/gateway.toml"'
         self.assertLess(
             install_script.index('if [[ ! -e "$config_dir/gateway.toml" ]]'),
-            install_script.index('neurobridge-network-config" --config "$config_dir/gateway.toml" --apply'),
+            install_script.index(setup_command),
         )
+        service = (ROOT / "linux/systemd/neurobridge.service").read_text()
+        self.assertIn("ExecStartPre=+/opt/neurobridge/venv/bin/python -m neurobridge.wired_address", service)
+        self.assertIn("neurobridge-wired-address.service", service)
+        self.assertNotIn("network-online.target", service)
 
     def test_kylin_serial_setup_is_one_command_and_preserves_a_backup(self) -> None:
         script_path = ROOT / "linux" / "setup-kylin-serial.sh"

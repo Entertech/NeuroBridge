@@ -54,6 +54,7 @@ echo "Updating Python package ..."
 "$install_dir/venv/bin/pip" install --no-deps "$install_dir"
 
 install -m 0644 "$install_dir/linux/systemd/neurobridge.service" "$unit_dir/neurobridge.service"
+install -m 0644 "$install_dir/linux/systemd/neurobridge-wired-address.service" "$unit_dir/neurobridge-wired-address.service"
 install -m 0644 "$install_dir/linux/systemd/neurobridge-dhcp.service" "$unit_dir/neurobridge-dhcp.service"
 
 systemctl daemon-reload

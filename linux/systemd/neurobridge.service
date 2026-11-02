@@ -1,13 +1,14 @@
 [Unit]
-Description=NeuroBridge Ubuntu BLE headband gateway
-After=network-online.target
-Wants=network-online.target
+Description=NeuroBridge Flowtime gateway
+After=network.target bluetooth.target
+Wants=network.target bluetooth.target neurobridge-wired-address.service
 
 [Service]
 Type=simple
 User=neurobridge
 Group=neurobridge
 Environment=PYTHONUNBUFFERED=1
+ExecStartPre=+/opt/neurobridge/venv/bin/python -m neurobridge.wired_address --config /etc/neurobridge/gateway.toml
 ExecStart=/opt/neurobridge/venv/bin/neurobridge --config /etc/neurobridge/gateway.toml
 Restart=always
 RestartSec=3

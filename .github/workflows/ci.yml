@@ -133,6 +133,13 @@ jobs:
             -DNUMCPP_NO_USE_BOOST=ON -DNEUROBRIDGE_BUILD_SDK_TESTS=ON
           cmake --build "$RUNNER_TEMP/sdk-tests" --parallel 2
           ctest --test-dir "$RUNNER_TEMP/sdk-tests" --output-on-failure
+  windows-b-side-ip:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate B-side script with Windows PowerShell and mocked network commands
+        shell: powershell
+        run: .\tests\test-b-side-ip.ps1
 
   unit-and-websocket:
     runs-on: ubuntu-latest
