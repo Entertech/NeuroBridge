@@ -1,19 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import json
 from pathlib import Path
 import socket
 import tempfile
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, PropertyMock, patch
 
 import websockets
 
 from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, RecordingConfig, ServerConfig
 from neurobridge.business.gateway import Gateway
 from neurobridge.ble.packets import DataWindow, RawPacket
-from neurobridge.northbound.websocket import SUBPROTOCOL, create_server
+from neurobridge.northbound.websocket import SUBPROTOCOL, create_server, require_subprotocol
+from websockets.datastructures import Headers
 
 
 def unused_port() -> int:
@@ -50,6 +52,9 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(websockets.exceptions.InvalidStatusCode) as error:
                     await websockets.connect(self.url, subprotocols=offered, origin=self.origin)
                 self.assertEqual(error.exception.status_code, 426)
+                self.assertEqual(error.exception.headers['Content-Type'], 'text/plain; charset=utf-8')
+        _, _, body = await require_subprotocol('/', Headers())
+        self.assertEqual(body.decode('utf-8').strip(), '连接协议不匹配，请使用 neurobridge.v1 子协议')
 
     async def test_status_request_uses_negotiated_subprotocol_and_contract_envelope(self) -> None:
         async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None, origin=self.origin) as client:
@@ -66,6 +71,53 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(websockets.exceptions.ConnectionClosedError) as error:
                 await client.recv()
             self.assertEqual(error.exception.code, 1003)
+            self.assertEqual(error.exception.reason, '请求格式不支持，请使用 JSON 文本发送')
+
+    async def test_wrong_endpoint_is_closed_with_a_readable_chinese_reason(self) -> None:
+        async with websockets.connect(self.url + '/wrong', subprotocols=[SUBPROTOCOL], ping_interval=None) as client:
+            with self.assertRaises(websockets.exceptions.ConnectionClosedError) as error:
+                await client.recv()
+            self.assertEqual(error.exception.code, 1008)
+            self.assertEqual(error.exception.reason, '连接地址错误，请检查网关地址和路径')
+
+    async def test_business_error_reasons_are_readable_chinese_over_websocket(self) -> None:
+        def request(action='getStatus', params=None, **changes):
+            value={'protocolVersion':'1.0','messageType':'request','requestId':'chinese-error','action':action,'params':params or {}}
+            value.update(changes)
+            return json.dumps(value)
+        cases=[
+            ('{',400,'请求内容格式错误，请检查 JSON 格式后重试'),
+            (request(extra=True),400,'请求信息不完整或包含多余字段，请检查后重试'),
+            (request(messageType='response'),400,'请求类型、请求编号或参数格式不正确'),
+            (request(protocolVersion='unsupported'),505,'通信协议版本不匹配，请使用网关支持的版本'),
+            (request('unknown'),400,'当前操作不受支持，请检查操作名称'),
+            (request(params={'streams':['eeg']}),400,'请求包含不支持的参数，请删除后重试'),
+            (request('subscribe',{'streams':[]}),400,'数据类型填写错误，请至少选择一种数据类型'),
+            (request('subscribe',{'streams':['status'],'includeInvalid':'false'}),400,'无效数据接收选项填写错误，请使用 true 或 false'),
+            (request('unsubscribe'),400,'缺少有效的订阅编号，请先确认需要取消的订阅'),
+            (request('unsubscribe',{'subscriptionId':'unknown'}),404,'订阅不存在或已失效，请检查订阅编号'),
+            (request('getLatest',{'streams':['unknown']}),409,'请求的数据类型不受支持或暂不可用，请重新选择'),
+            (request('getLatest',{'streams':['eeg']}),503,'头环未连接，且暂无可用的录播数据'),
+        ]
+        async with websockets.connect(self.url,subprotocols=[SUBPROTOCOL],ping_interval=None) as client:
+            async def exchange(raw,code,message=None):
+                await client.send(raw)
+                result=json.loads(await asyncio.wait_for(client.recv(),timeout=1))
+                self.assertEqual(result['code'],code,result)
+                if message is not None:self.assertEqual(result['message'],message)
+            for raw,code,message in cases:
+                with self.subTest(message=message):await exchange(raw,code,message)
+            self.gateway.config=replace(self.gateway.config,recording=replace(self.gateway.config.recording,replay_enabled=False))
+            await exchange(request('getLatest',{'streams':['eeg']}),503,'头环未连接')
+            self.gateway.status['connectionState']='connected'
+            with patch.object(type(self.gateway.algorithm),'available',new_callable=PropertyMock,return_value=True):
+                await exchange(request('subscribe',{'streams':['status']}),200)
+                await exchange(request('subscribe',{'streams':['status']}),429,'该数据已在当前连接中订阅，请勿重复订阅')
+                for stream in ['eeg.raw','hr.raw','eeg']:
+                    await exchange(request('subscribe',{'streams':[stream]}),200)
+                await exchange(request('subscribe',{'streams':['hr']}),429,'订阅数量已达上限，请先取消不需要的订阅')
+            with patch.object(self.gateway,'status_result',side_effect=RuntimeError('synthetic failure')):
+                await exchange(request(),500,'网关处理请求失败，请稍后重试或联系运维人员')
 
     async def test_local_browser_strategy_rejects_missing_or_unapproved_origins(self) -> None:
         for origin in (None, "http://localhost:8080", "https://example.com"):
@@ -114,6 +166,7 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event["data"]["event"], "data")
             await asyncio.wait_for(failed.wait_closed(), timeout=1)
             self.assertEqual(failed.close_code, 1011)
+            self.assertEqual(failed.close_reason, '数据发送失败或接收过慢，请重新连接并订阅')
             self.assertTrue(self.gateway.live)
             async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None) as restored:
                 status = await request(restored, "getStatus", {})
