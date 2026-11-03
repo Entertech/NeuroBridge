@@ -66,6 +66,28 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 await client.recv()
             self.assertEqual(error.exception.code, 1003)
 
+    async def test_corrupt_history_keeps_status_connected_and_healthy_replay_delivers(self) -> None:
+        healthy = self.gateway.store.start(1000)
+        self.gateway.store.save_algorithm(timestamp_ms=1200, valid=True, invalid_reasons=[], algorithm={"attention": 7})
+        self.gateway.store.stop()
+        broken = self.gateway.store.start(2000)
+        self.gateway.store.stop()
+        path = Path(self.directory.name) / "sessions" / broken / "raw/eeg.jsonl"
+        path.write_text("\n", encoding="utf-8")
+        async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None) as client:
+            async def request(action, params):
+                await client.send(json.dumps({"protocolVersion": "1.0", "messageType": "request", "requestId": action, "action": action, "params": params}))
+                return json.loads(await asyncio.wait_for(client.recv(), timeout=1))
+            response = await request("getStatus", {})
+            self.assertEqual(response["code"], 200)
+            self.assertEqual(response["data"]["result"]["connectionState"], "disconnected")
+            self.assertIn("eeg", response["data"]["result"]["availableStreams"])
+            response = await request("subscribe", {"streams": ["eeg"]})
+            self.assertEqual(response["code"], 200)
+            event = json.loads(await asyncio.wait_for(client.recv(), timeout=1))
+            self.assertEqual(event["data"]["payload"]["algorithm"]["attention"], 7)
+            self.assertEqual(self.gateway.replay_recording_id, healthy)
+
     async def test_failed_sender_is_closed_and_new_connection_can_resubscribe(self) -> None:
         await self.gateway.update_status("connectionState", "connected")
         async def request(client, action, params):

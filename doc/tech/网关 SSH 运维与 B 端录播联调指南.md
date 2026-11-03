@@ -374,6 +374,16 @@ neurobridge-ops update
 
 ### 网络与蓝牙分别诊断
 
+#### B 端 getStatus 返回 500 / JSONDecodeError
+
+2026-11-03 现场堆栈确认一条故障路径：`getStatus → available_streams → replay_recording_id → events → json.loads`，某个历史会话的数据行不是合法 JSON，导致状态请求返回通用 500。堆栈不能区分具体文件，也不能仅凭 `column 1` 判断为空白行、截断、其他内容或产生损坏的原因。该路径与有线 WS 已建连、BLE 扫描未匹配头环分别处理。
+
+修复后的只读录播读取在 JSON、编码、字段处理或文件访问失败时排除整个会话，不丢弃坏行后将部分数据当作完整会话发送，也不删除、修复或重写原文件。显式配置会话不可读时，仍按已有回退规则查找其他正常会话；新旧录制格式均适用。元数据清单不可解析时使用既有文件修改时间作为排序依据，数据文件仍单独校验。无可读会话时，`getStatus` 成功且仅提供 `status`；`getLatest`/`subscribe` 使用既有的录播不可用错误，不改报文结构或新增错误码。实时状态查询不读取历史录播。恢复文件后，下次读取即重试，无需重启；修复脚本或人工处理须另行保留备份并核对原始数据。
+
+日志关键字为 `Replay recording read failed`，包含 `recordingId`、`file`、`line`、`column`、`errorType`、`errno` 与 `sessionExcluded`。JSON 和逐行 UTF-8 错误给出物理行号；文件访问或后续字段处理无法定位到行时为 `None`。`sessionExcluded=False` 表示清单元数据回退，不代表排除数据会话。日志不包含原始行或算法值。同一连续错误按 `[logging].diagnostics_interval_seconds` 限频（默认 30 秒；0 为不抑制），新错误位置立即记录；不缓存录播数据或永久忽略坏文件。请求处理的非预期错误额外记录 `gatewayBootId`、连接、请求 ID 和动作，便于与 B 端日志关联。
+
+升级后重新查询状态，再用 `neurobridge-ops logs --lines 500` 或在网关本地读取 `/var/log/neurobridge/neurobridge.log`，按 `file` 和 `line` 定位。自动回归覆盖坏原始文件、坏算法文件、旧格式、权限和编码错误、正常会话回退及修复后恢复；现场损坏文件的具体内容与产生原因尚未核实，真实设备验收仍待完成。
+
 #### 静态 capture 页的运维 HTTP 契约
 
 此接口供已授权现场操作员使用，属于网关采集运维接口，不替代已发布的 B 端 WS 取数契约。使用 `[download]` 的监听地址和端口，默认 `http://192.168.88.10:8766`。仅在专用有线或受控现场网络使用，无 TLS/Token；不允许公网或不受控网络。`[download].capture_control_enabled` 默认开启，可单独禁用；禁用后原下载接口仍保留。`[ble].enabled=false` 时开始请求返回 `503`，不得绕过部署中的设备启用开关。

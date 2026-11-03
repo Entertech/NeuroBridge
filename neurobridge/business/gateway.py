@@ -64,7 +64,7 @@ class Gateway:
         self.config = config
         self.boot_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:4]}"
         self.assembler = WindowAssembler()
-        self.store = RecordingStore(config.recording.directory)
+        self.store = RecordingStore(config.recording.directory, diagnostics_interval_seconds=config.logging.diagnostics_interval_seconds)
         self.algorithm = AlgorithmRunner(config.algorithm)
         self.status: dict[str, Any] = {"connectionState": "disconnected", "wearState": "unknown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
         # This is deliberately an operational-only field: the released B-side
@@ -285,8 +285,8 @@ class Gateway:
             available.update({"eeg.raw", "hr.raw"})
         if self.algorithm.available:
             available.update({"eeg", "hr"})
-        recording_id = self.replay_recording_id
-        if not self.live and recording_id:
+        recording_id = self.replay_recording_id if not self.live else None
+        if recording_id:
             for event in self.store.events(recording_id):
                 algorithm = event["payload"].get("algorithm", {})
                 if any(key in algorithm for key in ("eeg", "sleep", "relaxation", "pleasure", "attention", "flow")):
@@ -328,6 +328,7 @@ class Gateway:
             return
         self.sessions.add(session)
         request_id: str | None = None
+        action: str | None = None
         start_replay_after_response = False
         try:
             request = self.parse_request(raw)
@@ -353,7 +354,7 @@ class Gateway:
             response = self.error(request_id, error)
             start_replay_after_response = False
         except Exception:
-            LOG.exception("Request handling failed")
+            LOG.exception("Request handling failed: bootId=%s sessionId=%s requestId=%s action=%s", self.boot_id, session.id, request_id, action)
             response = self.error(request_id, ProtocolError(500, "INTERNAL_ERROR", "Gateway request failed.", True))
             start_replay_after_response = False
         # Sending belongs outside the request error handler: a failed transport
