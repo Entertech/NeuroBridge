@@ -307,6 +307,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-11-03-operator-replay-policy-commands"
+date = "2026-11-03"
+scope = "gateway_operation"
+summary = "新增网关运维 replay enable/disable/status 指令与持久化 replay_enabled 部署策略，默认保留允许离线按需录播；禁止时阻止历史读取与播放，保留实时采集和录制文件，取数使用既有录播不可用错误。运行中通过重启生效，停止中只保存配置；补充配置原子写入、权限保留、审计和失败语义，并在既有授权设备的更新流程刷新运维命令。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确要求开启与禁止录播的指令；依据网关管理录播、B 端不切换数据源的架构实现为运维命令，不新增 B 端 WS 动作、字段、错误码或更改已发布对外文档、应用与报文版本。重启会中断当前会话，自动回归与 Ubuntu 实机验收分别记录。"
+
+[[change_records]]
 id = "2026-11-03-corrupt-recording-status-isolation"
 date = "2026-11-03"
 scope = "gateway_reliability"

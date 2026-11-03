@@ -894,6 +894,9 @@ class DeploymentTests(unittest.TestCase):
     def test_ssh_operations_are_explicitly_enabled_and_password_authenticated(self) -> None:
         preparation = (ROOT / "linux" / "prepare-ubuntu24.04-environment.sh").read_text(encoding="utf-8")
         script = (ROOT / "linux" / "configure-ssh-operations.sh").read_text(encoding="utf-8")
+        for name in ("neurobridge-ops", "neurobridge-ops-command"):
+            self.assertIn(f'cat "$setup_source_dir/linux/operations/{name}"', script)
+            script += "\n" + (ROOT / "linux/operations" / name).read_text(encoding="utf-8")
         wizard = (ROOT / "linux" / "setup-ssh-operations.sh").read_text(encoding="utf-8")
         quick_template = (ROOT / "config" / "ssh-operations.example.txt").read_text(encoding="utf-8")
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")

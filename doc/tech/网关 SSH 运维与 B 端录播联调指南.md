@@ -336,6 +336,14 @@ neurobridge-ops start
 
 `restart` 或 `stop` 会中断 B 端 WebSocket。服务恢复后，B 端必须重新连接，先调用 `getStatus`，再重新订阅；旧 `subscriptionId` 不可复用。
 
+### 5.0 允许与禁止录播
+
+网关运维命令：`neurobridge-ops replay enable`、`neurobridge-ops replay disable`、`neurobridge-ops replay status`。命令仅接受这三个动作，不新增 B 端 WS 请求，也不允许 B 端选择数据源。它们持久化 `/etc/neurobridge/gateway.toml` 的 `[recording].replay_enabled`（布尔；省略默认 `true`，保持旧部署行为）。`enable` 允许无头环时由 `getLatest`/`subscribe` 按需启动录播，不强制切换已连接头环；`disable` 禁止一切录播读取与启动，录制文件与实时采集配置保留。禁止时 `getStatus` 仍成功，无头环的取数请求返回既有录播不可用错误，`message` 明确说明已由部署配置禁止，不新增错误码或报文字段。
+
+启用/禁用使用互斥锁、完整配置校验和原子替换，保留其他字段、注释、文件权限和归属。正在运行的网关会重启以应用新值，中断当前录播与采集、完成当前录制并断开 WS；B 端须重连、`getStatus`、重新订阅。网关原本停止时仅保存配置，不启动服务；下次启动生效。重复设置同一值也会在服务运行时重启，以确保配置已应用。重启失败返回非零，明确区分已保存配置与未确认生效，不报告成功应用，也不回退用户选择的禁止策略。`status` 只报告配置值与服务活动状态，不修改配置或重启，不将配置值冒充运行时验收结果。
+
+所有 SSH 动作进入现有 `neurobridge-ops-audit`，记录开始/成功/失败。更新安装后的命令入口由 `linux/reload-ubuntu.sh` 刷新；仅在已有 SSH 运维授权入口的设备刷新，不配置/重启 SSH、不变更账号和密码。未配置 SSH 时可在网关本地执行 `sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control enable|disable|status`。自动验证与真实网关升级验收分开记录。
+
 ## 5.1 一键更新代码并重新加载
 
 `neurobridge-ops update` 不接收任意源码路径，只操作 `neurobridge-ops project` 显示的固定 Git 工作目录。它先确认工作树没有本地修改，默认读取当前分支，或使用 `--branch <分支名>` 显式选择 `origin` 上的分支；获取该分支并只允许快进更新，最后验证项目完整性、文件归属、组/其他用户写权限和符号链接，并调用其中的 `linux/reload-ubuntu.sh` 重新加载网关。

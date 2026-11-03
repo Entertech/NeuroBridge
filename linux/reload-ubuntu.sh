@@ -58,6 +58,7 @@ install -m 0644 "$install_dir/linux/systemd/neurobridge-wired-address.service" "
 install -m 0644 "$install_dir/linux/systemd/neurobridge-dhcp.service" "$unit_dir/neurobridge-dhcp.service"
 
 systemctl daemon-reload
+bash "$install_dir/linux/refresh-operations-commands.sh"
 if ! systemctl restart neurobridge.service; then
   fail "Gateway restart failed. Inspect the reason with: sudo journalctl -u neurobridge.service -n 100 --no-pager"
 fi

@@ -78,6 +78,7 @@ class RecordingConfig:
     replay_speed: float
     transport_trace_enabled: bool = False
     transport_trace_max_bytes: int = 1024 * 1024
+    replay_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -250,6 +251,9 @@ def load(
     trace_limit = recording.get("transport_trace_max_bytes", 1024 * 1024)
     if trace_limit <= 0:
         raise ValueError("recording.transport_trace_max_bytes must be positive")
+    replay_enabled = recording.get("replay_enabled", True)
+    if type(replay_enabled) is not bool:
+        raise ValueError("recording.replay_enabled must be boolean")
     if replay_speed <= 0:
         raise ValueError("recording.replay_speed must be greater than zero")
     host, port, endpoint = str(server.get("host", "127.0.0.1")), int(server.get("port", 8765)), str(server.get("path", "/neurobridge/v1/ws"))
@@ -470,7 +474,7 @@ def load(
     config = GatewayConfig(
         server=ServerConfig(host, port, endpoint, send_timeout, queue_size),
         ble=ble_config,
-        recording=RecordingConfig(recording_directory, recording.get("subject_id") or None, replay_recording_id, replay_speed, recording.get("transport_trace_enabled", False), trace_limit),
+        recording=RecordingConfig(recording_directory, recording.get("subject_id") or None, replay_recording_id, replay_speed, recording.get("transport_trace_enabled", False), trace_limit, replay_enabled),
         # Ubuntu installation places the locked native bridge at this fixed path.
         # ``enabled`` is therefore the only setting an operator needs to change
         # after the bridge's real-data POC has been approved.  An explicit command

@@ -90,6 +90,8 @@ reconnect_delay_seconds = 3
 # Optional protected transport trace; stop retaining whole chunks at the session budget.
 transport_trace_enabled = false
 transport_trace_max_bytes = 1048576
+# Gateway operator policy. Changes take effect after restarting the service.
+replay_enabled = true
 directory = "/var/lib/neurobridge/recordings"
 subject_id = ""
 # Optional pinned recording ID for offline replay in compatible non-serial
