@@ -307,6 +307,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-11-03-b-client-charts-metrics-and-device-telemetry"
+date = "2026-11-03"
+scope = "b_side_visualization_and_device_status"
+summary = "对照默认分支补齐 B 端左右/单通道脑波、七项频段能量和放松度、压力、心率、HRV、注意力、Flow，修正平铺状态查询字段读取；按已读取设备协议解释佩戴与电量，增加可选初始电量读取和失败隔离、原始状态字节诊断留存，断线清空遥测。补充缺项、零值、无效窗口、来源切换和录播循环的展示与回归。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求图表、六项指标及电量/佩戴显示，并提供已登录的设备协议供核实。保留既有 WS 字段、枚举和报文版本，不修改已锁定对外协议或采集包说明；状态字节增加独立诊断文件，不进入 EEG/HR 录播。内部预发布、运行说明和静态工具同步；合成验证与真实头环及 Ubuntu 现场验收分开。"
+
+[[change_records]]
 id = "2026-11-03-b-side-chinese-error-reasons"
 date = "2026-11-03"
 scope = "northbound_error_presentation"

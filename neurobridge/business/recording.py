@@ -14,6 +14,8 @@ import zipfile
 
 
 RAW_STREAMS = {"eeg": 20, "hr": 1}
+# Diagnostic raw bytes are retained separately and never treated as EEG/HR replay.
+STATUS_RAW_STREAMS = {"wear": 2, "battery": 1}
 # Kept only for reading sessions made by the superseded FF52 profile.  New
 # sessions never create this file and it remains hidden from northbound replay.
 LEGACY_REPLAY_STREAMS = {"hr_native": 16}
@@ -129,10 +131,10 @@ class RecordingStore:
             file.write(json.dumps({"sessionId": recording_id, **row}, separators=(",", ":"), ensure_ascii=False) + "\n")
 
     def save_raw_packet(self, *, stream: str, received_at_ms: int, window_start_ms: int, window_end_ms: int, value: bytes) -> None:
-        if not self.recording_id or stream not in RAW_STREAMS:
+        if not self.recording_id or stream not in {**RAW_STREAMS, **STATUS_RAW_STREAMS}:
             return
         self._sequence[stream] = self._sequence.get(stream, 0) + 1
-        expected = RAW_STREAMS[stream]
+        expected = {**RAW_STREAMS, **STATUS_RAW_STREAMS}[stream]
         valid = len(value) == expected
         self._append_session(
             self.recording_id,
