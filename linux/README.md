@@ -400,6 +400,22 @@ git pull --ff-only
 
 ### 运行诊断与日志采集
 
+#### HCI 断连原因采集
+
+反复掉线测试前，在网关本地管理员终端显式运行（默认持续 600 秒，可配置 1..86400 秒）：
+
+```bash
+sudo /opt/neurobridge/venv/bin/python -m neurobridge.ble.link_monitor --duration-seconds 600
+```
+
+命令调用系统 BlueZ 的 `btmon`，需要管理员权限和有效控制器（默认 `hci0`，可用 `--index hci1` 指定）。保持终端运行直到再次断开或到期，`Ctrl+C` 可提前结束；它不重启网关、不改变设备连接或扩大业务服务权限。日志写入 `/var/log/neurobridge/ble-link.log`，只白名单保存 HCI `Disconnect` 命令、`Disconnect Complete` 事件及 `Status`、`Handle`、`Reason`，不保存 ACL、波形、密钥或完整 HCI 抓包。轮转和诊断包沿用现有 `*.log*` 规则，不需要另发文件。历史事件无法由事后启动补抓；缺少 `btmon`、权限不足、控制器错误会使命令失败，检查终端报错和日志起止记录。BlueZ 原因码是控制器报告，需与网关 `attempt`、时间戳及现场关机行为对照，不能仅凭一次超时断定设备硬件故障。
+
+业务日志中 `BLE link disconnected` 新增 `stage`、`detectionSource=callback/poll`、`scanRssi`、`batteryPercent`、`wearState`、`pendingCallbacks`；RSSI 为连接前扫描值，不是断开瞬间测量值，遥测是本次连接最后收到的状态，缺失时为 `None/unknown`。`backendReason=unavailable` 仍表示 Bleak 没有提供 HCI 原因，真实原因以显式监控记录为准。`Headband cleanup started/completed`、算法进程启动/退出/强制终止日志用于区分链路断开与业务清理阻塞。
+
+算法评估和退出期限分别配置为 `[algorithm].evaluation_timeout_seconds`（默认 2 秒，覆盖写入与读取）和 `stop_timeout_seconds`（默认 1 秒，优雅退出和强制结束各最多等待一次）。交换超时或取消时隔离旧进程，当前窗口报告算法异常；后续原始字节继续落盘，算法等下一设备会话重新初始化。真实头环、Ubuntu 和 HCI 实机测试仍须现场完成。
+
+#### 常规日志导出
+
 服务会自动写入 journal 与持久化轮转日志，无需另外打开日志采集脚本。以下脚本只在需要导出排查包时手动运行；也可从任意目录执行 `sudo /opt/neurobridge/linux/collect-runtime-diagnostics.sh --since '72 hours ago' --output-dir /tmp`。
 
 网关本地控制台使用包含本次改动的源码执行（不需要 Git 工作区或 SSH）：

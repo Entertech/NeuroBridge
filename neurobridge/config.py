@@ -42,6 +42,8 @@ class RecordingConfig:
 class AlgorithmConfig:
     enabled: bool
     command: tuple[str, ...]
+    evaluation_timeout_seconds: float = 2.0
+    stop_timeout_seconds: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,10 @@ def load(path: str | Path) -> GatewayConfig:
     with Path(path).open("rb") as file:
         raw = tomllib.load(file)
     server, ble, recording, algorithm, download, logging, network = (raw.get(name, {}) for name in ("server", "ble", "recording", "algorithm", "download", "logging", "network"))
+    algorithm_timeouts = tuple(float(algorithm.get(key, default)) for key, default in (
+        ("evaluation_timeout_seconds", 2), ("stop_timeout_seconds", 1)))
+    if any(not math.isfinite(value) or value <= 0 for value in algorithm_timeouts):
+        raise ValueError("algorithm timeouts must be finite and greater than zero")
     replay_speed = float(recording.get("replay_speed", 1))
     replay_enabled = recording.get("replay_enabled", True)
     if type(replay_enabled) is not bool:
@@ -196,6 +202,7 @@ def load(path: str | Path) -> GatewayConfig:
         algorithm=AlgorithmConfig(
             bool(algorithm.get("enabled", True)),
             tuple(algorithm.get("command") or DEFAULT_ALGORITHM_COMMAND),
+            *algorithm_timeouts,
         ),
         download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path, capture_control_enabled, tuple(capture_origins)),
         logging=LoggingConfig(log_directory, log_filename, log_level, diagnostics_interval),

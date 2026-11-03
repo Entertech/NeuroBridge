@@ -120,9 +120,12 @@ class AlgorithmRunnerTests(unittest.IsolatedAsyncioTestCase):
             async def drain(self) -> None:
                 raise BrokenPipeError("bridge exited")
         class Process:
+            pid = 0
             returncode = None
             stdin = BrokenStdin()
             stdout = object()
+            def terminate(self): self.returncode = -15
+            async def wait(self): return self.returncode
         runner = AlgorithmRunner(AlgorithmConfig(True, ("bridge",)))
         runner.process = Process()  # type: ignore[assignment]
         window = DataWindow(0, 600)
@@ -142,9 +145,12 @@ class AlgorithmRunnerTests(unittest.IsolatedAsyncioTestCase):
             async def readline(self) -> bytes:
                 return b'{"algorithm":{},"bridgeError":"invalid EEG group"}\n'
         class Process:
+            pid = 0
             returncode = None
             stdin = Stdin()
             stdout = Stdout()
+            def terminate(self): self.returncode = -15
+            async def wait(self): return self.returncode
         runner = AlgorithmRunner(AlgorithmConfig(True, ("bridge",)))
         runner.process = Process()  # type: ignore[assignment]
         window = DataWindow(0, 600)

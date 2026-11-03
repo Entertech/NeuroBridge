@@ -72,6 +72,8 @@ level = "INFO"
 diagnostics_interval_seconds = 30.0
 
 [algorithm]
+evaluation_timeout_seconds = 2.0
+stop_timeout_seconds = 1.0
 # Ubuntu installation builds the locked bridge automatically at
 # /usr/local/lib/neurobridge/neurobridge_affective_bridge; no command needs to
 # be entered here. The default is enabled; use false only for a deliberate

@@ -64,6 +64,7 @@ class Gateway:
         self.config = config
         self.boot_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:4]}"
         self.assembler = WindowAssembler()
+        self._capture_lock = asyncio.Lock()
         self.store = RecordingStore(config.recording.directory, diagnostics_interval_seconds=config.logging.diagnostics_interval_seconds)
         self.algorithm = AlgorithmRunner(config.algorithm)
         self.status: dict[str, Any] = {"connectionState": "disconnected", "wearState": "unknown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
@@ -124,8 +125,10 @@ class Gateway:
         LOG.info("Gateway stopped: bootId=%s", self.boot_id)
 
     async def on_device_ready(self) -> None:
-        """Start a fresh local algorithm session before publishing connected state."""
+        """Prepare algorithm and recording before enabling any notifications."""
         await self.algorithm.initialize()
+        recording_id = self.store.start(now_ms())
+        LOG.info("Device recording prepared before notifications: bootId=%s recordingId=%s", self.boot_id, recording_id)
         self.status["algorithmState"] = "ready" if self.algorithm.available else ("error" if self.algorithm.error else "unavailable")
         if self.status["algorithmState"] == "error":
             LOG.error("Device capture initialized: algorithmState=error reason=%s", self.algorithm.error)
@@ -138,7 +141,7 @@ class Gateway:
         if name == "connectionState" and value == "connected" and previous != "connected":
             self.connection_error = None
             await self._stop_replay()
-            recording_id = self.store.start(now_ms())
+            recording_id = self.store.recording_id or self.store.start(now_ms())
             self._capture_windows = 0
             self._capture_summary_at = time.monotonic()
             LOG.info("Headband connected; recording started: recordingId=%s", recording_id)
@@ -147,6 +150,8 @@ class Gateway:
             self.status["batteryPercent"] = None
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
             recording_id = self.store.recording_id
+            cleanup_started = time.monotonic()
+            LOG.info("Headband cleanup started: bootId=%s recordingId=%s algorithmState=%s", self.boot_id, recording_id, self.status["algorithmState"])
             await self._cancel_window_flush()
             last = self.assembler.flush()
             if last:
@@ -154,6 +159,7 @@ class Gateway:
             await self.algorithm.stop()
             self.status["algorithmState"] = "unavailable"
             self.store.stop()
+            LOG.info("Headband cleanup completed: bootId=%s recordingId=%s elapsedMs=%s", self.boot_id, recording_id, round((time.monotonic() - cleanup_started) * 1000))
             if previous == "connected":
                 LOG.info("Headband disconnected; recording stopped: bootId=%s recordingId=%s captureWindows=%s", self.boot_id, recording_id, self._capture_windows)
             else:
@@ -186,9 +192,11 @@ class Gateway:
             )
         if characteristic in {"ff32", "battery"}:
             return
-        for window in self.assembler.add(characteristic, value, received_at_ms):
-            await self.publish_window(window)
-        self._schedule_window_flush()
+        # Raw persistence above stays independent of slow algorithm processing.
+        async with self._capture_lock:
+            for window in self.assembler.add(characteristic, value, received_at_ms):
+                await self.publish_window(window)
+            self._schedule_window_flush()
 
     def _schedule_window_flush(self) -> None:
         deadline = self.assembler.window_end_ms
@@ -206,8 +214,11 @@ class Gateway:
             await asyncio.sleep(max(0, deadline_ms - now_ms()) / 1000)
             if self._window_flush_deadline_ms != deadline_ms:
                 return
-            for window in self.assembler.flush_until(deadline_ms):
-                await self.publish_window(window)
+            async with self._capture_lock:
+                if self._window_flush_deadline_ms != deadline_ms:
+                    return
+                for window in self.assembler.flush_until(deadline_ms):
+                    await self.publish_window(window)
         except asyncio.CancelledError:
             return
         finally:
@@ -230,7 +241,7 @@ class Gateway:
         if self.algorithm.error and self.status["algorithmState"] != "error":
             await self.update_status("algorithmState", "error")
         # A disabled/unready algorithm does not invalidate correctly received raw data.
-        if self.algorithm.available:
+        if self.algorithm.available or self.algorithm.error:
             reasons.extend(algorithm_reasons)
         valid = not reasons
         if algorithm_payload:

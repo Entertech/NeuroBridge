@@ -39,7 +39,7 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。`FF31` 原始 EEG 与 `FF51` 原始心率均会持久化，`FF51` 用于北向 `hr.raw`；算法输入保留原始字节序和完整窗口。首次 Ubuntu 安装会以锁定版本自动构建并安装行 JSON C++ bridge 到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`，因此部署配置不需要填写算法命令；`algorithm.enabled` 默认开启，也是唯一启停项。macOS 仅完成源码构建及合成输入烟雾测试；SDK 输入分组、真实 Flowtime 数据输出和 Ubuntu x86_64 构建尚未验证，现场仍须根据状态、日志和真实数据验证算法结果。
+Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。连接后先初始化新算法会话和录制会话，再订阅 `FF31`、`FF32`、`FF51` 通知、向 `FF21` 写入 `0x05`，最后才公布 `connected`，确保启动期间的首包可落盘；初始化失败时关闭对应会话；停止时写入 `0x06`。`FF31` 原始 EEG 与 `FF51` 原始心率均会持久化，`FF51` 用于北向 `hr.raw`；算法输入保留原始字节序和完整窗口。首次 Ubuntu 安装会以锁定版本自动构建并安装行 JSON C++ bridge 到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`，因此部署配置不需要填写算法命令；`algorithm.enabled` 默认开启，也是唯一启停项。macOS 仅完成源码构建及合成输入烟雾测试；SDK 输入分组、真实 Flowtime 数据输出和 Ubuntu x86_64 构建尚未验证，现场仍须根据状态、日志和真实数据验证算法结果。
 
 佩戴状态按设备协议表 4-4 解释：FF32 两字节均为零表示佩戴且接触良好，任一非零表示未佩戴或接触不良，长度不符为未知。电量按表 4-2：3.1 V 对应 0%、4.1 V 对应 100%，单字节 `0x52` 对应 3.92 V，即 82%；有效值为 0–100，其他数据返回空。连接建立后尽力读取一次电量，并接收可选通知；电量读取或订阅失败只记诊断，不中断 EEG/HR 采集。FF32 与电量原始字节另存 `raw/wear.jsonl`、`raw/battery.jsonl`，包含会话及窗口时间，不进入 EEG/HR 算法窗口或北向原始数据录播。旧录制格式仍可读取，断线后清空当前设备遥测。本轮依据协议实现并完成合成回归，真实头环及 Ubuntu 现场验收待完成。
 
@@ -62,6 +62,8 @@ sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control status   
 历史会话中存在无效 JSON、编码错误或无法读取的数据文件时，录播读取排除整个会话并尝试其他正常会话，保留原文件。`getStatus` 继续返回状态；全部会话不可用时取数返回既有录播不可用错误。错误日志包含会话、文件和 JSON/编码错误行号，便于定位；真实采集状态查询不读取历史录播。详见 [内部诊断说明](doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md)。
 
 Windows B 端将静态包完整解压后，双击 `b-client-test/configure-wired-ip.bat`，允许 UAC 并按需选择有线网卡，追加 `192.168.88.20/24`，再打开 `index.html` 自动连接默认网关。脚本记录本地配置日志，DHCP 共存检查失败时停止，不以重置原网络作为回退；详见 [B 端文件夹说明](web/b-client-test/README.md)。
+
+采集窗口和算法请求串行处理；算法交换超时或取消后终止旧进程，防止迟到响应写入新窗口，直到下一设备会话初始化才恢复算法，原始通知继续落盘。`[algorithm].evaluation_timeout_seconds` 默认 2 秒；`stop_timeout_seconds` 默认 1 秒，终止超时后升级强制结束，再最多等待同一期限，不阻塞后续蓝牙重连。断线回调兼容锁定的 Bleak backend 对象，并保留轮询兜底。日志包含断线检测来源、阶段、扫描 RSSI、电量/佩戴快照、最后收包间隔、待处理回调数和清理耗时；控制器原因码需在测试前显式启动 [HCI 断连原因采集](linux/README.md#hci-断连原因采集)，仅持久化断连元数据。上述能力已覆盖模拟故障回归，Ubuntu 实机验收仍待进行。
 
 ## 仓库结构
 
