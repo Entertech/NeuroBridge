@@ -307,6 +307,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-11-03-replay-policy-mode-and-operations-reference"
+date = "2026-11-03"
+scope = "gateway_mode_and_internal_documentation"
+summary = "mode 统一受录播许可约束，禁止时状态和采集快照为 live，未连接头环仍按真实连接状态返回中文错误；运行中禁止指令通过重启停止旧录播并切回 live。整理本机与可选 SSH 操作、status 输出、约三天日志、静态页面及网络/蓝牙排查，新增完整 B 端异常 message 与场景表；同步唯一内部预发布的字段说明、切换时序和模拟验证。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求整理既有对话文档、B 端错误场景，并明确禁止录播时 mode 不能为 replay，当前 replay 应切回 live；保留枚举、报文结构及应用/报文版本，不修改已发布对外文档或发布 PDF。live 等待状态不等于设备已连接；自动模拟与现场验收分开记录，正式发布仍待明确授权。"
+
+[[change_records]]
 id = "2026-11-03-headband-disconnected-chinese-message"
 date = "2026-11-03"
 scope = "gateway_error_message"

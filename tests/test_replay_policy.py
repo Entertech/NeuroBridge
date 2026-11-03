@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,12 @@ import tempfile
 import tomllib
 import unittest
 from unittest.mock import patch
+
+import websockets
+
+from neurobridge.capture_control import CaptureControl
+from neurobridge.northbound.websocket import create_server
+from test_websocket import unused_port
 
 from neurobridge.business.gateway import ClientSession, Gateway, REPLAY_NOT_AVAILABLE_REASON
 from neurobridge.config import load
@@ -117,6 +124,8 @@ class ReplayGatewayTests(unittest.IsolatedAsyncioTestCase):
             session=ClientSession(); gateway.sessions.add(session)
             with patch.object(gateway.store,'replay_recording_id',side_effect=AssertionError('Disabled replay must not read history')):
                 self.assertEqual(gateway.status_result()['availableStreams'],['status'])
+                self.assertEqual(gateway.status_result()['mode'],'live')
+                self.assertFalse(gateway.live)
                 for action in ['getLatest','subscribe']:
                     sent=[]
                     async def send(item):sent.append(item)
@@ -132,7 +141,13 @@ class ReplayGatewayTests(unittest.IsolatedAsyncioTestCase):
                 await gateway.receive_packet('ff31',b'e'*20)
                 self.assertEqual(gateway.store.recording_id,recording)
                 self.assertIn('eeg.raw',gateway.status_result()['availableStreams'])
+                received=[]
+                async def status_send(item): received.append(item)
+                await gateway.subscribe(session,{'streams':['status']},status_send)
                 await gateway.update_status('connectionState','disconnected')
+                await asyncio.sleep(0)
+                self.assertEqual(received[-1]['data']['mode'],'live')
+                self.assertEqual(received[-1]['data']['payload']['status']['connectionState'],'disconnected')
                 await gateway.update_status('connectionState','connected')
                 self.assertNotEqual(gateway.store.recording_id,recording)
             await gateway.stop()
@@ -147,12 +162,75 @@ class ReplayGatewayTests(unittest.IsolatedAsyncioTestCase):
             gateway.store.stop();await gateway.stop()
             with patch('neurobridge.replay_control.service_active',return_value=False):apply('disable',path)
             gateway=Gateway(load(path));await gateway.start()
-            self.assertFalse(gateway.replay_available);await gateway.stop()
+            self.assertFalse(gateway.replay_available)
+            self.assertEqual(gateway.mode(),'live')
+            await gateway.stop()
             with patch('neurobridge.replay_control.service_active',return_value=False):apply('enable',path)
             gateway=Gateway(load(path));await gateway.start()
             self.assertTrue(gateway.replay_available)
+            self.assertEqual(gateway.mode(),'replay')
             self.assertEqual(gateway.latest_replay_algorithm()[0]['attention'],7)
             await gateway.stop()
+
+    async def test_disable_command_restarts_active_replay_into_live_mode_for_ws_and_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory); path=root/'gateway.toml'; port=unused_port()
+            path.write_text('[server]\nhost="127.0.0.1"\nport='+str(port)+'\n[recording]\ndirectory='+json.dumps(str(root/'data'))+'\n[algorithm]\nenabled=false\n')
+            runtime={}
+            async def boot():
+                gateway=Gateway(load(path))
+                await gateway.start()
+                runtime.update(gateway=gateway, capture=CaptureControl(gateway), server=await create_server(gateway))
+            async def shutdown():
+                runtime['server'].close()
+                await runtime['server'].wait_closed()
+                await runtime['capture'].shutdown()
+                await runtime['gateway'].stop()
+            async def restart():
+                await shutdown()
+                await boot()
+            await boot()
+            gateway=runtime['gateway']; gateway.store.start(1000)
+            for timestamp in [1200, 61200]:
+                gateway.store.save_algorithm(timestamp_ms=timestamp,valid=True,invalid_reasons=[],algorithm={'attention':7})
+            recording=gateway.store.recording_id
+            gateway.store.stop()
+            saved=(root/'data/algorithm'/f'{recording}.jsonl').read_bytes()
+            loop=asyncio.get_running_loop()
+            def systemctl(command,**kwargs):
+                if command[1]=='restart':
+                    asyncio.run_coroutine_threadsafe(restart(),loop).result(timeout=5)
+                return subprocess.CompletedProcess(command,0)
+            url=f'ws://127.0.0.1:{port}/neurobridge/v1/ws'
+            async def request(client,action,params):
+                await client.send(json.dumps({'protocolVersion':'1.0','messageType':'request','requestId':action,'action':action,'params':params}))
+                return json.loads(await asyncio.wait_for(client.recv(),timeout=1))
+            try:
+                async with websockets.connect(url,subprotocols=['neurobridge.v1'],ping_interval=None) as client:
+                    response=await request(client,'subscribe',{'streams':['eeg']})
+                    self.assertEqual(response['data']['result']['mode'],'replay')
+                    event=json.loads(await asyncio.wait_for(client.recv(),timeout=1))
+                    self.assertEqual(event['data']['mode'],'replay')
+                    self.assertIsNotNone(gateway._replay_task)
+                    with patch('neurobridge.replay_control.subprocess.run',side_effect=systemctl):
+                        result=await asyncio.to_thread(apply,'disable',path)
+                    self.assertTrue(result['applied'])
+                    await asyncio.wait_for(client.wait_closed(),timeout=1)
+                    self.assertIsNone(gateway._replay_task)
+                async with websockets.connect(url,subprotocols=['neurobridge.v1'],ping_interval=None) as client:
+                    response=await request(client,'getStatus',{})
+                    self.assertEqual(response['code'],200)
+                    status=response['data']['result']
+                    self.assertEqual(status['mode'],'live')
+                    self.assertEqual(status['connectionState'],'disconnected')
+                    self.assertEqual(runtime['capture'].snapshot()['mode'],'live')
+                    self.assertIsNone(runtime['gateway']._replay_task)
+                    response=await request(client,'getLatest',{'streams':['eeg']})
+                    self.assertEqual(response['code'],503)
+                    self.assertEqual(response['message'],'头环未连接')
+                self.assertEqual((root/'data/algorithm'/f'{recording}.jsonl').read_bytes(),saved)
+            finally:
+                await shutdown()
 
 
 class ReplaySshCommandTests(unittest.TestCase):

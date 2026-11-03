@@ -23,6 +23,20 @@ Windows 命令依据：[Microsoft netsh interface](https://learn.microsoft.com/e
 
 本机策略会校验页面 Origin；直接双击 `index.html` 形成的 `file://` 页面仅用于资源开发检查，不能连接生产回环 WebSocket。切换旧有线模式时应关闭本机网页服务并使用批准的隔离专网地址，仍不得暴露公网、无线网络或不受控局域网。
 
+## 异常提示与场景
+
+| B 端表现 | 场景与处理 |
+| --- | --- |
+| `getStatus` 返回 200，头环状态未连接 | 查询成功；禁止录播时 `mode="live"` 仍可能表示等待头环，须看 `connectionState`；允许离线录播时的 `replay` 不证明正在播放 |
+| 取数返回 503、`message="头环未连接"` | 当前没有实时连接且部署禁止录播，状态中 `mode="live"`；展示中文提示，联系网关运维，不在 B 端切换数据源 |
+| 取数返回 503、`message="No replay data is available."` | 无实时连接且允许录播，但没有可读历史会话；由网关运维检查 |
+| 返回 409、`One or more streams are unavailable.` | 查看 `data.details.streams`，按动作允许范围及最新 `availableStreams` 选择流 |
+| 返回 429 | 重复订阅流或超过同一连接的订阅数量上限；先检查已有订阅，不要循环重发 |
+| 返回 500、`Gateway request failed.` | 请求到达网关但处理失败；保留请求 ID、动作和时间，交给网关运维查堆栈，不能据此确定网络或硬件根因 |
+| 浏览器连接失败或异常关闭 | 可能没有业务 JSON 响应；核对完整地址、端口、子协议及网关日志，不能将浏览器关闭码当作具体硬件原因 |
+
+测试页时间带 `Z` 表示 UTC，北京时间加 8 小时。重连、网关更新或录播开关应用后，先 `getStatus` 再重新订阅，旧订阅 ID 不复用。完整的实际 `code/reason/message`、触发场景与处理表见源码 `doc/tech/B端异常消息与场景排查表.md`；该表是当前实现的内部联调参考，已发布协议版本保持独立。
+
 ## 没有网页时验证收数
 
 将仓库中的 `tools/b-client-probe.py` 单独复制到 B 端，在已准备好的 Python 环境中安装 `websockets==12.0`（离线现场提前准备依赖），然后运行：
