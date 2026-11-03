@@ -8,3 +8,5 @@
 页面必须继续使用网关公开的 HTTP/WebSocket 契约，不能依赖某个平台的文件系统路径或命令。
 
 完整静态包：`python3 tools/build-static-console.py`，输出 `output/neurobridge-static-console.zip`。必须完整解压，保留两个目录之间的相对位置；本机无需启动服务。
+
+当前 B 端 `message`、触发场景与连接异常分类见 [内部异常消息表](../doc/tech/B端异常消息与场景排查表.md)；网关本机录播命令与输出说明见 [Linux 运行说明](../linux/README.md#61-在网关本机管理录播无需-ssh)。

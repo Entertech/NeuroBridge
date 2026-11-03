@@ -30,7 +30,7 @@ git pull --ff-only
 
 需要远程运维时，Ubuntu 环境准备会安装但不启用 OpenSSH；部署后执行 `sudo ./linux/setup-ssh-operations.sh` 即可交互式完成运维账号密码、私有监听地址和来源网段配置。一键配置会把当前源码同步为运维账号自己的固定项目目录 `~/NeuroBridge`。SSH 场景中的源码更新只能使用 `neurobridge-ops update`：该命令默认从 `origin` 更新当前分支，也可使用 `neurobridge-ops update --branch <分支名>` 选择批准分支，使用 `neurobridge-ops branch` 查询当前分支；仅快进更新后部署重启，运维人员不应直接运行 Git。还可使用 `status`、`logs --follow`、`audit` 和 `restart`。`audit` 不记录密码或业务原始数据。由于该账号维护的代码随后会以 root 安装，必须把它作为网关管理员凭据管理。完整命令和回滚步骤见 [Ubuntu 网关部署与运行教程](linux/README.md#41-启用-ssh-运维入口可选) 与 [SSH 运维和录播联调指南](doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md)。
 
-部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。安装和每次 systemd 启动时，在确认的物理以太网口追加默认直连地址 `192.168.88.10/24`，已有局域网/DHCP 地址、默认路由、DNS 和 IPv6 均保留；无网线或无 DHCP 也可准备地址。独立辅助服务默认每 5 秒检查并补回被网络重连移除的固定地址。无网口、多网口未明确选择、地址或其他网口路由冲突时拒绝猜测并记录原因。专用地址仅接受 RFC1918 IPv4 网段，现场不同参数仍须在 `/etc/neurobridge/gateway.toml` 确认配置。B 端网卡需设置同网段地址，例如 `192.168.88.20/24`；双击静态联调页后默认连接 `ws://192.168.88.10:8765/neurobridge/v1/ws` 并查询状态。`replay_recording_id` 可留空，网关离线时会自动选择最新的非空历史会话。示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
+部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。安装和每次 systemd 启动时，在确认的物理以太网口追加默认直连地址 `192.168.88.10/24`，已有局域网/DHCP 地址、默认路由、DNS 和 IPv6 均保留；无网线或无 DHCP 也可准备地址。独立辅助服务默认每 5 秒检查并补回被网络重连移除的固定地址。无网口、多网口未明确选择、地址或其他网口路由冲突时拒绝猜测并记录原因。专用地址仅接受 RFC1918 IPv4 网段，现场不同参数仍须在 `/etc/neurobridge/gateway.toml` 确认配置。B 端网卡需设置同网段地址，例如 `192.168.88.20/24`；双击静态联调页后默认连接 `ws://192.168.88.10:8765/neurobridge/v1/ws` 并查询状态。当 `[recording].replay_enabled = true` 时，`replay_recording_id` 可留空，网关离线时会自动选择最新的非空、可读取历史会话。示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
 
 ```bash
 python3 -m venv .venv
@@ -47,7 +47,15 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 订阅事件通过有上限的独立队列发送，实时采集、落盘、蓝牙状态更新和录播时钟均不等待网络发送。发送失败、超时或积压时关闭对应 B 端连接，其他连接和采集继续；恢复后须重新连接、查询状态并订阅，不自动补传。发送期限与队列上限可在 `[server]` 配置。运行日志增加连接关联标识、发送失败/积压、蓝牙阶段与收包摘要；Linux 还会只读采集网卡、地址、路由与邻居状态变化。网关本地执行 `sudo ./linux/collect-runtime-diagnostics.sh` 可打包最近 72 小时系统日志和现有轮转日志，详见 [运行诊断](linux/README.md#运行诊断与日志采集)。自动回归覆盖故障隔离；Ubuntu 实机蓝牙及拔插网线验收仍需现场完成。
 
-网关运维可用 `neurobridge-ops replay enable` 允许离线录播、`neurobridge-ops replay disable` 禁止录播、`neurobridge-ops replay status` 查询保存的策略。开关持久化为 `[recording].replay_enabled`，默认 `true`；正在运行的网关会重启应用，B 端须重新连接和订阅。停止中的网关只保存策略，不自动启动。开启后仍由 B 端取数请求按需启动录播，实时头环优先；禁止不删除历史文件。详见 [运维指令](doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md#50-允许与禁止录播)。
+网关本机无需安装 `neurobridge-ops` 也可管理录播：
+
+```bash
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control enable   # 允许录播
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control disable  # 禁止录播
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control status   # 查询配置
+```
+
+开关持久化到 `[recording].replay_enabled`（默认 `true`）。运行中的网关会重启生效，B 端须重新连接和订阅；已停止时仅保存配置。开启仍由取数请求按需启动录播，实时头环优先；禁止保留历史文件，生效后 `mode` 为 `live`，即使头环尚未连接。`status` 的 `applied=null` 表示只查询，不能据此确认运行时已应用策略。已配置 SSH 运维时才可使用 `neurobridge-ops replay ...`。模块缺失、部署更新和完整输出说明见 [本机录播操作](linux/README.md#61-在网关本机管理录播无需-ssh)。
 
 历史会话中存在无效 JSON、编码错误或无法读取的数据文件时，录播读取排除整个会话并尝试其他正常会话，保留原文件。`getStatus` 继续返回状态；全部会话不可用时取数返回既有录播不可用错误。错误日志包含会话、文件和 JSON/编码错误行号，便于定位；真实采集状态查询不读取历史录播。详见 [内部诊断说明](doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md)。
 
@@ -82,7 +90,7 @@ Windows B 端将静态包完整解压后，双击 `b-client-test/configure-wired
 - 目标硬件：N100/N150 x86 小主机，8 GB 内存、256 GB SSD、千兆网口（双网口优先）、经实机验证可稳定连接目标头环的蓝牙 5.x 芯片。
 - 目标系统：Ubuntu LTS/Linux。网关不需要运行 Android；Android 或浏览器仅作为第三方展示端。
 - 链路：`头环 → BLE → 网关 → 有线以太网 → 第三方 B 端主机`。
-- 运行方式：实时模式和录播模式均为交付范围；头环未连接时，B 端首次 `subscribe` 或 `getLatest` 会启动网关级录播流程，并以 `mode="replay"` 标记数据来源。录播优先使用部署配置明确指定且有效的会话；否则自动遍历录播目录，选择最新的非空历史会话。后续订阅加入该流程的当前进度。最后一个 B 端 WebSocket 连接断开时，网关停止录播并重置进度；仍有连接时，文件播放到末尾会从首条重新循环。头环重连时自动停止录播并回到实时。网关应开机自启，现场无需操作。
+- 运行方式：实时模式和录播模式均为交付范围；头环未连接、允许录播且存在可读历史会话时，B 端首次 `subscribe` 或 `getLatest` 会启动网关级录播流程，并以 `mode="replay"` 标记数据来源。录播优先使用部署配置明确指定且有效的会话；否则自动遍历录播目录，选择最新的非空历史会话。后续订阅加入该流程的当前进度。最后一个 B 端 WebSocket 连接断开时，网关停止录播并重置进度；仍有连接时，文件播放到末尾会从首条重新循环。头环重连时自动停止录播并回到实时。网关应开机自启，现场无需操作。
 - 运维与交付：Ubuntu 安装脚本将网关注册为 systemd 开机自启服务；运行日志持久化并每日轮转。受控专用有线网络上的下载服务可导出已结束录播 ZIP 与运行日志快照，地址和端口由部署配置确认。B 端地址分配可选静态地址（默认）或独立 DHCP 单元；后者仅自动分配 B 端地址并发布固定网关地址，端口保持固定。
 - 演示范围：本次为单人；北向协议仅保留录播关联所需的 `subjectId`。
 - 当前设备通信规范定义：EEG `FF31` 为 20 字节大端数据包（2 字节序号与 6 个 24 位采样），心率 `FF51` 为 1 字节，佩戴/接触状态 `FF32` 为 2 字节；北向仍最多按 600 ms 分组，但实际包数由网关运行时记录，不写死。
@@ -144,6 +152,8 @@ Windows B 端将静态包完整解压后，双击 `b-client-test/configure-wired
 
 ### 其他文档
 
+- [B 端异常消息与场景排查表](doc/tech/B端异常消息与场景排查表.md)：按业务 JSON、连接异常与页面提示分类，列出实际 `message`、触发场景和处理方式；内部联调参考。
+- [静态采集控制台](web/capture/README.md)：直接打开、远程启停和完整 ZIP 下载。
 - [B 端联调网页](web/b-client-test/README.md)：零依赖的浏览器测试工具，可连接网关并测试 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。
 
 对外文档的 Markdown 独立保存在仓库，PDF 不提交仓库。包含未发布对外文档的 PR 必须先在该 PR 分支运行 `python3 tools/mark-external-documents-published.py --date <YYYY-MM-DD>`，将文档状态、发布日期、摘要、发布记录和锁定区间一并提交；CI 会拒绝仍含未发布文档的 PR，因而无法合入 `master`。PR 的 CI 生成候选包；状态已发布且已锁定的 PR 合入 `master` 后，CI 将四份外部 Markdown 转为 PDF，连同可直接双击打开的 `b-client-test/index.html` 联调网页打包为 `neurobridge-external-documents.zip` 并上传正式 Artifact。`candidate` 仅生成候选包；`publish` 仅允许所有打包源文档已发布且锁定时执行。如需额外生成某个历史正式版本或内部预发布版的北向协议 PDF，可填写 `protocol_version` 和 `protocol_stage`。版本清单见 [版本台账](neurobridge/version_registry.toml)。

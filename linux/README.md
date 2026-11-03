@@ -205,7 +205,7 @@ neurobridge-ops stop
 neurobridge-ops start
 ```
 
-每次 `status`、`logs`、`audit`、`update`、`start`、`stop` 或 `restart` 都会写入系统日志标识 `neurobridge-ops-audit`，记录系统时间、`sudo` 确认的运维账户、受限动作、参数摘要和开始/成功/失败结果；`logs --follow` 是持续命令，只记录开始。日志不包含账号密码、SSH 会话内容、网关配置或业务原始数据。使用 `neurobridge-ops audit` 查询；SSH 认证来源仍以系统 `sshd` 日志为准。
+每次 `status`、`logs`、`audit`、`update`、`replay`、`start`、`stop` 或 `restart` 都会写入系统日志标识 `neurobridge-ops-audit`，记录系统时间、`sudo` 确认的运维账户、受限动作、参数摘要和开始/成功/失败结果；`logs --follow` 是持续命令，只记录开始。日志不包含账号密码、SSH 会话内容、网关配置或业务原始数据。使用 `neurobridge-ops audit` 查询；SSH 认证来源仍以系统 `sshd` 日志为准。
 
 SSH 运维时，源码更新由 `neurobridge-ops update` 统一执行：它只使用固定项目目录，确认没有本地修改后，从 `origin` 获取指定分支并仅快进部署；不传 `--branch` 时使用当前分支。运维人员不应直接运行 Git、替换源码目录或传入临时路径。取得变更授权且网关能访问批准代码源后，SSH 登录执行：
 
@@ -217,7 +217,7 @@ neurobridge-ops update
 
 已经启用旧版 SSH 运维的网关升级到本方案后，需要从当前完整源码目录在网关本地重新运行一次 `sudo ./linux/setup-ssh-operations.sh`，脚本会初始化 `~/NeuroBridge`；之后直接维护这个项目目录。
 
-分支查询和可选 `--branch` 参数也需要通过上述本地配置重新安装命令；仅更新 `/opt/neurobridge` 或源码不会自动升级已安装的运维入口。重新配置后，先执行 `neurobridge-ops branch` 和 `neurobridge-ops help` 验证。查询当前分支不会拉取或部署，工作树有修改时也可查询；detached HEAD 没有当前分支，须显式指定更新目标。更新审计记录实际分支及成功或失败结果。
+旧版 `neurobridge-ops-update` 辅助器的分支查询和可选 `--branch` 能力，需要通过上述本地配置迁移；新版应用更新流程会刷新已授权的 CLI/命令闸口，但不会重建该更新辅助器或首次启用 SSH。重新配置后，先执行 `neurobridge-ops branch` 和 `neurobridge-ops help` 验证。查询当前分支不会拉取或部署，工作树有修改时也可查询；detached HEAD 没有当前分支，须显式指定更新目标。更新审计记录实际分支及成功或失败结果。
 
 `restart`、`stop` 或 `update` 会断开 B 端 WebSocket 连接；恢复后 B 端必须重新连接、调用 `getStatus` 并重新订阅。
 
@@ -282,19 +282,64 @@ sudo ss -lntp
 
 从 B 端主机使用已确认的 WebSocket 地址连接，并在握手中提供子协议 `neurobridge.v1`。连接后先调用 `getStatus`，再调用 `getLatest` 或 `subscribe`；断线重连后必须重新订阅，不能复用旧 `subscriptionId`。可用仓库的 [B 端联调网页](../web/b-client-test/README.md) 做人工验证。
 
-录播开关（更新到支持该功能的版本后，在网关/SSH 运维终端执行）：
+### 6.1 在网关本机管理录播（无需 SSH）
+
+直接在网关终端使用已安装环境，不依赖 `neurobridge-ops`：
 
 ```bash
-neurobridge-ops replay enable   # 允许离线时按需录播
-neurobridge-ops replay disable  # 禁止录播，保留原文件
-neurobridge-ops replay status   # 查询保存的策略和服务状态
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control enable   # 允许录播
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control disable  # 禁止录播
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control status   # 查询配置与服务状态
 ```
 
-开关修改 `/etc/neurobridge/gateway.toml` 中 `[recording].replay_enabled`，正在运行的服务会重启，结束当前会话并断开 B 端 WS；随后需要重新连接、查询状态和订阅。原本停止的服务仅保存配置，不会启动。重启失败返回非零，已选择的策略仍保留，须查看服务日志，不能仅凭配置值宣称运行时已生效。`enable` 不强制切换头环或自动创建订阅，禁止时无头环的取数请求返回既有录播不可用错误。`getStatus` 中 `mode="replay"` 仍表示离线模式，不代表正在播放或允许播放；应结合可用流和运维策略判断。
+开关修改 `/etc/neurobridge/gateway.toml` 中 `[recording].replay_enabled`，默认 `true`。运行中的服务会重启，结束当前录制和录播并断开 WS；禁止操作生效后，原先的 `mode="replay"` 切回 `live`，旧录播停止；B 端随后须重连、`getStatus`、重新订阅。已停止的服务仅保存配置，不自动启动，下次启动应用。重复启用/禁用也会重启运行中的服务；禁止录播保留录制文件和实时采集配置，`enable` 仅允许离线时按需录播，不强制切换实时头环、不自动创建订阅。
 
-没有 SSH 运维入口时，可在网关本地执行 `sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control enable`（或 `disable`、`status`）。既有运维入口随 `neurobridge-ops update` 的部署流程刷新，无需重新配置 SSH、账号或密码；仅复制已授权入口的新版命令，不为未配置设备新增 SSH 授权。更多错误与审计语义见 [内部联调指南](../doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md#50-允许与禁止录播)。
+查询输出示例：
 
-首次无头环冒烟验证可保持 `[ble].enabled = false`，此时 `getStatus` 应显示未连接；只要 `[recording].directory` 下存在非空历史会话，离线 `getLatest` 或 `subscribe` 就会自动选择最新会话并产生 `mode="replay"` 数据。若填写有效的 `replay_recording_id`，则该会话优先。实时采集验收还应覆盖头环连接、数据到达、断线重连和服务重启后的恢复。
+```json
+{"replayEnabledConfigured":false,"serviceActive":true,"applied":null}
+```
+
+| 输出字段 | 含义 | 不能据此得出的结论 |
+| --- | --- | --- |
+| `replayEnabledConfigured=false` | 保存的配置禁止录播；`true` 表示允许 | 不能只凭保存值确认当前进程已加载该值 |
+| `serviceActive=true` | 查询时 systemd 报告服务活动 | 不代表头环已连接、算法可用或正在录播 |
+| `applied=null` | 本次是 `status` 查询，不执行应用操作 | 不是失败，也不表示开关未配置 |
+| `applied=true` | 本次启用/禁用已保存，并完成运行中服务的重启/活动检查 | 不替代真实设备和 B 端数据验收 |
+| `applied=false` | 本次启用/禁用已保存，但服务原本停止，尚未启动应用 | 不应据此认为开关已经作用于运行中的进程 |
+
+刚执行 `disable` 成功时，运行中的网关已重启应用。若只是手工改了配置，可执行上述 `disable` 重新应用，但会重启服务。重启失败返回非零，已选择的策略仍保留，须查看 `sudo journalctl -u neurobridge.service -n 100 --no-pager`；不能把“配置已保存”当成“运行时已生效”。
+
+若提示 `No module named neurobridge.replay_control`，说明已安装的 Python 包不含新入口。由本机管理员取得包含该功能的批准源码后，在该源码根目录执行：
+
+```bash
+sudo bash linux/reload-ubuntu.sh
+```
+
+该命令部署当前目录源码到 `/opt/neurobridge` 并重启，不获取远端代码。若报告依赖或安装流程不同，按提示使用完整 `sudo bash linux/update-ubuntu.sh`。仅拉取源码或仅执行 `systemctl restart` 不会把新模块安装到服务环境。缺少 SSH 运维命令不妨碍上述本机入口使用。
+
+### 6.2 已配置 SSH 运维时的简写
+
+```bash
+neurobridge-ops replay enable
+neurobridge-ops replay disable
+neurobridge-ops replay status
+```
+
+`neurobridge-ops` 只在显式配置 SSH 运维入口后安装。运行支持新版刷新流程的 `neurobridge-ops update` 或本地更新流程，可刷新已有授权入口的 CLI/命令闸口，无需重设 SSH、账号或密码；不会为未配置设备新增 SSH 授权。旧版更新辅助器的分支参数能力仍按第 4.1 节迁移。
+
+### 6.3 录播开关与 B 端验收
+
+| 运行条件 | B 端应观察到的行为 |
+| --- | --- |
+| 头环未连接，禁止录播 | `getStatus` 返回 200、`mode="live"`、`connectionState="disconnected"`；`getLatest`/`subscribe` 返回 503，`message="头环未连接"` |
+| 头环未连接，允许录播且有正常历史会话 | 按需取数/订阅使用录播，输出 `mode="replay"` |
+| 头环未连接，允许录播但没有可读历史会话 | 状态查询成功；取数返回 503，`message="No replay data is available."` |
+| 头环已连接 | 使用实时可用流，关注算法状态和数据 `valid`；录播开关不强制切换数据源 |
+
+禁止录播时，`mode` 必须为 `live`，即使头环未连接；这表示等待实时设备，不代表实时数据已就绪。允许录播且头环未连接时才可为 `replay`，但仍须核对可读会话和实际取数结果。业务错误码、消息原文及异常场景见 [B 端异常消息与场景排查表](../doc/tech/B端异常消息与场景排查表.md)。
+
+首次无头环冒烟验证可保持 `[ble].enabled = false`，此时 `getStatus` 应显示未连接；当 `[recording].replay_enabled = true` 且 `[recording].directory` 下存在非空、可读取历史会话时，离线 `getLatest` 或 `subscribe` 就会自动选择最新会话并产生 `mode="replay"` 数据。若填写有效的 `replay_recording_id`，则该会话优先。实时采集验收还应覆盖头环连接、数据到达、断线重连和服务重启后的恢复。
 
 如果 `[download].enabled = true`，可从专用有线网络的 B 端访问 `http://<网关IP>:<下载端口><下载路径>` 查看已结束会话的下载索引。该接口没有 TLS 或应用层认证，绝不能暴露到公共或不受控网络。
 
@@ -355,6 +400,8 @@ git pull --ff-only
 
 ### 运行诊断与日志采集
 
+服务会自动写入 journal 与持久化轮转日志，无需另外打开日志采集脚本。以下脚本只在需要导出排查包时手动运行；也可从任意目录执行 `sudo /opt/neurobridge/linux/collect-runtime-diagnostics.sh --since '72 hours ago' --output-dir /tmp`。
+
 网关本地控制台使用包含本次改动的源码执行（不需要 Git 工作区或 SSH）：
 
 ```bash
@@ -393,7 +440,10 @@ sudo ./linux/collect-runtime-diagnostics.sh --since '72 hours ago' --output-dir 
 | B 端无法建立 WebSocket | 确认网线、两端 IP/掩码、专用网卡防火墙、端口和 `path`；握手必须提供 `neurobridge.v1` 子协议。连接恢复后先 `getStatus`，再重新订阅。 |
 | `neurobridge-dhcp.service` 显示未运行 | 在 `static` 模式下这是预期行为：其 `ExecCondition` 会跳过 DHCP 服务。只有配置为 `dhcp` 并填写完整 DHCP 参数后才应运行。 |
 | 未收到实时数据 | 确认 `[ble].enabled = true`、蓝牙适配器可见、设备名称/UUID 与已确认 profile 一致。通过网关日志查看扫描或连接失败原因；不要仅凭服务进程存活判断头环已连接。 |
-| 离线时没有录播数据 | 检查 `[recording].directory` 是否指向存放历史会话的目录，并确认其中至少有一个非空会话；网关会自动选择最新会话。若填写了 `replay_recording_id`，该会话无效时会回退到自动选择。 |
+| `neurobridge-ops: command not found` | 未配置可选 SSH 运维入口；使用第 6.1 节本机 Python 命令，不需要为录播开关先启用 SSH。 |
+| `getStatus` 返回业务 500 | 保留请求 ID 和时间，查网关 `Request handling failed` 后完整堆栈；旧版坏录制可能触发，升级后查看 `Replay recording read failed` 的文件与行号，不删除整个录制目录。 |
+| 取数返回 503“头环未连接” | 核对实时连接；此场景录播已禁止。状态查询仍可成功，不表示网络不通。 |
+| 离线时没有录播数据 | 先核对 `replay_enabled`；允许录播后再检查 `[recording].directory` 是否指向存放历史会话的目录，并确认其中至少有一个非空会话；网关会自动选择最新会话。若填写了 `replay_recording_id`，该会话无效时会回退到自动选择。 |
 | 下载接口不可用 | 确认 `[download].enabled = true`、监听 IP/端口与防火墙配置一致；只有已结束的录制会话能导出。 |
 
 如果 `update-ubuntu.sh` 在编译 bridge 时失败，先不要反复修改依赖或安装额外库。运行下面命令并将生成的压缩包上传给开发人员；包内只有 CMake/build 日志、系统与工具版本、当前源码 revision 和最近的服务日志，不包含 `gateway.toml`、录播或原始 BLE 数据：

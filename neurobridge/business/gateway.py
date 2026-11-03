@@ -89,6 +89,8 @@ class Gateway:
 
     @property
     def live(self) -> bool:
+        # Device connectivity is independent of the advertised source mode:
+        # a gateway with replay prohibited waits in live mode while disconnected.
         return self.status["connectionState"] == "connected"
 
     @property
@@ -102,7 +104,7 @@ class Gateway:
         return self._active_replay_recording_id or self.store.replay_recording_id(self.config.recording.replay_recording_id)
 
     def mode(self) -> str:
-        return "live" if self.live else "replay"
+        return "replay" if self.config.recording.replay_enabled and not self.live else "live"
 
     async def start(self) -> None:
         # The local algorithm is session scoped and must be initialized only after
