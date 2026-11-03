@@ -97,7 +97,7 @@ class WindowsReleaseBuildTests(unittest.TestCase):
                 pipeline.target_result(target["id"], self.inputs, self.results)
         release = self.root / "release"
         manifest = pipeline.assemble(self.results, release, "push_master")
-        self.assertEqual(manifest["aggregateArchive"]["packageCount"], 2)
+        self.assertEqual(manifest["aggregateArchive"]["packageCount"], 3)
         self.assertEqual(manifest["coverage"]["windows"]["builtPackageCount"], 1)
         self.assertEqual(sum(item["status"] == "failed" for item in manifest["coverage"]["windows"]["targetResults"]), 3)
         verify_nested_archives(release / manifest["aggregateArchive"]["fileName"], manifest)

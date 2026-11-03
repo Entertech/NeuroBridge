@@ -6,9 +6,9 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
-import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -50,6 +50,20 @@ def write(path: Path, text: str, mode: int = 0o644) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     path.chmod(mode)
+
+
+def validate_runtime_lock() -> None:
+    # --no-deps is intentional: require the exact complete Linux dependency set
+    # instead of silently retaining an old package when requirements.lock moves.
+    expected = set()
+    for line in (ROOT / "requirements.lock").read_text().splitlines():
+        match = re.match(r"^([\w-]+)==([^;\s]+)", line)
+        if match and match[1] != "pywin32":
+            expected.add((match[1].lower().replace("_", "-"), match[2]))
+    lock = tomllib.loads(LOCK.read_text())
+    actual = {(item["name"].lower().replace("_", "-"), item["version"]) for item in lock["wheels"]}
+    if actual != expected or len(actual) != len(lock["wheels"]):
+        raise ValueError("Ubuntu wheel lock differs from the complete Linux requirements.lock set")
 
 
 def wheels(cache: Path, *, download: bool = False) -> list[dict]:
@@ -156,6 +170,7 @@ def build(cache: Path, output: Path) -> Path:
     commit = run("git", "rev-parse", "HEAD")
     if run("git", "status", "--porcelain"):
         raise ValueError("Distributable build requires a clean source checkout")
+    validate_runtime_lock()
     wheels(cache)
     version = tomllib.loads((ROOT / "neurobridge/version_registry.toml").read_text())["application"]["version"]
     output.mkdir(parents=True, exist_ok=True)
@@ -175,6 +190,9 @@ def build(cache: Path, output: Path) -> Path:
                       "builtAt": at, "toolchain": toolchain, "signing": "unsigned",
                       "runtimeSha256": tree_digest(stage / PREFIX), "inputSha256": digest(LOCK),
                       "sdkLockSha256": digest(ROOT / "sdk.lock"), "requirementsSha256": digest(ROOT / "requirements.lock")}
+        build_info["systemPackages"] = run("dpkg-query", "-W", "-f=${Package}=${Version}\n",
+                                         "cmake", "g++", "libeigen3-dev", "libc6", "libstdc++6",
+                                         "python3.12", "dpkg", "patchelf").splitlines()
         write(stage / PREFIX / "build-info.json", json.dumps(build_info, indent=2) + "\n")
         # dpkg archives own all payloads as root regardless of the build operator.
         package = output / f"neurobridge-{version}-ubuntu-24.04-x86_64.deb"
@@ -205,6 +223,7 @@ def main() -> None:
     parser.add_argument("--prepare-inputs", action="store_true", help="download and SHA-256 verify wheels; no build")
     args = parser.parse_args()
     if args.prepare_inputs:
+        validate_runtime_lock()
         wheels(args.cache.resolve(), download=True)
     else:
         print(build(args.cache.resolve(), args.output_dir.resolve()))

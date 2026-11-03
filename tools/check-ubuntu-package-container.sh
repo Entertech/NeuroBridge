@@ -3,6 +3,7 @@ set -euo pipefail
 [[ $# == 1 ]] || { echo 'Usage: check-ubuntu-package-container.sh /absolute/output-directory' >&2; exit 1; }
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 output=$(cd "$1" && pwd)
+trap 'status=$?; if [[ $status -ne 0 ]]; then rm -f "$output/verification.json"; fi' EXIT
 packages=("$output"/*.deb)
 [[ ${#packages[@]} == 1 && -f ${packages[0]} ]]
 image=neurobridge-ubuntu-package-validation

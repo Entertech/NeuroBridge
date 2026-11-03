@@ -17,6 +17,15 @@ spec.loader.exec_module(builder)
 
 
 class UbuntuPackageTests(unittest.TestCase):
+    def test_wheel_versions_must_follow_the_runtime_requirements(self):
+        builder.validate_runtime_lock()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "requirements.lock").write_text("websockets==99.0\n")
+            with mock.patch.object(builder, "ROOT", root):
+                with self.assertRaisesRegex(ValueError, "complete Linux requirements"):
+                    builder.validate_runtime_lock()
+
     def test_wheel_cache_fails_closed_for_tampering_and_never_resolves_dependencies(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
