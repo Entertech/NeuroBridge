@@ -422,7 +422,7 @@ class ArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             args = self.bundle(Path(directory))
             receipt = train.artifact_receipt(*args)
-            self.assertEqual(len(receipt['targets']), 5)
+            self.assertEqual(len(receipt['targets']), 6)
             self.assertEqual(receipt['sourceCommit'], args[2])
             with self.assertRaisesRegex(ValueError, 'source commit'):
                 train.artifact_receipt(args[0], args[1], '0'*40, args[3])

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Entertech/NeuroBridge/schemas/release-manifest.schema.json",
   "title": "NeuroBridge immutable pre-publication release manifest",
-  "description": "Generated only after both platforms meet the minimum package gate and the aggregate ZIP is closed. Failed and blocked targets are recorded in coverage.targetResults. Publication is recorded separately by release-receipt.json.",
+  "description": "Generated only after all configured platforms meet the minimum package gate and the aggregate ZIP is closed. Failed and blocked targets are recorded in coverage.targetResults. Publication is recorded separately by release-receipt.json.",
   "type": "object",
   "additionalProperties": false,
   "required": [
