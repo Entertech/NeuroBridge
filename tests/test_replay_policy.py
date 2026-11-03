@@ -123,7 +123,7 @@ class ReplayGatewayTests(unittest.IsolatedAsyncioTestCase):
                     await gateway.handle(session,json.dumps({'protocolVersion':'1.0','messageType':'request','requestId':action,'action':action,'params':{'streams':['eeg']}}),send)
                     self.assertEqual(sent[0]['code'],503)
                     self.assertEqual(sent[0]['data']['reason'],REPLAY_NOT_AVAILABLE_REASON)
-                    self.assertIn('disabled',sent[0]['message'])
+                    self.assertEqual(sent[0]['message'],'头环未连接')
                 gateway._start_replay_if_needed()
                 self.assertIsNone(gateway._replay_task)
                 self.assertEqual(gateway.latest_replay_algorithm(),(None,None))
