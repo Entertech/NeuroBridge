@@ -127,10 +127,49 @@
         </aside>
       </div>
 
+      <section class="card readings" aria-labelledby="readingsTitle">
+        <div class="section-heading"><p class="section-index">04</p><div>
+          <h2 id="readingsTitle">实时指标</h2>
+          <p>点击 subscribe 并勾选 EEG、HR 后持续更新；getLatest 只读取一次。实时与录播以“数据来源”为准。</p>
+        </div></div>
+        <div class="metric-grid">
+          <article class="metric"><h3>放松度</h3><strong id="relaxationValue">—</strong><p id="relaxationMeta">尚未收到数据</p></article>
+          <article class="metric"><h3>压力值</h3><strong id="pressureValue">—</strong><p id="pressureMeta">尚未收到数据</p></article>
+          <article class="metric"><h3>心率</h3><strong id="heartRateValue">—</strong><p id="heartRateMeta">尚未收到数据</p></article>
+          <article class="metric"><h3>HRV</h3><strong id="hrvValue">—</strong><p id="hrvMeta">尚未收到数据</p></article>
+          <article class="metric"><h3>注意力</h3><strong id="attentionValue">—</strong><p id="attentionMeta">尚未收到数据</p></article>
+          <article class="metric"><h3>Flow</h3><strong id="flowValue">—</strong><p id="flowMeta">尚未收到数据</p></article>
+        </div>
+        <p class="hint">除心率和电量外均显示算法原值，不假定百分比或 HRV 单位。每项保留自己的数据时间；未提供的结果不会补零。</p>
+      </section>
+      <section class="chart-grid" aria-label="脑波与频段能量">
+        <article class="card chart-card">
+          <h2>脑波波形</h2>
+          <p class="hint">横轴：样本序号 · 纵轴：算法幅度原值 · 每通道最多显示最新 1200 点</p>
+          <div class="chart-legend"><span class="left-channel">● 左通道</span><span class="right-channel">● 右通道</span><span class="single-channel">● 单通道</span></div>
+          <canvas id="waveformCanvas" role="img" aria-label="左右或单通道脑波波形">脑波波形由算法提供。</canvas>
+          <p id="waveformMeta" class="chart-meta">尚未收到脑波数据</p>
+        </article>
+        <article class="card chart-card">
+          <h2>脑波频谱 · 频段能量</h2>
+          <p class="hint">显示各频段能量原值；未提供的频段留空，不计算 FFT 或换算百分比。</p>
+          <canvas id="spectrumCanvas" role="img" aria-label="脑波频段能量柱状图">下方列出各频段能量。</canvas>
+          <dl class="band-values">
+            <div><dt>δ</dt><dd id="deltaBandValue">未提供</dd></div>
+            <div><dt>θ</dt><dd id="thetaBandValue">未提供</dd></div>
+            <div><dt>α</dt><dd id="alphaBandValue">未提供</dd></div>
+            <div><dt>β</dt><dd id="betaBandValue">未提供</dd></div>
+            <div><dt>γ</dt><dd id="gammaBandValue">未提供</dd></div>
+            <div><dt>低 β</dt><dd id="lowBetaBandValue">未提供</dd></div>
+            <div><dt>高 β</dt><dd id="highBetaBandValue">未提供</dd></div>
+          </dl><p id="spectrumMeta" class="chart-meta">尚未收到频段能量</p>
+        </article>
+      </section>
+
       <section class="card log-card" aria-labelledby="logTitle">
         <div class="log-header">
           <div class="section-heading">
-            <p class="section-index">04</p>
+            <p class="section-index">05</p>
             <div>
               <h2 id="logTitle">协议日志</h2>
               <p>保留最近 500 条日志，含完整时间、连接耗时与关闭信息。原始字节和波形内容不展开。</p>

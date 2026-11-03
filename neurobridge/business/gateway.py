@@ -142,6 +142,9 @@ class Gateway:
             self._capture_windows = 0
             self._capture_summary_at = time.monotonic()
             LOG.info("Headband connected; recording started: recordingId=%s", recording_id)
+        if name == "connectionState" and value in {"connecting", "disconnected"}:
+            self.status["wearState"] = "unknown"
+            self.status["batteryPercent"] = None
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
             recording_id = self.store.recording_id
             await self._cancel_window_flush()
@@ -171,7 +174,7 @@ class Gateway:
 
     async def receive_packet(self, characteristic: str, value: bytes) -> None:
         received_at_ms = now_ms()
-        raw_stream = {"ff31": "eeg", "ff51": "hr"}.get(characteristic)
+        raw_stream = {"ff31": "eeg", "ff51": "hr", "ff32": "wear", "battery": "battery"}.get(characteristic)
         if raw_stream:
             window_start_ms = received_at_ms - received_at_ms % self.assembler.interval_ms
             self.store.save_raw_packet(
@@ -181,6 +184,8 @@ class Gateway:
                 window_end_ms=window_start_ms + self.assembler.interval_ms,
                 value=value,
             )
+        if characteristic in {"ff32", "battery"}:
+            return
         for window in self.assembler.add(characteristic, value, received_at_ms):
             await self.publish_window(window)
         self._schedule_window_flush()

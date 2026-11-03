@@ -14,9 +14,16 @@ REQUIRED_NOTIFICATION_CHARACTERISTICS = (FF31, FF32, FF51)
 OPTIONAL_NOTIFICATION_CHARACTERISTICS = (BATTERY,)
 
 
-def wear_state_from_packet(_value: bytes) -> str:
-    """FF32 state values require device-POC confirmation before interpretation."""
-    return "unknown"
+def wear_state_from_packet(value: bytes) -> str:
+    """Device protocol table 4-4: EEG/HR zero means attached/good contact."""
+    if len(value) != 2:
+        return "unknown"
+    return "worn" if value == b"\x00\x00" else "notWorn"
+
+
+def battery_percent_from_packet(value: bytes) -> int | None:
+    """Table 4-2: 3.1 V = 0%, 4.1 V = 100%; 0x52 = 3.92 V (82%)."""
+    return value[0] if len(value) == 1 and value[0] <= 100 else None
 
 
 class FlowtimeAdapter:
@@ -91,6 +98,7 @@ class FlowtimeAdapter:
                 LOG.info("BLE capture ready: attempt=%s setupElapsedMs=%s", self._attempt, round((self._connected_at - started) * 1000))
                 stage = "capture"
                 await self.status("connectionState", "connected")
+                await self._read_battery()
                 while self._client.is_connected and not self._stopping:
                     try:
                         await asyncio.wait_for(self._disconnected.wait(), timeout=1)
@@ -155,15 +163,6 @@ class FlowtimeAdapter:
     async def _subscribe(self) -> None:
         assert self._client
         client = self._client
-        async def notify(characteristic: str, value: bytes) -> None:
-            if characteristic == FF32:
-                await self.status("wearState", wear_state_from_packet(value))
-            elif characteristic == BATTERY:
-                # The profile's voltage-to-percent mapping still requires POC
-                # validation. Do not expose the raw byte as a percentage.
-                await self.status("batteryPercent", None)
-            else:
-                await self.packet({FF31: "ff31", FF51: "ff51"}[characteristic], value)
         def schedule(characteristic: str, value: bytearray) -> None:
             if self._stopping or self._client is not client:
                 return
@@ -171,7 +170,7 @@ class FlowtimeAdapter:
             self._last_packet_at = time.monotonic()
             self._packet_counts[label] = self._packet_counts.get(label, 0) + 1
             # Copy at callback time; backend bytearrays may be reused.
-            self._schedule_callback(notify(characteristic, bytes(value)), label)
+            self._schedule_callback(self._process_notification(characteristic, bytes(value)), label)
         for characteristic in REQUIRED_NOTIFICATION_CHARACTERISTICS:
             # Bleak notification callbacks are synchronous on all supported backends.
             # Schedule the async state update rather than relying on backend-specific
@@ -181,8 +180,38 @@ class FlowtimeAdapter:
             if not self._supports(characteristic):
                 LOG.info("Optional Flowtime notification is not exposed by this headband; continuing without it")
                 continue
-            await self._client.start_notify(characteristic, lambda sender, value, c=characteristic: schedule(c, value))
+            try:
+                await self._client.start_notify(characteristic, lambda sender, value, c=characteristic: schedule(c, value))
+            except Exception as exc:
+                LOG.warning("Optional battery notification unavailable: errorType=%s; capture continues", type(exc).__name__)
         LOG.info("Subscribed to required Flowtime EEG, wear-state, and heart-rate notifications")
+
+    async def _process_notification(self, characteristic: str, value: bytes) -> None:
+        label = {FF31: "ff31", FF32: "ff32", FF51: "ff51", BATTERY: "battery"}[characteristic]
+        await self.packet(label, value)
+        if characteristic == FF32:
+            state = wear_state_from_packet(value)
+            if state == "unknown":
+                LOG.warning("Invalid wear-state packet: packetBytes=%s expectedBytes=2", len(value))
+            await self.status("wearState", state)
+        elif characteristic == BATTERY:
+            percent = battery_percent_from_packet(value)
+            if percent is None:
+                LOG.warning("Invalid battery packet: packetBytes=%s expectedBytes=1 range=0..100", len(value))
+            await self.status("batteryPercent", percent)
+
+    async def _read_battery(self) -> None:
+        """Best-effort initial read after the recording session has started."""
+        if not self._supports(BATTERY):
+            return
+        client = self._client
+        try:
+            value = bytes(await asyncio.wait_for(client.read_gatt_char(BATTERY), timeout=2))
+        except Exception as exc:
+            LOG.warning("Initial battery read unavailable: errorType=%s; capture continues", type(exc).__name__)
+            return
+        if self._client is client and client.is_connected and not self._disconnected.is_set() and not self._stopping:
+            await self._run_callback(self._process_notification(BATTERY, value), "battery_read")
 
     def _supports(self, characteristic: str) -> bool:
         """Return whether a post-connect GATT characteristic is available.

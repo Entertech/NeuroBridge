@@ -61,9 +61,12 @@ class FlowtimeSelectionTests(unittest.TestCase):
         ])
         self.assertEqual(selected.rssi, -42)
 
-    def test_ff32_remains_unknown_until_its_values_are_poc_verified(self) -> None:
-        self.assertEqual(wear_state_from_packet(b"\x00\x00"), "unknown")
-        self.assertEqual(wear_state_from_packet(b"\x01\x02"), "unknown")
+    def test_ff32_uses_protocol_contact_state_without_waveform_inference(self) -> None:
+        self.assertEqual(wear_state_from_packet(b"\x00\x00"), "worn")
+        self.assertEqual(wear_state_from_packet(b"\x01\x02"), "notWorn")
+        self.assertEqual(wear_state_from_packet(b"\x00\x01"), "notWorn")
+        self.assertEqual(wear_state_from_packet(b"\x01\x00"), "notWorn")
+        self.assertEqual(wear_state_from_packet(b"\x00"), "unknown")
 
 
 class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):

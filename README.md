@@ -41,6 +41,8 @@ python3 -m venv .venv
 
 Flowtime 接入层以 Bleak 实现扫描/连接/通知/断连重连：只要未连接便扫描匹配 `device_name` 与 `model_nbr_uuid` 的设备，并选择 RSSI 最高者。完成 `FF31`、`FF32`、`FF51` 通知订阅后，网关初始化新算法会话、向 `FF21` 写入 `0x05`，最后才公布 `connected`；停止时写入 `0x06`。`FF31` 原始 EEG 与 `FF51` 原始心率均会持久化，`FF51` 用于北向 `hr.raw`；算法输入保留原始字节序和完整窗口。首次 Ubuntu 安装会以锁定版本自动构建并安装行 JSON C++ bridge 到 `/usr/local/lib/neurobridge/neurobridge_affective_bridge`，因此部署配置不需要填写算法命令；`algorithm.enabled` 默认开启，也是唯一启停项。macOS 仅完成源码构建及合成输入烟雾测试；SDK 输入分组、真实 Flowtime 数据输出和 Ubuntu x86_64 构建尚未验证，现场仍须根据状态、日志和真实数据验证算法结果。
 
+佩戴状态按设备协议表 4-4 解释：FF32 两字节均为零表示佩戴且接触良好，任一非零表示未佩戴或接触不良，长度不符为未知。电量按表 4-2：3.1 V 对应 0%、4.1 V 对应 100%，单字节 `0x52` 对应 3.92 V，即 82%；有效值为 0–100，其他数据返回空。连接建立后尽力读取一次电量，并接收可选通知；电量读取或订阅失败只记诊断，不中断 EEG/HR 采集。FF32 与电量原始字节另存 `raw/wear.jsonl`、`raw/battery.jsonl`，包含会话及窗口时间，不进入 EEG/HR 算法窗口或北向原始数据录播。旧录制格式仍可读取，断线后清空当前设备遥测。本轮依据协议实现并完成合成回归，真实头环及 Ubuntu 现场验收待完成。
+
 SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
 
 运行时代码按职责组织：`neurobridge/ble/` 负责 Flowtime 扫描、连接、通知与原始字节窗口；`neurobridge/algorithm/` 隔离算法 SDK bridge；`neurobridge/business/` 负责订阅、状态、录制与录播；`neurobridge/northbound/` 仅负责 WS/WebSocket 传输。
@@ -83,7 +85,7 @@ Windows B 端将静态包完整解压后，双击 `b-client-test/configure-wired
 | 采集控制台网页 | [`web/capture/`](web/capture/) | 直接打开静态页，远程查看网关状态、启停采集和保存 ZIP。 |
 | B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 平台无关纯静态资源；直接打开 `index.html` 即可使用。 |
 
-仅使用 B 端联调网页时，直接双击 [`web/b-client-test/index.html`](web/b-client-test/index.html) 或将其拖入浏览器；无需启动 HTTP 服务。然后填写专用有线网络内的网关 WebSocket 地址。该网页不代替网关进程，也不会访问本机蓝牙。
+仅使用 B 端联调网页时，直接双击 [`web/b-client-test/index.html`](web/b-client-test/index.html) 或将其拖入浏览器；无需启动 HTTP 服务。然后填写专用有线网络内的网关 WebSocket 地址。该网页不代替网关进程，也不会访问本机蓝牙。订阅 EEG、HR 和状态后，可查看左右/单通道脑波、脑波频段能量，以及放松度、压力、心率、HRV、注意力和 Flow；电量与佩戴状态兼容状态查询及事件。详见 [页面使用说明](web/b-client-test/README.md#波形频段能量与指标)。
 
 ## 首期交付结论
 
