@@ -645,9 +645,9 @@ elif "--version" in sys.argv:
                 (box.root / "config/kylin-wheelhouse.sha256").write_text(
                     hashlib.sha256(wheel.read_bytes()).hexdigest() + "  wheelhouse/test.whl\n"
                 )
-                script_dir = box.root / "linux"
-                script_dir.mkdir()
-                source = (ROOT / "linux/setup-kylin-python.sh").read_text()
+                script_dir = box.root / "linux" / "kylin"
+                script_dir.mkdir(parents=True)
+                source = (ROOT / "linux/kylin/setup-kylin-python.sh").read_text()
                 source = re.sub(r'portable_sha256="[0-9a-f]+"',
                                 'portable_sha256="' + hashlib.sha256(archive.read_bytes()).hexdigest() + '"',
                                 source)

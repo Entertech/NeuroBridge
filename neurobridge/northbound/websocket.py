@@ -19,7 +19,7 @@ async def require_subprotocol(_path: str, request_headers):
         for item in header.split(",")
     }
     if SUBPROTOCOL not in offered:
-        return HTTPStatus.UPGRADE_REQUIRED, [("Sec-WebSocket-Protocol", SUBPROTOCOL)], b"WebSocket subprotocol neurobridge.v1 is required.\n"
+        return HTTPStatus.UPGRADE_REQUIRED, [("Sec-WebSocket-Protocol", SUBPROTOCOL), ("Content-Type", "text/plain; charset=utf-8")], "连接协议不匹配，请使用 neurobridge.v1 子协议\n".encode("utf-8")
     return None
 
 
@@ -32,19 +32,29 @@ async def create_server(gateway: Gateway, controller=None):
     async def handler(websocket, path: str) -> None:
         if path != gateway.config.server.path:
             LOG.warning("WebSocket connection rejected: peer=%s endpoint=%s expected=%s", websocket.remote_address, path, gateway.config.server.path)
-            await websocket.close(code=1008, reason="Unsupported endpoint")
+            await websocket.close(code=1008, reason="连接地址错误，请检查网关地址和路径")
             return
         session = ClientSession()
+        async def close_failed_transport():
+            await websocket.close(code=1011, reason="数据发送失败或接收过慢，请重新连接并订阅")
+        session.close_transport = close_failed_transport
+        send_lock = asyncio.Lock()
         gateway.sessions.add(session)
         peer = websocket.remote_address
         LOG.info("B-side WebSocket client connected: peer=%s activeClients=%s", peer, len(gateway.sessions))
         async def send(message: dict) -> None:
-            await websocket.send(json.dumps(message, separators=(",", ":"), ensure_ascii=False))
+            async with send_lock:
+                async with asyncio.timeout(gateway.config.pipeline.send_timeout_ms / 1000):
+                    wire = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
+                    await websocket.send(wire)
+                    subscription = session.subscriptions.get(message.get("data", {}).get("subscriptionId"))
+                    gateway.hrv_trace.serialized(wire, message,
+                        hrRequested="hr" in subscription.streams if subscription else None, outcome="sent")
         try:
             async for message in websocket:
                 if not isinstance(message, str):
                     LOG.warning("WebSocket binary frame rejected: peer=%s bytes=%s", peer, len(message))
-                    await websocket.close(code=1003, reason="Text JSON required")
+                    await websocket.close(code=1003, reason="请求格式不支持，请使用 JSON 文本发送")
                     break
                 LOG.debug("WebSocket text frame received: peer=%s bytes=%s", peer, len(message.encode("utf-8")))
                 if controller is None:

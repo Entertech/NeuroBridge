@@ -12,8 +12,10 @@ import signal
 import time
 
 from .configuration.runtime import load_runtime_config
-from .bootstrap import build_container
+from .bootstrap import build_container, build_runtime
 from .download import serve_downloads
+from .diagnostics import NetworkDiagnostics
+from .capture_control import CaptureControl
 from .logging_setup import configure_logging
 from .northbound.local_ui import serve_local_ui
 from .northbound.strategy import access_strategy
@@ -100,7 +102,13 @@ async def run(config_path: str, *, override_path: str | None = None, development
             config.serial.rts,
         )
     gateway = container.gateway
-    adapter = container.device_adapter
+    runtime = build_runtime(container)
+    capture = None
+    diagnostics = None
+    if container.profile.profile_id == "ubuntu_headband_wired":
+        capture = CaptureControl(gateway, runtime=runtime)
+        diagnostics = NetworkDiagnostics(config, gateway.boot_id)
+        gateway.network_diagnostic = diagnostics.request_snapshot
     loop = asyncio.get_running_loop()
     task = asyncio.current_task()
     handles_sigterm = False
@@ -114,18 +122,23 @@ async def run(config_path: str, *, override_path: str | None = None, development
         await gateway.start()
         async with asyncio.TaskGroup() as group:
             group.create_task(serve(gateway, container.northbound_controller))
-            group.create_task(adapter.run())
+            group.create_task(capture.run() if capture is not None else runtime.run(auto_start=container.profile.transport != "bluetooth" or config.ble.enabled))
+            if diagnostics is not None:
+                group.create_task(diagnostics.run())
             if strategy.serves_local_ui(config):
                 group.create_task(serve_local_ui(config))
             if gateway.config.download.enabled:
-                group.create_task(serve_downloads(gateway))
+                group.create_task(serve_downloads(gateway, capture))
     except Exception:
         LOG.exception("Gateway runtime task failed")
         raise
     finally:
         LOG.info("Process shutdown started: uptimeSeconds=%.3f", time.monotonic() - started_at)
         try:
-            await adapter.stop()
+            if capture is not None:
+                await capture.shutdown()
+            else:
+                await runtime.close()
         finally:
             try:
                 await gateway.stop()

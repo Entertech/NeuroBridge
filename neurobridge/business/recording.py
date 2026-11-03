@@ -4,6 +4,7 @@ import base64
 from collections import defaultdict
 from hashlib import sha256
 import json
+import logging
 from pathlib import Path
 import re
 import subprocess
@@ -13,6 +14,8 @@ import zipfile
 
 
 RAW_STREAMS = {"eeg": 20, "hr": 1}
+# Diagnostic raw bytes are retained separately and never treated as EEG/HR replay.
+STATUS_RAW_STREAMS = {"wear": 2, "battery": 1}
 # Kept only for reading sessions made by the superseded FF52 profile.  New
 # sessions never create this file and it remains hidden from northbound replay.
 LEGACY_REPLAY_STREAMS = {"hr_native": 16}
@@ -26,6 +29,15 @@ CAPTURE_PACKAGE_DOCUMENT_FILENAME = "头环数据采集包格式说明_v0.1.pdf"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CAPTURE_PACKAGE_MARKDOWN = PROJECT_ROOT / "doc/tech/对外/头环数据采集包格式说明/头环数据采集包格式说明_v0.1.md"
 CAPTURE_PACKAGE_RENDERER = PROJECT_ROOT / "tools/render-protocol-pdf.sh"
+LOG = logging.getLogger(__name__)
+
+
+class RecordingReadError(ValueError):
+    """A presentation-safe location, never the contents of a physiological row."""
+    def __init__(self, path: Path, line: int, error: Exception) -> None:
+        super().__init__("Recording row cannot be read")
+        self.path, self.line, self.error_type = path, line, type(error).__name__
+        self.column = error.colno if isinstance(error, json.JSONDecodeError) else None
 
 
 def _deep_merge(target: dict, update: dict) -> None:
@@ -39,7 +51,7 @@ def _deep_merge(target: dict, update: dict) -> None:
 class RecordingStore:
     """Persist raw packets and independent algorithm metric events per session."""
 
-    def __init__(self, root: Path, capture_package_pdf: Path | None = None, *, create_directories: bool = True) -> None:
+    def __init__(self, root: Path, capture_package_pdf: Path | None = None, *, create_directories: bool = True, diagnostics_interval_seconds: float = 30) -> None:
         self.root = root
         if create_directories:
             self.root.mkdir(parents=True, exist_ok=True)
@@ -58,6 +70,33 @@ class RecordingStore:
         self._started_at_ms: int | None = None
         self._session_started_at_ms: dict[str, int] = {}
         self._capture_package_pdf = capture_package_pdf
+        self._diagnostics_interval = diagnostics_interval_seconds
+        self._last_read_warning: tuple | None = None
+        self._last_read_warning_at = 0.0
+
+    def _warn_unreadable(self, recording_id: str | None, error: Exception, path: Path | None = None, *, excluded: bool = True) -> None:
+        path = error.path if isinstance(error, RecordingReadError) else (path or self.root)
+        line = error.line if isinstance(error, RecordingReadError) else (error.lineno if isinstance(error, json.JSONDecodeError) else None)
+        error_type = error.error_type if isinstance(error, RecordingReadError) else type(error).__name__
+        column = error.column if isinstance(error, RecordingReadError) else (error.colno if isinstance(error, json.JSONDecodeError) else None)
+        key = (recording_id, str(path), line, column, error_type, excluded)
+        current = time.monotonic()
+        if key != self._last_read_warning or current - self._last_read_warning_at >= self._diagnostics_interval:
+            LOG.warning("Replay recording read failed: recordingId=%s file=%s line=%s column=%s errorType=%s errno=%s sessionExcluded=%s; original files retained", recording_id, path, line, column, error_type, getattr(error, "errno", None), excluded)
+            self._last_read_warning, self._last_read_warning_at = key, current
+
+    @staticmethod
+    def _rows(path: Path):
+        # Decode per line to retain the physical line number for UTF-8 errors.
+        with path.open("rb") as file:
+            for number, raw in enumerate(file, 1):
+                try:
+                    row = json.loads(raw.decode("utf-8"))
+                    if not isinstance(row, dict):
+                        raise ValueError("Recording row must be an object")
+                except (UnicodeError, ValueError) as error:
+                    raise RecordingReadError(path, number, error) from None
+                yield row
 
     def start(self, started_at_ms: int | None = None) -> str:
         self.recording_id = f"rec-{uuid.uuid4()}"
@@ -92,10 +131,10 @@ class RecordingStore:
             file.write(json.dumps({"sessionId": recording_id, **row}, separators=(",", ":"), ensure_ascii=False) + "\n")
 
     def save_raw_packet(self, *, stream: str, received_at_ms: int, window_start_ms: int, window_end_ms: int, value: bytes) -> None:
-        if not self.recording_id or stream not in RAW_STREAMS:
+        if not self.recording_id or stream not in {**RAW_STREAMS, **STATUS_RAW_STREAMS}:
             return
         self._sequence[stream] = self._sequence.get(stream, 0) + 1
-        expected = RAW_STREAMS[stream]
+        expected = {**RAW_STREAMS, **STATUS_RAW_STREAMS}[stream]
         valid = len(value) == expected
         self._append_session(
             self.recording_id,
@@ -219,7 +258,7 @@ class RecordingStore:
         make an otherwise usable historical recording invisible to offline
         replay.  The active capture session is always excluded.
         """
-        if preferred_recording_id and self.has_recording(preferred_recording_id) and self.events(preferred_recording_id):
+        if preferred_recording_id and preferred_recording_id != self.recording_id and self.has_recording(preferred_recording_id) and self.events(preferred_recording_id):
             return preferred_recording_id
 
         candidates: dict[str, tuple[int, int]] = {}
@@ -231,7 +270,11 @@ class RecordingStore:
                 recording_id = path.stem
                 if recording_id == self.recording_id or not self._safe_recording_id(recording_id):
                     continue
-                modified_at_ms = int(path.stat().st_mtime * 1000)
+                try:
+                    modified_at_ms = int(path.stat().st_mtime * 1000)
+                except OSError as error:
+                    self._warn_unreadable(recording_id, error, path)
+                    continue
                 candidates[recording_id] = max(candidates.get(recording_id, (0, 0)), (modified_at_ms, modified_at_ms))
 
         for recording_id in sorted(candidates, key=lambda item: (candidates[item], item), reverse=True):
@@ -248,7 +291,12 @@ class RecordingStore:
         """Return completed session metadata suitable for the local download index."""
         recordings: list[dict] = []
         sessions = self.root / "sessions"
-        for session in sessions.iterdir():
+        try:
+            candidates = list(sessions.iterdir())
+        except OSError as error:
+            self._warn_unreadable(None, error, sessions)
+            return recordings
+        for session in candidates:
             if not session.is_dir() or not self._safe_recording_id(session.name) or session.name == self.recording_id:
                 continue
             manifest = session / "manifest.json"
@@ -256,12 +304,19 @@ class RecordingStore:
             if manifest.is_file():
                 try:
                     started_at_ms = json.loads(manifest.read_text(encoding="utf-8")).get("startedAtMs")
-                except (OSError, json.JSONDecodeError):
-                    pass
+                    if type(started_at_ms) is not int or started_at_ms < 0:
+                        started_at_ms = None
+                except (OSError, ValueError, AttributeError) as error:
+                    self._warn_unreadable(session.name, error, manifest, excluded=False)
+            try:
+                modified_at_ms = int(session.stat().st_mtime * 1000)
+            except OSError as error:
+                self._warn_unreadable(session.name, error, session)
+                continue
             recordings.append({
                 "recordingId": session.name,
                 "startedAtMs": started_at_ms,
-                "modifiedAtMs": int(session.stat().st_mtime * 1000),
+                "modifiedAtMs": modified_at_ms,
             })
         return sorted(recordings, key=lambda item: item["modifiedAtMs"], reverse=True)
 
@@ -274,8 +329,7 @@ class RecordingStore:
             path = session / "raw" / f"{stream}.jsonl"
             if not path.exists():
                 continue
-            for line in path.read_text(encoding="utf-8").splitlines():
-                row = json.loads(line)
+            for row in self._rows(path):
                 timestamp = int(row["windowEndMs"])
                 raw_windows[timestamp][stream].append(row)
                 item = merged[timestamp]
@@ -309,8 +363,7 @@ class RecordingStore:
             path = session / "algorithm" / f"{metric}.jsonl"
             if not path.exists():
                 continue
-            for line in path.read_text(encoding="utf-8").splitlines():
-                row = json.loads(line)
+            for row in self._rows(path):
                 timestamp = int(row["timestampMs"])
                 item = merged[timestamp]
                 item["timestampMs"] = timestamp
@@ -326,8 +379,7 @@ class RecordingStore:
             path = self.root / category / f"{recording_id}.jsonl"
             if not path.exists():
                 continue
-            for line in path.read_text(encoding="utf-8").splitlines():
-                row = json.loads(line)
+            for row in self._rows(path):
                 item = merged[int(row["timestampMs"])]
                 item["timestampMs"] = int(row["timestampMs"])
                 item["valid"] = item["valid"] and bool(row["valid"])
@@ -340,8 +392,13 @@ class RecordingStore:
 
     def events(self, recording_id: str) -> list[dict]:
         session = self._session_dir(recording_id)
-        has_new_records = session.is_dir() and any(path.stat().st_size for path in session.rglob("*.jsonl"))
-        return self._new_events(recording_id) if has_new_records else self._legacy_events(recording_id)
+        try:
+            has_new_records = session.is_dir() and any(path.stat().st_size for path in session.rglob("*.jsonl"))
+            return self._new_events(recording_id) if has_new_records else self._legacy_events(recording_id)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            # Never replay a partial session as valid after dropping a bad row.
+            self._warn_unreadable(recording_id, error, session)
+            return []
 
     def _write_manifest(self, recording_id: str, documentation_pdf: Path | None = None) -> dict:
         session = self._session_dir(recording_id)

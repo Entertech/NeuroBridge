@@ -2,9 +2,13 @@
 
 本文是面向部署和联调人员的内部操作手册，适用于 Ubuntu 24.04 x86_64 网关与一台 B 端主机通过专用有线网络直连的场景。B 端主机大概率采用麒麟国产操作系统；其具体产品、版本和 CPU 架构仍须在进场前确认。
 
-SSH 只用于网关运维；B 端取数、订阅和录播控制仍使用既有 WebSocket 北向协议。本文不修改 B 端协议，也不要求网关实现任何自定义加密、证书或 Token 逻辑。账号密码认证和 SSH 传输保护均由系统 OpenSSH 提供。
+SSH 只用于网关运维且为可选入口；B 端取数、订阅仍使用既有 WebSocket 北向协议，录播策略由网关运维设置。未启用 SSH 时，在网关本机终端仍可管理服务、日志与录播。本文不修改 B 端协议，也不要求网关实现任何自定义加密、证书或 Token 逻辑。账号密码认证和 SSH 传输保护均由系统 OpenSSH 提供。
 
 ## 1. 场景与边界
+
+反复断连现场复测时，先部署包含蓝牙生命周期修复的版本，再在网关本地管理员终端运行 `sudo /opt/neurobridge/venv/bin/python -m neurobridge.ble.link_monitor --duration-seconds 600`，保持运行等待复现。该显式监控只保存控制器断连事件/命令及原因元数据，默认写入 `/var/log/neurobridge/ble-link.log`，会被原有诊断包收集和日志轮转规则覆盖，不保存人体原始数据或完整 HCI 抓包。详见 [HCI 断连原因采集](../../linux/README.md#hci-断连原因采集)。普通网关运行日志自动补充断线阶段、检测来源、电量/佩戴快照和清理耗时；`scanRssi` 是扫描时的值，`backendReason=unavailable` 不代表已经查明原因。
+
+通知启用前已准备录制会话，因此连接初始化失败也可能留下包含原始首包的已完成会话；它不表示头环曾成功进入可用状态。采集窗口与算法请求串行处理，算法交换超时/取消会隔离旧进程以防结果串配，直到下一设备会话重新初始化；算法退出使用配置化期限和强制结束，原始落盘及自动重连继续。当前仅有源码与模拟故障回归证据，尚不能宣称已消除现场反复掉线或确认头环关机原因。
 
 现场只有两台主机：网关和 B 端主机。B 端主机既可以打开联调页，也可以作为唯一的 SSH 运维终端。
 
@@ -16,31 +20,31 @@ SSH 只用于网关运维；B 端取数、订阅和录播控制仍使用既有 W
 
 上图的 IP、端口和 WebSocket 路径均是示例，必须替换为双方确认的现场配置。该网口不得接入公网、无线网络或不受控局域网。
 
-头环未连接时，网关在 B 端首次调用 `getLatest` 或 `subscribe` 后自动进入录播，并在数据中标记 `mode="replay"`。当前实现中，`replay_recording_id` 可留空：网关会从录制目录选择最新的非空历史会话；填写一个存在且非空的会话 ID 时，填写值优先。
+头环未连接、部署允许录播且存在可读取历史会话时，网关在 B 端首次调用 `getLatest` 或 `subscribe` 后自动进入录播，并在数据中标记 `mode="replay"`。当前实现中，`replay_recording_id` 可留空：网关会从录制目录选择最新的非空历史会话；填写一个存在且非空的会话 ID 时，填写值优先。
 
 ## 2. 部署前检查
 
 SSH 运维入口由下列文件提供：
 
-- `linux/setup-ssh-operations.sh`：交互式一键配置入口；
-- `linux/configure-ssh-operations.sh`：可自动化调用的严格配置器；
+- `linux/ubuntu/setup-ssh-operations.sh`：交互式一键配置入口；
+- `linux/ubuntu/configure-ssh-operations.sh`：可自动化调用的严格配置器；
 - `config/ssh-operations.example.txt`：快速模式配置模板；首次运行时据此生成 Git 忽略的 `config/ssh-operations.txt`；
-- 运行时命令：`neurobridge-ops`。
+- 可选 SSH 运维命令：`neurobridge-ops`，仅显式配置后安装；本机录播命令见第 5.0 节。
 
 一键 SSH 配置会把执行配置时的完整源码同步到 SSH 运维账号固定的 `~/NeuroBridge` 项目目录。SSH 登录后可通过 `neurobridge-ops project` 查看实际绝对路径，后续代码更新、部署、状态和日志操作都以该目录为准，不再创建单独的版本暂存目录。
 
-若网关仅部署 `master`，确认该分支已经包含上述文件；否则应先合入对应的 SSH 运维变更，再部署到现场。部署后使用以下命令确认文件存在：
+确认网关部署的批准分支已经包含上述文件；否则应先合入对应的 SSH 运维变更，再部署到现场。部署后使用以下命令确认文件存在：
 
 ```bash
-test -x linux/setup-ssh-operations.sh
-test -x linux/configure-ssh-operations.sh
+test -x linux/ubuntu/setup-ssh-operations.sh
+test -x linux/ubuntu/configure-ssh-operations.sh
 test -f config/ssh-operations.example.txt
 ```
 
 首次准备环境时必须完成：
 
 ```bash
-sudo ./linux/prepare-ubuntu24.04-environment.sh
+sudo ./linux/ubuntu/prepare-ubuntu24.04-environment.sh
 ```
 
 该命令在可访问受控软件源时安装 `openssh-server`，但会保持 `ssh.socket` 和 `ssh.service` 停用。Ubuntu 24.04 安装 OpenSSH 后可能自动启用 socket 激活；环境准备脚本会一并关闭该通配监听，避免它提前占用 22 端口。现场已经隔离、只剩网关与 B 端直连时，不能再依赖该直连网络临时安装缺失的 OpenSSH 包；应在隔离前完成准备，或按现场受控的软件交付流程补齐系统包。
@@ -95,7 +99,7 @@ ping -c 4 192.168.88.10
 
 ## 3. 配置网关网络与录播
 
-先在网关本地控制台配置接入 B 端的网卡静态 IP。不要用安装脚本覆盖现有 Netplan 文件；只修改现场对应的网卡配置。示例地址为：
+在网关本地控制台先核对部署配置中的专用物理网口、地址和子网。当前安装/systemd 启动流程会在选定有线口追加固定地址，保留已有局域网/DHCP 地址、默认路由、DNS 与 IPv6，不覆盖 Netplan，不用公网可达性判断专线是否可用；多物理网口须明确指定。系统已有地址不会自动变成 SSH 监听配置，SSH 仍须单独确认。示例地址为：
 
 ```text
 网关：192.168.88.10/24
@@ -126,6 +130,7 @@ path = "/neurobridge/v1/ws"
 enabled = false
 
 [recording]
+replay_enabled = true
 directory = "/var/lib/neurobridge/recordings"
 replay_recording_id = ""
 replay_speed = 1.0
@@ -189,7 +194,7 @@ port=22
 ```bash
 install -m 600 config/ssh-operations.example.txt config/ssh-operations.txt
 nano config/ssh-operations.txt
-sudo ./linux/setup-ssh-operations.sh --quick
+sudo ./linux/ubuntu/setup-ssh-operations.sh --quick
 ```
 
 也可以直接执行最后一条命令；脚本会自动创建配置文件，并逐项询问其中缺少的值。配置完整时，`--quick` 只显示参数摘要并要求输入最终 `YES` 确认。密码值不会回显、进入命令参数或写入日志，但它在该 TXT 中是明文，因此必须保持权限 `600`，不得复制到现场记录、聊天、日志或版本库。配置文件含明文密码但权限允许组或其他用户读取时，脚本会拒绝继续。
@@ -197,7 +202,7 @@ sudo ./linux/setup-ssh-operations.sh --quick
 原快速命令仍兼容；命令中的 IP 会覆盖文件里的 `allow_from`：
 
 ```bash
-sudo ./linux/setup-ssh-operations.sh --quick 192.168.88.20
+sudo ./linux/ubuntu/setup-ssh-operations.sh --quick 192.168.88.20
 ```
 
 配置中没有监听 IP、并且设备也未检测到可用私有 IP 时，脚本会提示输入且不展示默认值。网关有多块私网网卡时，应在文件中明确填写目标地址，不能依赖脚本选择第一个地址。快速模式只接受单台来源；需要允许一个来源网段时使用完整模式。
@@ -207,7 +212,7 @@ sudo ./linux/setup-ssh-operations.sh --quick 192.168.88.20
 需要自定义账号、监听 IP、来源网段或 SSH 端口时，继续使用原有无参数命令：
 
 ```bash
-sudo ./linux/setup-ssh-operations.sh
+sudo ./linux/ubuntu/setup-ssh-operations.sh
 ```
 
 按现场值回答提示。直连示例：
@@ -231,7 +236,7 @@ Ubuntu 24.04 可能同时提供 `ssh.socket` 和 `ssh.service`。配置器会在
 如果需要接入自动化部署，可使用非交互入口。密码必须由受控的标准输入提供，不能出现在参数或版本库中：
 
 ```bash
-printf '%s\n' '<至少6位数字密码>' | sudo ./linux/configure-ssh-operations.sh \
+printf '%s\n' '<至少6位数字密码>' | sudo ./linux/ubuntu/configure-ssh-operations.sh \
   --operator-user neuroops \
   --operator-password-stdin \
   --listen-address 192.168.88.10 \
@@ -322,7 +327,9 @@ neurobridge-ops logs --lines 500   # 查询历史日志，最多 1000 条
 neurobridge-ops logs --follow      # 实时追踪运行日志；Ctrl-C 停止
 neurobridge-ops audit --lines 500  # 查询 SSH 运维操作审计，最多 1000 条
 watch -n 2 neurobridge-ops status  # 每 2 秒刷新服务状态
-neurobridge-ops update             # 切换至 master、快进拉取并重新加载
+neurobridge-ops branch             # 查询当前分支，不拉取或部署
+neurobridge-ops update             # 从 origin 快进更新当前分支并重新加载
+neurobridge-ops update --branch codex/linux-headband-ethernet-gateway
 neurobridge-ops restart            # 重启网关服务
 neurobridge-ops stop
 neurobridge-ops start
@@ -330,13 +337,47 @@ neurobridge-ops start
 
 现场不再区分发布管理员和普通运维，配置的 SSH 账号就是唯一的受信任运维账号。SSH 场景中的源码更新必须通过 `neurobridge-ops update` 执行，不支持运维人员手工运行 Git 命令、替换源码目录或传入临时路径。因为该账号维护的脚本随后会以 root 安装，所以必须把它作为网关管理员凭据管理，不能共享密码或放宽允许来源 IP。
 
-每次 `status`、`logs`、`audit`、`update`、`start`、`stop` 或 `restart` 都会写入系统日志标识 `neurobridge-ops-audit`。日志包含系统时间、`sudo` 确认的运维账户、受限动作、参数摘要和开始/成功/失败结果；`logs --follow` 是持续命令，只记录开始。不记录账号密码、SSH 会话内容、网关配置或业务原始数据。用 `neurobridge-ops audit` 查询这份审计日志；SSH 登录来源仍以系统 `sshd` 日志为准。
+每次 `status`、`logs`、`audit`、`update`、`replay`、`start`、`stop` 或 `restart` 都会写入系统日志标识 `neurobridge-ops-audit`。日志包含系统时间、`sudo` 确认的运维账户、受限动作、参数摘要和开始/成功/失败结果；`logs --follow` 是持续命令，只记录开始。不记录账号密码、SSH 会话内容、网关配置或业务原始数据。用 `neurobridge-ops audit` 查询这份审计日志；SSH 登录来源仍以系统 `sshd` 日志为准。
 
 `restart` 或 `stop` 会中断 B 端 WebSocket。服务恢复后，B 端必须重新连接，先调用 `getStatus`，再重新订阅；旧 `subscriptionId` 不可复用。
 
+### 5.0 允许与禁止录播
+
+在网关本机终端执行，不需要先配置 SSH 或安装 `neurobridge-ops`：
+
+```bash
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control enable   # 允许录播
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control disable  # 禁止录播
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control status   # 只读查询
+```
+
+只有显式配置过 SSH 运维入口时，才能使用简写：
+
+```bash
+neurobridge-ops replay enable
+neurobridge-ops replay disable
+neurobridge-ops replay status
+```
+
+两种入口使用同一逻辑，持久化 `/etc/neurobridge/gateway.toml` 的 `[recording].replay_enabled`（布尔；省略默认 `true`）。`enable` 允许无头环时按需录播，仍须由 `getLatest`/`subscribe` 请求触发，不强制切换实时头环；`disable` 禁止录播读取与启动，保留文件和实时采集配置。不新增 B 端 WS 动作，B 端不选择数据源。禁止操作应用后，当前 `replay` 模式切回 `live`，旧录播停止；未连接头环时，`getStatus` 仍成功且 `mode="live"`、`connectionState="disconnected"`，取数返回既有 503 和中文 `message="头环未连接"`。
+
+启用/禁用使用互斥锁、完整配置校验和原子替换，保留其他字段、注释、文件权限和归属。运行中的服务会重启以应用策略，结束当前录制与录播并断开 WS；B 端须重连、`getStatus`、重新订阅。已停止的服务只保存配置，下次启动生效。重复设置同一值也会重启运行中的服务。重启失败返回非零，所选策略仍保存，应查服务日志；不报告成功应用，也不回退用户选择的禁止策略。
+
+`status` 示例：
+
+```json
+{"replayEnabledConfigured":false,"serviceActive":true,"applied":null}
+```
+
+它表示“保存的配置禁止录播、服务活动、本次仅查询”，不表示查询失败，也不证明当前进程已加载该配置。启用/禁用输出 `applied=true` 表示完成运行中服务的重启/活动检查；`false` 表示原本停止，仅保存配置。该字段不是设备或数据验收结果。禁止录播时，`mode` 必须为 `live`，即使头环未连接；这表示等待实时设备，不代表实时数据已就绪。允许录播且头环未连接时才可为 `replay`，但仍须核对可读会话和实际取数结果。完整字段说明和本机部署步骤见 [Linux 运行说明](../../linux/README.md#61-在网关本机管理录播无需-ssh)。
+
+若出现 `No module named neurobridge.replay_control`，先由本机管理员将批准的新源码部署到 `/opt/neurobridge`：在已更新的源码根目录运行 `sudo bash linux/ubuntu/reload-ubuntu.sh`，按脚本提示处理需要完整更新的情形。仅更新源码或重启旧服务不能安装新模块。`neurobridge-ops: command not found` 则说明可选运维入口缺失，优先使用上述本机入口。
+
+通过 SSH 命令闸口执行的动作进入 `neurobridge-ops-audit`，记录开始/成功/失败。本机直接执行模块不经过该 SSH 闸口，应结合 sudo、服务启动和运行日志核对。应用更新流程会刷新已有授权的 CLI/命令闸口，不配置或重启 SSH、不创建授权、不更改账号密码，也不重建旧版更新辅助器。
+
 ## 5.1 一键更新代码并重新加载
 
-`neurobridge-ops update` 不接收任意源码路径，只操作 `neurobridge-ops project` 显示的固定 Git 工作目录。它先确认工作树没有本地修改，再固定切换至 `master`、执行仅快进的拉取，最后验证项目完整性、文件归属、组/其他用户写权限和符号链接，并调用其中的 `linux/reload-ubuntu.sh` 重新加载网关。
+`neurobridge-ops update` 不接收任意源码路径，只操作 `neurobridge-ops project` 显示的固定 Git 工作目录。它先确认工作树没有本地修改，默认读取当前分支，或使用 `--branch <分支名>` 显式选择 `origin` 上的分支；获取该分支并只允许快进更新，最后验证项目完整性、文件归属、组/其他用户写权限和符号链接，并调用其中的 `linux/ubuntu/reload-ubuntu.sh` 重新加载网关。
 
 取得变更授权且网关能访问批准的代码源后，SSH 登录只执行：
 
@@ -344,7 +385,9 @@ neurobridge-ops start
 neurobridge-ops update
 ```
 
-该命令不会创建合并提交，也不会接受临时路径或覆盖现场修改。若工作树有修改、无法切换至 `master`、无法从批准上游快进拉取，或网关处于隔离网络，命令会失败；不要改用手工 Git、`rsync` 或未知文件绕过检查，应联系网关交付方按批准流程处理。更新成功后会安装源码、更新 Python 包、重新加载 systemd 单元并重启网关。B 端 WebSocket 会断开，恢复后必须重新连接、调用 `getStatus` 并重新订阅。更新失败时，同一个运维账号执行 `neurobridge-ops logs --lines 500` 和 `neurobridge-ops audit --lines 100`，保留错误摘要后联系交付方。
+该命令不会创建合并提交，也不会接受临时路径或覆盖现场修改。若工作树有修改、指定远端分支不存在、本地领先或分叉而无法从 `origin` 快进更新，或网关处于隔离网络，命令会失败；不要改用手工 Git、`rsync` 或未知文件绕过检查，应联系网关交付方按批准流程处理。更新成功后会安装源码、更新 Python 包、重新加载 systemd 单元并重启网关。B 端 WebSocket 会断开，恢复后必须重新连接、调用 `getStatus` 并重新订阅。更新失败时，同一个运维账号执行 `neurobridge-ops logs --lines 500` 和 `neurobridge-ops audit --lines 100`，保留错误摘要后联系交付方。
+
+旧版入口升级到分支参数版时，由交付方在网关本地控制台，从包含新功能的批准源码重新运行 `sudo ./linux/ubuntu/setup-ssh-operations.sh`，再验证 `neurobridge-ops branch` 和 `neurobridge-ops help`。新版部署流程会刷新已有授权的 CLI/命令闸口；旧版 `neurobridge-ops-update` 辅助器的迁移仍需上述本地配置，首次启用 SSH 也必须显式配置。`branch` 为只读查询，工作树有修改时仍可执行；detached HEAD 无当前分支，无参数更新会失败，须使用 `update --branch <分支名>`。只在远端存在的分支可自动建立本地同名分支；原分支不会被删除或重置。更新日志和审计记录实际分支与结果。
 
 ## 6. B 端录播联调步骤
 
@@ -355,9 +398,9 @@ neurobridge-ops update
    ```
 
 2. 填入确认后的 WebSocket 地址，例如 `ws://192.168.88.10:8765/neurobridge/v1/ws`。
-3. 建立连接并调用 `getStatus`，确认头环未连接。
+3. 由网关运维确认录播已允许且有正常历史会话，再建立连接并调用 `getStatus`，确认头环未连接；状态成功不等于有可播数据。
 4. 调用 `getLatest` 或 `subscribe`。
-5. 确认返回数据中的 `mode` 为 `replay`。
+5. 确认收到成功取数结果或订阅后的实际数据事件，并核对 `mode="replay"`、时间戳与 `valid`，不能只看状态中的 `mode`。禁止录播时应为 503“头环未连接”，场景表见 [B 端异常消息与场景排查表](B端异常消息与场景排查表.md)。
 6. 在 B 端 SSH 终端并行执行：
 
    ```bash
@@ -367,6 +410,82 @@ neurobridge-ops update
    观察服务状态、请求处理、录播启动和异常原因。运行日志不会记录完整敏感原始数据。
 
 ## 7. 常见问题
+
+### 网络与蓝牙分别诊断
+
+按实际响应区分问题，先看 [B 端异常消息与场景排查表](B端异常消息与场景排查表.md)：WS JSON 中的业务 500/503、握手状态、关闭码和网页自身错误不是同一层信号。
+
+服务自动写入 journal 与持久化轮转日志，不需要额外打开日志采集脚本。需要导出最近约三天时，在网关本机执行：
+
+```bash
+sudo /opt/neurobridge/linux/ubuntu/collect-runtime-diagnostics.sh --since '72 hours ago' --output-dir /tmp
+```
+
+脚本只在导出时手动运行，不参与日常日志生成。实际覆盖范围受系统 journal 与轮转保留情况影响。若只查今天之前的应用日志，可直接使用 journal 的结束时间，不能给采集脚本传未支持的 `--until`：
+
+```bash
+sudo journalctl -u neurobridge.service --since '3 days ago' --until 'today' --no-pager -o short-iso
+```
+
+B 端 ISO 时间的 `Z` 表示 UTC；与网关日志对照时保留时区。例如本次反馈 `2026-11-03T01:33:09Z` 对应北京时间 `09:33:09+08:00`。在同一故障时间窗查询完整堆栈：
+
+```bash
+sudo journalctl -u neurobridge.service \
+  --since '2026-11-03 01:32:30 UTC' \
+  --until '2026-11-03 01:34:00 UTC' \
+  --no-pager -o short-iso
+```
+
+#### 常见入口与扫描诊断
+
+| 现象 | 解释与操作 |
+| --- | --- |
+| `neurobridge-ops` 不存在 | 它由可选 SSH 运维配置安装，不是运行网关的必需命令；使用本机 Python 录播入口与 `systemctl`/`journalctl` |
+| SSH 配置文件不存在，`ssh.service`/`ssh.socket` 均 inactive | 尚未完成可选 SSH 配置，不能从缺失文件推断账号和端口；在网关本地明确配置后再查询监听。不要为使用录播开关而先开启 SSH |
+| SSH setup 提示需要 Git working tree | 受控 SSH 更新需要完整 Git 工作树来获取批准分支；该要求不代表运行网关或本机录播命令必须依赖 Git。无 `.git` 的受控源码可由本机管理员按部署流程安装 |
+| `BLE scan completed` 中 `discovered>0, matching=0` | 当次扫描发现了周边设备，但没有符合名称/profile 的目标；核对开机、占用及配置。不能据此断言蓝牙控制器坏了，也不能把一次扫描未匹配算成已连接后的掉线 |
+| `BLE link disconnected` | 对照同一 `attempt` 的连接阶段、连接时长、最后收包时间和上下文；回调缺少底层原因时保持未知，不从 B 端错误推断硬件根因 |
+
+#### B 端 getStatus 返回 500 / JSONDecodeError
+
+2026-11-03 现场堆栈确认一条故障路径：`getStatus → available_streams → replay_recording_id → events → json.loads`，某个历史会话的数据行不是合法 JSON，导致状态请求返回通用 500。堆栈不能区分具体文件，也不能仅凭 `column 1` 判断为空白行、截断、其他内容或产生损坏的原因。该路径与有线 WS 已建连、BLE 扫描未匹配头环分别处理。
+
+修复后的只读录播读取在 JSON、编码、字段处理或文件访问失败时排除整个会话，不丢弃坏行后将部分数据当作完整会话发送，也不删除、修复或重写原文件。显式配置会话不可读时，仍按已有回退规则查找其他正常会话；新旧录制格式均适用。元数据清单不可解析时使用既有文件修改时间作为排序依据，数据文件仍单独校验。无可读会话时，`getStatus` 成功且仅提供 `status`；`getLatest`/`subscribe` 使用既有的录播不可用错误，不改报文结构或新增错误码。实时状态查询不读取历史录播。恢复文件后，下次读取即重试，无需重启；修复脚本或人工处理须另行保留备份并核对原始数据。
+
+日志关键字为 `Replay recording read failed`，包含 `recordingId`、`file`、`line`、`column`、`errorType`、`errno` 与 `sessionExcluded`。JSON 和逐行 UTF-8 错误给出物理行号；文件访问或后续字段处理无法定位到行时为 `None`。`sessionExcluded=False` 表示清单元数据回退，不代表排除数据会话。日志不包含原始行或算法值。同一连续错误按 `[logging].diagnostics_interval_seconds` 限频（默认 30 秒；0 为不抑制），新错误位置立即记录；不缓存录播数据或永久忽略坏文件。请求处理的非预期错误额外记录 `bootId`（对应报文 `gatewayBootId`）、连接、请求 ID 和动作，便于与 B 端日志关联。
+
+升级后重新查询状态，在网关本地执行 `sudo journalctl -u neurobridge.service -n 500 --no-pager` 或读取 `/var/log/neurobridge/neurobridge.log`，按 `file` 和 `line` 定位。配置过 SSH 运维时也可使用 `neurobridge-ops logs --lines 500`。自动回归覆盖坏原始文件、坏算法文件、旧格式、权限和编码错误、正常会话回退及修复后恢复；现场损坏文件的具体内容与产生原因尚未核实，真实设备验收仍待完成。
+
+#### 静态 capture 页的运维 HTTP 契约
+
+此接口供已授权现场操作员使用，属于网关采集运维接口，不替代已发布的 B 端 WS 取数契约。使用 `[download]` 的监听地址和端口，默认 `http://192.168.88.10:8766`。仅在专用有线或受控现场网络使用，无 TLS/Token；不允许公网或不受控网络。`[download].capture_control_enabled` 默认开启，可单独禁用；禁用后原下载接口仍保留。`[ble].enabled=false` 时开始请求返回 `503`，不得绕过部署中的设备启用开关。
+
+| 方法、路径 | 行为 |
+| --- | --- |
+| `GET /api/status` | 读取采集状态，不切换录播或自动订阅。 |
+| `GET /api/logs` | 返回本次运行的有界诊断日志缓冲，最多 200 条，每条消息最多 2048 字符；原始字节和连续波形不进入此缓冲。 |
+| `POST /api/capture/start` | 无请求体；幂等启动扫描任务。重复请求不会创建第二个设备连接。 |
+| `POST /api/capture/stop` | 无请求体；停止设备采集，完成当前会话，保留 WS 和 HTTP 监听。重复停止成功。 |
+
+新运维 JSON 响应采用 `{protocolVersion, code, data, message}` 包络，`protocolVersion` 使用台账中的报文版本。成功 `code=200`；`400` 请求格式错误、`403` 浏览器来源未授权、`404` 未启用控制接口、`405` 方法错误、`503` 设备接入未启用或控制服务正在关闭、`500` 内部操作失败，失败时 `message` 给出原因。既有 `/downloads` 索引和 ZIP 契约保持原样。
+
+状态响应的 `data` 直接包含网关与连接、算法状态及以下采集字段，不是 WS `getStatus` 的 `data.result` 包装，也不包含 WS 可用流清单：`captureRunning`（布尔，扫描/连接任务存活，不代表头环已连接）、`recordingId`（当前录制会话 ID 或 `null`）、`connectionError`（最近设备接入错误或 `null`）、`exportRecordingId`（当前或本次运行最近会话 ID，可能 `null`）、`exportUrl`（已结束会话的相对下载路径或 `null`）、`websocketUrl`（部署配置中的 WS 地址）。`connectionState`、`algorithmState` 与现有网关状态一致；`serverTimeMs` 为毫秒 Unix 时间。页面每 1500 ms 读取状态和日志，日志条目为 `{timestampMs, level, message}`，其中 `timestampMs` 是毫秒 Unix 时间，`level` 为日志级别；HTTP 读取延迟取决于网络和本次请求耗时，不表示设备采样频率或算法刷新频率。
+
+本地 `file://` 页的浏览器来源为 `null`，默认允许；同源托管页也允许。其他来源必须在 `[download].capture_allowed_origins` 显式登记，禁止通配来源。未授权来源在执行控制动作前即被拒绝。仅对允许来源返回 CORS 和本地网络预检头；浏览器仍可能要求用户允许本地网络访问。可直接访问网关 `/capture/index.html` 使用同源托管的同一套静态文件。
+
+保存顺序固定为：页面显示“停止并保存 ZIP” → `POST /api/capture/stop` → 确认 `recordingId=null` 且有 `exportUrl` → 下载该已完成会话。仍在采集的会话下载继续返回 `409`，不导出未完成数据。状态/日志不可达或操作失败时页面显示错误，不把浏览器网络故障解释为设备掉线，也不自动重试开始/停止操作。
+
+部署默认地址为 `192.168.88.10/24`。安装和每次 systemd 启动时检查专用物理以太网口，缺少此地址则追加；已有受控局域网地址、DHCP、默认路由和 DNS 保留。无网线或无 DHCP 也能配置，辅助服务会补回网络重连后被移除的地址；决策与失败原因见 `neurobridge.service`、`neurobridge-wired-address.service` 的 journal，详见 [默认有线地址配置](../../linux/README.md#3-专用有线网络的默认自动配置)。此功能不探测公网，不修改 SSH 原有监听地址或允许来源规则。
+
+B 端网卡配置同网段不同地址（例如 `192.168.88.20/24`）后，直接打开最新的 `web/b-client-test/index.html`，页面默认连接部署地址并自动查询状态；连接失败时显示目标、耗时、关闭码等诊断信息，可手动重试。订阅仍由 B 端按所选流启动。使用新的静态 ZIP 时须整体解压，不能只替换 HTML 或继续打开旧包。
+
+先保留故障时刻与日志，再重启或更新。网络发送异常、超时或订阅事件积压会关闭对应 B 端连接；采集和蓝牙重连不等待网络发送，原始字节与算法结果继续独立保存。恢复后 B 端需重新连接、`getStatus`、订阅，旧订阅不能复用；该处理不启用心跳或补传。
+
+在网关本地项目目录运行 `sudo ./linux/ubuntu/collect-runtime-diagnostics.sh`，可一次导出最近 72 小时的网关、网络、BlueZ、内核和运维日志，当前系统状态及全部现存应用轮转日志。该入口只读，不要求 `.git`，也不依赖 SSH 是否已经启用；详细参数、配置项和日志字段见 [Ubuntu 运行诊断与日志采集](../../linux/README.md#运行诊断与日志采集)。远程受限 `neurobridge-ops logs` 仍只查询应用 journal；系统采集脚本须由本地具备权限的管理员执行。
+
+网络按 `bootId/sessionId/subscriptionId` 对照发送错误、队列积压、连接关闭和网络快照，蓝牙按 `attempt` 对照扫描匹配数量、扫描 RSSI、连接失败阶段、连接持续时间及最后收包时间。仅扫描不到设备不能算成一次蓝牙掉线，网络发送报错不能当成蓝牙底层断开原因；`backendReason=unavailable` 表示当前回调未提供 HCI 原因。周期网络快照也不能代替故障时的两端 IP/掩码、路由和 ping 结果。
+
+本次新增能力以源码和自动回归为依据，真实头环断开重连、Ubuntu 目标机以及专用有线链路拔插恢复仍需现场验收。系统 journal 和应用轮转保留多久决定了实际可导出的历史，指定 72 小时不保证历史一定存在。
 
 ### 7.1 推荐排查顺序
 
@@ -447,3 +566,13 @@ sudo systemctl restart ssh.service
 ```
 
 是否进一步停用 SSH 服务，由现场运维策略决定。撤销 SSH 不会改动网关业务服务、录播文件或 B 端 WebSocket 协议。
+
+## B 端图表与设备状态验证（2026-11-03）
+
+静态 B 端页使用默认分支波形/频谱布局思路，增加左右或单通道波形、七项脑波频段能量、放松度、压力值、心率、HRV、注意力和 Flow。页面先自动 `getStatus`；手动订阅 EEG、HR、状态后持续刷新。图表不推定采样率，指标不推定百分比或 HRV 单位，缺项不补零；每项标注数据时间，来源或连接切换后清空。仅收到原始流不能证明算法数据已产生。
+
+当前适配层依据 [Flowtime 通信协议](https://entertech.feishu.cn/docs/doccnlmMLpxwY25gJQyiFQmBeRd?from=from_copylink) 的蓝牙服务列表、表 4-2 和表 4-4：电量特征为 2A19，可读及通知；单字节 0–100 映射百分比（0x52 → 3.92 V → 82%）。FF32 两字节分别报告 EEG/HR，均为 0 时汇总 `worn`，任一非零时汇总 `notWorn`，含义是“未佩戴或接触不良”，不能据此区分脱落和质量差；长度异常为 `unknown`。状态查询直接返回状态字段，连续状态事件位于 `payload.status`，页面均已兼容。
+
+连接建立并开启录制后尽力读取一次电量，后续靠通知刷新；未暴露特征或读取/通知失败不阻断采集，日志记录阶段及错误类型，原始状态字节保存至当前会话的 `raw/wear.jsonl`、`raw/battery.jsonl`。这些诊断文件沿用会话、接收时间、窗口时间、Base64 原字节和长度有效标记；只作追溯，不进入 EEG/HR 算法或北向录播。manifest 自动列出文件，旧会话不要求具有它们。此次为未发布扩展，已发布采集包说明保持锁定，使用新诊断文件须以本节为内部补充。
+
+源码与协议支持上述含义；自动回归覆盖有效/无效包、0%/82%/100%、可选电量失败、原字节持久化、实时与录播界面及网络故障隔离。现场需升级网关及静态包，再确认真实头环佩戴/接触切换、电量、算法输出、拔插网线及蓝牙重连；自动回归不能替代现场验收。

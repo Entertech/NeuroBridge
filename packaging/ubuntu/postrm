@@ -1,0 +1,13 @@
+#!/bin/sh
+@COMMON@
+case "$1" in
+    remove|purge)
+        if systemd_running; then
+            # --no-reload avoids loading units whose files dpkg just removed.
+            for unit in $units; do systemctl --no-reload disable "$unit"; done
+            systemctl daemon-reload
+        fi
+        rm -rf "$state"
+        echo 'Configuration, recordings and logs were retained in /etc/neurobridge, /var/lib/neurobridge and /var/log/neurobridge (including on purge).'
+        ;;
+esac

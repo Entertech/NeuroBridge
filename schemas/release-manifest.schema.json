@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Entertech/NeuroBridge/schemas/release-manifest.schema.json",
   "title": "NeuroBridge immutable pre-publication release manifest",
-  "description": "Generated only after both platforms meet the minimum package gate and the aggregate ZIP is closed. Failed and blocked targets are recorded in coverage.targetResults. Publication is recorded separately by release-receipt.json.",
+  "description": "Generated only after all configured platforms meet the minimum package gate and the aggregate ZIP is closed. Failed and blocked targets are recorded in coverage.targetResults. Publication is recorded separately by release-receipt.json.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -60,17 +60,18 @@
     "coverage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["requireAllMatrixTargets", "windows", "kylin"],
+      "required": ["requireAllMatrixTargets", "windows", "kylin", "ubuntu"],
       "properties": {
         "requireAllMatrixTargets": { "const": false },
         "windows": { "$ref": "#/$defs/coveragePlatform" },
-        "kylin": { "$ref": "#/$defs/coveragePlatform" }
+        "kylin": { "$ref": "#/$defs/coveragePlatform" },
+        "ubuntu": { "$ref": "#/$defs/coveragePlatform" }
       }
     },
     "platformArchives": {
       "type": "array",
-      "minItems": 2,
-      "maxItems": 2,
+      "minItems": 3,
+      "maxItems": 3,
       "items": { "$ref": "#/$defs/platformArchive" }
     },
     "aggregateArchive": { "$ref": "#/$defs/archive" },
@@ -158,9 +159,9 @@
       "additionalProperties": false,
       "required": ["target", "osVersion", "edition", "architecture", "format", "status", "fileName", "sha256", "validation"],
       "properties": {
-        "target": { "type": "string", "enum": ["windows", "kylin"] },
+        "target": { "type": "string", "enum": ["windows", "kylin", "ubuntu"] },
         "osVersion": { "type": "string", "minLength": 1 },
-        "edition": { "type": "string", "enum": ["server", "desktop", "none"] },
+        "edition": { "type": "string", "enum": ["server", "desktop", "none", "v10"] },
         "architecture": { "type": "string", "enum": ["x86", "x86_64", "arm64", "loongarch64", "mips64el", "sw64", "all"] },
         "format": { "type": "string", "enum": ["exe", "msi", "deb", "rpm"] },
         "status": { "const": "candidate" },
@@ -186,9 +187,20 @@
           "then": {
             "properties": {
               "osVersion": { "const": "V10" },
-              "edition": { "enum": ["server", "desktop"] },
+              "edition": { "enum": ["server", "desktop", "v10"] },
               "architecture": { "enum": ["x86_64", "arm64", "loongarch64", "mips64el", "sw64", "all"] },
               "format": { "enum": ["deb", "rpm"] }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "target": { "const": "ubuntu" } } },
+          "then": {
+            "properties": {
+              "osVersion": { "const": "24.04" },
+              "edition": { "const": "none" },
+              "architecture": { "const": "x86_64" },
+              "format": { "const": "deb" }
             }
           }
         }
@@ -199,7 +211,7 @@
       "additionalProperties": false,
       "required": ["platform", "fileName", "sha256", "status", "packageCount", "packages"],
       "properties": {
-        "platform": { "type": "string", "enum": ["windows", "kylin"] },
+        "platform": { "type": "string", "enum": ["windows", "kylin", "ubuntu"] },
         "fileName": { "type": "string", "minLength": 1 },
         "sha256": { "$ref": "#/$defs/sha256" },
         "status": { "const": "candidate" },

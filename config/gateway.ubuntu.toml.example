@@ -2,7 +2,7 @@ config_schema_version = 1
 profile = "ubuntu_headband_wired"
 
 [server]
-host = "192.168.88.1"
+host = "192.168.88.10"
 port = 8765
 path = "/neurobridge/v1/ws"
 
@@ -16,8 +16,10 @@ port = 8080
 
 [network]
 mode = "static"
-interface = "enp1s0"
+interface = "auto"
 subnet_cidr = "192.168.88.0/24"
+ensure_static_address = true
+address_check_interval_seconds = 5.0
 
 [data_source]
 type = "bluetooth"
@@ -32,6 +34,7 @@ scan_timeout_seconds = 5
 reconnect_delay_seconds = 3
 
 [recording]
+replay_enabled = true
 # Optional protected transport trace; stop retaining whole chunks at the session budget.
 transport_trace_enabled = false
 transport_trace_max_bytes = 1048576
@@ -42,9 +45,11 @@ replay_speed = 1.0
 
 [download]
 enabled = true
-host = "192.168.88.1"
+host = "192.168.88.10"
 port = 8766
 path = "/downloads"
+capture_control_enabled = true
+capture_allowed_origins = ["null"]
 
 [logging]
 rotation_mode = "external"
@@ -77,3 +82,6 @@ persistence_timeout_ms = 1000
 shutdown_timeout_ms = 5000
 send_timeout_ms = 5000
 metrics_interval_seconds = 10
+# Offline data-query deadline and replay catalogue cache lifetime; getStatus never scans files.
+replay_catalog_timeout_ms = 2000
+replay_catalog_refresh_ms = 30000

@@ -244,7 +244,7 @@ printf '未访问网络；.runtime、现场配置和录制数据均已保留。\
 cleanup_bundle
 trap - EXIT
 exec 1>&3 2>&4 3>&- 4>&-
-exec bash "$project_dir/linux/neurobridge-kylin-bootstrap.sh"
+exec bash "$project_dir/linux/kylin/neurobridge-kylin-bootstrap.sh"
 exit 0
 __NEUROBRIDGE_GIT_BUNDLE__
 RUNNER

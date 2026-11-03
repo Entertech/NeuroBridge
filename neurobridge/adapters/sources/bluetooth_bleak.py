@@ -21,18 +21,21 @@ LOG = logging.getLogger(__name__)
 
 
 class BluetoothBleakSource:
-    def __init__(self, config: BleConfig, device_ready, error=None, *, queue_size: int = 64, enqueue_timeout_ms: int = 50) -> None:
+    def __init__(self, config: BleConfig, device_ready, error=None, *, queue_size: int = 64, enqueue_timeout_ms: int = 50, telemetry=None, diagnostics_interval_seconds: float = 30) -> None:
+        self.enabled = config.enabled
         self._chunks: asyncio.Queue[RawChunk | None] = asyncio.Queue(maxsize=queue_size)
         self._events: asyncio.Queue[DeviceConnectionEvent | None] = asyncio.Queue(maxsize=queue_size)
         self._session_id: str | None = None
+        self._capture_started = False
         self._status = SourceStatus(ConnectionState.DISCONNECTED)
         self._task: asyncio.Task[None] | None = None
         self._device_ready = device_ready
+        self._telemetry = telemetry
         self.dropped_raw_chunks = 0
         self.dropped_raw_bytes = 0
         self._pending_gap_bytes = 0
         self.enqueue_timeout_ms = enqueue_timeout_ms
-        self._adapter = FlowtimeAdapter(config, self._packet, self._status_changed, self._prepare_device, error, external_control=True)
+        self._adapter = FlowtimeAdapter(config, self._packet, self._status_changed, self._prepare_device, error, external_control=True, capture_ready=self._start_capture, diagnostics_interval_seconds=diagnostics_interval_seconds)
         self.control = BluetoothSessionControl(lambda: self._session_id, lambda: False, self._write_control)
 
     async def _write_control(self, command: bytes) -> None:
@@ -43,13 +46,22 @@ class BluetoothBleakSource:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._adapter.run())
 
-    async def stop(self) -> None:
+    async def wait_stopped(self) -> None:
+        if self._task is None:
+            raise RuntimeError("Source must be started before supervision")
+        # Session cancellation must leave the producer alive for ordered cleanup.
+        await asyncio.shield(self._task)
+
+    async def stop(self, *, drain=False) -> None:
         if self._session_id is not None:
             await self.control.stop_stream(self._session_id)
         await self._adapter.stop()
-        if self._task and not self._task.done():
-            self._task.cancel()
+        if self._task:
+            if not self._task.done():
+                self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
+        if drain:
+            await self._chunks.join()
         self._finish_queue(self._chunks)
         self._finish_queue(self._events)
 
@@ -57,8 +69,14 @@ class BluetoothBleakSource:
         return self._status
 
     async def chunks(self) -> AsyncIterator[RawChunk]:
-        while (item := await self._chunks.get()) is not None:
-            yield item
+        while True:
+            item = await self._chunks.get()
+            try:
+                if item is None:
+                    return
+                yield item
+            finally:
+                self._chunks.task_done()
 
     async def connection_events(self) -> AsyncIterator[DeviceConnectionEvent]:
         while (item := await self._events.get()) is not None:
@@ -83,31 +101,41 @@ class BluetoothBleakSource:
                 len(packet.value),
             )
 
+    async def _start_capture(self) -> None:
+        result = await self.control.start_stream(self._session_id)
+        if result.outcome not in {"started", "alreadyStreaming"}:
+            raise ConnectionError(f"BLE capture start failed: {result.reason or result.outcome}")
+
     async def _prepare_device(self) -> bool:
-        # Notifications are installed and the BLE link is usable here. Emit the
+        # The BLE link is usable; notifications are installed only after this
+        # preparation returns. Emit the
         # application connection session before algorithm initialization and the
         # FF21 start command, so no post-start bytes precede recording setup.
         if self._session_id is None:
             self._session_id = f"conn-{uuid.uuid4().hex}"
         if self._status.state != ConnectionState.CONNECTED:
-            event = DeviceConnectionEvent(ConnectionState.CONNECTED, int(time.time() * 1000), self._session_id)
+            event = DeviceConnectionEvent(ConnectionState.CONNECTED, int(time.time() * 1000), self._session_id, reason="preparing_capture")
             self._status = SourceStatus(ConnectionState.CONNECTED, self._session_id)
             await self._events.put(event)
         return await self._device_ready()
 
     async def _status_changed(self, name: str, value: object) -> None:
         if name != "connectionState":
+            if self._telemetry:
+                await self._telemetry(name, value)
             return
         state = {"connecting": ConnectionState.CONNECTING, "connected": ConnectionState.CONNECTED}.get(str(value), ConnectionState.RECONNECTING)
         if state == ConnectionState.CONNECTED:
             self._session_id = self._session_id or f"conn-{uuid.uuid4().hex}"
-            if self._status.state == ConnectionState.CONNECTED:
+            if self._capture_started:
                 return
+            self._capture_started = True
         event = DeviceConnectionEvent(state, int(time.time() * 1000), self._session_id)
         self._status = SourceStatus(state, self._session_id)
         await self._events.put(event)
         if state != ConnectionState.CONNECTED:
             self._session_id = None
+            self._capture_started = False
 
     @staticmethod
     def _finish_queue(queue: asyncio.Queue[object]) -> None:

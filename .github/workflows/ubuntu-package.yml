@@ -1,0 +1,72 @@
+name: Ubuntu native package
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/ubuntu-package.yml'
+      - '.github/workflows/release.yml'
+      - 'packaging/ubuntu/**'
+      - 'tools/*ubuntu*'
+      - 'tools/release_pipeline.py'
+      - 'tools/build-release-bundle.py'
+      - 'release/release_matrix.toml'
+      - 'schemas/release*.json'
+      - 'tests/package/**'
+      - 'config/ubuntu-package-inputs.toml'
+      - 'config/gateway.ubuntu.toml.example'
+      - 'linux/ubuntu/**'
+      - 'linux/common/**'
+      - 'neurobridge/**'
+      - 'mac/algorithm_bridge/**'
+      - 'third_party/**'
+      - 'requirements.lock'
+      - 'sdk.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu-deb:
+    name: Build and verify Ubuntu 24.04 amd64 DEB
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3.12 cmake g++ libeigen3-dev dpkg-dev patchelf
+      - uses: actions/cache@v4
+        with:
+          path: .runtime/ubuntu-package-inputs
+          key: ubuntu-24.04-amd64-cp312-${{ hashFiles('config/ubuntu-package-inputs.toml') }}
+      - name: Prepare verified wheels (network stage)
+        run: python tools/build-ubuntu-package.py --prepare-inputs
+      - name: Build precompiled DEB (offline assembly)
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/ubuntu
+          python tools/build-ubuntu-package.py --output-dir artifacts/ubuntu > artifacts/ubuntu/build.log 2>&1
+      - name: Verify install, upgrade and removal without network
+        run: bash tools/check-ubuntu-package-container.sh artifacts/ubuntu
+      - name: Upload verified Ubuntu package and provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: neurobridge-input-ubuntu-24.04-x86_64-deb
+          path: artifacts/ubuntu/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-package-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ubuntu/*.log
+          if-no-files-found: ignore
+          retention-days: 30

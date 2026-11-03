@@ -69,6 +69,10 @@ std::vector<uint8_t> base64_decode(const std::string& encoded) {
     return decoded;
 }
 
+const char* hrv_state(double value) {
+    return !std::isfinite(value) ? "non_finite" : value == 0 ? "zero" : "number";
+}
+
 void json_number(std::ostream& output, const char* name, double value, bool& first) {
     if (!first) output << ',';
     first = false;
@@ -135,6 +139,9 @@ void enable_requested_algorithms(AffectiveAlgorithm& algorithm) {
 std::string evaluate(AffectiveAlgorithm& algorithm, const std::string& request) {
     const auto eeg = base64_decode(json_string_field(request, "eegRawBase64"));
     const auto hr = base64_decode(json_string_field(request, "hrRawBase64"));
+    const bool hrv_diagnostics = json_string_field(request, "hrvDiagnostics") == "1";
+    const char* sdk_hrv_state = "not_called";
+    const char* serialized_hrv_state = "missing";
     std::ostringstream result;
     result << "{\"algorithm\":{";
     bool first = true;
@@ -183,6 +190,8 @@ std::string evaluate(AffectiveAlgorithm& algorithm, const std::string& request) 
     }
     if (!hr.empty()) {
         const auto values = algorithm.appendHR(hr);
+        sdk_hrv_state = hrv_state(values.hr.hrv);
+        serialized_hrv_state = std::isfinite(values.hr.hrv) ? sdk_hrv_state : "null";
         if (!first) result << ',';
         first = false;
         result << "\"hr\":{";
@@ -194,7 +203,12 @@ std::string evaluate(AffectiveAlgorithm& algorithm, const std::string& request) 
         json_number(result, "coherence", values.coherence, first);
         json_number(result, "arousal", values.arousal, first);
     }
-    result << "}}";
+    result << "}";
+    if (hrv_diagnostics) {
+        result << ",\"hrvDiagnostics\":{\"sdkHrvState\":\"" << sdk_hrv_state
+               << "\",\"serializedHrvState\":\"" << serialized_hrv_state << "\"}";
+    }
+    result << "}";
     return result.str();
 }
 

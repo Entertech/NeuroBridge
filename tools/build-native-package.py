@@ -509,6 +509,8 @@ def validate_native(path: Path, target: dict[str, str], log: Path) -> None:
 
 
 def build(target: dict[str, str], runtime: Path, output_dir: Path) -> Path:
+    if target["platform"] == "ubuntu":
+        raise ValueError("Ubuntu uses tools/build-ubuntu-package.py; Kylin staging is incompatible")
     runtime_requirements(target, runtime)
     output_dir.mkdir(parents=True, exist_ok=True)
     log = output_dir / "validation.log"

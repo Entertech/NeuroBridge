@@ -57,11 +57,23 @@ class NativePackageBuilderTests(unittest.TestCase):
             (destination / "validation.log").write_text("bootstrap fixture validated\n")
             pipeline.save_json(destination / "verification.json", report)
             self.assertEqual(pipeline.target_result(kylin["id"], inputs, results)["status"], "candidate")
+            with self.assertRaisesRegex(ValueError, "minimum package gate failed"):
+                pipeline.assemble(results, root / "missing-ubuntu", "push_master")
+            ubuntu = next(item for item in pipeline.matrix() if item["platform"] == "ubuntu")
+            destination = inputs / ubuntu["id"]
+            destination.mkdir(parents=True)
+            deb = destination / f"neurobridge-{BUILDER.APPLICATION_VERSION}-ubuntu-24.04-x86_64.deb"
+            deb.write_bytes(pipeline.MAGIC["deb"] + b"Ubuntu DEB fixture")
+            (destination / "validation.log").write_text("Ubuntu fixture validation\n")
+            report.update(targetId=ubuntu["id"], targetArchitecture="x86_64", fileName=deb.name,
+                          sha256=pipeline.sha256(deb))
+            pipeline.save_json(destination / "verification.json", report)
+            self.assertEqual(pipeline.target_result(ubuntu["id"], inputs, results)["status"], "candidate")
             release = root / "release"
             manifest = pipeline.assemble(results, release, "push_master")
             self.assertEqual(manifest["coverage"]["windows"]["builtPackageCount"], 1)
             self.assertEqual(manifest["coverage"]["kylin"]["builtPackageCount"], 1)
-            self.assertEqual(manifest["aggregateArchive"]["packageCount"], 2)
+            self.assertEqual(manifest["aggregateArchive"]["packageCount"], 3)
             verify_nested_archives(release / manifest["aggregateArchive"]["fileName"], manifest)
             # No bypass: a changed native installer is rejected by the same path.
             package.write_bytes(package.read_bytes() + b"tampered")

@@ -128,7 +128,8 @@ def collect_web_client_files() -> list[Path]:
     missing = [name for name in required if not (WEB_CLIENT_DIRECTORY / name).is_file()]
     if missing:
         raise FileNotFoundError(f"B-side test page is incomplete: {', '.join(missing)}")
-    return sorted(path for path in WEB_CLIENT_DIRECTORY.rglob("*") if path.is_file())
+    # Keep runtime logs and locally copied files out of delivery archives.
+    return sorted(WEB_CLIENT_DIRECTORY / name for name in required)
 
 
 def render_documents(documents: list[ExternalDocument], pdf_directory: Path) -> list[Path]:

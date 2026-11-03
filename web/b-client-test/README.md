@@ -11,3 +11,5 @@ http://127.0.0.1:8080/
 网关会动态注入 `ws://127.0.0.1:8765/neurobridge/v1/ws`。页面使用 `neurobridge.v1` 子协议，可测试 `getStatus`、`getLatest`、`subscribe` 和 `unsubscribe`，且不会发送 Ping/Pong 或 JSON 心跳。
 
 本机策略会校验页面 Origin；直接双击 `index.html` 形成的 `file://` 页面仅用于资源开发检查，不能连接生产回环 WebSocket。切换旧有线模式时应关闭本机网页服务并使用批准的隔离专网地址，仍不得暴露公网、无线网络或不受控局域网。
+
+Ubuntu 头环专网接入与可双击的独立页面见 [Ubuntu B 端页面](../ubuntu/b-client-test/README.md)。本目录继续作为共享本机页面，不随 Ubuntu 地址模板切换默认入口。

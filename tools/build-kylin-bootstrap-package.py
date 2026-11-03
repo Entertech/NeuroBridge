@@ -85,9 +85,10 @@ SOURCE_DIRS = (
     "neurobridge",
     "web",
     "config",
-    "linux",
+    "linux/kylin",
+    "linux/common",
     # The bridge sources live under mac/ even though the Kylin build compiles
-    # them: linux/build-algorithm-bridge.sh points cmake at mac/algorithm_bridge.
+    # them: linux/common/build-algorithm-bridge.sh points cmake at mac/algorithm_bridge.
     "mac/algorithm_bridge",
     "packaging/kylin",
     "tools",

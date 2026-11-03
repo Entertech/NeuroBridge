@@ -35,6 +35,7 @@ PACKAGE_SPECS = {
     "kylin": [
         ("V10", "v10", "all", "deb"),
     ],
+    "ubuntu": [("24.04", "none", "x86_64", "deb")],
 }
 
 
@@ -72,7 +73,7 @@ def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> No
             "expectedTargets": [item["id"] for item in targets if item["platform"] == platform],
             "targetResults": [{"targetId": item["id"], "status": "blocked", "reason": "fixture"} for item in targets if item["platform"] == platform],
         }
-        for platform in ("windows", "kylin")
+        for platform in ("windows", "kylin", "ubuntu")
     }
 
     platform_archives = []
@@ -83,7 +84,7 @@ def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> No
         package_entries = []
         with zipfile.ZipFile(release / archive_name, "w") as archive:
             for index, (os_version, edition, architecture, package_format) in enumerate(specs):
-                family = f"windows-{os_version}" if platform == "windows" else f"kylin-{edition}"
+                family = f"{platform}-{os_version if platform != 'kylin' else edition}"
                 filename = f"neurobridge-0.2.0-{family}-{architecture}.{package_format}"
                 payload = f"{filename}-{index}".encode()
                 validation_name = f"validation/{platform}-{index}.json"
@@ -119,6 +120,26 @@ def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> No
 
 
 class ReleaseBundleTests(unittest.TestCase):
+    def test_ubuntu_native_deb_is_shipped_in_its_own_family_with_install_instructions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_release_fixture(root / "release", ("ubuntu",))
+            write_document_package(root / "documents")
+            output = root / "bundle.zip"
+            build_bundle(root / "release", root / "documents", output)
+            with zipfile.ZipFile(output) as outer:
+                self.assertIn("ubuntu/ubuntu.zip", outer.namelist())
+                self.assertNotIn("kylin/kylin.zip", outer.namelist())
+                with zipfile.ZipFile(outer.open("ubuntu/ubuntu.zip")) as system:
+                    self.assertEqual(system.namelist(), ["ubuntu-24.04.zip"])
+                    with zipfile.ZipFile(system.open("ubuntu-24.04.zip")) as family:
+                        self.assertIn("README.md", family.namelist())
+                        self.assertIn("docs/protocol.pdf", family.namelist())
+                        self.assertNotIn("docs/kylin-deployment-guide_v1.0.pdf", family.namelist())
+                        with zipfile.ZipFile(family.open("ubuntu-24.04-x86_64.zip")) as payload:
+                            self.assertEqual(set(payload.namelist()), {"neurobridge-0.2.0-ubuntu-24.04-x86_64.deb", "checksums.sha256"})
+                verify_release_bundle(output, json.loads(outer.read("metadata/bundle-manifest.json")))
+
     def setUp(self):
         # Archive tests exercise file placement and content selection, without
         # requiring Chrome/Pandoc in the unit-test environment.

@@ -88,6 +88,8 @@ def utc_formatter() -> logging.Formatter:
     # logs exported from machines in different time zones directly comparable.
     formatter.converter = time.gmtime
     return formatter
+def _operational_record(record: logging.LogRecord) -> bool:
+    return record.levelno >= logging.INFO or not record.name.startswith(("websockets", "bleak"))
 
 
 def configure_logging(config: LoggingConfig) -> None:
@@ -105,10 +107,16 @@ def configure_logging(config: LoggingConfig) -> None:
                     TimestampedRotatingFileHandler(logfile, maxBytes=config.max_bytes,
                                         backupCount=config.backup_count, encoding="utf-8"))
     file_handler.setFormatter(formatter)
+    file_handler.addFilter(_operational_record)
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
+    stream_handler.addFilter(_operational_record)
     logging.basicConfig(
         level=getattr(logging, config.level),
         handlers=[file_handler, stream_handler],
         force=True,
     )
+    # Library DEBUG traces may include entire physiological WebSocket frames or
+    # GATT notification bytes. Diagnostics must never create another raw store.
+    for name in ("websockets", "bleak"):
+        logging.getLogger(name).setLevel(logging.INFO)

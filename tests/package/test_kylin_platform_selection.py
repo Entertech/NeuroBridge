@@ -113,8 +113,8 @@ if [[ ${1:-} == --version ]]; then echo 'Python 3.11.16'; fi
             for compiler in ('cc', 'c++'):
                 self.executable(box.root / ('stubs/' + compiler), '#!/bin/sh\nif [ "$1" = -dumpmachine ]; then echo aarch64-linux-gnu; else echo "GCC fixture"; fi\n')
             self.executable(box.root / 'stubs/make', f'#!/bin/sh\nif [ "$1" = install ]; then prefix=$(cat .prefix); mkdir -p "$prefix/bin"; cp "{native_python}" "$prefix/bin/python3"; fi\n')
-            script = box.root / 'linux/setup-kylin-python.sh'
-            self.executable(script, box.relocate((ROOT / 'linux/setup-kylin-python.sh').read_text()))
+            script = box.root / 'linux/kylin/setup-kylin-python.sh'
+            self.executable(script, box.relocate((ROOT / 'linux/kylin/setup-kylin-python.sh').read_text()))
             result = box.run(script)
             combined = result.stdout + result.stderr
             if present:
@@ -145,7 +145,7 @@ if [[ ${1:-} == --version ]]; then echo 'Python 3.11.16'; fi
             fake_cmake = box.root / 'cmake-fixture'
             self.executable(fake_cmake, '#!/bin/sh\necho "cmake version 3.31.6"\n')
             self.executable(box.root / 'stubs/make', f'#!/bin/sh\nif [ "$1" = install ]; then prefix=$(cat .prefix); mkdir -p "$prefix/bin"; cp "{fake_cmake}" "$prefix/bin/cmake"; fi\n')
-            full = (ROOT / 'linux/setup-kylin-algorithm.sh').read_text()
+            full = (ROOT / 'linux/kylin/setup-kylin-algorithm.sh').read_text()
             start = full.index('prepare_project_cmake() {')
             end = full.index('\nnb_require_compiler ||', start)
             script = box.root / 'run-cmake.sh'

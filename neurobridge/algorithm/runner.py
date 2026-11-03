@@ -7,6 +7,7 @@ import logging
 import time
 
 from ..config import AlgorithmConfig
+from ..hrv_diagnostics import HrvTrace
 
 LOG = logging.getLogger(__name__)
 
@@ -25,6 +26,8 @@ class AlgorithmRunner:
         self.config = config
         self.process: asyncio.subprocess.Process | None = None
         self.error: str | None = None
+        self._exchange_lock = asyncio.Lock()
+        self.hrv_trace = HrvTrace()
 
     @property
     def available(self) -> bool:
@@ -69,14 +72,14 @@ class AlgorithmRunner:
             except ProcessLookupError:
                 pass
             try:
-                await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
+                await asyncio.wait_for(process.wait(), self.config.stop_timeout_seconds)
             except TimeoutError:
                 LOG.error("Algorithm bridge ignored terminate; killing pid=%s", process.pid)
                 try:
                     process.kill()
                 except ProcessLookupError:
                     pass
-                await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
+                await asyncio.wait_for(process.wait(), self.config.stop_timeout_seconds)
             LOG.info("Algorithm bridge stopped: returncode=%s", process.returncode)
 
     async def _discard_exchange(self, process: asyncio.subprocess.Process) -> None:
@@ -111,17 +114,27 @@ class AlgorithmRunner:
         end_ms: int,
         eeg_packet_count: int = 0,
         hr_packet_count: int = 0,
+        diagnostic_context: dict | None = None,
     ) -> tuple[dict | None, list[str]]:
         """Evaluate transport-neutral bytes without requiring legacy BLE models."""
 
+        async with self._exchange_lock:
+            return await self._evaluate_raw(eeg, hr, start_ms=start_ms, end_ms=end_ms,
+                eeg_packet_count=eeg_packet_count, hr_packet_count=hr_packet_count, diagnostic_context=diagnostic_context)
+
+    async def _evaluate_raw(self, eeg, hr, *, start_ms, end_ms, eeg_packet_count=0, hr_packet_count=0, diagnostic_context=None):
+        context = {**(diagnostic_context or {}), "windowStartMs": start_ms, "windowEndMs": end_ms,
+                   "hrInputBytes": len(hr), "hrInputPackets": hr_packet_count, "mode": "live"}
         if not eeg and not hr:
             return None, []
         process = self.process
         if not self.available or not process or not process.stdin or not process.stdout:
+            self.hrv_trace.observe("bridge_response", None, expected_hr=bool(hr), outcome="not_ready", **context)
             return None, ["ALGORITHM_NOT_READY"]
         started_at = time.monotonic()
         try:
             request = {"timestampMs": end_ms, "windowStartMs": start_ms, "eegRawBase64": base64.b64encode(eeg).decode(), "hrRawBase64": base64.b64encode(hr).decode()}
+            request["hrvDiagnostics"] = "1"
             # Include pipe backpressure in the request budget, not just reading.
             async with asyncio.timeout(self.config.request_timeout_ms / 1000):
                 process.stdin.write((json.dumps(request) + "\n").encode())
@@ -130,6 +143,9 @@ class AlgorithmRunner:
             if not response:
                 raise RuntimeError("algorithm bridge closed stdout without a response")
             result = json.loads(response)
+            self.hrv_trace.observe("bridge_response", result.get("algorithm") if isinstance(result, dict) else None,
+                expected_hr=bool(hr), native=result.get("hrvDiagnostics", {}) if isinstance(result, dict) else {},
+                bridgePid=process.pid, outcome="response", **context)
             bridge_error = (result.get("bridgeError") or result.get("pocError")) if isinstance(result, dict) else None
             if bridge_error:
                 raise ValueError(f"algorithm bridge: {bridge_error}")
@@ -157,6 +173,7 @@ class AlgorithmRunner:
         except asyncio.CancelledError:
             if self.process is process:
                 self.error = "algorithm bridge request cancelled"
+            self.hrv_trace.observe("bridge_response", None, expected_hr=bool(hr), outcome="cancelled", **context)
             await self._discard_exchange(process)
             raise
         except (asyncio.TimeoutError, json.JSONDecodeError, OSError, UnicodeError, ValueError, RuntimeError) as exc:
@@ -171,5 +188,6 @@ class AlgorithmRunner:
                 type(exc).__name__,
                 _safe_log_text(str(exc) or type(exc).__name__),
             )
+            self.hrv_trace.observe("bridge_response", None, expected_hr=bool(hr), outcome="error", reason=type(exc).__name__, **context)
             await self._discard_exchange(process)
             return None, ["ALGORITHM_ERROR"]

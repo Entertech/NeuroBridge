@@ -62,9 +62,12 @@ class FlowtimeSelectionTests(unittest.TestCase):
         ])
         self.assertEqual(selected.rssi, -42)
 
-    def test_ff32_remains_unknown_until_its_values_are_poc_verified(self) -> None:
-        self.assertEqual(wear_state_from_packet(b"\x00\x00"), "unknown")
-        self.assertEqual(wear_state_from_packet(b"\x01\x02"), "unknown")
+    def test_ff32_uses_protocol_contact_state_without_waveform_inference(self) -> None:
+        self.assertEqual(wear_state_from_packet(b"\x00\x00"), "worn")
+        self.assertEqual(wear_state_from_packet(b"\x01\x02"), "notWorn")
+        self.assertEqual(wear_state_from_packet(b"\x00\x01"), "notWorn")
+        self.assertEqual(wear_state_from_packet(b"\x01\x00"), "notWorn")
+        self.assertEqual(wear_state_from_packet(b"\x00"), "unknown")
 
 
 class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
@@ -191,7 +194,7 @@ class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(gateway.status["algorithmState"], "ready")
             self.assertEqual(broadcasts[-1]["algorithmState"], "ready")
 
-    async def test_algorithm_not_ready_is_logged_and_returns_false(self) -> None:
+    async def test_algorithm_not_ready_is_logged_and_ble_raw_capture_remains_available(self) -> None:
         class FakeAlgorithm:
             available = False
             error = "bridge process unavailable"
@@ -204,7 +207,7 @@ class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
             gateway = Gateway(config(Path(directory)))
             gateway.algorithm = FakeAlgorithm()
             with self.assertLogs("neurobridge.business.gateway", level="ERROR") as logs:
-                self.assertFalse(await gateway.on_device_ready())
+                self.assertTrue(await gateway.on_device_ready())
             self.assertEqual(gateway.status["algorithmState"], "error")
             self.assertIn("bridge process unavailable", "\n".join(logs.output))
 
@@ -468,8 +471,11 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             gateway = Gateway(config(Path(directory)))
             await gateway.update_status("connectionState", "connected")
             sent: list[dict] = []
+            delivered = asyncio.Event()
             async def send(item: dict) -> None:
                 sent.append(item)
+                if item["data"].get("event") == "data":
+                    delivered.set()
             session = ClientSession()
             gateway.sessions.add(session)
             await gateway.handle(session, '{"protocolVersion":"1.0","messageType":"request","requestId":"1","action":"subscribe","params":{"streams":["eeg.raw"]}}', send)
@@ -477,6 +483,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             window = DataWindow(600, 1200)
             window.append(RawPacket("ff31", 1000, b"x" * EEG_PACKET_BYTES))
             await gateway.publish_window(window)
+            await asyncio.wait_for(delivered.wait(), timeout=1)
             event = next(item for item in sent if item["data"].get("event") == "data")
             self.assertEqual(set(event), {"protocolVersion", "code", "data", "message"})
             self.assertEqual(event["data"]["subscriptionId"], subscription_id)

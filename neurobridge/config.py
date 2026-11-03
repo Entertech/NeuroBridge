@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 import re
 import tomllib
+from urllib.parse import urlsplit
 
 from .configuration.migration import migrate
 
@@ -17,6 +18,8 @@ class ServerConfig:
     host: str
     port: int
     path: str
+    send_timeout_seconds: float = 5.0
+    delivery_queue_size: int = 16
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,8 @@ class PipelineConfig:
     shutdown_timeout_ms: int = 5000
     send_timeout_ms: int = 5000
     metrics_interval_seconds: int = 10
+    replay_catalog_timeout_ms: int = 2000
+    replay_catalog_refresh_ms: int = 30000
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,7 @@ class RecordingConfig:
     replay_speed: float
     transport_trace_enabled: bool = False
     transport_trace_max_bytes: int = 1024 * 1024
+    replay_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -82,6 +88,11 @@ class AlgorithmConfig:
     enabled: bool
     command: tuple[str, ...]
     request_timeout_ms: int = 2000
+    stop_timeout_seconds: float = 1.0
+
+    @property
+    def evaluation_timeout_seconds(self) -> float:
+        return self.request_timeout_ms / 1000
 
 
 @dataclass(frozen=True)
@@ -106,6 +117,8 @@ class DownloadConfig:
     host: str = "127.0.0.1"
     port: int = 8766
     path: str = "/downloads"
+    capture_control_enabled: bool = True
+    capture_allowed_origins: tuple[str, ...] = ("null",)
 
 
 @dataclass(frozen=True)
@@ -116,6 +129,7 @@ class LoggingConfig:
     rotation_mode: str = "size"
     max_bytes: int = 10 * 1024**2
     backup_count: int = 14
+    diagnostics_interval_seconds: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -128,6 +142,8 @@ class NetworkConfig:
     dhcp_range_start: str | None = None
     dhcp_range_end: str | None = None
     dhcp_lease_time: str = "12h"
+    ensure_static_address: bool = True
+    address_check_interval_seconds: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -180,13 +196,13 @@ def load(
             raw = _merge_config(raw, tomllib.load(file))
     raw = migrate(raw)
     section_fields = {
-        "server": {"host", "port", "path"},
+        "server": {"host", "port", "path", "send_timeout_seconds", "delivery_queue_size"},
         "ble": {"enabled", "device_name", "model_nbr_uuid", "scan_timeout_seconds", "reconnect_delay_seconds"},
-        "recording": {"directory", "subject_id", "replay_recording_id", "replay_speed", "transport_trace_enabled", "transport_trace_max_bytes"},
-        "algorithm": {"enabled", "command", "request_timeout_ms"},
-        "download": {"enabled", "host", "port", "path"},
-        "logging": {"directory", "filename", "level", "rotation_mode", "max_bytes", "backup_count"},
-        "network": {"mode", "interface", "subnet_cidr", "dhcp_range_start", "dhcp_range_end", "dhcp_lease_time"},
+        "recording": {"directory", "subject_id", "replay_recording_id", "replay_speed", "transport_trace_enabled", "transport_trace_max_bytes", "replay_enabled"},
+        "algorithm": {"enabled", "command", "request_timeout_ms", "evaluation_timeout_seconds", "stop_timeout_seconds"},
+        "download": {"enabled", "host", "port", "path", "capture_control_enabled", "capture_allowed_origins"},
+        "logging": {"directory", "filename", "level", "rotation_mode", "max_bytes", "backup_count", "diagnostics_interval_seconds"},
+        "network": {"mode", "interface", "subnet_cidr", "dhcp_range_start", "dhcp_range_end", "dhcp_lease_time", "ensure_static_address", "address_check_interval_seconds"},
         "access": {"mode"},
         "local_ui": {"enabled", "host", "port", "directory"},
         "data_source": {"type", "window_interval_ms", "stale_after_ms"},
@@ -242,9 +258,18 @@ def load(
     trace_limit = recording.get("transport_trace_max_bytes", 1024 * 1024)
     if trace_limit <= 0:
         raise ValueError("recording.transport_trace_max_bytes must be positive")
+    replay_enabled = recording.get("replay_enabled", True)
+    if type(replay_enabled) is not bool:
+        raise ValueError("recording.replay_enabled must be boolean")
     if replay_speed <= 0:
         raise ValueError("recording.replay_speed must be greater than zero")
     host, port, endpoint = str(server.get("host", "127.0.0.1")), int(server.get("port", 8765)), str(server.get("path", "/neurobridge/v1/ws"))
+    send_timeout = float(server.get("send_timeout_seconds", 5))
+    queue_size = server.get("delivery_queue_size", 16)
+    if not math.isfinite(send_timeout) or send_timeout <= 0:
+        raise ValueError("server.send_timeout_seconds must be finite and greater than zero")
+    if type(queue_size) is not int or not 1 <= queue_size <= 1024:
+        raise ValueError("server.delivery_queue_size must be an integer between 1 and 1024")
     try:
         address = ipaddress.ip_address(host)
     except ValueError as exc:
@@ -260,9 +285,26 @@ def load(
         raise ValueError("download.host must be a static IP address, not a DNS name or wildcard") from exc
     if not (download_address.is_private or download_address.is_loopback) or not 1 <= download_port <= 65535 or not download_path.startswith("/"):
         raise ValueError("download host must be private/loopback; port and HTTP path are invalid")
+    capture_control_enabled = download.get("capture_control_enabled", True)
+    capture_origins = download.get("capture_allowed_origins", ["null"])
+    if type(capture_control_enabled) is not bool:
+        raise ValueError("download.capture_control_enabled must be boolean")
+    if not isinstance(capture_origins, list) or any(not isinstance(origin, str) for origin in capture_origins):
+        raise ValueError("download.capture_allowed_origins must be an origin array")
+    for origin in capture_origins:
+        if origin == "null":
+            continue
+        parsed_origin = urlsplit(origin)
+        if parsed_origin.scheme not in {"http", "https"} or not parsed_origin.hostname or parsed_origin.username or parsed_origin.password or parsed_origin.path or parsed_origin.query or parsed_origin.fragment or "*" in origin:
+            raise ValueError("download.capture_allowed_origins must contain exact HTTP origins or null")
+        if parsed_origin.port is not None and not 1 <= parsed_origin.port <= 65535:
+            raise ValueError("download.capture_allowed_origins has an invalid port")
     log_directory = Path(logging.get("directory", "/var/log/neurobridge"))
     log_filename = str(logging.get("filename", "neurobridge.log"))
     log_level = str(logging.get("level", "INFO")).upper()
+    diagnostics_interval = float(logging.get("diagnostics_interval_seconds", 30))
+    if not math.isfinite(diagnostics_interval) or diagnostics_interval < 0:
+        raise ValueError("logging.diagnostics_interval_seconds must be finite and non-negative")
     if Path(log_filename).name != log_filename or not log_filename.endswith(".log"):
         raise ValueError("logging.filename must be a plain .log filename")
     rotation_mode = logging.get("rotation_mode", "size")
@@ -294,6 +336,12 @@ def load(
     dhcp_range_start = network.get("dhcp_range_start") or None
     dhcp_range_end = network.get("dhcp_range_end") or None
     dhcp_lease_time = str(network.get("dhcp_lease_time", "12h"))
+    ensure_static_address = network.get("ensure_static_address", True)
+    address_check_interval = float(network.get("address_check_interval_seconds", 5))
+    if type(ensure_static_address) is not bool:
+        raise ValueError("network.ensure_static_address must be boolean")
+    if not math.isfinite(address_check_interval) or not 1 <= address_check_interval <= 3600:
+        raise ValueError("network.address_check_interval_seconds must be between 1 and 3600")
     if network_mode not in {"static", "dhcp"}:
         raise ValueError("network.mode must be static or dhcp")
     if interface is not None and interface != "auto" and (
@@ -406,7 +454,16 @@ def load(
             dtr=dtr,
             rts=rts,
         )
-    algorithm_timeout_ms = algorithm.get("request_timeout_ms", 2000)
+    legacy_timeout = algorithm.get("evaluation_timeout_seconds")
+    stop_timeout = float(algorithm.get("stop_timeout_seconds", 1))
+    if not math.isfinite(stop_timeout) or stop_timeout <= 0:
+        raise ValueError("algorithm timeouts must be finite and greater than zero")
+    if legacy_timeout is not None:
+        if not isinstance(legacy_timeout, (int, float)) or isinstance(legacy_timeout, bool) or not math.isfinite(legacy_timeout) or legacy_timeout <= 0:
+            raise ValueError("algorithm timeouts must be finite and greater than zero")
+        if "request_timeout_ms" in algorithm and algorithm["request_timeout_ms"] != legacy_timeout * 1000:
+            raise ValueError("algorithm request_timeout_ms and evaluation_timeout_seconds conflict")
+    algorithm_timeout_ms = algorithm.get("request_timeout_ms", int(legacy_timeout * 1000) if legacy_timeout is not None else 2000)
     if not isinstance(algorithm_timeout_ms, int) or isinstance(algorithm_timeout_ms, bool) or not 100 <= algorithm_timeout_ms <= 120000:
         raise ValueError("algorithm.request_timeout_ms must be an integer between 100 and 120000")
     storage_values = {
@@ -431,9 +488,9 @@ def load(
     if any(type(value) is not int or value <= 0 for value in pipeline_values.values()):
         raise ValueError("pipeline limits and intervals must be positive integers")
     config = GatewayConfig(
-        server=ServerConfig(host, port, endpoint),
+        server=ServerConfig(host, port, endpoint, send_timeout, queue_size),
         ble=ble_config,
-        recording=RecordingConfig(recording_directory, recording.get("subject_id") or None, replay_recording_id, replay_speed, recording.get("transport_trace_enabled", False), trace_limit),
+        recording=RecordingConfig(recording_directory, recording.get("subject_id") or None, replay_recording_id, replay_speed, recording.get("transport_trace_enabled", False), trace_limit, replay_enabled),
         # Ubuntu installation places the locked native bridge at this fixed path.
         # ``enabled`` is therefore the only setting an operator needs to change
         # after the bridge's real-data POC has been approved.  An explicit command
@@ -442,10 +499,11 @@ def load(
             bool(algorithm.get("enabled", True)),
             tuple(algorithm.get("command") or DEFAULT_ALGORITHM_COMMAND),
             algorithm_timeout_ms,
+            stop_timeout,
         ),
-        download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path),
-        logging=LoggingConfig(log_directory, log_filename, log_level, rotation_mode, max_bytes, backup_count),
-        network=NetworkConfig(network_mode, interface, subnet_cidr, dhcp_range_start, dhcp_range_end, dhcp_lease_time),
+        download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path, capture_control_enabled, tuple(capture_origins)),
+        logging=LoggingConfig(log_directory, log_filename, log_level, rotation_mode, max_bytes, backup_count, diagnostics_interval),
+        network=NetworkConfig(network_mode, interface, subnet_cidr, dhcp_range_start, dhcp_range_end, dhcp_lease_time, ensure_static_address, address_check_interval),
         access=AccessConfig(access_mode),
         local_ui=LocalUiConfig(
             local_ui_enabled,
@@ -484,15 +542,15 @@ def _validate_types(raw: dict) -> None:
     transport parameters are consumed or used to load drivers.
     """
     boolean = {"ble.enabled", "algorithm.enabled", "download.enabled", "local_ui.enabled",
-               "serial.dtr", "serial.rts", "storage.auto_cleanup_enabled", "recording.transport_trace_enabled"}
+               "serial.dtr", "serial.rts", "storage.auto_cleanup_enabled", "recording.transport_trace_enabled", "recording.replay_enabled", "network.ensure_static_address", "download.capture_control_enabled"}
     integer = {"server.port", "download.port", "local_ui.port", "ble.scan_timeout_seconds",
                "ble.reconnect_delay_seconds", "serial.baud_rate", "serial.handshake_timeout_ms",
                "serial.command_response_timeout_ms", "serial.max_buffer_bytes",
                "algorithm.request_timeout_ms", "data_source.window_interval_ms", "data_source.stale_after_ms",
-               "logging.max_bytes", "logging.backup_count", "recording.transport_trace_max_bytes"}
+               "logging.max_bytes", "logging.backup_count", "recording.transport_trace_max_bytes", "server.delivery_queue_size"}
     number = {"serial.data_timeout_seconds", "serial.reconnect_delay_seconds", "serial.stats_interval_seconds",
-              "recording.replay_speed"}
-    arrays = {"algorithm.command", "serial.candidate_types"}
+              "recording.replay_speed", "algorithm.evaluation_timeout_seconds", "algorithm.stop_timeout_seconds", "server.send_timeout_seconds", "logging.diagnostics_interval_seconds", "network.address_check_interval_seconds"}
+    arrays = {"algorithm.command", "serial.candidate_types", "download.capture_allowed_origins"}
     for section, fields in raw.items():
         if not isinstance(fields, dict):
             continue

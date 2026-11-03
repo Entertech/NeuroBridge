@@ -76,6 +76,10 @@ def matrix() -> list[dict[str, str]]:
         for arch in CONFIG["kylin"]["architectures"]:
             for fmt in CONFIG["kylin"]["formats"]:
                 targets.append({"id": f"kylin-{edition}-{arch}-{fmt}", "platform": "kylin", "osVersion": "V10", "edition": edition, "architecture": arch, "format": fmt, "runner": CONFIG["build"]["linux_coordinator"]})
+    for version in CONFIG["ubuntu"]["versions"]:
+        for arch in CONFIG["ubuntu"]["architectures"]:
+            for fmt in CONFIG["ubuntu"]["formats"]:
+                targets.append({"id": f"ubuntu-{version}-{arch}-{fmt}", "platform": "ubuntu", "osVersion": version, "edition": "none", "architecture": arch, "format": fmt, "runner": CONFIG["build"]["ubuntu_coordinator"]})
     if len(targets) != CONFIG["aggregate"]["expected_package_count"] or len({item["id"] for item in targets}) != len(targets):
         raise ValueError("release matrix count or IDs differ from the declared contract")
     return targets
@@ -340,7 +344,7 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
         if result.get("target") != target or result.get("sourceCommit") != commit or result.get("status") not in {"candidate", "failed", "blocked", "source-only"}:
             raise ValueError(f"invalid result identity/status for {target['id']}")
         results.append(result)
-    winners = {platform: [item for item in results if item["target"]["platform"] == platform and item["status"] == "candidate"] for platform in ("windows", "kylin")}
+    winners = {platform: [item for item in results if item["target"]["platform"] == platform and item["status"] == "candidate"] for platform in CONFIG["aggregate"]["platform_archives"]}
     counts = {platform: len(items) for platform, items in winners.items()}
     log("coverage_gate", totalTargets=len(results), candidatePackages=counts, enforceMinimum=enforce)
     if enforce and any(count < CONFIG["minimum_packages_per_platform"] for count in counts.values()):
@@ -351,7 +355,7 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
     zip_stamp = built_times[-1].timetuple()[:6]
     output.mkdir(parents=True, exist_ok=True)
     platform_archives = []
-    for platform in ("windows", "kylin"):
+    for platform in CONFIG["aggregate"]["platform_archives"]:
         archive = output / f"{platform}-v{version}-{date}.zip"
         package_entries = []
         seen_packages: set[str] = set()
@@ -371,7 +375,7 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
                 package_entries.append({"target": platform, "osVersion": target["osVersion"], "edition": target["edition"], "architecture": target["architecture"], "format": target["format"], "status": "candidate", "fileName": package.name, "sha256": item["sha256"], "validation": "pending", "validationLog": f"validation/{target['id']}/{validation_log.name}"})
         platform_archives.append({"platform": platform, "fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": len(package_entries), "packages": package_entries})
     coverage = {"requireAllMatrixTargets": False}
-    for platform in ("windows", "kylin"):
+    for platform in CONFIG["aggregate"]["platform_archives"]:
         config = CONFIG[platform]
         coverage[platform] = {"expectedTargets": [item["id"] for item in targets if item["platform"] == platform], "expectedFormats": config["formats"], "expectedPackageCount": config["expected_package_count"], "builtPackageCount": counts[platform], "targetResults": [{"targetId": item["target"]["id"], "status": item["status"], "reason": item["reason"], **({"validationLog": item["validationLog"]} if item.get("validationLog") else {})} for item in results if item["target"]["platform"] == platform]}
     internal_manifest = {"applicationVersion": version, "sourceCommit": commit, "coverage": coverage, "platformArchives": [{key: item[key] for key in ("platform", "fileName", "sha256", "packageCount")} for item in platform_archives]}

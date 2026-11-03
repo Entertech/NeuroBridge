@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
+import time
 from contextlib import contextmanager
 import queue
 from threading import Event, Thread
@@ -55,12 +56,10 @@ class SegmentedArchive(RecordingStore):
                 connection.execute("PRAGMA cache_size=-2048")
                 connection.execute("CREATE TABLE results (batch TEXT PRIMARY KEY, payload TEXT)")
                 for path in sorted((session / "algorithm").glob("[0-9]*.jsonl")):
-                    with path.open(encoding="utf-8") as source:
-                        for line in source:
-                            row = json.loads(line)
-                            if row["recordType"] == "algorithm.result":
-                                connection.execute("INSERT OR REPLACE INTO results VALUES (?, ?)",
-                                                   (row["correlationId"], json.dumps(row["payload"])))
+                    for row in self._rows(path):
+                        if row["recordType"] == "algorithm.result":
+                            connection.execute("INSERT OR REPLACE INTO results VALUES (?, ?)",
+                                               (row["correlationId"], json.dumps(row["payload"])))
                 yield connection
             finally:
                 connection.close()
@@ -74,29 +73,27 @@ class SegmentedArchive(RecordingStore):
 
     def _results(self, recording_id, session, algorithms):
         for path in sorted((session / "parsed").glob("[0-9]*.jsonl")):
-            with path.open(encoding="utf-8") as source:
-                for line in source:
-                    row = json.loads(line)
-                    if row["recordType"] != "parsed.signal_batch":
-                        continue
-                    p = row["payload"]
-                    signals = tuple(ParsedSignal(
-                        s["signalType"], base64.b64decode(s["samples"]["bytesBase64"], validate=True),
-                        s["sampleFormat"], s["unit"], s["windowHint"], tuple(s["frameRefs"]),
-                        s["receivedAtMs"], s["valid"], tuple(s["invalidReasons"]), s.get("sampleCount"),
-                    ) for s in p["signals"])
-                    batch = ParsedSignalBatch(p["batchId"], p["deviceProtocol"], p["connectionSessionId"],
-                                              recording_id, p["windowStartMs"], p["windowEndMs"],
-                                              signals, tuple(p["frameRefs"]), p["valid"], tuple(p["invalidReasons"]),
-                                              p.get("sourceType"), p.get("schemaVersion", 1))
-                    saved = algorithms.execute("SELECT payload FROM results WHERE batch=?", (batch.batch_id,)).fetchone()
-                    a = json.loads(saved[0]) if saved else None
-                    result = AlgorithmResult(batch.batch_id, a.get("algorithmVersion") if a else None,
-                        a["startedAtMs"] if a else batch.window_end_ms,
-                        a["completedAtMs"] if a else batch.window_end_ms,
-                        a["metrics"] if a else {}, a["valid"] if a else False,
-                        tuple(a["invalidReasons"]) if a else ("ALGORITHM_RESULT_MISSING",))
-                    yield WindowResult(batch, result, "replay", result.completed_at_ms, True)
+            for row in self._rows(path):
+                if row["recordType"] != "parsed.signal_batch":
+                    continue
+                p = row["payload"]
+                signals = tuple(ParsedSignal(
+                    s["signalType"], base64.b64decode(s["samples"]["bytesBase64"], validate=True),
+                    s["sampleFormat"], s["unit"], s["windowHint"], tuple(s["frameRefs"]),
+                    s["receivedAtMs"], s["valid"], tuple(s["invalidReasons"]), s.get("sampleCount"),
+                ) for s in p["signals"])
+                batch = ParsedSignalBatch(p["batchId"], p["deviceProtocol"], p["connectionSessionId"],
+                                          recording_id, p["windowStartMs"], p["windowEndMs"],
+                                          signals, tuple(p["frameRefs"]), p["valid"], tuple(p["invalidReasons"]),
+                                          p.get("sourceType"), p.get("schemaVersion", 1))
+                saved = algorithms.execute("SELECT payload FROM results WHERE batch=?", (batch.batch_id,)).fetchone()
+                a = json.loads(saved[0]) if saved else None
+                result = AlgorithmResult(batch.batch_id, a.get("algorithmVersion") if a else None,
+                    a["startedAtMs"] if a else batch.window_end_ms,
+                    a["completedAtMs"] if a else batch.window_end_ms,
+                    a["metrics"] if a else {}, a["valid"] if a else False,
+                    tuple(a["invalidReasons"]) if a else ("ALGORITHM_RESULT_MISSING",))
+                yield WindowResult(batch, result, "replay", result.completed_at_ms, True)
 
     def events(self, recording_id):
         return list(self.iter_events(recording_id))
@@ -179,17 +176,61 @@ class SegmentedArchive(RecordingStore):
 
 
 class ArchiveReplayReader:
-    def __init__(self, archive):
+    def __init__(self, archive, *, cache_ttl_seconds=30):
         self.archive = archive
+        self.cache_ttl_seconds = cache_ttl_seconds
         self._inspection = None
+        self._inspection_lock = asyncio.Lock()
+        self._inspection_preference = None
+        self._cached_preference = None
+        self._cached_selection = None
+        self._cache_deadline = 0
+        self._generation = 0
+        self._scan_done = Event()
+        self._scan_done.set()
+
+    def invalidate(self):
+        self._generation += 1
+        self._cache_deadline = 0
 
     async def inspect(self, preferred_recording_id):
-        if self._inspection is None or self._inspection.done():
-            self._inspection = asyncio.create_task(self._inspect_async(preferred_recording_id))
-        return await asyncio.shield(self._inspection)
+        while True:
+            if self._cached_selection is not None and self._cached_preference == preferred_recording_id and time.monotonic() < self._cache_deadline:
+                return self._cached_selection
+            async with self._inspection_lock:
+                if self._cached_selection is not None and self._cached_preference == preferred_recording_id and time.monotonic() < self._cache_deadline:
+                    return self._cached_selection
+                if self._inspection is None or self._inspection.done():
+                    # Cancelling a coroutine cannot interrupt a blocked OS read.
+                    # Serialize replacement scans until the physical reader exits.
+                    while not self._scan_done.is_set():
+                        await asyncio.sleep(.005)
+                    self._inspection_generation = self._generation
+                    self._inspection_preference = preferred_recording_id
+                    self._inspection = asyncio.create_task(self._inspect_async(preferred_recording_id))
+            task, preference, generation = self._inspection, self._inspection_preference, self._inspection_generation
+            result = await asyncio.shield(task)
+            if preference == preferred_recording_id and generation == self._generation:
+                return result
+
+    async def close(self):
+        if self._inspection and not self._inspection.done():
+            self._inspection.cancel()
+            await asyncio.gather(self._inspection, return_exceptions=True)
 
     async def _inspect_async(self, preferred_recording_id):
-        async for value in self._read(lambda: iter((self._inspect(preferred_recording_id),))):
+        generation = self._generation
+        self._scan_done.clear()
+        def scan():
+            try:
+                yield self._inspect(preferred_recording_id)
+            finally:
+                self._scan_done.set()
+        async for value in self._read(scan):
+            if generation == self._generation:
+                self._cached_selection = value
+                self._cached_preference = preferred_recording_id
+                self._cache_deadline = time.monotonic() + self.cache_ttl_seconds
             return value
 
     @staticmethod
@@ -239,23 +280,32 @@ class ArchiveReplayReader:
         candidates = [preferred_recording_id] if preferred_recording_id else []
         candidates += [item["recordingId"] for item in self.archive.completed_recordings()]
         for category in ("raw", "algorithm"):
-            candidates += [p.stem for p in sorted((self.archive.root / category).glob("rec-*.jsonl"),
-                                                 key=lambda p: p.stat().st_mtime, reverse=True)]
+            paths = []
+            for path in (self.archive.root / category).glob("rec-*.jsonl"):
+                try:
+                    paths.append((path.stat().st_mtime, path.stem))
+                except OSError as error:
+                    self.archive._warn_unreadable(path.stem, error, path)
+            candidates.extend(recording_id for _, recording_id in sorted(paths, reverse=True))
         for recording_id in dict.fromkeys(candidates):
             if recording_id == self.archive.recording_id:
                 continue
             found, latest, timestamp, streams = False, None, None, set()
-            for row in self.archive.iter_events(recording_id):
-                if row.get("deviceProtocol") not in {None, "headband_ble"}:
-                    continue
-                found = True
-                algorithm = row["payload"].get("algorithm", {})
-                if any(k not in {"hr", "pressure", "coherence", "arousal"} for k in algorithm):
-                    streams.add("eeg")
-                if any(k in algorithm for k in {"hr", "pressure", "coherence", "arousal"}):
-                    streams.add("hr")
-                if row["valid"] and algorithm:
-                    latest, timestamp = algorithm, row["timestampMs"]
+            try:
+                for row in self.archive.iter_events(recording_id):
+                    if row.get("deviceProtocol") not in {None, "headband_ble"}:
+                        continue
+                    found = True
+                    algorithm = row["payload"].get("algorithm", {})
+                    if any(k not in {"hr", "pressure", "coherence", "arousal"} for k in algorithm):
+                        streams.add("eeg")
+                    if any(k in algorithm for k in {"hr", "pressure", "coherence", "arousal"}):
+                        streams.add("hr")
+                    if row["valid"] and algorithm:
+                        latest, timestamp = algorithm, row["timestampMs"]
+            except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as error:
+                self.archive._warn_unreadable(recording_id, error)
+                continue
             if found:
                 return recording_id, frozenset(streams), latest, timestamp
         return None, frozenset(), None, None

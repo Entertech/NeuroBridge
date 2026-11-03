@@ -9,6 +9,16 @@ WORKFLOWS = Path(__file__).resolve().parents[2] / '.github/workflows'
 
 
 class ReleaseTriggerTests(unittest.TestCase):
+    def test_ubuntu_native_workflow_uses_fixed_native_target_and_verified_artifacts(self):
+        text = (WORKFLOWS / "ubuntu-package.yml").read_text()
+        for command in ("runs-on: ubuntu-24.04", "python-version: '3.12'", "github.event.pull_request.head.sha || github.sha", "--prepare-inputs", "tools/build-ubuntu-package.py --output-dir", "tools/check-ubuntu-package-container.sh", "neurobridge-input-ubuntu-24.04-x86_64-deb"):
+            self.assertIn(command, text)
+        for publication in ("git tag", "git push", "gh release", "tools.publish_release"):
+            self.assertNotIn(publication, text)
+        release = job_block("release-targets", WORKFLOWS / "release.yml")
+        self.assertIn("matrix.platform == 'ubuntu'", release)
+        self.assertIn("rm -f \"$input/verification.json\"", release)
+
     def test_code_validation_cannot_start_packaging(self):
         text = (WORKFLOWS/'ci.yml').read_text()
         self.assertNotIn('uses: ./.github/workflows/release.yml', text)

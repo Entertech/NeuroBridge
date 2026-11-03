@@ -8,6 +8,7 @@ import time
 from dataclasses import replace
 from collections.abc import Callable
 
+from ..hrv_diagnostics import HrvTrace
 from ..domain.algorithm import AlgorithmResult, AlgorithmSession, AlgorithmState
 from ..domain.raw import DeviceFrame, ParseOutcome, RawChunk
 from ..domain.result import WindowResult
@@ -53,7 +54,9 @@ class ApplicationService:
         algorithm_queue_size: int = 8,
         persistence_timeout_ms: int = 1000,
         shutdown_timeout_ms: int = 5000,
+        diagnostics_interval_seconds: float = 30,
     ) -> None:
+        self.hrv_trace = HrvTrace(diagnostics_interval_seconds)
         self.device_protocol = device_protocol
         self.requires_algorithm_to_start = requires_algorithm_to_start
         self.transport_trace_enabled = transport_trace_enabled
@@ -197,6 +200,7 @@ class ApplicationService:
         *,
         existing_stream: bool = False,
         prepared_algorithm_state: AlgorithmState | None = None,
+        start_stream: bool = True,
     ) -> AlgorithmState:
         """Bind a clean algorithm session, optionally reusing an unused prepared engine."""
 
@@ -247,7 +251,7 @@ class ApplicationService:
             self._algorithm_state.value,
             existing_stream,
         )
-        if self.control is not None:
+        if start_stream and self.control is not None:
             if connection_session_id != self._connection_session_id:
                 return AlgorithmState.ERROR
             if algorithm_state == AlgorithmState.READY or existing_stream or not self.requires_algorithm_to_start:
@@ -324,11 +328,17 @@ class ApplicationService:
                         "connectionSessionId": frame.connection_session_id,
                         "sequence": frame.sequence,
                         "sourceChunkIds": frame.source_chunk_ids,
+                        "channel": chunk.channel,
                         "rawBytes": frame.raw_bytes,
                     },
                 )
             )
         for signal in outcome.signals:
+            if signal.signal_type == "device_status":
+                for frame_id in signal.frame_refs:
+                    self._frames.pop(frame_id, None)
+                    self._frame_receipts.pop(frame_id, None)
+                continue
             batches = self.assembler.append(
                 signal,
                 device_protocol=self.device_protocol,
@@ -495,6 +505,12 @@ class ApplicationService:
                 ("ALGORITHM_UNAVAILABLE",),
             )
             result = WindowResult(batch, unavailable, "live", timestamp, persistence_guaranteed)
+        self.hrv_trace.observe("application_result", result.algorithm_result.metrics,
+            batchId=batch.batch_id, connectionSessionId=batch.connection_session_id,
+            recordingSessionId=batch.recording_session_id, windowStartMs=batch.window_start_ms,
+            windowEndMs=batch.window_end_ms, mode="live", expected_hr=any(s.signal_type == "hr" for s in batch.signals),
+            valid=result.valid, outcome="backlog" if backlog else "evaluated",
+            reason=result.algorithm_result.invalid_reasons[0] if result.algorithm_result.invalid_reasons else None)
         result_counter = "algorithm_valid_results" if result.algorithm_result.valid else "algorithm_invalid_results"
         self.diagnostics[result_counter] += 1
         if "ALGORITHM_TIMEOUT" in result.algorithm_result.invalid_reasons:
@@ -529,13 +545,21 @@ class ApplicationService:
             algorithm_receipt = await self._confirm(algorithm_receipt)
         if not algorithm_receipt.persistence_guaranteed and result.persistence_guaranteed:
             result = WindowResult(batch, result.algorithm_result, result.mode, result.completed_at_ms, False)
+        self.hrv_trace.observe("recording_confirmed", result.algorithm_result.metrics,
+            batchId=batch.batch_id, recordingSessionId=batch.recording_session_id,
+            windowEndMs=batch.window_end_ms, mode="live", persistenceAccepted=algorithm_receipt.accepted,
+            persistenceGuaranteed=algorithm_receipt.persistence_guaranteed, outcome="queued" if backlog else "confirmed")
         async with self._lifecycle_lock:
             if batch.connection_session_id != self._connection_session_id:
                 LOG.info("Window result invalidated while persistence completed: batchId=%s", batch.batch_id)
+                self.hrv_trace.observe("application_skipped", result.algorithm_result.metrics,
+                    batchId=batch.batch_id, windowEndMs=batch.window_end_ms, mode="live", outcome="connection_ended")
                 self._discard_batch_frames(batch)
                 return result
             order = self._batch_order[batch.batch_id]
             if self._last_published_order > order:
+                self.hrv_trace.observe("application_skipped", result.algorithm_result.metrics,
+                    batchId=batch.batch_id, windowEndMs=batch.window_end_ms, mode="live", outcome="superseded")
                 self.diagnostics["superseded_results"] += 1
                 self._discard_batch_frames(batch)
                 return result
@@ -565,7 +589,11 @@ class ApplicationService:
         return result
 
     async def _persist_late(self, batch: ParsedSignalBatch, result: AlgorithmResult) -> None:
-        await self._confirm(self._persist_algorithm(batch, result, late=True))
+        confirmed = await self._confirm(self._persist_algorithm(batch, result, late=True))
+        self.hrv_trace.observe("late_result", result.metrics, batchId=batch.batch_id,
+            recordingSessionId=batch.recording_session_id, windowEndMs=batch.window_end_ms,
+            mode="live", valid=result.valid, outcome="late_not_published",
+            persistenceAccepted=confirmed.accepted, persistenceGuaranteed=confirmed.persistence_guaranteed)
         LOG.warning(
             "Late algorithm result persisted without republishing: batchId=%s recordingSessionId=%s",
             batch.batch_id,
@@ -573,7 +601,7 @@ class ApplicationService:
         )
 
     def _persist_algorithm(self, batch: ParsedSignalBatch, result: AlgorithmResult, *, late: bool) -> PersistenceReceipt:
-        return self._persist(
+        receipt = self._persist(
             PersistenceRecord(
                 1,
                 batch.recording_session_id,
@@ -595,6 +623,11 @@ class ApplicationService:
                 },
             )
         )
+        self.hrv_trace.observe("recording_enqueue", result.metrics, batchId=batch.batch_id,
+            recordingSessionId=batch.recording_session_id, windowEndMs=batch.window_end_ms, mode="live",
+            persistenceAccepted=receipt.accepted, persistenceGuaranteed=receipt.persistence_guaranteed,
+            outcome="late" if late else "normal")
+        return receipt
 
     def _persist(self, record: PersistenceRecord) -> PersistenceReceipt:
         if self.recording is None:

@@ -84,11 +84,20 @@ class PosixSerialSource:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._adapter.run())
 
-    async def stop(self) -> None:
+    async def wait_stopped(self) -> None:
+        if self._task is None:
+            raise RuntimeError("Source must be started before supervision")
+        # Session cancellation must leave the producer alive for ordered cleanup.
+        await asyncio.shield(self._task)
+
+    async def stop(self, *, drain=False) -> None:
         await self._adapter.stop()
-        if self._task and not self._task.done():
-            self._task.cancel()
+        if self._task:
+            if not self._task.done():
+                self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
+        if drain:
+            await self._chunk_queue.join()
         self._finish_queue(self._chunk_queue)
         self._finish_queue(self._event_queue)
 
@@ -104,8 +113,14 @@ class PosixSerialSource:
         return self._control
 
     async def chunks(self) -> AsyncIterator[RawChunk]:
-        while (item := await self._chunk_queue.get()) is not None:
-            yield item
+        while True:
+            item = await self._chunk_queue.get()
+            try:
+                if item is None:
+                    return
+                yield item
+            finally:
+                self._chunk_queue.task_done()
 
     async def connection_events(self) -> AsyncIterator[DeviceConnectionEvent]:
         while (item := await self._event_queue.get()) is not None:

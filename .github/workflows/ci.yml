@@ -23,7 +23,7 @@ jobs:
       - name: Lint workflow syntax and expressions
         uses: docker://rhysd/actionlint:1.7.12
         with:
-          args: -color -shellcheck= -pyflakes= .github/workflows/ci.yml .github/workflows/source-train.yml .github/workflows/release.yml .github/workflows/kylin-bootstrap.yml
+          args: -color -shellcheck= -pyflakes= .github/workflows/ci.yml .github/workflows/source-train.yml .github/workflows/release.yml .github/workflows/kylin-bootstrap.yml .github/workflows/ubuntu-package.yml
       - name: Check source stages, required jobs and reusable workflow permissions
         run: python -m tools.check_source_train_workflows
       - name: Exercise source recovery and protected finalization
@@ -133,6 +133,13 @@ jobs:
             -DNUMCPP_NO_USE_BOOST=ON -DNEUROBRIDGE_BUILD_SDK_TESTS=ON
           cmake --build "$RUNNER_TEMP/sdk-tests" --parallel 2
           ctest --test-dir "$RUNNER_TEMP/sdk-tests" --output-on-failure
+  windows-b-side-ip:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate B-side script with Windows PowerShell and mocked network commands
+        shell: powershell
+        run: .\tests\test-b-side-ip.ps1
 
   unit-and-websocket:
     runs-on: ubuntu-latest
@@ -152,6 +159,12 @@ jobs:
       - run: node tests/capture_connection_order.cjs
       - run: python -m compileall -q neurobridge
       - run: bash tools/check-external-protocol.sh
+      - name: Build static capture and B-side consoles
+        run: python tools/build-static-console.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: neurobridge-static-console
+          path: output/neurobridge-static-console.zip
       - name: Detect unpublished external documents
         id: external-document-state
         run: |

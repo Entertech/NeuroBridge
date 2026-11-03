@@ -16,13 +16,16 @@ import zipfile
 from .application.gateway import GatewayApplication as Gateway
 from .versioning import APPLICATION_VERSION
 from .diagnostics import runtime_context
+from .adapters.northbound.protocol import envelope
+from .capture_control import CaptureError
 
 LOG = logging.getLogger(__name__)
 MAX_REQUEST_HEADER_BYTES = 16 * 1024
 FILE_CHUNK_BYTES = 64 * 1024
+DEPLOYED_WEB_ROOT = Path("/opt/neurobridge/web")
 
 
-def _http_response(status: int, reason: str, *, content_type: str, content_length: int, filename: str | None = None) -> bytes:
+def _http_response(status: int, reason: str, *, content_type: str, content_length: int, filename: str | None = None, extra_headers: dict | None = None) -> bytes:
     headers = [
         f"HTTP/1.1 {status} {reason}",
         "Connection: close",
@@ -32,6 +35,7 @@ def _http_response(status: int, reason: str, *, content_type: str, content_lengt
     ]
     if filename is not None:
         headers.append(f'Content-Disposition: attachment; filename="{filename}"')
+    headers.extend(f"{key}: {value}" for key, value in (extra_headers or {}).items())
     return ("\r\n".join(headers) + "\r\n\r\n").encode("ascii")
 
 
@@ -127,7 +131,99 @@ async def _send_index(writer: asyncio.StreamWriter, gateway: Gateway, method: st
     await writer.drain()
 
 
-async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, gateway: Gateway) -> None:
+async def _send_control_json(writer, status: int, data: dict, message: str, headers: dict) -> None:
+    body = (json.dumps(envelope(status, data, message), ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    writer.write(_http_response(status, "OK" if status == 200 else "Capture request failed", content_type="application/json; charset=utf-8", content_length=len(body), extra_headers={"Cache-Control": "no-store", **headers}))
+    writer.write(body)
+    await writer.drain()
+
+
+async def _handle_control(writer, gateway: Gateway, capture, method: str, path: str, request_headers: dict) -> None:
+    headers = {"Vary": "Origin"}
+    if not gateway.config.download.capture_control_enabled:
+        await _send_control_json(writer, 404, {}, "Capture control is disabled.", headers)
+        return
+    origin = request_headers.get("origin")
+    host, port = gateway.config.download.host, gateway.config.download.port
+    authority = f"[{host}]" if ":" in host else host
+    own_origin = f"http://{authority}" + (f":{port}" if port != 80 else "")
+    allowed = origin is None or origin == own_origin or origin in gateway.config.download.capture_allowed_origins
+    if not allowed:
+        LOG.warning("Capture HTTP origin rejected: bootId=%s peer=%s", gateway.boot_id, writer.get_extra_info("peername"))
+        await _send_control_json(writer, 403, {}, "Browser origin is not allowed.", headers)
+        return
+    if origin is not None:
+        headers["Access-Control-Allow-Origin"] = origin
+    routes = {"/api/status": "GET", "/api/logs": "GET", "/api/capture/start": "POST", "/api/capture/stop": "POST"}
+    if path not in routes:
+        await _send_control_json(writer, 404, {}, "Unknown capture endpoint.", headers)
+        return
+    if method == "OPTIONS":
+        headers.update({"Access-Control-Allow-Methods": routes[path] + ", OPTIONS", "Access-Control-Allow-Headers": "Content-Type"})
+        if request_headers.get("access-control-request-private-network") == "true":
+            headers["Access-Control-Allow-Private-Network"] = "true"
+        writer.write(_http_response(204, "No Content", content_type="text/plain", content_length=0, extra_headers=headers))
+        await writer.drain()
+        return
+    if method != routes[path]:
+        await _send_control_json(writer, 405, {}, "Method not allowed.", headers)
+        return
+    if request_headers.get("content-length", "0") != "0" or "transfer-encoding" in request_headers:
+        await _send_control_json(writer, 400, {}, "Capture requests must not have a body.", headers)
+        return
+    if capture is None:
+        await _send_control_json(writer, 503, {}, "Capture control service is unavailable.", headers)
+        return
+    try:
+        if path == "/api/status":
+            data = capture.snapshot()
+        elif path == "/api/logs":
+            data = capture.logs.snapshot()
+        else:
+            LOG.info("Capture HTTP operation requested: bootId=%s action=%s peer=%s", gateway.boot_id, path.rsplit("/", 1)[-1], writer.get_extra_info("peername"))
+            data = await (capture.start() if path.endswith("/start") else capture.stop())
+    except CaptureError as exc:
+        status, data, message = exc.code, {}, str(exc)
+    except Exception:
+        LOG.exception("Capture HTTP operation failed: bootId=%s path=%s", gateway.boot_id, path)
+        status, data, message = 500, {}, "Capture operation failed; inspect gateway logs."
+    else:
+        status, message = 200, "OK"
+    # A transport failure must not be mistaken for a capture operation failure.
+    await _send_control_json(writer, status, data, message, headers)
+
+
+async def _send_static_page(writer, gateway: Gateway, method: str, path: str) -> bool:
+    if not gateway.config.download.capture_control_enabled:
+        return False
+    if path in {"/", "/capture", "/capture/", "/b-client-test/"}:
+        location = "/b-client-test/index.html" if path == "/b-client-test/" else "/capture/index.html"
+        writer.write(_http_response(302, "Found", content_type="text/plain", content_length=0, extra_headers={"Location": location}))
+        await writer.drain()
+        return True
+    capture_files = {"index.html", "app.js", "styles.css", "README.md"}
+    client_files = {"index.html", "app.js", "styles.css", "version.js", "README.md", "configure-wired-ip.bat", "configure-wired-ip.ps1"}
+    parts = path.strip("/").split("/")
+    if len(parts) != 2 or not ((parts[0] == "capture" and parts[1] in capture_files) or (parts[0] == "b-client-test" and parts[1] in client_files)):
+        return False
+    web_root = Path(__file__).resolve().parents[1] / "web" / "ubuntu"
+    if not web_root.is_dir():
+        web_root = DEPLOYED_WEB_ROOT / "ubuntu"
+    file = web_root.joinpath(*parts)
+    if parts[0] == "b-client-test" and parts[1] in {"version.js", "configure-wired-ip.bat", "configure-wired-ip.ps1"}:
+        file = web_root.parent.joinpath(*parts)
+    if not file.is_file() or file.is_symlink():
+        return False
+    body = file.read_bytes()
+    content_type = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".md": "text/plain; charset=utf-8"}.get(file.suffix, "application/octet-stream")
+    writer.write(_http_response(200, "OK", content_type=content_type, content_length=len(body), extra_headers={"Cache-Control": "no-store"}))
+    if method == "GET":
+        writer.write(body)
+    await writer.drain()
+    return True
+
+
+async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, gateway: Gateway, capture=None) -> None:
     temporary: Path | None = None
     peer = writer.get_extra_info("peername")
     try:
@@ -144,6 +240,7 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         if len(request) != 3:
             await _send_error(writer, 400, "Invalid request")
             return
+        request_headers = {}
         host_headers = []
         for line in lines[1:]:
             if not line:
@@ -152,6 +249,10 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                 await _send_error(writer, 400, "Invalid request header")
                 return
             name, value = line.split(":", 1)
+            if name.lower() in request_headers:
+                await _send_error(writer, 400, "Duplicate request header")
+                return
+            request_headers[name.lower()] = value.strip()
             if name.lower() == "host":
                 host_headers.append(value.strip())
         expected_host = f"{gateway.config.download.host}:{gateway.config.download.port}"
@@ -159,14 +260,22 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             await _send_error(writer, 421, "Misdirected Request")
             return
         method, target, _version = request
-        if method not in {"GET", "HEAD"}:
-            await _send_error(writer, 405, "Method not allowed")
-            return
         parsed = urlsplit(target)
+        path = unquote(parsed.path)
+        if method in {"GET", "HEAD"} and not parsed.fragment and await _send_static_page(writer, gateway, method, path):
+            return
+        if (parsed.query or parsed.fragment) and path.startswith("/api/"):
+            await _send_control_json(writer, 400, {}, "Query parameters are not supported.", {})
+            return
         if parsed.query or parsed.fragment:
             await _send_error(writer, 400, "Query parameters are not supported")
             return
-        path = unquote(parsed.path)
+        if path.startswith("/api/"):
+            await _handle_control(writer, gateway, capture, method, path, request_headers)
+            return
+        if method not in {"GET", "HEAD"}:
+            await _send_error(writer, 405, "Method not allowed")
+            return
         log_path = "".join(character if character.isprintable() else " " for character in path)[:256]
         LOG.info("Download request received: peer=%s method=%s path=%s", peer, method, log_path)
         base = gateway.config.download.path
@@ -224,20 +333,20 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             await writer.wait_closed()
 
 
-async def create_download_server(gateway: Gateway) -> asyncio.Server:
+async def create_download_server(gateway: Gateway, capture=None) -> asyncio.Server:
     config = gateway.config.download
     if not config.enabled:
         raise ValueError("Download service is disabled")
     return await asyncio.start_server(
-        lambda reader, writer: _handle_client(reader, writer, gateway),
+        lambda reader, writer: _handle_client(reader, writer, gateway, capture),
         config.host,
         config.port,
         limit=MAX_REQUEST_HEADER_BYTES,
     )
 
 
-async def serve_downloads(gateway: Gateway) -> None:
-    server = await create_download_server(gateway)
+async def serve_downloads(gateway: Gateway, capture=None) -> None:
+    server = await create_download_server(gateway, capture)
     try:
         config = gateway.config.download
         LOG.info("Download service listening on http://%s:%s%s", config.host, config.port, config.path)

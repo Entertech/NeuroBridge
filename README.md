@@ -1,12 +1,12 @@
 # NeuroBridge
 
-NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。运行时首个现场验证基线仍是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机；当前发布矩阵包含一个银河麒麟 V10 通用引导 DEB（all） 和 Windows 10/11 的 x86_64 EXE/MSI 目标。网关核心负责串口采集、数据与算法处理、北向协议适配、录播和运行维护。
+NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。运行时首个现场验证基线仍是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机；当前发布矩阵包含一个银河麒麟 V10 通用引导 DEB（all）、Windows 10/11 的 x86_64 EXE/MSI 和 Ubuntu 24.04 amd64 预编译 DEB 目标。本分支增加 Ubuntu 24.04 x86_64 蓝牙头环与专网 B 端接入；网关核心负责采集、数据与算法处理、北向协议适配、录播和运行维护。
 
-统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于 M1 验收范围。
+统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。Ubuntu 头环作为独立 Profile 整合，按单独的目标机清单验收；各平台结果分别记录。
 
 源码发布采用 `需求分支 → dev_B → publish_B → 独立候选提交 → 打包与发布验证 → vB → finalize_B → master`。需求开发不升版，用户选定版本和需求范围后才初始化版本；各阶段 PR 和 push 只做代码检查，合入 `master` 不再自动发版。源码流程通过 GitHub App 编排，配置见 [code-release-train.toml](.release/code-release-train.toml)，操作和启用条件见[发布技术方案](doc/tech/发布工作流技术方案.md)。
 
-已有 Windows 10/11 x64 EXE/MSI 和麒麟 DEB 构建由 `Release` 提供打包接口。训练发布要求全部 5 个安装包通过校验；总 ZIP 上传 Actions Artifacts 并回下载验证后，由源码流程给同一候选提交打不可变 tag，再创建 GitHub Release 下载入口和最终合入 PR。只有远端 tag 身份及默认分支祖先校验通过，才算发布完成。手动 `Release` 与 `Kylin bootstrap package` 仍可构建诊断候选，不创建 tag。应用版本仍以台账 `[application].version` 为准；旧平台字段不自动递增，不改变协议版本或目标机验收状态。
+Windows 10/11 x64 EXE/MSI、麒麟引导 DEB 和 Ubuntu 预编译 DEB 构建由 `Release` 提供打包接口。训练发布要求全部 6 个安装包通过校验；总 ZIP 上传 Actions Artifacts 并回下载验证后，由源码流程给同一候选提交打不可变 tag，再创建 GitHub Release 下载入口和最终合入 PR。只有远端 tag 身份及默认分支祖先校验通过，才算发布完成。手动 `Release` 与 `Kylin bootstrap package` 仍可构建诊断候选，不创建 tag。应用版本仍以台账 `[application].version` 为准；旧平台字段不自动递增，不改变协议版本或目标机验收状态。
 
 原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。
 
@@ -16,70 +16,47 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 手动运行 `Release` 可直接构建 Windows 原生安装包，或复用同分支、同提交并通过校验的 `native_input_run_id`。正式发版从 `Source version train` 的显式 `release` 操作进入；重试恢复原候选 SHA 和已验证的 Artifact，不重新初始化版本、移动 tag 或重复发送成功的发布结果。
 
-## 可运行网关与部署
+## Ubuntu 24.04 头环网关
 
-2026-09-09 用户确认：Windows 10 专业版 22H2（OS 内部版本 19045.6466，x64；Inspiron 7559、i7-6700HQ、16 GB RAM）与银河麒麟 V10 SP1 2503 均已运行联调成功。系统与硬件信息已由用户截图确认；具体证据范围和仍待补齐的专项验收记录见[内部运行手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md#已验证环境2026-09-09-用户确认)。
+Ubuntu x86_64 使用 `ubuntu_headband_wired` Profile：头环 BLE → 网关 → 专用有线网络 → B 端。它与 Windows/麒麟耳机共用 Bootstrap、ApplicationService、算法引擎和分段存储，通过 Profile 固定设备、传输、接入方式和录播能力。整合范围与兼容性见 [Ubuntu 头环接入整合](doc/tech/NeuroBridge项目结构与多系统接入/Ubuntu头环接入整合.md)。
 
-运行中的算法故障会同步到内部状态和浏览器状态订阅。麒麟启动脚本仅向终端或 systemd journal 输出控制台内容，持久运行日志由 Python 按配置轮转，不再追加无上限的 `neurobridge-console.log`。这些修复须随当前版本在目标机验证。
+Ubuntu 推荐使用[预编译 DEB](packaging/ubuntu/README.md)：安装时不联网、不编译，系统依赖需由基础镜像预先准备；首次安装不启用或启动服务。核验包来源后安装，确认 `/etc/neurobridge/gateway.toml` 的现场网络参数，再执行 `systemctl enable --now neurobridge.service neurobridge-dhcp.service`。升级保留配置和录制；已有源码部署需先按说明迁移 systemd 单元。`Ubuntu native package` 工作流上传 DEB 与验证证据，不发版、不打 tag。
 
-2026-09-08 需求审查修复已补充严格配置类型、Kylin V10 运行时检查、600 ms 合同校验、进程内日志轮转、存储错误分类与启动降级、会话控制及候选包摘要预检。默认日志按 10 MiB 轮转并保留 14 份备份；大小轮转归档使用 UTC 时间和唯一随机后缀，当前日志保留固定入口 `neurobridge.log`，命名与保留规则见[内部运行手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md#7-日志在哪里怎么导出)。详细配置、测试和仍未关闭的现场/发布门禁见[需求补齐与验收清单](doc/tech/NeuroBridge项目结构与多系统接入/需求补齐与验收清单.md#7-需求审查后的代码修复)。源码回归不代表目标机或正式安装包验收通过。
-
-仓库现已包含可部署的 Python 网关：`neurobridge/`。银河麒麟目标机固定使用 `data_source.type="serial"` 和 `access.mode="local_browser"`，由同机浏览器通过 `127.0.0.1` 使用 WebSocket。仓库保留的其他策略属于历史兼容代码，不是本次交付能力。
-
-麒麟引导包的 Python 入口按运行时当前位置设置随包标准库路径，安装器规范化代码/运行时权限，并在最终部署目录以服务账户校验网关入口后才启用服务；旧包出现 `No module named 'encodings'` 时，按[内部构建说明](doc/tech/源码原生安装包构建.md#python-标准库定位失败的现场恢复)验证与恢复。源码回归不替代目标机安装、采集和重启验收。
-
-2026-09-10 用户确认耳机首次上电无需 ACK，直接 E1 即可出数。Windows 和银河麒麟现统一并行发现/打开串口与准备算法；已有合法流直接接管，静默设备两项就绪后发送 E1，收到完整合法 28 字节帧才确认连接并创建录制会话。算法复用预备实例，正常停止发送 E0；失败/取消清理候选和算法。不再发送 ACK 或使用停止提示文件，旧配置键兼容保留。详见[验证时序](doc/tech/银河麒麟V10耳机USB串口接入_PRD.md#42-验证时序)。源码回归不替代两平台真实耳机冷启动、停止/整机重启与拔插验收。
-
-银河麒麟 x86_64 项目的日常入口不会自动访问 Git。耳机 USB 已连接时运行入口并输入 `1`；已有完整配置时也可输入 `2` 直接启动。两项默认都会安装或复用以当前桌面用户运行的 `neurobridge.service`，立即启动并设为开机自启；只有在菜单 `9` 中显式配置为非自启后，日常入口才以前台方式运行。需要拆除这套源码部署时输入菜单 `10`：先停服务并移除 systemd 单元，也可选择备份现场数据后删除整个源码目录；顺序必须是先停服务再删源码，详见 [Linux 部署教程第 10 节](linux/README.md#10-拆除源码部署一键退出)：
-
-```bash
-bash linux/neurobridge-kylin-bootstrap.sh
-```
-
-旧设备无法 `git pull` 时，在开发机对已提交且测试通过的分支执行 `./tools/build-kylin-offline-update.sh`，只传输生成的 `neurobridge-kylin-offline-update.run`。目标机在项目根目录运行该单文件；它校验内嵌 Git bundle 后从本地快进代码、保留 `.runtime` 与现场数据，并自动打开菜单，全程不访问远端。完整部署、日志字段和导出方法见[银河麒麟 V10 内部手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md)。
-
-Ubuntu 24.04 x86_64 网关可先用公开 HTTPS 地址匿名获取本仓库源码，不需要 GitHub 账号或密码：
+以下为保留的**源码部署**入口；DEB 部署使用包升级，不运行源码更新器：
 
 ```bash
 git clone https://github.com/Entertech/NeuroBridge.git
 cd NeuroBridge
-./linux/prepare-ubuntu24.04-environment.sh  # 一次性联网准备
-# 此处可断开互联网
-./linux/update-ubuntu.sh
+# 切到经批准的 Ubuntu 分支/提交后再准备与部署
+./linux/ubuntu/prepare-ubuntu24.04-environment.sh  # 一次性联网准备
+sudo ./linux/ubuntu/install-ubuntu.sh             # 使用本地源码构建、安装；不会首次启动服务
 sudoedit /etc/neurobridge/gateway.toml
+sudo systemctl start neurobridge
 ```
 
-`git clone`/`git pull` 仅用于人为获取新版本源码。源码已在目标机后，安装、C++ bridge 构建、Python 包更新和运行均不访问 GitHub、APT、PyPI 或其他互联网服务。`update-ubuntu.sh` 只部署当前目录已有的源码；更新代码时，先自行执行匿名 `git pull --ff-only`，再运行该脚本：
+首次配置来自 [Ubuntu 专属模板](config/gateway.ubuntu.toml.example)。示例网关为 `192.168.88.10/24`，B 端为 `192.168.88.20/24`，WS 为 `ws://192.168.88.10:8765/neurobridge/v1/ws`；地址、端口、网卡与扫描匹配条件必须在现场确认。安装和 systemd 启动追加专用地址并保留已有地址、路由与 DNS；多网口必须指定目标接口。部署后更新使用 `./linux/ubuntu/update-ubuntu.sh`，会重启服务，B 端须重新连接、查询状态并订阅。SSH 运维继续使用 `neurobridge-ops branch`、`update [--branch 分支]`、`status` 和 `logs --follow`。详见 [Linux 部署与运维](linux/README.md)。
+
+Ubuntu 的采集控制台由下载服务提供：`http://192.168.88.10:8766/capture/`；兼容 B 端页面位于 `/b-client-test/`。也可生成独立静态包后双击打开：
 
 ```bash
-git pull --ff-only
-./linux/update-ubuntu.sh
+python3 tools/build-static-console.py
 ```
 
-脚本会自动申请 `sudo` 权限，将当前工作树同步到 `/opt/neurobridge`、从本地源码更新 Python 包、重建算法 bridge、重新加载 systemd 单元并重启网关。网关重启会使现有 B 端连接断开，B 端需重新建连并订阅。
+该包使用 `web/ubuntu/` 中的页面，包含扫描/停止/导出、左右脑波、频段和六项指标。`web/capture/`、`web/b-client-test/` 继续用于默认分支的本机耳机展示。采集控制只管理当前 Ubuntu 采集管线，HTTP/WS 监听持续存在；重复启动复用当前采集，停止后再启动创建新的采集和算法会话。静态页仅连接已批准的隔离专网，不发送心跳。
 
-需要远程运维时，Ubuntu 环境准备会安装但不启用 OpenSSH；部署后执行 `sudo ./linux/setup-ssh-operations.sh` 即可交互式完成运维账号密码、私有监听地址和来源网段配置。一键配置会把当前源码同步为运维账号自己的固定项目目录 `~/NeuroBridge`。SSH 场景中的源码更新只能使用 `neurobridge-ops update`：该命令固定切换至 `master`、快进拉取批准的上游版本并部署重启，运维人员不应直接运行 Git。还可使用 `status`、`logs --follow`、`audit` 和 `restart`。`audit` 不记录密码或业务原始数据。由于该账号维护的代码随后会以 root 安装，必须把它作为网关管理员凭据管理。完整命令和回滚步骤见 [Ubuntu 网关部署与运行教程](linux/README.md#41-启用-ssh-运维入口可选) 与 [SSH 运维和录播联调指南](doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md)。
-
-部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。首次安装会自动给唯一且未在使用的物理以太网口设置默认的封闭直连地址 `192.168.88.10/24`；无网口、多网口、已有 IPv4/IPv6 地址或默认路由、或 Netplan 冲突时会安全停止，需指定 `[network].interface` 或断开原网络后重试。专用链路地址仅接受 RFC1918 IPv4 网段。该默认值不替代双方现场确认：静态 IP、网段、端口、Flowtime 扫描匹配条件、录播目录和回放倍率均可在 `/etc/neurobridge/gateway.toml` 覆盖；`replay_recording_id` 仅适用于明确支持录播的兼容数据源，当前银河麒麟耳机 `data_source.type="serial"` 必须留空且不会自动回放。示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
+录播由部署配置管理。Ubuntu 离线时只在许可开启且存在可读历史会话时按请求回放；禁止时 `mode=live`，取数提示“头环未连接”，历史文件保留。串口耳机 Profile 始终禁止录播。网关本机可执行：
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install --no-deps -e .  # unit tests do not need BLE hardware
-.venv/bin/pip install websockets==12.0 pyserial==3.5
-.venv/bin/python -m unittest discover -s tests -v
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control enable
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control disable
+sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control status
 ```
 
-历史 Flowtime BLE 兼容层仍保留 Bleak 扫描、通知和启停实现，但不属于当前银河麒麟耳机 USB 串口需求。银河麒麟一键流程在当前 N100/N150 本机构建 C++ 算法 bridge 到项目 `.runtime/algorithm/`，进程自检通过后才自动启用；自检不代表真实耳机数据 POC，SDK 输入分组、串口原始投影、输出指标和性能仍须在最终麒麟主机验证。
+旧 Ubuntu 配置可在加载时迁移为蓝牙专网配置，保留现场地址、录播许可和算法期限；已声明新 schema 的配置仍须显式选择数据源。新部署使用共享的有界分段存储，兼容读取旧录制；原始数据与算法结果分别持久化，回放不重新计算算法。录制格式、运行诊断和旧安装回退见整合说明。Ubuntu 源码集成与合成回归不等于真实头环、N100/N150 或现场验收。
 
-SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 接入 POC](doc/tech/%E7%AE%97%E6%B3%95%20SDK%20%E6%8E%A5%E5%85%A5%20POC.md)。
+采集生命周期由共享 `GatewayRuntime` 监督：设备生产任务异常会更新错误状态、清理旧会话并按配置重建，不关闭 HTTP/WS。`getStatus` 与纯状态订阅只读取内存；离线取数的录播目录检查有独立期限与缓存，详见整合说明。macOS POC 停止采集后同样保留监听，重新开始使用新会话。
 
-当前 SDK 已更新为保留质量评级、放开 EEG 处理末端输出限制的提交：完成窗口处理后，质量为 `NONE` 也不再清零波形和能量；佩戴检测失败、窗口预热和下游算法的质量判断仍保留。部署现有系统时须重新构建算法 bridge；源码及合成测试通过不代表真实耳机算法比对或目标机验收通过，详见上述 POC 文档。
-
-算法输出的左右脑波限幅为 `[-2000, 2000]`：范围内保留滤波后的实际幅值，超界分别截到上下限，再按既有规则保留两位小数。三个平台构建均使用仓库内 SDK 快照；历史录制保持原值，先前 CI 安装包不含此改动。
-
-运行时稳定内核按 `domain/`、`ports/`、`application/` 分层；`adapters/` 放置设备 Parser、数据源、算法、存储和北向实现，`profiles/` 固定操作系统/设备/接入能力，`bootstrap/` 是唯一组合根。正式采集由 ApplicationService 和 GatewayApplication 编排，保留 `frameId → batchId → algorithm result` 关联，旧 business.Gateway 仅作兼容 facade；设备与历史录制适配器仍复用既有底层实现。M1 固定 POSIX TTY、修订号 181 Parser、本机回环页面和禁用录播能力。
-
-算法处理、分段写入和订阅发送均有界，慢算法/磁盘不会让 RawChunk 消费等待完整处理；`[pipeline]` 配置等待上限和周期资源日志。长测日志默认每 10 秒记录运行时长、收帧/算法/发送增量、收帧年龄、写入进度及资源状态，并在连接变化和停止采集时补充记录；配置、字段和 24 小时测试步骤见[内部手册](doc/tech/麒麟V10网关运行与串口联调内部文档.md#71-windows--麒麟长时间运行测试)。候选安装器保留应用/配置/服务回滚快照，仍需目标机安装与长稳验收。两组需求的实现对照、额外兼容内容及发布门禁见[需求补齐与验收清单](doc/tech/NeuroBridge项目结构与多系统接入/需求补齐与验收清单.md)。
+HRV 缺失或为 null 时，可使用 [HRV 链路诊断](doc/tech/NeuroBridge项目结构与多系统接入/Ubuntu头环接入整合.md#hrv-链路诊断) 对照 SDK、桥接、应用结果、录制、投影与实际发送的字段状态。新增 HRV trace 不记录心率/HRV 数值或原始字节；默认按状态变化和周期记录，DEBUG 可逐窗口追踪。
 
 ## 仓库结构
 
@@ -88,8 +65,8 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 - `neurobridge/adapters/`、`profiles/`、`bootstrap/`：I/O 实现、固定 Deployment Profile 和唯一运行时组合根。
 - `web/`：由网关托管、无构建步骤的静态网页；`capture/` 是通过网关 WebSocket 查看耳机原始数据的页面，`b-client-test/` 是完整的 B 端协议联调页。
 - `mac/`：仅 macOS POC 的启动器、蓝牙验证、原生算法 bridge 与本机配置模板。
-- `linux/`：银河麒麟项目一键流程、Ubuntu 兼容部署脚本、systemd 单元与日志轮转配置。
-- `windows/`：Windows COM Source 配置、Service 入口与后续目标机验收说明；`packaging/` 提供银河麒麟/Windows unsigned 候选安装骨架。
+- `linux/kylin/`、`linux/ubuntu/`：分别维护麒麟与 Ubuntu 部署；`linux/common/` 只提供共享构建内核，两个平台互不依赖。
+- `windows/`：Windows COM Source 配置、Service 入口与后续目标机验收说明；`packaging/` 分别维护麒麟引导包、Windows 安装包和 Ubuntu 原生 DEB 的资源与生命周期。
 
 网页不再放入平台目录。两个页面都由当前网关的回环 HTTP 服务托管并连接同一个北向 WebSocket，不直接访问 USB 串口，也不控制 systemd 进程。
 
@@ -97,8 +74,8 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 | 场景 | 入口 | 当前状态 |
 | --- | --- | --- |
-| 银河麒麟 V10 x86_64 网关 | [`linux/neurobridge-kylin-bootstrap.sh`](linux/neurobridge-kylin-bootstrap.sh) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。菜单 `1` 完成项目内配置并默认安装/启动 systemd 开机自启服务；菜单 `9` 可查看状态或显式配置为非自启。 |
-| Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 固定 BLE 头环与旧 B 端专网 Profile；源码入口已统一，仍需 M2 实机回归。 |
+| 银河麒麟 V10 x86_64 网关 | [`linux/kylin/neurobridge-kylin-bootstrap.sh`](linux/kylin/neurobridge-kylin-bootstrap.sh) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。菜单 `1` 完成项目内配置并默认安装/启动 systemd 开机自启服务；菜单 `9` 可查看状态或显式配置为非自启。 |
+| Ubuntu x86_64 网关部署 | [DEB 安装说明](packaging/ubuntu/README.md)；[源码部署](linux/ubuntu/install-ubuntu.sh) | 固定 BLE 头环与专用 B 端 Profile；共用分层管线，支持受控采集、诊断和录播策略；实机验收待完成。 |
 | macOS 历史 POC | [`mac/start-poc.command`](mac/start-poc.command) | 已接入统一 Bootstrap/BLE Profile，不属于当前 M1 验收。 |
 | Windows 网关 | [`windows/README.md`](windows/README.md)；[一键操作教程](doc/tech/麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。双击 `windows/neurobridge-windows-bootstrap.cmd` 自动准备配置、构建自检算法，首次管理员授权后安装开机自启服务并打开本机页面；可在菜单关闭自启。用户已确认上述 Windows x64 实机运行成功，新增开机自启仍待实机重启验证。串口发现与算法准备并行，直接 E1 后以合法帧验证；真实耳机新流程复测待完成。Windows 7 与 32 位系统不在交付范围内；签名不属于当前发布门禁。 |
 | 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；明确区分实时耳机连接与 `live`/`replay` 数据来源，原始数据区与解析数据区固定上下排列。 |
@@ -167,6 +144,8 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 - [头环蓝牙网关对接方案 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%AF%B9%E6%8E%A5%E6%96%B9%E6%A1%88_v0.1.md)：历史方案，不属于当前银河麒麟耳机 USB 串口需求。
 
 ### 对外文档
+
+- [头环数据网关安装部署指南 v0.1（未发布评审稿）](doc/tech/对外/头环数据网关安装部署指南/头环数据网关安装部署指南_v0.1.md)：适用于 `codex/linux-headband-ethernet-gateway`，补充从新系统到 B 端验收的首次部署流程；CI 单独生成评审 PDF，不进入正式交付 ZIP。
 
 - [头环数据网关北向网络协议 v0.2](doc/tech/%E5%AF%B9%E5%A4%96/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%E5%8C%97%E5%90%91%E7%BD%91%E7%BB%9C%E5%8D%8F%E8%AE%AE/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E7%BD%91%E5%85%B3%E5%8C%97%E5%90%91%E7%BD%91%E7%BB%9C%E5%8D%8F%E8%AE%AE_v0.2.md)：已发布，B 端 WS/JSON 接入契约与联调验收。
 - [头环数据采集包格式说明 v0.1](doc/tech/%E5%AF%B9%E5%A4%96/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E9%87%87%E9%9B%86%E5%8C%85%E6%A0%BC%E5%BC%8F%E8%AF%B4%E6%98%8E/%E5%A4%B4%E7%8E%AF%E6%95%B0%E6%8D%AE%E9%87%87%E9%9B%86%E5%8C%85%E6%A0%BC%E5%BC%8F%E8%AF%B4%E6%98%8E_v0.1.md)：已发布，一键保存 ZIP 的文件、字段和校验规则。
