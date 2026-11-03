@@ -238,7 +238,24 @@ jobs:
           ref: ${{ env.SOURCE_SHA }}
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.platform == 'ubuntu' && '3.12' || '3.11' }}
+      - name: Build Ubuntu precompiled DEB and verify offline installation
+        if: matrix.platform == 'ubuntu'
+        continue-on-error: true
+        shell: bash
+        env:
+          TARGET_ID: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/release-inputs/$TARGET_ID"
+          mkdir -p "$input" "artifacts/targets/$TARGET_ID"
+          exec > >(tee "artifacts/targets/$TARGET_ID/input-fetch.log") 2>&1
+          trap 'status=$?; if [[ $status -ne 0 ]]; then rm -f "$input/verification.json"; printf "blocked: Ubuntu native build/lifecycle verification failed exit_code=%s\n" "$status"; fi' EXIT
+          sudo apt-get update
+          sudo apt-get install -y python3.12 cmake g++ libeigen3-dev dpkg-dev patchelf
+          python tools/build-ubuntu-package.py --prepare-inputs
+          python tools/build-ubuntu-package.py --output-dir "$input"
+          bash tools/check-ubuntu-package-container.sh "$input"
       # The Kylin deliverable is the bootstrap package. It is built here from
       # the checked-out source and does not consume a prebuilt runtime input.
       - name: Restore approved Kylin dependency cache

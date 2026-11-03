@@ -23,7 +23,7 @@ jobs:
       - name: Lint workflow syntax and expressions
         uses: docker://rhysd/actionlint:1.7.12
         with:
-          args: -color -shellcheck= -pyflakes= .github/workflows/ci.yml .github/workflows/source-train.yml .github/workflows/release.yml .github/workflows/kylin-bootstrap.yml
+          args: -color -shellcheck= -pyflakes= .github/workflows/ci.yml .github/workflows/source-train.yml .github/workflows/release.yml .github/workflows/kylin-bootstrap.yml .github/workflows/ubuntu-package.yml
       - name: Check source stages, required jobs and reusable workflow permissions
         run: python -m tools.check_source_train_workflows
       - name: Exercise source recovery and protected finalization

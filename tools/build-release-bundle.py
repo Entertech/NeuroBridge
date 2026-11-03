@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RELEASE_MATRIX = tomllib.loads((ROOT / "release/release_matrix.toml").read_text(encoding="utf-8"))
 MANIFEST_FILENAME = "release-manifest.json"
 # Platforms whose per-version archives must also carry the shipped documents.
-DOCUMENT_BEARING_PLATFORMS = ("windows", "kylin")
+DOCUMENT_BEARING_PLATFORMS = tuple(RELEASE_MATRIX["aggregate"]["platform_archives"])
 
 
 def delivery_pdf_name(name: str) -> str:
@@ -94,11 +94,11 @@ def collect_native_packages(release_directory: Path, release_manifest: dict) -> 
             for package in platform_archive.get("packages", []):
                 platform = platform_archive["platform"]
                 policy = RELEASE_MATRIX[platform]
-                versions = policy["versions"] if platform == "windows" else policy["editions"]
-                version = package["osVersion"] if platform == "windows" else package["edition"]
+                versions = policy["versions"] if platform != "kylin" else policy["editions"]
+                version = package["osVersion"] if platform != "kylin" else package["edition"]
                 if version not in versions or package["architecture"] not in policy["architectures"] or package["format"] not in policy["formats"]:
                     raise ValueError(f"unsupported release target: {package['fileName']}")
-                family = f"windows-{package['osVersion']}" if platform == "windows" else f"kylin-{package['edition']}"
+                family = f"{platform}-{version}"
                 member = f"packages/{package['fileName']}"
                 if member not in members:
                     raise ValueError(f"missing package member {member} in {archive_path.name}")
@@ -144,10 +144,10 @@ def build_system_archives(
 ) -> tuple[dict[str, bytes], list[dict]]:
     files: dict[str, bytes] = {}
     manifest: list[dict] = []
-    for platform in ("windows", "kylin"):
-        if platform == "windows":
-            families = [f"windows-{version}" for version in RELEASE_MATRIX["windows"]["versions"]]
-            expected_architectures = RELEASE_MATRIX["windows"]["architectures"]
+    for platform in tuple(RELEASE_MATRIX["aggregate"]["platform_archives"]):
+        if platform != "kylin":
+            families = [f"{platform}-{version}" for version in RELEASE_MATRIX[platform]["versions"]]
+            expected_architectures = RELEASE_MATRIX[platform]["architectures"]
         elif RELEASE_MATRIX["kylin"].get("package_kind") == "bootstrap":
             # One bootstrap package installs on the Kylin machine and builds
             # there, so it is not split by edition and architecture.
@@ -164,7 +164,7 @@ def build_system_archives(
                 continue
             arch_entries: list[dict] = []
             family_documents = {f"docs/{delivery_pdf_name(name)}": payload for name, payload in sorted(platform_documents.get(platform, {}).items())}
-            support_files = ["install-with-logs.ps1", "diagnostic-context.ps1", "build-info.txt"] if platform == "windows" else []
+            support_files = ["install-with-logs.ps1", "diagnostic-context.ps1", "build-info.txt"] if platform == "windows" else (["README.md"] if platform == "ubuntu" else [])
             family_stream = io.BytesIO()
             with zipfile.ZipFile(family_stream, "w", zipfile.ZIP_DEFLATED) as family_zip:
                 for architecture, packages in architectures:
@@ -178,6 +178,8 @@ def build_system_archives(
                     add_bytes(family_zip, "install-with-logs.ps1", (ROOT / "packaging/windows/install-with-logs.ps1").read_bytes(), timestamp)
                     add_bytes(family_zip, "diagnostic-context.ps1", (ROOT / "windows/diagnostic-context.ps1").read_bytes(), timestamp)
                     add_bytes(family_zip, "build-info.txt", build_info, timestamp)
+                if platform == "ubuntu":
+                    add_bytes(family_zip, "README.md", (ROOT / "packaging/ubuntu/README.md").read_bytes(), timestamp)
             family_data = family_stream.getvalue()
             family_filename = f"{family}.zip"
             family_archives.append((
@@ -300,7 +302,7 @@ def render_bundle_directory_guide(release_manifest: dict, systems: list[dict], d
         f"| {code(DIRECTORY_GUIDE_FILENAME)} | 本目录说明，位于总 ZIP 根目录 |",
     ]
     for system in systems:
-        label = "Windows" if system['platform'] == 'windows' else "银河麒麟"
+        label = {"windows": "Windows", "kylin": "银河麒麟", "ubuntu": "Ubuntu"}[system["platform"]]
         lines.append(f"| {code(system['fileName'])} | {label}系统压缩包；只解压需要部署的平台 |")
     if document_names:
         lines.append("| `docs/external/` | 共用接口、采集包格式说明或联调附件，具体文件见第 3 节 |")
@@ -335,6 +337,8 @@ def render_bundle_directory_guide(release_manifest: dict, systems: list[dict], d
             lines.extend(["", "每个安装文件分组内的 `checksums.sha256` 仅用于核验同目录安装包。", ""])
             if system['platform'] == 'windows':
                 lines.extend(["Windows：选择匹配系统的分组；EXE 和 MSI 二选一。安装日志入口及其模块在版本 ZIP 中，解压后保存在同一目录。", ""])
+            elif system["platform"] == "ubuntu":
+                lines.extend(["Ubuntu：预编译 DEB 仅适用于 Ubuntu 24.04 amd64；安装不编译算法。先阅读随包 README，确认系统依赖与专用网卡配置后再启用服务。", ""])
             else:
                 architectures = {entry['architecture'] for entry in variant['architectureArchives']}
                 if 'all' in architectures:
@@ -416,7 +420,7 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
         "coverage": release_manifest["coverage"],
         "systemArchives": system_manifest,
         "documents": sorted(name for name in files if name.startswith("docs/") or name == DIRECTORY_GUIDE_FILENAME),
-        "systemDocuments": sorted(name for name in files if name.startswith(("windows/", "kylin/")) and name.endswith(".pdf")),
+        "systemDocuments": sorted(name for name in files if name.startswith(("windows/", "kylin/", "ubuntu/")) and name.endswith(".pdf")),
         "validationFiles": sorted(name for name in files if name.startswith("metadata/validation/")),
         "metadataFiles": ["metadata/document-filenames.json"],
     }

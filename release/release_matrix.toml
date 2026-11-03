@@ -25,9 +25,17 @@ formats = ["deb"]
 expected_package_count = 1
 package_kind = "bootstrap"
 
+[ubuntu]
+versions = ["24.04"]
+architectures = ["x86_64"]
+formats = ["deb"]
+expected_package_count = 1
+package_kind = "prebuilt"
+python_line = "3.12"
+
 [aggregate]
-expected_package_count = 5
-platform_archives = ["windows", "kylin"]
+expected_package_count = 6
+platform_archives = ["windows", "kylin", "ubuntu"]
 file_name_pattern = "neurobridge-v<applicationVersion>-<buildDate>.zip"
 
 [release]
@@ -46,6 +54,7 @@ actions_artifact_retention_days = 90
 [build]
 windows_coordinator = "windows-2022"
 linux_coordinator = "ubuntu-22.04"
+ubuntu_coordinator = "ubuntu-24.04"
 toolchains = "verified_offline_cache"
 cross_arch_requires_target_verification = true
 missing_verified_input = "blocked"

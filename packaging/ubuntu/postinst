@@ -1,0 +1,34 @@
+#!/bin/sh
+@COMMON@
+case "$1" in
+    configure)
+        getent group neurobridge >/dev/null || addgroup --system neurobridge
+        getent passwd neurobridge >/dev/null || adduser --system --ingroup neurobridge --home /var/lib/neurobridge --no-create-home --disabled-login neurobridge
+        if getent group bluetooth >/dev/null; then adduser neurobridge bluetooth; fi
+        install -d -m 0750 -o root -g neurobridge /etc/neurobridge
+        install -d -m 0750 -o neurobridge -g neurobridge /var/lib/neurobridge /var/lib/neurobridge/recordings /var/log/neurobridge
+        install -d -m 0700 "$state"
+        if [ ! -e /etc/neurobridge/gateway.toml ]; then
+            install -m 0640 -o root -g neurobridge /usr/share/neurobridge/gateway.toml.example /etc/neurobridge/gateway.toml
+        fi
+        if systemd_running; then
+            systemctl daemon-reload
+            # A new installation waits for site network configuration. An
+            # upgrade restarts only units that were active before unpacking.
+            for unit in $units; do
+                if [ -f "$state/$unit.active" ]; then
+                    systemctl start "$unit"
+                    rm -f "$state/$unit.active"
+                fi
+            done
+        fi
+        echo 'Review /etc/neurobridge/gateway.toml and the dedicated Ethernet address before: systemctl enable --now neurobridge.service neurobridge-dhcp.service'
+        ;;
+    abort-upgrade)
+        if systemd_running; then
+            for unit in $units; do
+                if [ -f "$state/$unit.active" ]; then systemctl start "$unit"; rm -f "$state/$unit.active"; fi
+            done
+        fi
+        ;;
+esac

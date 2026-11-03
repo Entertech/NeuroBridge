@@ -1,0 +1,6 @@
+# Runtime-only image: no pip, compiler, SDK source or Python development tools.
+# Network is used to prepare the image; package lifecycle runs --network none.
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    python3.12 libc6 libstdc++6 libgcc-s1 bluez dbus iproute2 dnsmasq-base \
+    logrotate systemd adduser && rm -rf /var/lib/apt/lists/*

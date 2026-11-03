@@ -1,0 +1,40 @@
+# Ubuntu 24.04 amd64 / CPython 3.12 only. Verified before offline assembly.
+schema_version = 1
+python_abi = "cp312"
+architecture = "x86_64"
+
+[[wheels]]
+name = "async_timeout"
+version = "4.0.3"
+filename = "async_timeout-4.0.3-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/a7/fa/e01228c2938de91d47b307831c62ab9e4001e747789d0b05baf779a6488c/async_timeout-4.0.3-py3-none-any.whl"
+sha256 = "7405140ff1230c310e51dc27b3145b9092d659ce68ff733fb0cefe3ee42be028"
+
+[[wheels]]
+name = "bleak"
+version = "0.19.0"
+filename = "bleak-0.19.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/af/10/3cf8069ebc30fc784bcc7ed2559bc892c0b79a59a3b7b27a16442d04c3b5/bleak-0.19.0-py3-none-any.whl"
+sha256 = "ccdba0d17dcceb1326e4e46600b37e9019cd52ce01948e2a3dbd6c94d1e4de01"
+
+[[wheels]]
+name = "dbus_fast"
+version = "1.95.2"
+filename = "dbus_fast-1.95.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/ed/1a/03cace2dec2e2b76e90f26a87d2d11caa8fef6963d655a46bc6e7e2356a6/dbus_fast-1.95.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+sha256 = "cab158bcf86c4b2e03c2f3453738a61de83c82cbed11f23331ccc9a9aba6d5b1"
+
+[[wheels]]
+name = "pyserial"
+version = "3.5"
+filename = "pyserial-3.5-py2.py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/07/bc/587a445451b253b285629263eb51c2d8e9bcea4fc97826266d186f96f558/pyserial-3.5-py2.py3-none-any.whl"
+sha256 = "c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0"
+
+[[wheels]]
+name = "websockets"
+version = "12.0"
+filename = "websockets-12.0-cp312-cp312-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/f1/00/d6f01ca2b191f8b0808e4132ccd2e7691f0453cbd7d0f72330eb97453c3a/websockets-12.0-cp312-cp312-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+sha256 = "1f38a7b376117ef7aff996e737583172bdf535932c9ca021746573bce40165ed"
+

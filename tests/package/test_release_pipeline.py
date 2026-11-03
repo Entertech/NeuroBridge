@@ -16,14 +16,15 @@ from neurobridge.versioning import APPLICATION_VERSION
 
 
 class ReleasePipelineTests(unittest.TestCase):
-    def test_matrix_has_one_kylin_bootstrap_and_four_windows_targets(self) -> None:
+    def test_matrix_has_one_ubuntu_deb_one_kylin_bootstrap_and_four_windows_targets(self) -> None:
         targets = matrix()
-        self.assertEqual(len(targets), 5)
-        self.assertEqual(len({target["id"] for target in targets}), 5)
+        self.assertEqual(len(targets), 6)
+        self.assertEqual(len({target["id"] for target in targets}), 6)
         self.assertEqual(sum(target["platform"] == "windows" for target in targets), 4)
         kylin = [target for target in targets if target["platform"] == "kylin"]
         self.assertEqual([target["id"] for target in kylin], ["kylin-v10-all-deb"])
         self.assertEqual(kylin[0]["format"], "deb")
+        self.assertEqual([t["id"] for t in targets if t["platform"] == "ubuntu"], ["ubuntu-24.04-x86_64-deb"])
         self.assertFalse(CONFIG["require_all_matrix_targets"])
 
     def test_missing_input_is_recorded_without_a_fake_package(self) -> None:
@@ -71,7 +72,7 @@ class ReleasePipelineTests(unittest.TestCase):
     def test_aggregate_records_gaps_and_checks_candidate_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            selected = {"windows-10-x86_64-msi", "kylin-v10-all-deb"}
+            selected = {"windows-10-x86_64-msi", "kylin-v10-all-deb", "ubuntu-24.04-x86_64-deb"}
             for target in matrix():
                 folder = root / "results" / target["id"]
                 result = {"target": target, "sourceCommit": run("git", "rev-parse", "HEAD"), "status": "blocked", "reason": "fixture lacks target runtime"}
@@ -90,7 +91,7 @@ class ReleasePipelineTests(unittest.TestCase):
                 save_json(folder / "result.json", result)
             release = root / "release"
             manifest = assemble(root / "results", release)
-            self.assertEqual(manifest["aggregateArchive"]["packageCount"], 2)
+            self.assertEqual(manifest["aggregateArchive"]["packageCount"], 3)
             self.assertEqual(manifest["coverage"]["windows"]["builtPackageCount"], 1)
             self.assertEqual(manifest["coverage"]["kylin"]["builtPackageCount"], 1)
             self.assertEqual(len(manifest["coverage"]["windows"]["targetResults"]), 4)

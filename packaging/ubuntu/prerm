@@ -1,0 +1,18 @@
+#!/bin/sh
+@COMMON@
+case "$1" in
+    upgrade|remove|deconfigure)
+        if systemd_running; then
+            # Refuse to stop a service replaced by an unrelated local unit.
+            check_overrides
+            install -d -m 0700 "$state"
+            for unit in $units; do
+                rm -f "$state/$unit.active"
+                if systemctl is-active --quiet "$unit"; then
+                    if [ "$1" = upgrade ]; then touch "$state/$unit.active"; fi
+                    systemctl stop "$unit"
+                fi
+            done
+        fi
+        ;;
+esac

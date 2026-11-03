@@ -1,12 +1,12 @@
 # NeuroBridge
 
-NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。运行时首个现场验证基线仍是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机；当前发布矩阵包含一个银河麒麟 V10 通用引导 DEB（all） 和 Windows 10/11 的 x86_64 EXE/MSI 目标。本分支增加 Ubuntu 24.04 x86_64 蓝牙头环与专网 B 端接入；网关核心负责采集、数据与算法处理、北向协议适配、录播和运行维护。
+NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主机的 PC 网关。运行时首个现场验证基线仍是 N100/N150 x86_64 主机上的银河麒麟 V10，设备为通过 USB 派生 TTY 通信的耳机；当前发布矩阵包含一个银河麒麟 V10 通用引导 DEB（all）、Windows 10/11 的 x86_64 EXE/MSI 和 Ubuntu 24.04 amd64 预编译 DEB 目标。本分支增加 Ubuntu 24.04 x86_64 蓝牙头环与专网 B 端接入；网关核心负责采集、数据与算法处理、北向协议适配、录播和运行维护。
 
 统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。Ubuntu 头环作为独立 Profile 整合，按单独的目标机清单验收；各平台结果分别记录。
 
 源码发布采用 `需求分支 → dev_B → publish_B → 独立候选提交 → 打包与发布验证 → vB → finalize_B → master`。需求开发不升版，用户选定版本和需求范围后才初始化版本；各阶段 PR 和 push 只做代码检查，合入 `master` 不再自动发版。源码流程通过 GitHub App 编排，配置见 [code-release-train.toml](.release/code-release-train.toml)，操作和启用条件见[发布技术方案](doc/tech/发布工作流技术方案.md)。
 
-已有 Windows 10/11 x64 EXE/MSI 和麒麟 DEB 构建由 `Release` 提供打包接口。训练发布要求全部 5 个安装包通过校验；总 ZIP 上传 Actions Artifacts 并回下载验证后，由源码流程给同一候选提交打不可变 tag，再创建 GitHub Release 下载入口和最终合入 PR。只有远端 tag 身份及默认分支祖先校验通过，才算发布完成。手动 `Release` 与 `Kylin bootstrap package` 仍可构建诊断候选，不创建 tag。应用版本仍以台账 `[application].version` 为准；旧平台字段不自动递增，不改变协议版本或目标机验收状态。
+Windows 10/11 x64 EXE/MSI、麒麟引导 DEB 和 Ubuntu 预编译 DEB 构建由 `Release` 提供打包接口。训练发布要求全部 6 个安装包通过校验；总 ZIP 上传 Actions Artifacts 并回下载验证后，由源码流程给同一候选提交打不可变 tag，再创建 GitHub Release 下载入口和最终合入 PR。只有远端 tag 身份及默认分支祖先校验通过，才算发布完成。手动 `Release` 与 `Kylin bootstrap package` 仍可构建诊断候选，不创建 tag。应用版本仍以台账 `[application].version` 为准；旧平台字段不自动递增，不改变协议版本或目标机验收状态。
 
 原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。
 
@@ -19,6 +19,10 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 ## Ubuntu 24.04 头环网关
 
 Ubuntu x86_64 使用 `ubuntu_headband_wired` Profile：头环 BLE → 网关 → 专用有线网络 → B 端。它与 Windows/麒麟耳机共用 Bootstrap、ApplicationService、算法引擎和分段存储，通过 Profile 固定设备、传输、接入方式和录播能力。整合范围与兼容性见 [Ubuntu 头环接入整合](doc/tech/NeuroBridge项目结构与多系统接入/Ubuntu头环接入整合.md)。
+
+Ubuntu 推荐使用[预编译 DEB](packaging/ubuntu/README.md)：安装时不联网、不编译，系统依赖需由基础镜像预先准备；首次安装不启用或启动服务。核验包来源后安装，确认 `/etc/neurobridge/gateway.toml` 的现场网络参数，再执行 `systemctl enable --now neurobridge.service neurobridge-dhcp.service`。升级保留配置和录制；已有源码部署需先按说明迁移 systemd 单元。`Ubuntu native package` 工作流上传 DEB 与验证证据，不发版、不打 tag。
+
+以下为保留的**源码部署**入口；DEB 部署使用包升级，不运行源码更新器：
 
 ```bash
 git clone https://github.com/Entertech/NeuroBridge.git
@@ -62,7 +66,7 @@ HRV 缺失或为 null 时，可使用 [HRV 链路诊断](doc/tech/NeuroBridge项
 - `web/`：由网关托管、无构建步骤的静态网页；`capture/` 是通过网关 WebSocket 查看耳机原始数据的页面，`b-client-test/` 是完整的 B 端协议联调页。
 - `mac/`：仅 macOS POC 的启动器、蓝牙验证、原生算法 bridge 与本机配置模板。
 - `linux/kylin/`、`linux/ubuntu/`：分别维护麒麟与 Ubuntu 部署；`linux/common/` 只提供共享构建内核，两个平台互不依赖。
-- `windows/`：Windows COM Source 配置、Service 入口与后续目标机验收说明；`packaging/` 提供银河麒麟/Windows unsigned 候选安装骨架。
+- `windows/`：Windows COM Source 配置、Service 入口与后续目标机验收说明；`packaging/` 分别维护麒麟引导包、Windows 安装包和 Ubuntu 原生 DEB 的资源与生命周期。
 
 网页不再放入平台目录。两个页面都由当前网关的回环 HTTP 服务托管并连接同一个北向 WebSocket，不直接访问 USB 串口，也不控制 systemd 进程。
 
@@ -71,7 +75,7 @@ HRV 缺失或为 null 时，可使用 [HRV 链路诊断](doc/tech/NeuroBridge项
 | 场景 | 入口 | 当前状态 |
 | --- | --- | --- |
 | 银河麒麟 V10 x86_64 网关 | [`linux/kylin/neurobridge-kylin-bootstrap.sh`](linux/kylin/neurobridge-kylin-bootstrap.sh) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。菜单 `1` 完成项目内配置并默认安装/启动 systemd 开机自启服务；菜单 `9` 可查看状态或显式配置为非自启。 |
-| Ubuntu x86_64 网关部署 | [`linux/ubuntu/install-ubuntu.sh`](linux/ubuntu/install-ubuntu.sh) | 固定 BLE 头环与专用 B 端 Profile；共用分层管线，支持受控采集、诊断和录播策略；实机验收待完成。 |
+| Ubuntu x86_64 网关部署 | [DEB 安装说明](packaging/ubuntu/README.md)；[源码部署](linux/ubuntu/install-ubuntu.sh) | 固定 BLE 头环与专用 B 端 Profile；共用分层管线，支持受控采集、诊断和录播策略；实机验收待完成。 |
 | macOS 历史 POC | [`mac/start-poc.command`](mac/start-poc.command) | 已接入统一 Bootstrap/BLE Profile，不属于当前 M1 验收。 |
 | Windows 网关 | [`windows/README.md`](windows/README.md)；[一键操作教程](doc/tech/麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。双击 `windows/neurobridge-windows-bootstrap.cmd` 自动准备配置、构建自检算法，首次管理员授权后安装开机自启服务并打开本机页面；可在菜单关闭自启。用户已确认上述 Windows x64 实机运行成功，新增开机自启仍待实机重启验证。串口发现与算法准备并行，直接 E1 后以合法帧验证；真实耳机新流程复测待完成。Windows 7 与 32 位系统不在交付范围内；签名不属于当前发布门禁。 |
 | 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；明确区分实时耳机连接与 `live`/`replay` 数据来源，原始数据区与解析数据区固定上下排列。 |

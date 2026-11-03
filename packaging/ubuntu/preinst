@@ -1,0 +1,11 @@
+#!/bin/sh
+@COMMON@
+case "$1" in
+    install|upgrade)
+        . /etc/os-release
+        [ "$ID" = ubuntu ] && [ "$VERSION_ID" = 24.04 ] && [ "$(dpkg --print-architecture)" = amd64 ] || {
+            echo 'This package requires Ubuntu 24.04 amd64.' >&2; exit 1;
+        }
+        check_overrides
+        ;;
+esac

@@ -81,7 +81,7 @@ def verify_nested_archives(archive: Path, manifest: dict) -> None:
             verify_release_bundle(archive, json.loads(outer.read("metadata/bundle-manifest.json")))
             return
     archives = manifest["platformArchives"]
-    if {item["platform"] for item in archives} != {"windows", "kylin"}:
+    if {item["platform"] for item in archives} != set(CONFIG["aggregate"]["platform_archives"]):
         raise ValueError("release must contain exactly one ZIP per platform")
     with zipfile.ZipFile(archive) as outer, tempfile.TemporaryDirectory(prefix="neurobridge-release-verify-") as temporary:
         expected_outer = {"build-manifest.json", "release-logs.jsonl", *(item["fileName"] for item in archives)}
@@ -282,10 +282,10 @@ def publish(directory: Path, expected_sha256: str) -> dict:
         raise ValueError("manifest commit, release state or trigger does not match this checkout")
     if manifest["git"]["dirty"] or command("git", "status", "--porcelain", "--untracked-files=no"):
         raise ValueError("release checkout is dirty")
-    expected_counts = {"windows": CONFIG["windows"]["expected_package_count"], "kylin": CONFIG["kylin"]["expected_package_count"]}
+    expected_counts = {platform: CONFIG[platform]["expected_package_count"] for platform in CONFIG["aggregate"]["platform_archives"]}
     if any(len(manifest["coverage"][platform]["targetResults"]) != count for platform, count in expected_counts.items()):
         raise ValueError("manifest lacks results for every release target")
-    if any(manifest["coverage"][platform]["builtPackageCount"] < 1 for platform in ("windows", "kylin")):
+    if any(manifest["coverage"][platform]["builtPackageCount"] < 1 for platform in CONFIG["aggregate"]["platform_archives"]):
         raise ValueError("minimum per-platform package gate failed")
     if not archive.is_file() or sha256(archive) != manifest["aggregateArchive"]["sha256"]:
         raise ValueError("aggregate ZIP missing or SHA-256 mismatch")
@@ -298,7 +298,7 @@ def publish(directory: Path, expected_sha256: str) -> dict:
         if checksums.read_text(encoding="utf-8") != f"{sha256(archive)}  {archive.name}\n":
             raise ValueError("checksum sidecar differs from aggregate ZIP")
     notes = directory / "release-notes.md"
-    gaps = [item for platform in ("windows", "kylin") for item in manifest["coverage"][platform]["targetResults"] if item["status"] != "candidate"]
+    gaps = [item for platform in CONFIG["aggregate"]["platform_archives"] for item in manifest["coverage"][platform]["targetResults"] if item["status"] != "candidate"]
     notes.write_text(f"NeuroBridge {tag}\n\nSource commit: `{commit}`. Unsigned packages; physical verification is pending.\n\n" + "Incomplete targets:\n" + ("\n".join(f"- `{item['targetId']}`: {item['status']} — {item['reason']}" for item in gaps) or "- None") + "\n", encoding="utf-8")
     with notes.open("a", encoding="utf-8") as output:
         output.write("\n" + ARCHIVE_CHECKPOINT + json.dumps(archive_checkpoint(archive, version, commit), sort_keys=True) + "\n-->\n")
@@ -311,7 +311,7 @@ def publish(directory: Path, expected_sha256: str) -> dict:
     if len(release_log_text.splitlines()) != sum(expected_counts.values()):
         raise ValueError("release logs missing or incomplete")
     logged = {entry["target"]["id"]: entry["status"] for entry in (json.loads(line) for line in release_log_text.splitlines())}
-    expected_logged = {item["targetId"]: item["status"] for platform in ("windows", "kylin") for item in manifest["coverage"][platform]["targetResults"]}
+    expected_logged = {item["targetId"]: item["status"] for platform in CONFIG["aggregate"]["platform_archives"] for item in manifest["coverage"][platform]["targetResults"]}
     if logged != expected_logged:
         raise ValueError("release logs do not match target coverage")
     assets = [archive] if bundle_mode else [archive, manifest_path, directory / f"{archive.name}.sha256", directory / "release-logs.jsonl"]

@@ -8,7 +8,7 @@
 
 分支 `codex/ubuntu-unified-architecture` 从 `codex/linux-headband-ethernet-gateway` 的 `896570050550fcaa2f55c92d2633051d3d8cbdfe` 创建，rebase 到默认分支 `master` 的 `715ddb8`。原分支与 `ubuntu_0.0.1`、`ubuntu_0.0.2`、`ubuntu_0.0.3` 标签保留，便于核对旧现场行为。
 
-本轮在默认分支的统一架构中支持 Ubuntu 24.04 LTS x86_64 头环网关。应用版本沿用版本台账的默认分支基线，报文版本和已锁定协议保持原值；此次需求分支不执行发版、打新标签或修改正式安装包矩阵。Ubuntu 使用源码部署与 systemd，Windows/麒麟继续使用各自的串口本机 Profile。NanoPi、Ubuntu ARM、其他 Ubuntu 版本和现场验收不由本轮合成结果推定。
+本轮在默认分支的统一架构中支持 Ubuntu 24.04 LTS x86_64 头环网关。应用版本沿用版本台账的默认分支基线，报文版本和已锁定协议保持原值；此次需求分支不执行发版或打新标签；本次新增 Ubuntu 原生 DEB 构建目标并接入发布矩阵。Ubuntu 使用预编译 DEB 或既有源码部署与 systemd，Windows/麒麟继续使用各自的串口本机 Profile。NanoPi、Ubuntu ARM、其他 Ubuntu 版本和现场验收不由本轮合成结果推定。
 
 ## 固定组合与依赖方向
 
@@ -122,3 +122,13 @@ HRV trace: {"stage":"payload_projection","timestampMs":600,"hrRequested":true,"u
 前者说明 SDK 的非有限值在 C++ 桥接时转成 null；后者说明该次投影丢失了上游数值字段。若 `websocket_sent` 仍为 `number/zero`，继续检查客户端接收与显示。本轮自动测试与合成 SDK 验证不替代现场异常数据定位。
 
 HRV 诊断验证：Ubuntu 24.04 x86_64 仿真容器的完整 Python 回归完成 648 项，7 项 Windows 专属用例跳过，无失败（355.683 秒）；原生 CTest 两项通过，覆盖 SDK EEG 回归及 HRV 非有限值序列化、诊断启用/关闭。对 900 个合成 HR 样本、300 个窗口比较诊断前后 bridge，算法输出完全一致，新增 SDK 状态元数据完整；实际 WebSocket JSON、录播、持久化确认、脱敏、状态变化和节流均有自动回归。现场 HRV 缺失的根因仍需部署后日志确认。
+
+## Ubuntu 原生 DEB 打包
+
+Ubuntu 固定 Ubuntu 24.04 x86_64，采用预编译 `amd64` DEB；麒麟保持面向多种 CPU/ABI 的源码引导 DEB，两种安装器不互相调用。Ubuntu 在 CI 中用现有 `linux/ubuntu/build-algorithm-bridge.sh` 构建 C++17 算法桥，SDK 静态链接，Python 3.12 wheel 逐个锁定 URL/摘要后离线组包。安装时不下载依赖、不运行 pip、不编译；系统 Python 3.12、BlueZ、DBus 等作为明确的 DEB 依赖，由基础镜像提前准备。
+
+资源归 `packaging/ubuntu/`；构建器为 `tools/build-ubuntu-package.py`，平台服务模板继续归 `linux/ubuntu/systemd/`。包内应用、依赖与启动器使用 `/opt/neurobridge/`，服务文件使用 `/usr/lib/systemd/system/`。Profile 由包内 defaults 固定为 `ubuntu_headband_wired`；配置加载规则和算法数学逻辑不变，未显式定制的算法命令指向随包二进制。
+
+首次安装不启用、不启动服务、不修改网卡。操作员确认配置中的地址、子网、网卡、端口后再启用服务。升级停止并恢复原先运行的本包服务，保留已有配置、录制与日志；remove/purge 也保留这些数据。源码部署在 `/etc/systemd/system/` 的同名单元/drop-in 会明确阻止安装，须先备份并停止旧部署、迁移单元；包安装后不混用源码更新器。完整命令见[Ubuntu 安装包说明](../../../packaging/ubuntu/README.md)。
+
+发布矩阵新增 `ubuntu-24.04-x86_64-deb`；Windows 4 项、麒麟 1 项、Ubuntu 1 项，共 6 项，聚合、校验与交付 ZIP 都识别 Ubuntu。新增 `Ubuntu native package` 工作流只构建并上传 Actions Artifact，发布生命周期仍由既有源码训练流程控制。安装验证使用断网的 Ubuntu 24.04 amd64 运行时容器，容器内没有编译器、pip 或 SDK 源码。验证记录区分实际 DEB 执行、合成服务状态测试与待完成的实机验收；首次新增包没有历史 DEB，因此自动升级验证为同版本重装，跨版本升级及真实 systemd/BLE/专网恢复验收仍待目标机完成。
