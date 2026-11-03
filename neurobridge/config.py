@@ -35,6 +35,7 @@ class RecordingConfig:
     subject_id: str | None
     replay_recording_id: str | None
     replay_speed: float
+    replay_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,9 @@ def load(path: str | Path) -> GatewayConfig:
         raw = tomllib.load(file)
     server, ble, recording, algorithm, download, logging, network = (raw.get(name, {}) for name in ("server", "ble", "recording", "algorithm", "download", "logging", "network"))
     replay_speed = float(recording.get("replay_speed", 1))
+    replay_enabled = recording.get("replay_enabled", True)
+    if type(replay_enabled) is not bool:
+        raise ValueError("recording.replay_enabled must be boolean")
     if replay_speed <= 0:
         raise ValueError("recording.replay_speed must be greater than zero")
     host, port, endpoint = str(server.get("host", "127.0.0.1")), int(server.get("port", 8765)), str(server.get("path", "/neurobridge/v1/ws"))
@@ -184,7 +188,7 @@ def load(path: str | Path) -> GatewayConfig:
     return GatewayConfig(
         server=ServerConfig(host, port, endpoint, send_timeout, queue_size),
         ble=BleConfig(bool(ble.get("enabled", False)), ble.get("device_name") or None, str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(), int(ble.get("scan_timeout_seconds", 5)), int(ble.get("reconnect_delay_seconds", 3))),
-        recording=RecordingConfig(Path(recording.get("directory", "./recordings")), recording.get("subject_id") or None, recording.get("replay_recording_id") or None, replay_speed),
+        recording=RecordingConfig(Path(recording.get("directory", "./recordings")), recording.get("subject_id") or None, recording.get("replay_recording_id") or None, replay_speed, replay_enabled),
         # Ubuntu installation places the locked native bridge at this fixed path.
         # ``enabled`` is therefore the only setting an operator needs to change
         # after the bridge's real-data POC has been approved.  An explicit command

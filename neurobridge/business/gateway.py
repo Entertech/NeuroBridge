@@ -97,6 +97,8 @@ class Gateway:
 
     @property
     def replay_recording_id(self) -> str | None:
+        if not self.config.recording.replay_enabled:
+            return None
         return self._active_replay_recording_id or self.store.replay_recording_id(self.config.recording.replay_recording_id)
 
     def mode(self) -> str:
@@ -106,7 +108,7 @@ class Gateway:
         # The local algorithm is session scoped and must be initialized only after
         # a Flowtime connection has subscribed all notifications and started capture.
         self.status["algorithmState"] = "unavailable"
-        LOG.info("Gateway started: version=%s bootId=%s recordingDirectory=%s networkMode=%s sendTimeoutSeconds=%s deliveryQueueSize=%s", APPLICATION_VERSION, self.boot_id, self.config.recording.directory, self.config.network.mode, self.config.server.send_timeout_seconds, self.config.server.delivery_queue_size)
+        LOG.info("Gateway started: version=%s bootId=%s recordingDirectory=%s replayEnabled=%s networkMode=%s sendTimeoutSeconds=%s deliveryQueueSize=%s", APPLICATION_VERSION, self.boot_id, self.config.recording.directory, self.config.recording.replay_enabled, self.config.network.mode, self.config.server.send_timeout_seconds, self.config.server.delivery_queue_size)
 
     async def stop(self) -> None:
         await self._cancel_window_flush()
@@ -373,7 +375,7 @@ class Gateway:
         streams = params.get("streams", ["eeg", "hr"])
         self.validate_streams(streams, allowed={"eeg", "hr"})
         if not self.live and not self.replay_available:
-            raise ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "No replay data is available.", True)
+            raise self.replay_unavailable_error()
         unavailable = set(streams) - self.available_streams()
         if unavailable:
             raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
@@ -397,6 +399,8 @@ class Gateway:
 
     def latest_replay_algorithm(self) -> tuple[dict | None, int | None]:
         """Use the gateway's active replay cursor, or the latest valid result before it advances."""
+        if not self.config.recording.replay_enabled:
+            return None, None
         if self._replay_algorithm is not None and self._replay_algorithm_timestamp is not None:
             return self._replay_algorithm, self._replay_algorithm_timestamp
         recording_id = self.replay_recording_id
@@ -414,6 +418,10 @@ class Gateway:
         if unknown:
             raise ProtocolError(400, "INVALID_REQUEST", "Request contains unsupported params.", details={"params": sorted(unknown)})
 
+    def replay_unavailable_error(self) -> ProtocolError:
+        message = "No replay data is available." if self.config.recording.replay_enabled else "Replay is disabled by gateway deployment configuration."
+        return ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, message, True)
+
     async def subscribe(self, session: ClientSession, params: dict, send: Any, *, start_replay: bool = True) -> dict:
         streams = self.validate_streams(params.get("streams"))
         include_invalid = params.get("includeInvalid", False)
@@ -426,7 +434,7 @@ class Gateway:
         if duplicate_streams:
             raise ProtocolError(429, "RATE_LIMITED", "A stream is already subscribed on this connection.", True, {"streams": sorted(duplicate_streams)})
         if not self.live and not self.replay_available:
-            raise ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "No replay data is available.", True)
+            raise self.replay_unavailable_error()
         unavailable = set(streams) - self.available_streams()
         if unavailable:
             raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
@@ -451,7 +459,7 @@ class Gateway:
 
     def _start_replay_if_needed(self) -> None:
         """Start one replay clock for the gateway after the first B-side data request."""
-        if not self.sessions or self.live or (self._replay_task and not self._replay_task.done()):
+        if not self.config.recording.replay_enabled or not self.sessions or self.live or (self._replay_task and not self._replay_task.done()):
             return
         recording_id = self.store.replay_recording_id(self.config.recording.replay_recording_id)
         if not recording_id:
@@ -476,7 +484,7 @@ class Gateway:
         self._replay_algorithm_timestamp = None
 
     def _replay_should_continue(self) -> bool:
-        return not self.live and bool(self.sessions)
+        return self.config.recording.replay_enabled and not self.live and bool(self.sessions)
 
     def _subscription_entries(self) -> tuple[tuple[ClientSession, Subscription], ...]:
         return tuple((session, subscription) for session in tuple(self.sessions) for subscription in tuple(session.subscriptions.values()))
@@ -544,6 +552,8 @@ class Gateway:
             LOG.warning("B-side failed-client cleanup failed: bootId=%s sessionId=%s errorType=%s", self.boot_id, session.id, type(exc).__name__)
 
     async def _replay(self) -> None:
+        if not self.config.recording.replay_enabled:
+            return
         recording_id = self._active_replay_recording_id
         if not recording_id:
             return

@@ -39,6 +39,8 @@ scan_timeout_seconds = 5
 reconnect_delay_seconds = 3
 
 [recording]
+# Gateway operator policy. Changes take effect after restarting the service.
+replay_enabled = true
 directory = "/var/lib/neurobridge/recordings"
 subject_id = ""
 # Optional pinned recording ID for offline replay. When empty, missing, or no

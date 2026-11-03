@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Root-owned command gate and journal audit logger for SSH operations.
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export LC_ALL=C
+
+fail() {
+  echo "ERROR: $*" >&2
+  exit 2
+}
+
+[[ ${EUID} -eq 0 ]] || fail "This helper must run as root through sudo."
+
+operator=${SUDO_USER:-unknown}
+audit() {
+  local action=$1 request=$2 result=$3
+  /usr/bin/logger -p authpriv.notice -t neurobridge-ops-audit -- \
+    "operator=$operator action=$action request=$request result=$result"
+}
+
+run_and_audit() {
+  local action=$1 request=$2
+  shift 2
+  audit "$action" "$request" started
+  if "$@"; then
+    audit "$action" "$request" success
+    return 0
+  else
+    local status=$?
+    audit "$action" "$request" "failed:$status"
+    return "$status"
+  fi
+}
+
+lines=200
+parse_lines() {
+  if [[ $# -eq 0 ]]; then
+    return 0
+  fi
+  [[ $# -eq 2 && $1 == --lines && $2 =~ ^[0-9]+$ && $2 -ge 1 && $2 -le 1000 ]] \
+    || fail "Usage: neurobridge-ops $current_action [--lines N] (N: 1-1000)"
+  lines=$2
+}
+
+case "${1:-}" in
+  project)
+    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops project"
+    run_and_audit project path /usr/local/sbin/neurobridge-ops-update --print-project
+    ;;
+  branch)
+    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops branch"
+    run_and_audit branch current /usr/local/sbin/neurobridge-ops-update --print-branch
+    ;;
+  status)
+    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops status"
+    run_and_audit status status /usr/local/sbin/neurobridge-ops-status
+    ;;
+  logs)
+    shift
+    if [[ ${1:-} == --follow || ${1:-} == -f ]]; then
+      [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops logs [--follow|-f|--lines N]"
+      audit logs follow started
+      exec /usr/local/sbin/neurobridge-ops-logs --follow
+    fi
+    current_action=logs
+    parse_lines "$@"
+    run_and_audit logs "lines:$lines" /usr/local/sbin/neurobridge-ops-logs --lines "$lines"
+    ;;
+  audit)
+    shift
+    current_action=audit
+    parse_lines "$@"
+    run_and_audit audit "lines:$lines" /usr/bin/journalctl -t neurobridge-ops-audit -n "$lines" --no-pager
+    ;;
+  update)
+    if [[ $# -eq 1 ]]; then
+      branch=$(/usr/local/sbin/neurobridge-ops-update --print-branch) \
+        || fail "Cannot determine the current branch; specify update --branch <branch>."
+    elif [[ $# -eq 3 && $2 == --branch ]]; then
+      branch=$3
+    else
+      fail "Usage: neurobridge-ops update [--branch <branch>]"
+    fi
+    [[ -n "$branch" && "$branch" != -* && "$branch" != HEAD ]] \
+      && /usr/bin/git check-ref-format "refs/heads/$branch" \
+      || fail "--branch requires a valid branch name."
+    run_and_audit update "branch:$branch" /usr/local/sbin/neurobridge-ops-update --branch "$branch"
+    ;;
+  replay)
+    [[ $# -eq 2 && ( $2 == enable || $2 == disable || $2 == status ) ]] || fail "Usage: neurobridge-ops replay enable|disable|status"
+    run_and_audit replay "$2" /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control "$2"
+    ;;
+  start|stop|restart)
+    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops start|stop|restart"
+    run_and_audit "$1" neurobridge.service /usr/bin/systemctl "$1" neurobridge.service
+    ;;
+  *)
+    fail "Usage: neurobridge-ops {project|branch|status|logs|audit|update|replay|start|stop|restart}"
+    ;;
+esac

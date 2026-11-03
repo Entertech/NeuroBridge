@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# User-facing gateway operations command. Privileged operations are constrained
+# by /etc/sudoers.d/neurobridge-operator and root-owned helper scripts.
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: neurobridge-ops <command>
+
+Commands:
+  project                Show the fixed NeuroBridge project working directory.
+  branch                 Show the current branch of the managed project.
+  status                 Show current service state and the latest 200 logs.
+  logs [--lines N]       Show recent logs (default 200, maximum 1000).
+  logs --follow           Follow new gateway logs in real time; Ctrl-C stops it.
+  audit [--lines N]      Show SSH operations audit events (default 200, maximum 1000).
+  update [--branch NAME] Fetch NAME (default: current branch) from origin and reload.
+  replay enable|disable|status  Allow or prohibit offline replay; changes restart a running gateway.
+  start | stop | restart  Control the NeuroBridge gateway service.
+  help                   Show this help.
+USAGE
+}
+
+case "${1:-help}" in
+  project|branch)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command "$1"
+    ;;
+  status)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command status
+    ;;
+  logs)
+    shift
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command logs "$@"
+    ;;
+  audit)
+    shift
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command audit "$@"
+    ;;
+  update)
+    [[ $# -eq 1 || ( $# -eq 3 && $2 == --branch ) ]] || { usage >&2; exit 2; }
+    shift
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command update "$@"
+    ;;
+  replay)
+    [[ $# -eq 2 && ( $2 == enable || $2 == disable || $2 == status ) ]] || { usage >&2; exit 2; }
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command replay "$2"
+    ;;
+  start|stop|restart)
+    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+    exec sudo -- /usr/local/sbin/neurobridge-ops-command "$1"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

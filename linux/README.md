@@ -248,6 +248,7 @@ sudoedit /etc/neurobridge/gateway.toml
 | `[ble] enabled` | 无头环/冒烟验证时保持 `false`；完成该 Ubuntu 主机的真实头环 POC 后才改为 `true`，同时确认扫描匹配字段。 |
 | `[recording] directory` | 保持默认的 `/var/lib/neurobridge/recordings`，除非已按权限和容量要求另行配置。 |
 | `[recording] subject_id` | 填写演示或采集使用的受试者标识；无值可留空。 |
+| `[recording] replay_enabled` | 默认 `true`；`false` 禁止离线录播，保留实时采集及历史文件。可由运维命令持久化并重启生效。 |
 | `[recording] replay_recording_id` | 可选：填写一个存在且非空的录制会话 ID 以固定回放目标；留空、填写已删除 ID 或空会话时，离线录播自动选择该目录中最新的非空历史会话。 |
 | `[download]` | 仅在专用有线网络确有导出需求时启用；`host` 必须是网关静态 IP，端口由双方确认。 |
 | `[algorithm] enabled` | 默认 `true`。安装器已提供 bridge，无需填写路径；需要仅采集原始数据或维护时才改为 `false`。 |
@@ -280,6 +281,18 @@ sudo ss -lntp
 ```
 
 从 B 端主机使用已确认的 WebSocket 地址连接，并在握手中提供子协议 `neurobridge.v1`。连接后先调用 `getStatus`，再调用 `getLatest` 或 `subscribe`；断线重连后必须重新订阅，不能复用旧 `subscriptionId`。可用仓库的 [B 端联调网页](../web/b-client-test/README.md) 做人工验证。
+
+录播开关（更新到支持该功能的版本后，在网关/SSH 运维终端执行）：
+
+```bash
+neurobridge-ops replay enable   # 允许离线时按需录播
+neurobridge-ops replay disable  # 禁止录播，保留原文件
+neurobridge-ops replay status   # 查询保存的策略和服务状态
+```
+
+开关修改 `/etc/neurobridge/gateway.toml` 中 `[recording].replay_enabled`，正在运行的服务会重启，结束当前会话并断开 B 端 WS；随后需要重新连接、查询状态和订阅。原本停止的服务仅保存配置，不会启动。重启失败返回非零，已选择的策略仍保留，须查看服务日志，不能仅凭配置值宣称运行时已生效。`enable` 不强制切换头环或自动创建订阅，禁止时无头环的取数请求返回既有录播不可用错误。`getStatus` 中 `mode="replay"` 仍表示离线模式，不代表正在播放或允许播放；应结合可用流和运维策略判断。
+
+没有 SSH 运维入口时，可在网关本地执行 `sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control enable`（或 `disable`、`status`）。既有运维入口随 `neurobridge-ops update` 的部署流程刷新，无需重新配置 SSH、账号或密码；仅复制已授权入口的新版命令，不为未配置设备新增 SSH 授权。更多错误与审计语义见 [内部联调指南](../doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md#50-允许与禁止录播)。
 
 首次无头环冒烟验证可保持 `[ble].enabled = false`，此时 `getStatus` 应显示未连接；只要 `[recording].directory` 下存在非空历史会话，离线 `getLatest` 或 `subscribe` 就会自动选择最新会话并产生 `mode="replay"` 数据。若填写有效的 `replay_recording_id`，则该会话优先。实时采集验收还应覆盖头环连接、数据到达、断线重连和服务重启后的恢复。
 

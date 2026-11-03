@@ -20,5 +20,6 @@ fi
 
 echo "WARNING: Updating restarts the gateway; B-end WebSocket clients must reconnect and subscribe again."
 bash "$root_dir/linux/install-ubuntu.sh"
+bash "$root_dir/linux/refresh-operations-commands.sh"
 systemctl restart neurobridge.service
 systemctl --no-pager --full status neurobridge.service

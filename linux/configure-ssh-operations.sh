@@ -89,7 +89,7 @@ command -v runuser >/dev/null 2>&1 || fail "runuser is required for controlled S
 IFS= read -r operator_password || fail "--operator-password-stdin requires one password line on standard input."
 [[ "$operator_password" =~ ^[0-9]{6,}$ ]] || fail "Operator password must contain at least 6 digits."
 setup_source_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
-for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/install-ubuntu.sh; do
+for required in pyproject.toml requirements.lock linux/reload-ubuntu.sh linux/install-ubuntu.sh linux/operations/neurobridge-ops linux/operations/neurobridge-ops-command; do
   [[ -f "$setup_source_dir/$required" ]] || fail "SSH setup must run from a complete NeuroBridge checkout: missing $required"
 done
 /usr/bin/git -C "$setup_source_dir" rev-parse --is-inside-work-tree 2>/dev/null | grep -qx true \
@@ -445,163 +445,9 @@ case "${1:-}" in
 esac
 EOF
 
-cat >"$ops_cli_tmp" <<'EOF'
-#!/usr/bin/env bash
-# User-facing gateway operations command. Privileged operations are constrained
-# by /etc/sudoers.d/neurobridge-operator and root-owned helper scripts.
-set -euo pipefail
+cat "$setup_source_dir/linux/operations/neurobridge-ops" >"$ops_cli_tmp"
 
-usage() {
-  cat <<'USAGE'
-Usage: neurobridge-ops <command>
-
-Commands:
-  project                Show the fixed NeuroBridge project working directory.
-  branch                 Show the current branch of the managed project.
-  status                 Show current service state and the latest 200 logs.
-  logs [--lines N]       Show recent logs (default 200, maximum 1000).
-  logs --follow           Follow new gateway logs in real time; Ctrl-C stops it.
-  audit [--lines N]      Show SSH operations audit events (default 200, maximum 1000).
-  update [--branch NAME] Fetch NAME (default: current branch) from origin and reload.
-  start | stop | restart  Control the NeuroBridge gateway service.
-  help                   Show this help.
-USAGE
-}
-
-case "${1:-help}" in
-  project|branch)
-    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
-    exec sudo -- /usr/local/sbin/neurobridge-ops-command "$1"
-    ;;
-  status)
-    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
-    exec sudo -- /usr/local/sbin/neurobridge-ops-command status
-    ;;
-  logs)
-    shift
-    exec sudo -- /usr/local/sbin/neurobridge-ops-command logs "$@"
-    ;;
-  audit)
-    shift
-    exec sudo -- /usr/local/sbin/neurobridge-ops-command audit "$@"
-    ;;
-  update)
-    [[ $# -eq 1 || ( $# -eq 3 && $2 == --branch ) ]] || { usage >&2; exit 2; }
-    shift
-    exec sudo -- /usr/local/sbin/neurobridge-ops-command update "$@"
-    ;;
-  start|stop|restart)
-    [[ $# -eq 1 ]] || { usage >&2; exit 2; }
-    exec sudo -- /usr/local/sbin/neurobridge-ops-command "$1"
-    ;;
-  help|-h|--help)
-    usage
-    ;;
-  *)
-    usage >&2
-    exit 2
-    ;;
-esac
-EOF
-
-cat >"$command_tmp" <<'EOF'
-#!/usr/bin/env bash
-# Root-owned command gate and journal audit logger for SSH operations.
-set -euo pipefail
-export PATH=/usr/sbin:/usr/bin:/sbin:/bin
-export LC_ALL=C
-
-fail() {
-  echo "ERROR: $*" >&2
-  exit 2
-}
-
-[[ ${EUID} -eq 0 ]] || fail "This helper must run as root through sudo."
-
-operator=${SUDO_USER:-unknown}
-audit() {
-  local action=$1 request=$2 result=$3
-  /usr/bin/logger -p authpriv.notice -t neurobridge-ops-audit -- \
-    "operator=$operator action=$action request=$request result=$result"
-}
-
-run_and_audit() {
-  local action=$1 request=$2
-  shift 2
-  audit "$action" "$request" started
-  if "$@"; then
-    audit "$action" "$request" success
-    return 0
-  else
-    local status=$?
-    audit "$action" "$request" "failed:$status"
-    return "$status"
-  fi
-}
-
-lines=200
-parse_lines() {
-  if [[ $# -eq 0 ]]; then
-    return 0
-  fi
-  [[ $# -eq 2 && $1 == --lines && $2 =~ ^[0-9]+$ && $2 -ge 1 && $2 -le 1000 ]] \
-    || fail "Usage: neurobridge-ops $current_action [--lines N] (N: 1-1000)"
-  lines=$2
-}
-
-case "${1:-}" in
-  project)
-    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops project"
-    run_and_audit project path /usr/local/sbin/neurobridge-ops-update --print-project
-    ;;
-  branch)
-    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops branch"
-    run_and_audit branch current /usr/local/sbin/neurobridge-ops-update --print-branch
-    ;;
-  status)
-    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops status"
-    run_and_audit status status /usr/local/sbin/neurobridge-ops-status
-    ;;
-  logs)
-    shift
-    if [[ ${1:-} == --follow || ${1:-} == -f ]]; then
-      [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops logs [--follow|-f|--lines N]"
-      audit logs follow started
-      exec /usr/local/sbin/neurobridge-ops-logs --follow
-    fi
-    current_action=logs
-    parse_lines "$@"
-    run_and_audit logs "lines:$lines" /usr/local/sbin/neurobridge-ops-logs --lines "$lines"
-    ;;
-  audit)
-    shift
-    current_action=audit
-    parse_lines "$@"
-    run_and_audit audit "lines:$lines" /usr/bin/journalctl -t neurobridge-ops-audit -n "$lines" --no-pager
-    ;;
-  update)
-    if [[ $# -eq 1 ]]; then
-      branch=$(/usr/local/sbin/neurobridge-ops-update --print-branch) \
-        || fail "Cannot determine the current branch; specify update --branch <branch>."
-    elif [[ $# -eq 3 && $2 == --branch ]]; then
-      branch=$3
-    else
-      fail "Usage: neurobridge-ops update [--branch <branch>]"
-    fi
-    [[ -n "$branch" && "$branch" != -* && "$branch" != HEAD ]] \
-      && /usr/bin/git check-ref-format "refs/heads/$branch" \
-      || fail "--branch requires a valid branch name."
-    run_and_audit update "branch:$branch" /usr/local/sbin/neurobridge-ops-update --branch "$branch"
-    ;;
-  start|stop|restart)
-    [[ $# -eq 1 ]] || fail "Usage: neurobridge-ops start|stop|restart"
-    run_and_audit "$1" neurobridge.service /usr/bin/systemctl "$1" neurobridge.service
-    ;;
-  *)
-    fail "Usage: neurobridge-ops {project|branch|status|logs|audit|update|start|stop|restart}"
-    ;;
-esac
-EOF
+cat "$setup_source_dir/linux/operations/neurobridge-ops-command" >"$command_tmp"
 
 {
 cat <<'EOF'

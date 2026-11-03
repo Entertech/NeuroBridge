@@ -23,6 +23,9 @@ def unprivileged(script: str) -> str:
 
 
 def template(variable: str) -> str:
+    names = {"ops_cli_tmp": "neurobridge-ops", "command_tmp": "neurobridge-ops-command"}
+    if variable in names:
+        return (ROOT / "linux/operations" / names[variable]).read_text()
     match = re.search(r'cat >"\$' + variable + r'" <<\'EOF\'\n(.*?)\nEOF', SOURCE, re.S)
     assert match is not None
     return match[1]
