@@ -307,6 +307,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-11-03-ble-lifecycle-and-algorithm-isolation"
+date = "2026-11-03"
+scope = "gateway_capture_reliability"
+summary = "修复 Bleak 0.19 backend 断线回调身份比较，兼容旧连接回调隔离与轮询兜底；通知订阅前初始化算法并创建录制会话，保留启动首包及失败会话。串行化采集窗口与算法请求，超时/取消时隔离旧响应流，配置化算法评估和终止期限，终止失败升级 kill，避免重连清理无限阻塞。增加连接阶段、电量/佩戴、收包间隔、进程与清理耗时日志，提供显式启动、白名单过滤的 HCI 断连原因采集并沿用诊断包和日志轮转。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求修复 review 确认的四个缺陷并补充后续实测日志；不增加北向字段、动作或报文版本，不修改已锁定对外文档。合成故障与进程回归不等于 Ubuntu 实机验收，真实反复断连原因仍待控制器原因码与现场复测确认。"
+
+[[change_records]]
 id = "2026-11-03-b-client-charts-metrics-and-device-telemetry"
 date = "2026-11-03"
 scope = "b_side_visualization_and_device_status"
