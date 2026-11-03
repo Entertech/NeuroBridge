@@ -272,7 +272,7 @@ class RuntimeDiagnosticCollectorTests(unittest.TestCase):
             (logs / "gateway.toml").write_text("SECRET_CONFIGURATION")
             (logs / "raw.jsonl").write_text("PRIVATE_RAW_BYTES")
             (logs / "secret.log").symlink_to(logs / "gateway.toml")
-            script = Path(__file__).resolve().parents[1] / "linux/collect-runtime-diagnostics.sh"
+            script = Path(__file__).resolve().parents[1] / "linux/ubuntu/collect-runtime-diagnostics.sh"
             environment = dict(os.environ, PATH=f"{commands}{os.pathsep}{os.environ['PATH']}")
             environment.pop("SUDO_USER", None)
             result = subprocess.run(["bash", str(script), "--since", "2026-10-30 10:30:00", "--log-dir", str(logs), "--output-dir", str(output)], env=environment, capture_output=True, text=True, timeout=10, check=True)

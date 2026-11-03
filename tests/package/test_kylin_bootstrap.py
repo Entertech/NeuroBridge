@@ -128,9 +128,10 @@ class BootstrapPackageTests(unittest.TestCase):
                 "pyproject.toml",
                 "requirements.lock",
                 "sdk.lock",
-                "linux/setup-kylin-python.sh",
-                "linux/setup-kylin-algorithm.sh",
-                "linux/build-algorithm-bridge.sh",
+                "linux/kylin/setup-kylin-python.sh",
+                "linux/kylin/setup-kylin-algorithm.sh",
+                "linux/common/build-algorithm-bridge.sh",
+                "linux/kylin/build-algorithm-bridge.sh",
                 "mac/algorithm_bridge/CMakeLists.txt",
                 "mac/algorithm_bridge/affective_bridge.cpp",
                 "packaging/kylin/offline/cmake-3.31.6-linux-x86_64.tar.gz",
@@ -149,6 +150,8 @@ class BootstrapPackageTests(unittest.TestCase):
                 self.assertTrue(any((bundled / "python-runtime").glob("*.tar.gz")))
                 self.assertTrue(any((bundled / "wheelhouse").glob("*.whl")))
                 self.assertFalse((bundled / "runtime").exists())
+                self.assertFalse((bundled / "linux/ubuntu").exists())
+                self.assertFalse((bundled / "linux/install-ubuntu.sh").exists())
                 present["checked"] = True
                 Path(args[-1]).write_bytes(b"!<arch>\n" + b"\0" * 2048)
 

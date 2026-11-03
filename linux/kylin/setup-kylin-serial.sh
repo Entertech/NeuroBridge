@@ -35,11 +35,11 @@ Options:
   -h, --help                  Show this help
 
 Default project mode writes only below:
-  $(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/.runtime/
+  $(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)/.runtime/
 EOF
 }
 
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 config_path=
 device=auto
 restart_service=true
@@ -155,7 +155,7 @@ if [[ -z $python_path ]]; then
     echo "ERROR: no usable Python 3.11+ environment was found."
     echo "Checked the active environment, project .venv/venv, /opt installation, python3.11, and python3."
     echo "Prepare the ignored project environment from the project root:"
-    echo "  ./linux/setup-kylin-python.sh"
+    echo "  ./linux/kylin/setup-kylin-python.sh"
     echo "Then rerun this command, or pass --python /absolute/path/to/python."
   } >&2
   exit 1
@@ -223,7 +223,7 @@ if (( ${#tty_candidates[@]} )); then
   done
 else
   echo "WARNING: no ttyACM/ttyUSB device exists; no serial group membership was changed." >&2
-  echo "Connect and detect the actual device before granting permissions: sudo $root_dir/linux/diagnose-kylin-usb-serial.sh" >&2
+  echo "Connect and detect the actual device before granting permissions: sudo $root_dir/linux/kylin/diagnose-kylin-usb-serial.sh" >&2
 fi
 
 PYTHONPATH=$root_dir "$python_path" -m neurobridge.serial_setup --config "$config_path" --check-only
@@ -264,10 +264,10 @@ fi
 echo "service=$service_state"
 [[ -n $setup_log ]] && echo "setupLog=$setup_log"
 if [[ $runtime_ready == true && $system_install != true ]]; then
-  echo "run=$root_dir/linux/start-kylin-gateway.sh"
+  echo "run=$root_dir/linux/kylin/start-kylin-gateway.sh"
 elif [[ $runtime_ready != true ]]; then
   echo "WARNING: configuration succeeded, but pyserial is missing from $python_path" >&2
-  echo "Run ./linux/setup-kylin-python.sh before starting NeuroBridge." >&2
+  echo "Run ./linux/kylin/setup-kylin-python.sh before starting NeuroBridge." >&2
 fi
 if [[ $system_install == true ]]; then
   echo "logs=sudo journalctl -u neurobridge.service -f -o short-iso-precise"

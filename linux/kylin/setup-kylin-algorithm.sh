@@ -21,7 +21,7 @@ ask_yes_no() {
   done
 }
 
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 runtime_dir="$root_dir/.runtime"
 algorithm_dir="$runtime_dir/algorithm"
 config_path="$runtime_dir/config/gateway.toml"
@@ -45,7 +45,7 @@ package_dir="$root_dir/packaging/kylin/offline"
 
 usage() {
   cat <<EOF
-Usage: ./linux/setup-kylin-algorithm.sh
+Usage: ./linux/kylin/setup-kylin-algorithm.sh
 
 Builds the locked C++ algorithm bridge locally on Galaxy Kylin V10 with the selected native CPU profile,
 runs a non-biological empty-input process smoke test, and only then enables it
@@ -85,7 +85,7 @@ algorithm_setup_end() {
 }
 trap 'algorithm_setup_end "$?"' EXIT
 [[ -f $config_path && ! -L $config_path ]] || fail \
-  "Project configuration is missing. First run: sudo $root_dir/linux/setup-kylin-serial.sh"
+  "Project configuration is missing. First run: sudo $root_dir/linux/kylin/setup-kylin-serial.sh"
 NB_INPUT_LOCK="$root_dir/config/kylin-bootstrap-inputs.toml"
 . "$root_dir/packaging/kylin/platform.sh"
 if [[ -f $root_dir/packaging/kylin/diagnostic-context.sh ]]; then
@@ -113,7 +113,7 @@ for candidate in "$root_dir/.venv/bin/python" "$root_dir/venv/bin/python"; do
     break
   fi
 done
-[[ -n $python_path ]] || fail "Project Python environment is not ready. Run: $root_dir/linux/setup-kylin-python.sh"
+[[ -n $python_path ]] || fail "Project Python environment is not ready. Run: $root_dir/linux/kylin/setup-kylin-python.sh"
 [[ -f $root_dir/third_party/AffectiveCloud-Algorithm-SDK/cpp/package/CMakeLists.txt ]] \
   || fail "Locked AffectiveCloud algorithm SDK source is missing from third_party/."
 [[ -f $root_dir/third_party/NumCpp/CMakeLists.txt ]] \
@@ -385,7 +385,7 @@ attempt_dir="$algorithm_dir/attempt-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 install -d -m 0750 "$attempt_dir"
 echo "buildAttempt=$attempt_dir"
 
-PYTHON="$python_path" "$root_dir/linux/build-algorithm-bridge.sh" \
+PYTHON="$python_path" "$root_dir/linux/kylin/build-algorithm-bridge.sh" \
   "$root_dir/third_party" "$attempt_dir" \
   || fail "Algorithm bridge build failed. Configuration was not changed. Build log: $attempt_dir/build.log"
 
@@ -441,4 +441,4 @@ echo "algorithmReady=true"
 echo "bridge=$final_bridge"
 echo "config=$config_path"
 echo "log=$setup_log"
-echo "next=$root_dir/linux/start-kylin-gateway.sh"
+echo "next=$root_dir/linux/kylin/start-kylin-gateway.sh"

@@ -67,10 +67,10 @@ bridge=$source_root/.runtime/algorithm/neurobridge_affective_bridge
 
 [[ -x $python_runtime/bin/python3 && -x $bridge ]] || {
   printf 'Python runtime or algorithm bridge is not built yet; running the existing setup.\n'
-  NEUROBRIDGE_PORTABLE_PYTHON=1 "$source_root/linux/setup-kylin-python.sh"
+  NEUROBRIDGE_PORTABLE_PYTHON=1 "$source_root/linux/kylin/setup-kylin-python.sh"
   install -d -m 0750 "$source_root/.runtime/config"
   [[ -f $source_root/.runtime/config/gateway.toml ]] || cp "$source_root/config/gateway.toml.example" "$source_root/.runtime/config/gateway.toml"
-  "$source_root/linux/setup-kylin-algorithm.sh"
+  "$source_root/linux/kylin/setup-kylin-algorithm.sh"
 }
 [[ -x $python_runtime/bin/python3 ]] || fail "Python runtime was not produced at $python_runtime."
 [[ -x $bridge ]] || fail "Algorithm bridge was not produced at $bridge."
@@ -99,7 +99,7 @@ install -m 0755 "$bridge" "$stage/runtime/bin/neurobridge_affective_bridge"
 # interpreter copied above cannot import serial or websockets on its own.  Copy
 # the installed packages across.  The gateway source is copied separately.
 venv_site=("$source_root"/.venv/lib/python*/site-packages)
-[[ -d ${venv_site[0]} ]] || fail "No installed packages found in .venv. Run linux/setup-kylin-python.sh before building the archive."
+[[ -d ${venv_site[0]} ]] || fail "No installed packages found in .venv. Run linux/kylin/setup-kylin-python.sh before building the archive."
 runtime_site=$("$stage/runtime/bin/python" -c 'import site; print([p for p in site.getsitepackages() if p.endswith("site-packages")][0])')
 [[ -n $runtime_site && -d $runtime_site ]] || fail "The staged interpreter has no site-packages directory."
 runtime_prefix=$(cd "$stage/runtime/bin/python-runtime" && pwd -P)

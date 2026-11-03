@@ -2,14 +2,14 @@
 # Interactive, project-local Galaxy Kylin onboarding and recovery assistant.
 set -u -o pipefail
 
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 runtime_dir="$root_dir/.runtime"
 autostart_preference_path="$runtime_dir/config/kylin-autostart.conf"
 setup_log=
 
 usage() {
   cat <<'EOF'
-Usage: ./linux/setup-kylin-gateway.sh
+Usage: ./linux/kylin/setup-kylin-gateway.sh
 
 Galaxy Kylin project assistant. It provides a numeric menu for:
   1. Prepare everything needed and start with boot autostart (recommended)
@@ -44,14 +44,14 @@ if [[ ${1:-} == -h || ${1:-} == --help ]]; then
 fi
 [[ $# -eq 0 ]] || fail "Unknown option: $1"
 [[ ${EUID:-$(id -u)} -ne 0 ]] || fail \
-  "Run without sudo: ./linux/setup-kylin-gateway.sh"
+  "Run without sudo: ./linux/kylin/setup-kylin-gateway.sh"
 
 validate_project_root() {
   [[ -n $root_dir && $root_dir != / ]] || fail "Unsafe project root: $root_dir"
   [[ -f $root_dir/pyproject.toml ]] || fail "pyproject.toml is missing: $root_dir"
   [[ -d $root_dir/.git && ! -L $root_dir/.git ]] || fail \
     ".git must be a real directory in this checkout: $root_dir/.git"
-  [[ -f $root_dir/linux/setup-kylin-gateway.sh ]] || fail \
+  [[ -f $root_dir/linux/kylin/setup-kylin-gateway.sh ]] || fail \
     "Gateway assistant is missing from the validated project root."
 }
 
@@ -230,22 +230,22 @@ repair_and_update() {
     else
       export NEUROBRIDGE_RELOADED_MENU=1
     fi
-    exec bash "$root_dir/linux/setup-kylin-gateway.sh"
+    exec bash "$root_dir/linux/kylin/setup-kylin-gateway.sh"
   fi
   [[ $before_revision == "$after_revision" ]] && log_message "代码已经是最新版本。"
 }
 
 check_current_serial() {
   run_step "检查当前 USB/串口（无需拔插）" \
-    sudo "$root_dir/linux/diagnose-kylin-usb-serial.sh"
+    sudo "$root_dir/linux/kylin/diagnose-kylin-usb-serial.sh"
 }
 
 generate_serial_config() {
-  run_step "生成 USB 串口运行配置" sudo "$root_dir/linux/setup-kylin-serial.sh"
+  run_step "生成 USB 串口运行配置" sudo "$root_dir/linux/kylin/setup-kylin-serial.sh"
 }
 
 setup_algorithm() {
-  run_step "编译、自检并启用本地算法" "$root_dir/linux/setup-kylin-algorithm.sh"
+  run_step "编译、自检并启用本地算法" "$root_dir/linux/kylin/setup-kylin-algorithm.sh"
 }
 
 start_gateway() {
@@ -253,7 +253,7 @@ start_gateway() {
     && systemctl is-active --quiet neurobridge.service 2>/dev/null; then
     log_message "NeuroBridge 已由 systemd 后台运行，无需重复启动。"
     log_message "浏览器：http://127.0.0.1:8080/"
-    show_menu_action 9 "./linux/setup-kylin-autostart.sh status"
+    show_menu_action 9 "./linux/kylin/setup-kylin-autostart.sh status"
     return 0
   fi
   if [[ -f $autostart_preference_path && ! -L $autostart_preference_path ]] \
@@ -263,7 +263,7 @@ start_gateway() {
     log_message "按 Ctrl+C 停止网关并返回菜单。"
     # A gateway may run indefinitely; run_step's setup tee is only for finite
     # installation commands. Runtime logs already rotate inside Python.
-    "$root_dir/linux/start-kylin-gateway.sh"
+    "$root_dir/linux/kylin/start-kylin-gateway.sh"
     local result=$?
     log_message "result=$result step=以前台方式启动 NeuroBridge"
     return "$result"
@@ -274,14 +274,14 @@ start_gateway() {
     return 1
   fi
   log_message "默认使用 systemd 开机自启；如需非自启，请在菜单 9 中选择停止并禁用。"
-  run_step "安装/更新并启动 systemd 网关" "$root_dir/linux/setup-kylin-autostart.sh" enable
+  run_step "安装/更新并启动 systemd 网关" "$root_dir/linux/kylin/setup-kylin-autostart.sh" enable
   return $?
 }
 
 export_diagnostics() {
   local latest_archive
   run_step "导出完整诊断包" \
-    sudo "$root_dir/linux/collect-kylin-runtime-diagnostics.sh" --journal-lines 10000
+    sudo "$root_dir/linux/kylin/collect-kylin-runtime-diagnostics.sh" --journal-lines 10000
   latest_archive=$(find "$runtime_dir/logs/diagnostics" -maxdepth 1 -type f -name '*.zip' \
     -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
   if [[ -n $latest_archive && -f $latest_archive ]]; then
@@ -431,7 +431,7 @@ check_gateway_capture() {
   fi
   if command -v timeout >/dev/null 2>&1; then
     run_step "跟踪启动脚本（最多 15 秒）" \
-      timeout 15s bash -x "$root_dir/linux/start-kylin-gateway.sh" || true
+      timeout 15s bash -x "$root_dir/linux/kylin/start-kylin-gateway.sh" || true
   else
     log_message "timeout 不可用，跳过启动脚本跟踪。"
   fi
@@ -459,11 +459,11 @@ EOF
   IFS= read -r autostart_choice || return 0
   log_message "autostartSelected=$autostart_choice"
   case $autostart_choice in
-    1) run_step "启用并启动 systemd 网关" "$root_dir/linux/setup-kylin-autostart.sh" enable ;;
-    2) run_step "查看 systemd 网关状态" "$root_dir/linux/setup-kylin-autostart.sh" status ;;
+    1) run_step "启用并启动 systemd 网关" "$root_dir/linux/kylin/setup-kylin-autostart.sh" enable ;;
+    2) run_step "查看 systemd 网关状态" "$root_dir/linux/kylin/setup-kylin-autostart.sh" status ;;
     3)
       if ask_yes_no "是否停止网关并显式配置为非自启？"; then
-        run_step "停止并禁用 systemd 网关" "$root_dir/linux/setup-kylin-autostart.sh" disable
+        run_step "停止并禁用 systemd 网关" "$root_dir/linux/kylin/setup-kylin-autostart.sh" disable
       else
         log_message "已取消非自启配置。"
       fi
@@ -474,7 +474,7 @@ EOF
 }
 
 retire_project() {
-  local retire_choice result uninstall_script="$root_dir/linux/uninstall-kylin-project.sh"
+  local retire_choice result uninstall_script="$root_dir/linux/kylin/uninstall-kylin-project.sh"
   retire_removed_source=false
   if [[ ! -x $uninstall_script ]]; then
     log_message "缺少卸载脚本：$uninstall_script"
@@ -527,8 +527,8 @@ prepare_and_start() {
   if python_environment_ready; then
     log_message "Python 环境已就绪，跳过重复安装。"
   else
-    run_step "初始化项目 Python 环境" "$root_dir/linux/setup-kylin-python.sh" || {
-      show_menu_action 1 "./linux/setup-kylin-python.sh"
+    run_step "初始化项目 Python 环境" "$root_dir/linux/kylin/setup-kylin-python.sh" || {
+      show_menu_action 1 "./linux/kylin/setup-kylin-python.sh"
       return 1
     }
   fi
@@ -537,11 +537,11 @@ prepare_and_start() {
   serial_result=$?
   if (( serial_result == 2 )); then
     log_message "未找到当前 USB 串口，已停止且不会启动网关。确认耳机 USB 已插好后输入 4 重试。"
-    show_menu_action 4 "sudo ./linux/diagnose-kylin-usb-serial.sh"
+    show_menu_action 4 "sudo ./linux/kylin/diagnose-kylin-usb-serial.sh"
     return 1
   elif (( serial_result != 0 )); then
     log_message "USB/串口检查执行失败或被中断，不进入后续配置。"
-    show_menu_action 4 "sudo ./linux/diagnose-kylin-usb-serial.sh"
+    show_menu_action 4 "sudo ./linux/kylin/diagnose-kylin-usb-serial.sh"
     return "$serial_result"
   fi
 
@@ -549,7 +549,7 @@ prepare_and_start() {
     log_message "串口运行配置已存在，跳过重复生成。需要重置时返回菜单输入 5。"
   else
     generate_serial_config || {
-      show_menu_action 5 "sudo ./linux/setup-kylin-serial.sh"
+      show_menu_action 5 "sudo ./linux/kylin/setup-kylin-serial.sh"
       return 1
     }
   fi
@@ -558,7 +558,7 @@ prepare_and_start() {
   else
     setup_algorithm || {
       log_message "算法尚未准备成功。为保证不会提前发送 E1，本次不启动网关。"
-      show_menu_action 6 "./linux/setup-kylin-algorithm.sh"
+      show_menu_action 6 "./linux/kylin/setup-kylin-algorithm.sh"
       return 1
     }
   fi
@@ -605,7 +605,7 @@ while true; do
     1) prepare_and_start || true ;;
     2)
       start_gateway || true
-      show_menu_action 2 "./linux/start-kylin-gateway.sh"
+      show_menu_action 2 "./linux/kylin/start-kylin-gateway.sh"
       ;;
     3)
       repair_and_update menu
@@ -617,16 +617,16 @@ while true; do
         log_message "检查完成。输入 1 可继续一键准备并启动，输入 5 可重新生成串口配置。"
       elif (( result == 2 )); then
         log_message "未找到串口。确认 USB 已连接后再次输入 4；如需拔插差分诊断，请执行带 --plug-cycle 的高级命令。"
-        show_menu_action 4 "sudo ./linux/diagnose-kylin-usb-serial.sh --plug-cycle --timeout 60"
+        show_menu_action 4 "sudo ./linux/kylin/diagnose-kylin-usb-serial.sh --plug-cycle --timeout 60"
       else
-        show_menu_action 4 "sudo ./linux/diagnose-kylin-usb-serial.sh"
+        show_menu_action 4 "sudo ./linux/kylin/diagnose-kylin-usb-serial.sh"
       fi
       ;;
     5)
       if generate_serial_config; then
         log_message "串口配置已生成。输入 1 继续准备并启动，或输入 2 直接启动。"
       else
-        show_menu_action 1 "./linux/setup-kylin-python.sh"
+        show_menu_action 1 "./linux/kylin/setup-kylin-python.sh"
       fi
       ;;
     6)

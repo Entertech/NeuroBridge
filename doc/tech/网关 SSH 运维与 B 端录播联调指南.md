@@ -26,8 +26,8 @@ SSH 只用于网关运维且为可选入口；B 端取数、订阅仍使用既�
 
 SSH 运维入口由下列文件提供：
 
-- `linux/setup-ssh-operations.sh`：交互式一键配置入口；
-- `linux/configure-ssh-operations.sh`：可自动化调用的严格配置器；
+- `linux/ubuntu/setup-ssh-operations.sh`：交互式一键配置入口；
+- `linux/ubuntu/configure-ssh-operations.sh`：可自动化调用的严格配置器；
 - `config/ssh-operations.example.txt`：快速模式配置模板；首次运行时据此生成 Git 忽略的 `config/ssh-operations.txt`；
 - 可选 SSH 运维命令：`neurobridge-ops`，仅显式配置后安装；本机录播命令见第 5.0 节。
 
@@ -36,15 +36,15 @@ SSH 运维入口由下列文件提供：
 确认网关部署的批准分支已经包含上述文件；否则应先合入对应的 SSH 运维变更，再部署到现场。部署后使用以下命令确认文件存在：
 
 ```bash
-test -x linux/setup-ssh-operations.sh
-test -x linux/configure-ssh-operations.sh
+test -x linux/ubuntu/setup-ssh-operations.sh
+test -x linux/ubuntu/configure-ssh-operations.sh
 test -f config/ssh-operations.example.txt
 ```
 
 首次准备环境时必须完成：
 
 ```bash
-sudo ./linux/prepare-ubuntu24.04-environment.sh
+sudo ./linux/ubuntu/prepare-ubuntu24.04-environment.sh
 ```
 
 该命令在可访问受控软件源时安装 `openssh-server`，但会保持 `ssh.socket` 和 `ssh.service` 停用。Ubuntu 24.04 安装 OpenSSH 后可能自动启用 socket 激活；环境准备脚本会一并关闭该通配监听，避免它提前占用 22 端口。现场已经隔离、只剩网关与 B 端直连时，不能再依赖该直连网络临时安装缺失的 OpenSSH 包；应在隔离前完成准备，或按现场受控的软件交付流程补齐系统包。
@@ -194,7 +194,7 @@ port=22
 ```bash
 install -m 600 config/ssh-operations.example.txt config/ssh-operations.txt
 nano config/ssh-operations.txt
-sudo ./linux/setup-ssh-operations.sh --quick
+sudo ./linux/ubuntu/setup-ssh-operations.sh --quick
 ```
 
 也可以直接执行最后一条命令；脚本会自动创建配置文件，并逐项询问其中缺少的值。配置完整时，`--quick` 只显示参数摘要并要求输入最终 `YES` 确认。密码值不会回显、进入命令参数或写入日志，但它在该 TXT 中是明文，因此必须保持权限 `600`，不得复制到现场记录、聊天、日志或版本库。配置文件含明文密码但权限允许组或其他用户读取时，脚本会拒绝继续。
@@ -202,7 +202,7 @@ sudo ./linux/setup-ssh-operations.sh --quick
 原快速命令仍兼容；命令中的 IP 会覆盖文件里的 `allow_from`：
 
 ```bash
-sudo ./linux/setup-ssh-operations.sh --quick 192.168.88.20
+sudo ./linux/ubuntu/setup-ssh-operations.sh --quick 192.168.88.20
 ```
 
 配置中没有监听 IP、并且设备也未检测到可用私有 IP 时，脚本会提示输入且不展示默认值。网关有多块私网网卡时，应在文件中明确填写目标地址，不能依赖脚本选择第一个地址。快速模式只接受单台来源；需要允许一个来源网段时使用完整模式。
@@ -212,7 +212,7 @@ sudo ./linux/setup-ssh-operations.sh --quick 192.168.88.20
 需要自定义账号、监听 IP、来源网段或 SSH 端口时，继续使用原有无参数命令：
 
 ```bash
-sudo ./linux/setup-ssh-operations.sh
+sudo ./linux/ubuntu/setup-ssh-operations.sh
 ```
 
 按现场值回答提示。直连示例：
@@ -236,7 +236,7 @@ Ubuntu 24.04 可能同时提供 `ssh.socket` 和 `ssh.service`。配置器会在
 如果需要接入自动化部署，可使用非交互入口。密码必须由受控的标准输入提供，不能出现在参数或版本库中：
 
 ```bash
-printf '%s\n' '<至少6位数字密码>' | sudo ./linux/configure-ssh-operations.sh \
+printf '%s\n' '<至少6位数字密码>' | sudo ./linux/ubuntu/configure-ssh-operations.sh \
   --operator-user neuroops \
   --operator-password-stdin \
   --listen-address 192.168.88.10 \
@@ -371,13 +371,13 @@ neurobridge-ops replay status
 
 它表示“保存的配置禁止录播、服务活动、本次仅查询”，不表示查询失败，也不证明当前进程已加载该配置。启用/禁用输出 `applied=true` 表示完成运行中服务的重启/活动检查；`false` 表示原本停止，仅保存配置。该字段不是设备或数据验收结果。禁止录播时，`mode` 必须为 `live`，即使头环未连接；这表示等待实时设备，不代表实时数据已就绪。允许录播且头环未连接时才可为 `replay`，但仍须核对可读会话和实际取数结果。完整字段说明和本机部署步骤见 [Linux 运行说明](../../linux/README.md#61-在网关本机管理录播无需-ssh)。
 
-若出现 `No module named neurobridge.replay_control`，先由本机管理员将批准的新源码部署到 `/opt/neurobridge`：在已更新的源码根目录运行 `sudo bash linux/reload-ubuntu.sh`，按脚本提示处理需要完整更新的情形。仅更新源码或重启旧服务不能安装新模块。`neurobridge-ops: command not found` 则说明可选运维入口缺失，优先使用上述本机入口。
+若出现 `No module named neurobridge.replay_control`，先由本机管理员将批准的新源码部署到 `/opt/neurobridge`：在已更新的源码根目录运行 `sudo bash linux/ubuntu/reload-ubuntu.sh`，按脚本提示处理需要完整更新的情形。仅更新源码或重启旧服务不能安装新模块。`neurobridge-ops: command not found` 则说明可选运维入口缺失，优先使用上述本机入口。
 
 通过 SSH 命令闸口执行的动作进入 `neurobridge-ops-audit`，记录开始/成功/失败。本机直接执行模块不经过该 SSH 闸口，应结合 sudo、服务启动和运行日志核对。应用更新流程会刷新已有授权的 CLI/命令闸口，不配置或重启 SSH、不创建授权、不更改账号密码，也不重建旧版更新辅助器。
 
 ## 5.1 一键更新代码并重新加载
 
-`neurobridge-ops update` 不接收任意源码路径，只操作 `neurobridge-ops project` 显示的固定 Git 工作目录。它先确认工作树没有本地修改，默认读取当前分支，或使用 `--branch <分支名>` 显式选择 `origin` 上的分支；获取该分支并只允许快进更新，最后验证项目完整性、文件归属、组/其他用户写权限和符号链接，并调用其中的 `linux/reload-ubuntu.sh` 重新加载网关。
+`neurobridge-ops update` 不接收任意源码路径，只操作 `neurobridge-ops project` 显示的固定 Git 工作目录。它先确认工作树没有本地修改，默认读取当前分支，或使用 `--branch <分支名>` 显式选择 `origin` 上的分支；获取该分支并只允许快进更新，最后验证项目完整性、文件归属、组/其他用户写权限和符号链接，并调用其中的 `linux/ubuntu/reload-ubuntu.sh` 重新加载网关。
 
 取得变更授权且网关能访问批准的代码源后，SSH 登录只执行：
 
@@ -387,7 +387,7 @@ neurobridge-ops update
 
 该命令不会创建合并提交，也不会接受临时路径或覆盖现场修改。若工作树有修改、指定远端分支不存在、本地领先或分叉而无法从 `origin` 快进更新，或网关处于隔离网络，命令会失败；不要改用手工 Git、`rsync` 或未知文件绕过检查，应联系网关交付方按批准流程处理。更新成功后会安装源码、更新 Python 包、重新加载 systemd 单元并重启网关。B 端 WebSocket 会断开，恢复后必须重新连接、调用 `getStatus` 并重新订阅。更新失败时，同一个运维账号执行 `neurobridge-ops logs --lines 500` 和 `neurobridge-ops audit --lines 100`，保留错误摘要后联系交付方。
 
-旧版入口升级到分支参数版时，由交付方在网关本地控制台，从包含新功能的批准源码重新运行 `sudo ./linux/setup-ssh-operations.sh`，再验证 `neurobridge-ops branch` 和 `neurobridge-ops help`。新版部署流程会刷新已有授权的 CLI/命令闸口；旧版 `neurobridge-ops-update` 辅助器的迁移仍需上述本地配置，首次启用 SSH 也必须显式配置。`branch` 为只读查询，工作树有修改时仍可执行；detached HEAD 无当前分支，无参数更新会失败，须使用 `update --branch <分支名>`。只在远端存在的分支可自动建立本地同名分支；原分支不会被删除或重置。更新日志和审计记录实际分支与结果。
+旧版入口升级到分支参数版时，由交付方在网关本地控制台，从包含新功能的批准源码重新运行 `sudo ./linux/ubuntu/setup-ssh-operations.sh`，再验证 `neurobridge-ops branch` 和 `neurobridge-ops help`。新版部署流程会刷新已有授权的 CLI/命令闸口；旧版 `neurobridge-ops-update` 辅助器的迁移仍需上述本地配置，首次启用 SSH 也必须显式配置。`branch` 为只读查询，工作树有修改时仍可执行；detached HEAD 无当前分支，无参数更新会失败，须使用 `update --branch <分支名>`。只在远端存在的分支可自动建立本地同名分支；原分支不会被删除或重置。更新日志和审计记录实际分支与结果。
 
 ## 6. B 端录播联调步骤
 
@@ -418,7 +418,7 @@ neurobridge-ops update
 服务自动写入 journal 与持久化轮转日志，不需要额外打开日志采集脚本。需要导出最近约三天时，在网关本机执行：
 
 ```bash
-sudo /opt/neurobridge/linux/collect-runtime-diagnostics.sh --since '72 hours ago' --output-dir /tmp
+sudo /opt/neurobridge/linux/ubuntu/collect-runtime-diagnostics.sh --since '72 hours ago' --output-dir /tmp
 ```
 
 脚本只在导出时手动运行，不参与日常日志生成。实际覆盖范围受系统 journal 与轮转保留情况影响。若只查今天之前的应用日志，可直接使用 journal 的结束时间，不能给采集脚本传未支持的 `--until`：
@@ -481,7 +481,7 @@ B 端网卡配置同网段不同地址（例如 `192.168.88.20/24`）后，直�
 
 先保留故障时刻与日志，再重启或更新。网络发送异常、超时或订阅事件积压会关闭对应 B 端连接；采集和蓝牙重连不等待网络发送，原始字节与算法结果继续独立保存。恢复后 B 端需重新连接、`getStatus`、订阅，旧订阅不能复用；该处理不启用心跳或补传。
 
-在网关本地项目目录运行 `sudo ./linux/collect-runtime-diagnostics.sh`，可一次导出最近 72 小时的网关、网络、BlueZ、内核和运维日志，当前系统状态及全部现存应用轮转日志。该入口只读，不要求 `.git`，也不依赖 SSH 是否已经启用；详细参数、配置项和日志字段见 [Ubuntu 运行诊断与日志采集](../../linux/README.md#运行诊断与日志采集)。远程受限 `neurobridge-ops logs` 仍只查询应用 journal；系统采集脚本须由本地具备权限的管理员执行。
+在网关本地项目目录运行 `sudo ./linux/ubuntu/collect-runtime-diagnostics.sh`，可一次导出最近 72 小时的网关、网络、BlueZ、内核和运维日志，当前系统状态及全部现存应用轮转日志。该入口只读，不要求 `.git`，也不依赖 SSH 是否已经启用；详细参数、配置项和日志字段见 [Ubuntu 运行诊断与日志采集](../../linux/README.md#运行诊断与日志采集)。远程受限 `neurobridge-ops logs` 仍只查询应用 journal；系统采集脚本须由本地具备权限的管理员执行。
 
 网络按 `bootId/sessionId/subscriptionId` 对照发送错误、队列积压、连接关闭和网络快照，蓝牙按 `attempt` 对照扫描匹配数量、扫描 RSSI、连接失败阶段、连接持续时间及最后收包时间。仅扫描不到设备不能算成一次蓝牙掉线，网络发送报错不能当成蓝牙底层断开原因；`backendReason=unavailable` 表示当前回调未提供 HCI 原因。周期网络快照也不能代替故障时的两端 IP/掩码、路由和 ping 结果。
 

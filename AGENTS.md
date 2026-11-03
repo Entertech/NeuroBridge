@@ -15,6 +15,12 @@
 - Ubuntu 24.04 x86_64 固定使用 `ubuntu_headband_wired` / `data_source.type="bluetooth"` / `access.mode="wired_b_side"`，链路为头环 → BLE → 网关 → 专用有线网络 → B 端，禁用 `local_ui`。Ubuntu 使用 `config/gateway.ubuntu.toml.example`，不得套用串口耳机模板。
 - 各平台共用 Bootstrap、ApplicationService、算法和存储接口；平台入口不得自行创建第二套生产 Gateway 或直接把设备回调接到旧兼容 facade。Ubuntu 录播还受 `[recording].replay_enabled` 约束；该策略不得使串口 Profile 开启录播。
 
+## Linux 目录边界
+
+- 麒麟脚本及 systemd 渲染器只放在 `linux/kylin/`，Ubuntu 部署、SSH、systemd 模板和日志轮转只放在 `linux/ubuntu/`。
+- `linux/common/` 仅放无平台部署策略的复用实现；平台目录可调用 common，common 不导入平台目录，麒麟与 Ubuntu 不互相调用。
+- `linux/` 根目录旧脚本仅为已发布命令和已安装服务提供兼容转发；新代码、CI 和内部使用说明必须引用明确的平台入口。麒麟引导包只携带 `linux/kylin/` 与 `linux/common/`。
+
 ## 数据与协议规则
 
 - 本机可视化前端（兼容模式下为 B 端）按需拉取数据：小数据使用 `getLatest`；连续波形/节律必须经 `subscribe` 启动、每 600 ms 一组或一批发送，并可由 `unsubscribe` 停止。

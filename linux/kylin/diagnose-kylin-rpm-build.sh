@@ -35,14 +35,14 @@
 # running gateway even if it were executed by mistake.  rpmbuild -bb never runs
 # %post/%preun/%postun: they are only packaged as scriptlets.
 #
-# Usage:  ./linux/diagnose-kylin-rpm-build.sh
+# Usage:  ./linux/kylin/diagnose-kylin-rpm-build.sh
 #         NEUROBRIDGE_KYLIN_RUNTIME_ROOT=/opt/neurobridge-release-inputs \
-#           ./linux/diagnose-kylin-rpm-build.sh
+#           ./linux/kylin/diagnose-kylin-rpm-build.sh
 
 set -uo pipefail
 
 scratch=/tmp/neurobridge-rpm-diagnose
-repo=$(cd "$(dirname "$0")/.." && pwd)
+repo=$(cd "$(dirname "$0")/../.." && pwd)
 runtime_root=${NEUROBRIDGE_KYLIN_RUNTIME_ROOT:-/opt/neurobridge-release-inputs}
 runtime=$runtime_root/kylin-server-x86_64-rpm/runtime
 
@@ -448,7 +448,7 @@ CI 的构建跑在自托管 runner 里，它没有控制终端、通常也没有
        tools/build-native-package.py 里给 rpmbuild 加 --define "_tmppath <目录>"
      上面的 TEST E 就是验证这条路。
   2. 调整 runner 侧的 KYSEC 策略，使 runner 用户执行 /var/tmp 下的临时脚本
-     不需要弹框（linux/setup-kylin-release-runner.sh 里补一条并写进文档）。
+     不需要弹框（linux/kylin/setup-kylin-release-runner.sh 里补一条并写进文档）。
 
 请把上面的完整输出发回，我按结果改代码。
 MSG

@@ -118,7 +118,7 @@ class OperationalLoggingTests(unittest.TestCase):
 
     def test_bootstrap_does_not_capture_foreground_runtime_output(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        source = (root / "linux/neurobridge-kylin-bootstrap.sh").read_text()
+        source = (root / "linux/kylin/neurobridge-kylin-bootstrap.sh").read_text()
         launch = source[source.index('bootstrap_log="$project_dir/.runtime/logs/kylin-bootstrap-'):]
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
@@ -137,12 +137,12 @@ class OperationalLoggingTests(unittest.TestCase):
 
     def test_menu_foreground_start_does_not_tee_into_setup_log(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        source = (root / "linux/setup-kylin-gateway.sh").read_text()
+        source = (root / "linux/kylin/setup-kylin-gateway.sh").read_text()
         function = source.split('start_gateway() {', 1)[1].split('\n}\n', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
-            (project / "linux").mkdir()
-            start = project / "linux/start-kylin-gateway.sh"
+            (project / "linux" / "kylin").mkdir(parents=True)
+            start = project / "linux/kylin/start-kylin-gateway.sh"
             start.write_text('#!/bin/sh\nprintf "runtime-output\\n"; exit 7\n')
             start.chmod(0o755)
             preference = project / "preference"
@@ -157,7 +157,7 @@ class OperationalLoggingTests(unittest.TestCase):
 
     def test_kylin_runtime_output_has_only_one_bounded_persistent_copy(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        source = (root / "linux/start-kylin-gateway.sh").read_text()
+        source = (root / "linux/kylin/start-kylin-gateway.sh").read_text()
         # Run the real post-validation launch path with a synthetic Python
         # executable, skipping host/TTY checks on the development machine.
         launch = source[source.index('install -d -m 0750 \\\n'):]

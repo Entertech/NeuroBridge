@@ -269,12 +269,12 @@ class OperationsRefreshTests(unittest.TestCase):
             root=Path(directory)
             local=root/'usr/local';(local/'bin').mkdir(parents=True);(local/'sbin').mkdir()
             etc=root/'etc/sudoers.d';etc.mkdir(parents=True)
-            source=root/'checkout/linux';source.mkdir(parents=True)
+            source=root/'checkout/linux/ubuntu';source.mkdir(parents=True)
             (source/'operations').mkdir()
             for name in ['neurobridge-ops','neurobridge-ops-command']:
-                (source/'operations'/name).write_text((ROOT/'linux/operations'/name).read_text())
+                (source/'operations'/name).write_text((ROOT/'linux/ubuntu/operations'/name).read_text())
             refresh=source/'refresh-operations-commands.sh'
-            script=(ROOT/'linux/refresh-operations-commands.sh').read_text()
+            script=(ROOT/'linux/ubuntu/refresh-operations-commands.sh').read_text()
             script=script.replace('[[ ${EUID} -eq 0 && $# -eq 0 ]]','[[ $# -eq 0 ]]').replace('/etc/sudoers.d',str(etc)).replace('/usr/local',str(local)).replace('install -o root -g root','install')
             refresh.write_text(script)
             subprocess.run(['bash',str(refresh)],check=True)

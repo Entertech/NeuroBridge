@@ -5,10 +5,10 @@ set -euo pipefail
 unit_name=neurobridge.service
 unit_path="/etc/systemd/system/$unit_name"
 managed_marker="# Managed by NeuroBridge Galaxy Kylin project autostart"
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 runtime_dir="$root_dir/.runtime"
-start_script="$root_dir/linux/start-kylin-gateway.sh"
-unit_renderer="$root_dir/linux/lib/kylin-systemd-unit.sh"
+start_script="$root_dir/linux/kylin/start-kylin-gateway.sh"
+unit_renderer="$root_dir/linux/kylin/lib/kylin-systemd-unit.sh"
 config_path="$runtime_dir/config/gateway.toml"
 preference_path="$runtime_dir/config/kylin-autostart.conf"
 action=${1:-}
@@ -20,7 +20,7 @@ fail() {
 
 usage() {
   cat <<'EOF'
-Usage: ./linux/setup-kylin-autostart.sh enable|status|disable
+Usage: ./linux/kylin/setup-kylin-autostart.sh enable|status|disable
 
   enable   Install/update neurobridge.service, enable it for every boot, and
            start it now as the current desktop user.
@@ -83,7 +83,7 @@ case $action in
 esac
 
 [[ ${EUID:-$(id -u)} -ne 0 ]] || fail \
-  "Run without sudo: ./linux/setup-kylin-autostart.sh $action"
+  "Run without sudo: ./linux/kylin/setup-kylin-autostart.sh $action"
 [[ -n $root_dir && $root_dir != / && -f $root_dir/pyproject.toml ]] || fail \
   "Invalid NeuroBridge project root: $root_dir"
 [[ -d $root_dir/.git && ! -L $root_dir/.git ]] || fail \
@@ -125,7 +125,7 @@ fi
 [[ -x $start_script && ! -L $start_script ]] || fail "Startup script is missing or unsafe: $start_script"
 [[ -f $unit_renderer && ! -L $unit_renderer ]] || fail \
   "Systemd unit renderer is missing or unsafe: $unit_renderer"
-# shellcheck source=linux/lib/kylin-systemd-unit.sh
+# shellcheck source=linux/kylin/lib/kylin-systemd-unit.sh
 . "$unit_renderer"
 [[ -f $config_path && ! -L $config_path ]] || fail \
   "Project configuration is missing. Choose menu 1 before enabling autostart."

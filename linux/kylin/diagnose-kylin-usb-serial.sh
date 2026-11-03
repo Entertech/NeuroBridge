@@ -4,12 +4,12 @@
 # observed. No serial payload or recording is collected.
 set -u -o pipefail
 
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 default_output_dir="$root_dir/.runtime/logs/diagnostics"
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./linux/diagnose-kylin-usb-serial.sh [options]
+Usage: sudo ./linux/kylin/diagnose-kylin-usb-serial.sh [options]
 
 Options:
   --plug-cycle        Observe an explicit unplug/plug cycle instead of checking
@@ -375,12 +375,12 @@ if [[ $detection_mode == current ]]; then
     result_code=0
     log "成功：检测到当前串口候选；目标设备将在网关启动后通过固定握手确认："
     sed 's/^/  /' "$result_tty_file" | tee -a "$console_log"
-    log "下一步执行：sudo ./linux/setup-kylin-serial.sh"
+    log "下一步执行：sudo ./linux/kylin/setup-kylin-serial.sh"
   else
     result_status=current_tty_not_detected
     result_code=2
     log "未检测到当前 ttyACM/ttyUSB/by-id 串口节点；已保存当前 USB、接口、驱动和内核快照。"
-    log "先检查接线、供电和 USB 数据线；如需观察插入瞬间，再执行：sudo ./linux/diagnose-kylin-usb-serial.sh --plug-cycle --timeout ${timeout_seconds}"
+    log "先检查接线、供电和 USB 数据线；如需观察插入瞬间，再执行：sudo ./linux/kylin/diagnose-kylin-usb-serial.sh --plug-cycle --timeout ${timeout_seconds}"
   fi
   finalize
   exit "$result_code"
@@ -442,7 +442,7 @@ if [[ $tty_seen == true ]]; then
   result_code=0
   log "成功：检测到新的串口节点："
   sed 's/^/  /' "$session_dir/new-tty-paths.log" | tee -a "$console_log"
-  log "下一步执行：sudo ./linux/setup-kylin-serial.sh"
+  log "下一步执行：sudo ./linux/kylin/setup-kylin-serial.sh"
 elif [[ $usb_seen == true ]]; then
   result_status=usb_detected_tty_timeout
   result_code=2

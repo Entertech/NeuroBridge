@@ -9,7 +9,7 @@ fail() {
 }
 
 [[ $# -eq 0 ]] || fail "Usage: $0"
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 result="/tmp/neurobridge-ubuntu-build-diagnostics-$stamp.tar.gz"
 archive_owner=${SUDO_USER:-$(id -un)}

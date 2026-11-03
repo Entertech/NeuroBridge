@@ -10,9 +10,9 @@ unit_name=neurobridge.service
 unit_path="/etc/systemd/system/$unit_name"
 managed_marker="# Managed by NeuroBridge Galaxy Kylin project autostart"
 script_path=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 runtime_dir="$root_dir/.runtime"
-start_script="$root_dir/linux/start-kylin-gateway.sh"
+start_script="$root_dir/linux/kylin/start-kylin-gateway.sh"
 config_path="$runtime_dir/config/gateway.toml"
 preference_path="$runtime_dir/config/kylin-autostart.conf"
 port_pattern='127\.0\.0\.1:(8080|8765|8766)([[:space:]]|$)'
@@ -30,7 +30,7 @@ fail() {
 
 usage() {
   cat <<'EOF'
-Usage: ./linux/uninstall-kylin-project.sh <action> [options]
+Usage: ./linux/kylin/uninstall-kylin-project.sh <action> [options]
 
 Actions:
   status      Report the managed unit, leftover gateway processes, listening
@@ -53,9 +53,9 @@ for the exact systemd changes and for deleting files owned by root. A managed
 unit that was not installed by this project is never touched.
 
 Examples:
-  ./linux/uninstall-kylin-project.sh status
-  ./linux/uninstall-kylin-project.sh uninstall
-  ./linux/uninstall-kylin-project.sh purge --yes
+  ./linux/kylin/uninstall-kylin-project.sh status
+  ./linux/kylin/uninstall-kylin-project.sh uninstall
+  ./linux/kylin/uninstall-kylin-project.sh purge --yes
 EOF
 }
 
@@ -139,8 +139,12 @@ unit_state() {
 unit_references_this_checkout() {
   # The unit renderer doubles '%' for systemd specifier expansion, so accept
   # both the raw path and the escaped form.
-  sudo grep -Fq -- "$start_script" "$unit_path" 2>/dev/null && return 0
-  sudo grep -Fq -- "${start_script//%/%%}" "$unit_path" 2>/dev/null
+  local candidate
+  for candidate in "$start_script" "$root_dir/linux/start-kylin-gateway.sh"; do
+    sudo grep -Fq -- "$candidate" "$unit_path" 2>/dev/null && return 0
+    sudo grep -Fq -- "${candidate//%/%%}" "$unit_path" 2>/dev/null && return 0
+  done
+  return 1
 }
 
 foreground_processes() {
@@ -348,7 +352,7 @@ if [[ -z $action ]]; then
 fi
 
 [[ ${EUID:-$(id -u)} -ne 0 ]] || fail \
-  "Run without sudo: ./linux/uninstall-kylin-project.sh $action"
+  "Run without sudo: ./linux/kylin/uninstall-kylin-project.sh $action"
 
 case $action in
   status)
@@ -366,7 +370,7 @@ case $action in
     stop_and_remove_unit
     clear_autostart_preference
     printf '卸载完成：systemd 单元已移除，源码目录保留在 %s\n' "$root_dir"
-    printf '如需彻底删除源码，请执行：./linux/uninstall-kylin-project.sh purge\n'
+    printf '如需彻底删除源码，请执行：./linux/kylin/uninstall-kylin-project.sh purge\n'
     show_status
     ;;
   purge)

@@ -181,7 +181,7 @@ class ReleaseVersionGateTests(unittest.TestCase):
         base = self.git("rev-parse", "HEAD")
         for name in (".github/workflows/release.yml", "tools/release_pipeline.py", "tools/publish_release.py",
                      "tools/build-native-package.py", "tools/build-product-candidate.py", "release/release_matrix.toml",
-                     "packaging/windows/install.ps1", "linux/setup-kylin-algorithm.sh", "windows/algorithm_build.py",
+                     "packaging/windows/install.ps1", "linux/kylin/setup-kylin-algorithm.sh", "windows/algorithm_build.py",
                      "config/kylin-runtime-manifest.toml", "requirements.lock", "pyproject.toml", "AGENTS.md", ".gitignore"):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)

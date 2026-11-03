@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class DeploymentTests(unittest.TestCase):
     def test_kylin_startup_entry_never_updates_source_and_opens_the_menu(self) -> None:
-        script_path = ROOT / "linux" / "neurobridge-kylin-bootstrap.sh"
+        script_path = ROOT / "linux" / "kylin" / "neurobridge-kylin-bootstrap.sh"
         script = script_path.read_text(encoding="utf-8")
         self.assertTrue(os.access(script_path, os.X_OK))
 
@@ -49,7 +49,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("1. 一键准备并启动（默认开机自启，推荐）", menu_result.stdout)
 
         self.assertIn('elif [[ -f $script_dir/../pyproject.toml ]]', script)
-        self.assertIn('assistant="$project_dir/linux/setup-kylin-gateway.sh"', script)
+        self.assertIn('assistant="$project_dir/linux/kylin/setup-kylin-gateway.sh"', script)
         self.assertIn('[[ ${EUID:-$(id -u)} -ne 0 ]]', script)
         self.assertIn('[[ -n $project_dir && $project_dir != / ]]', script)
         self.assertIn('[[ -f $project_dir/pyproject.toml ]]', script)
@@ -68,7 +68,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('kylin-bootstrap-$(date -u', script)
 
     def test_kylin_startup_refuses_incomplete_checkout_without_calling_git(self) -> None:
-        source = (ROOT / "linux" / "neurobridge-kylin-bootstrap.sh").read_text(encoding="utf-8")
+        source = (ROOT / "linux" / "kylin" / "neurobridge-kylin-bootstrap.sh").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temporary_directory:
             project = Path(temporary_directory) / "NeuroBridge"
             project.mkdir()
@@ -113,9 +113,9 @@ class DeploymentTests(unittest.TestCase):
             source = temporary_root / "source"
             target = temporary_root / "target"
             tools_dir = source / "tools"
-            linux_dir = source / "linux"
+            linux_dir = source / "linux" / "kylin"
             tools_dir.mkdir(parents=True)
-            linux_dir.mkdir()
+            linux_dir.mkdir(parents=True)
             builder = tools_dir / "build-kylin-offline-update.sh"
             builder.write_text(builder_source, encoding="utf-8")
             builder.chmod(0o755)
@@ -184,10 +184,10 @@ class DeploymentTests(unittest.TestCase):
             self.assertTrue((target / ".runtime" / "offline-update" / "current.txt").is_file())
 
     def test_kylin_bootstrap_ignores_git_write_permissions_during_daily_startup(self) -> None:
-        source = (ROOT / "linux" / "neurobridge-kylin-bootstrap.sh").read_text(encoding="utf-8")
+        source = (ROOT / "linux" / "kylin" / "neurobridge-kylin-bootstrap.sh").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temporary_directory:
             project = Path(temporary_directory) / "NeuroBridge"
-            linux_dir = project / "linux"
+            linux_dir = project / "linux" / "kylin"
             git_dir = project / ".git"
             linux_dir.mkdir(parents=True)
             git_dir.mkdir()
@@ -229,7 +229,7 @@ class DeploymentTests(unittest.TestCase):
             self.assertFalse(sudo_called.exists())
 
     def test_kylin_gateway_assistant_guides_setup_and_repairs_git_permissions_safely(self) -> None:
-        script_path = ROOT / "linux" / "setup-kylin-gateway.sh"
+        script_path = ROOT / "linux" / "kylin" / "setup-kylin-gateway.sh"
         script = script_path.read_text(encoding="utf-8")
         self.assertTrue(os.access(script_path, os.X_OK))
         self.assertIn('config.get("access", {}).get("mode") == "local_browser"', script)
@@ -277,7 +277,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('[[ -n $root_dir && $root_dir != / ]]', script)
         self.assertIn('[[ -f $root_dir/pyproject.toml ]]', script)
         self.assertIn('[[ -d $root_dir/.git && ! -L $root_dir/.git ]]', script)
-        self.assertIn('[[ -f $root_dir/linux/setup-kylin-gateway.sh ]]', script)
+        self.assertIn('[[ -f $root_dir/linux/kylin/setup-kylin-gateway.sh ]]', script)
         self.assertLess(
             script.index("validate_project_root\n"),
             script.index('sudo chown -R --no-dereference'),
@@ -296,14 +296,14 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn('run_step "以普通用户更新代码" sudo', script)
         self.assertIn("更新后的助手代码不会继续使用旧进程", script)
         self.assertIn("NEUROBRIDGE_RESUME_START", script)
-        self.assertIn('sudo "$root_dir/linux/diagnose-kylin-usb-serial.sh"', script)
+        self.assertIn('sudo "$root_dir/linux/kylin/diagnose-kylin-usb-serial.sh"', script)
         self.assertIn("检查当前 USB/串口（无需拔插）", script)
         self.assertIn("--plug-cycle --timeout 60", script)
         self.assertIn("[yes/no]", script)
         self.assertIn("下一步命令：", script)
         self.assertIn('runtime_dir="$root_dir/.runtime"', script)
         self.assertIn("setup-kylin-gateway-$(date -u", script)
-        self.assertIn('"$root_dir/linux/setup-kylin-algorithm.sh"', script)
+        self.assertIn('"$root_dir/linux/kylin/setup-kylin-algorithm.sh"', script)
         self.assertIn("算法尚未准备成功", script)
         self.assertIn("Python 环境已就绪，跳过重复安装", script)
         self.assertIn("本地算法已构建并启用，跳过重复编译", script)
@@ -314,17 +314,17 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('autostart_preference_path="$runtime_dir/config/kylin-autostart.conf"', script)
         self.assertIn("默认使用 systemd 开机自启", script)
         self.assertIn("已显式配置为非自启", script)
-        self.assertIn('"$root_dir/linux/setup-kylin-autostart.sh" enable', script)
-        self.assertIn('"$root_dir/linux/setup-kylin-autostart.sh" status', script)
-        self.assertIn('"$root_dir/linux/setup-kylin-autostart.sh" disable', script)
+        self.assertIn('"$root_dir/linux/kylin/setup-kylin-autostart.sh" enable', script)
+        self.assertIn('"$root_dir/linux/kylin/setup-kylin-autostart.sh" status', script)
+        self.assertIn('"$root_dir/linux/kylin/setup-kylin-autostart.sh" disable', script)
         self.assertIn("一键退出（移除开机自启与源码）", script)
-        self.assertIn('uninstall_script="$root_dir/linux/uninstall-kylin-project.sh"', script)
+        self.assertIn('uninstall_script="$root_dir/linux/kylin/uninstall-kylin-project.sh"', script)
         self.assertIn('"$uninstall_script" uninstall', script)
         self.assertIn('"$uninstall_script" purge', script)
         self.assertIn("retire_removed_source", script)
 
     def test_kylin_uninstall_helper_removes_only_its_own_managed_unit(self) -> None:
-        script_path = ROOT / "linux" / "uninstall-kylin-project.sh"
+        script_path = ROOT / "linux" / "kylin" / "uninstall-kylin-project.sh"
         script = script_path.read_text(encoding="utf-8")
         self.assertTrue(os.access(script_path, os.X_OK))
 
@@ -385,7 +385,7 @@ class DeploymentTests(unittest.TestCase):
 
     def test_kylin_uninstall_helper_purges_a_checkout_end_to_end(self) -> None:
         """Exercise the real purge path in a sandbox with stubbed system tools."""
-        script_source = (ROOT / "linux" / "uninstall-kylin-project.sh").read_text(encoding="utf-8")
+        script_source = (ROOT / "linux" / "kylin" / "uninstall-kylin-project.sh").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as raw:
             sandbox = Path(raw)
             stub_dir = sandbox / "stub"
@@ -403,20 +403,20 @@ class DeploymentTests(unittest.TestCase):
             self.assertNotIn("/etc/os-release", patched)
 
             project = sandbox / "project"
-            (project / "linux").mkdir(parents=True)
+            (project / "linux" / "kylin").mkdir(parents=True)
             (project / ".git").mkdir()
             (project / ".runtime" / "config").mkdir(parents=True)
             (project / ".runtime" / "recordings").mkdir(parents=True)
             (project / ".runtime" / "logs").mkdir(parents=True)
             (project / "pyproject.toml").write_text("", encoding="utf-8")
-            (project / "linux" / "start-kylin-gateway.sh").write_text("", encoding="utf-8")
+            (project / "linux" / "kylin" / "start-kylin-gateway.sh").write_text("", encoding="utf-8")
             (project / ".runtime" / "config" / "gateway.toml").write_text(
                 'data_source.type = "serial"\n', encoding="utf-8"
             )
             (project / ".runtime" / "recordings" / "session-1.dat").write_text(
                 "RECORDING", encoding="utf-8"
             )
-            script_path = project / "linux" / "uninstall-kylin-project.sh"
+            script_path = project / "linux" / "kylin" / "uninstall-kylin-project.sh"
             script_path.write_text(patched, encoding="utf-8")
             script_path.chmod(0o755)
 
@@ -462,7 +462,7 @@ class DeploymentTests(unittest.TestCase):
 
     def test_kylin_uninstall_helper_refuses_cancelled_purge(self) -> None:
         """A wrong typed confirmation must leave the checkout untouched."""
-        script_source = (ROOT / "linux" / "uninstall-kylin-project.sh").read_text(encoding="utf-8")
+        script_source = (ROOT / "linux" / "kylin" / "uninstall-kylin-project.sh").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as raw:
             sandbox = Path(raw)
             stub_dir = sandbox / "stub"
@@ -476,12 +476,12 @@ class DeploymentTests(unittest.TestCase):
                 patched = patched.replace(gate, ":")
 
             project = sandbox / "project"
-            (project / "linux").mkdir(parents=True)
+            (project / "linux" / "kylin").mkdir(parents=True)
             (project / ".git").mkdir()
             (project / ".runtime" / "config").mkdir(parents=True)
             (project / "pyproject.toml").write_text("", encoding="utf-8")
-            (project / "linux" / "start-kylin-gateway.sh").write_text("", encoding="utf-8")
-            script_path = project / "linux" / "uninstall-kylin-project.sh"
+            (project / "linux" / "kylin" / "start-kylin-gateway.sh").write_text("", encoding="utf-8")
+            script_path = project / "linux" / "kylin" / "uninstall-kylin-project.sh"
             script_path.write_text(patched, encoding="utf-8")
             script_path.chmod(0o755)
 
@@ -627,8 +627,8 @@ class DeploymentTests(unittest.TestCase):
             self.assertIn("configSha256", manifest.stdout)
 
     def test_kylin_autostart_runs_project_gateway_as_desktop_user(self) -> None:
-        script_path = ROOT / "linux" / "setup-kylin-autostart.sh"
-        renderer_path = ROOT / "linux" / "lib" / "kylin-systemd-unit.sh"
+        script_path = ROOT / "linux" / "kylin" / "setup-kylin-autostart.sh"
+        renderer_path = ROOT / "linux" / "kylin" / "lib" / "kylin-systemd-unit.sh"
         script = script_path.read_text(encoding="utf-8")
         self.assertTrue(os.access(script_path, os.X_OK))
         for shell_path in (script_path, renderer_path):
@@ -648,7 +648,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
         self.assertIn("enable|status|disable", help_result.stdout)
         self.assertIn("never runs the gateway as root", help_result.stdout)
-        self.assertIn('unit_renderer="$root_dir/linux/lib/kylin-systemd-unit.sh"', script)
+        self.assertIn('unit_renderer="$root_dir/linux/kylin/lib/kylin-systemd-unit.sh"', script)
         self.assertIn("render_neurobridge_kylin_unit", script)
         self.assertIn('sudo systemctl enable "$unit_name"', script)
         self.assertIn('sudo systemctl start "$unit_name"', script)
@@ -668,7 +668,7 @@ class DeploymentTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary_directory:
             project_root = Path(temporary_directory) / "银河麒麟V10" / "NeuroBridge"
-            start_script = project_root / "linux" / "start-kylin-gateway.sh"
+            start_script = project_root / "linux" / "kylin" / "start-kylin-gateway.sh"
             start_script.parent.mkdir(parents=True)
             start_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
             start_script.chmod(0o755)
@@ -722,7 +722,7 @@ class DeploymentTests(unittest.TestCase):
                 self.assertEqual(verify_result.returncode, 0, verify_result.stderr)
 
     def test_kylin_usb_serial_diagnosis_prompts_times_out_and_preserves_logs(self) -> None:
-        script_path = ROOT / "linux" / "diagnose-kylin-usb-serial.sh"
+        script_path = ROOT / "linux" / "kylin" / "diagnose-kylin-usb-serial.sh"
         script = script_path.read_text(encoding="utf-8")
         self.assertTrue(os.access(script_path, os.X_OK))
         syntax = subprocess.run(
@@ -784,7 +784,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("cat /etc/neurobridge/gateway.toml", script)
 
     def test_kylin_runtime_diagnostics_are_self_contained_and_exclude_configuration_contents(self) -> None:
-        script_path = ROOT / "linux" / "collect-kylin-runtime-diagnostics.sh"
+        script_path = ROOT / "linux" / "kylin" / "collect-kylin-runtime-diagnostics.sh"
         script = script_path.read_text(encoding="utf-8")
         syntax = subprocess.run(
             ["bash", "-n", str(script_path)],
@@ -827,14 +827,14 @@ class DeploymentTests(unittest.TestCase):
         self.assertNotIn("/root/.ssh", script)
 
     def test_service_account_can_read_the_gateway_configuration(self) -> None:
-        install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
-        service = (ROOT / "linux" / "systemd" / "neurobridge.service").read_text(encoding="utf-8")
+        install_script = (ROOT / "linux" / "ubuntu" / "install-ubuntu.sh").read_text(encoding="utf-8")
+        service = (ROOT / "linux" / "ubuntu" / "systemd" / "neurobridge.service").read_text(encoding="utf-8")
         self.assertIn("User=neurobridge", service)
         self.assertIn("install -o root -g neurobridge -m 0640", install_script)
         self.assertIn("chown root:neurobridge \"$config_dir/gateway.toml\"", install_script)
 
     def test_installer_rejects_non_ubuntu_or_non_x86_64_hosts(self) -> None:
-        install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
+        install_script = (ROOT / "linux" / "ubuntu" / "install-ubuntu.sh").read_text(encoding="utf-8")
         self.assertIn('uname -m) != "x86_64"', install_script)
         self.assertIn('ID:-} != "ubuntu"', install_script)
         self.assertIn('VERSION_ID:-} != "24.04"', install_script)
@@ -845,7 +845,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("systemctl enable neurobridge.service", install_script)
 
     def test_ubuntu_ble_installer_does_not_grant_serial_device_groups(self) -> None:
-        install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
+        install_script = (ROOT / "linux" / "ubuntu" / "install-ubuntu.sh").read_text(encoding="utf-8")
         self.assertIn("gateway.ubuntu.toml.example", install_script)
         self.assertIn("usermod -aG bluetooth neurobridge", install_script)
         self.assertNotIn("for tty_device in /dev/ttyACM* /dev/ttyUSB*", install_script)
@@ -876,15 +876,15 @@ class DeploymentTests(unittest.TestCase):
                 self.assertIn(auto_connect, script)
 
     def test_one_command_update_uses_only_the_existing_checkout(self) -> None:
-        script = (ROOT / "linux" / "update-ubuntu.sh").read_text(encoding="utf-8")
+        script = (ROOT / "linux" / "ubuntu" / "update-ubuntu.sh").read_text(encoding="utf-8")
         self.assertIn('exec sudo --preserve-env=PATH bash "$0"', script)
-        self.assertIn('bash "$root_dir/linux/install-ubuntu.sh"', script)
+        self.assertIn('bash "$root_dir/linux/ubuntu/install-ubuntu.sh"', script)
         self.assertNotIn("git pull", script)
         self.assertNotIn("git fetch", script)
         self.assertNotIn("git clone", script)
 
     def test_online_environment_preparation_is_separate_from_offline_deployment(self) -> None:
-        script = (ROOT / "linux" / "prepare-ubuntu24.04-environment.sh").read_text(encoding="utf-8")
+        script = (ROOT / "linux" / "ubuntu" / "prepare-ubuntu24.04-environment.sh").read_text(encoding="utf-8")
         self.assertIn("apt-get update", script)
         self.assertIn("apt-get install", script)
         self.assertIn('pip install -r "$root_dir/requirements.lock"', script)
@@ -892,12 +892,12 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("Ubuntu 24.04", script)
 
     def test_ssh_operations_are_explicitly_enabled_and_password_authenticated(self) -> None:
-        preparation = (ROOT / "linux" / "prepare-ubuntu24.04-environment.sh").read_text(encoding="utf-8")
-        script = (ROOT / "linux" / "configure-ssh-operations.sh").read_text(encoding="utf-8")
+        preparation = (ROOT / "linux" / "ubuntu" / "prepare-ubuntu24.04-environment.sh").read_text(encoding="utf-8")
+        script = (ROOT / "linux" / "ubuntu" / "configure-ssh-operations.sh").read_text(encoding="utf-8")
         for name in ("neurobridge-ops", "neurobridge-ops-command"):
-            self.assertIn(f'cat "$setup_source_dir/linux/operations/{name}"', script)
-            script += "\n" + (ROOT / "linux/operations" / name).read_text(encoding="utf-8")
-        wizard = (ROOT / "linux" / "setup-ssh-operations.sh").read_text(encoding="utf-8")
+            self.assertIn(f'cat "$setup_source_dir/linux/ubuntu/operations/{name}"', script)
+            script += "\n" + (ROOT / "linux/ubuntu/operations" / name).read_text(encoding="utf-8")
+        wizard = (ROOT / "linux" / "ubuntu" / "setup-ssh-operations.sh").read_text(encoding="utf-8")
         quick_template = (ROOT / "config" / "ssh-operations.example.txt").read_text(encoding="utf-8")
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("openssh-server", preparation)
@@ -1020,13 +1020,13 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("config/ssh-operations.txt", gitignore)
 
     def test_ssh_setup_supports_quick_and_full_modes(self) -> None:
-        source = (ROOT / "linux" / "setup-ssh-operations.sh").read_text(encoding="utf-8")
+        source = (ROOT / "linux" / "ubuntu" / "setup-ssh-operations.sh").read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)
-            linux_dir = temporary_root / "linux"
+            linux_dir = temporary_root / "linux" / "ubuntu"
             config_dir = temporary_root / "config"
             bin_dir = temporary_root / "bin"
-            linux_dir.mkdir()
+            linux_dir.mkdir(parents=True)
             config_dir.mkdir()
             bin_dir.mkdir()
 
@@ -1141,18 +1141,18 @@ class DeploymentTests(unittest.TestCase):
             )
 
     def test_installer_builds_and_installs_the_locked_algorithm_bridge(self) -> None:
-        install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
+        install_script = (ROOT / "linux" / "ubuntu" / "install-ubuntu.sh").read_text(encoding="utf-8")
         self.assertIn("--exclude venv", install_script)
         self.assertIn("PIP_NO_INDEX=1", install_script)
         self.assertIn("--no-build-isolation", install_script)
         self.assertNotIn("apt-get", install_script)
         self.assertNotIn("git clone", install_script)
         self.assertNotIn("git fetch", install_script)
-        self.assertIn('runuser -u neurobridge -- "$install_dir/linux/build-algorithm-bridge.sh"', install_script)
+        self.assertIn('runuser -u neurobridge -- "$install_dir/linux/ubuntu/build-algorithm-bridge.sh"', install_script)
         self.assertIn('/usr/local/lib/neurobridge', install_script)
 
     def test_vendored_bridge_build_never_fetches_sdk_sources(self) -> None:
-        script = (ROOT / "linux" / "build-algorithm-bridge.sh").read_text(encoding="utf-8")
+        script = (ROOT / "linux" / "common" / "build-algorithm-bridge.sh").read_text(encoding="utf-8")
         self.assertNotIn("git clone", script)
         self.assertNotIn("git fetch", script)
         self.assertNotIn("prepare-algorithm-sdk", script)
@@ -1161,7 +1161,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(script.count("-DNUMCPP_NO_USE_BOOST=ON"), 2)
         self.assertIn('rm -rf "$build_root"', script)
         self.assertIn('tee "$build_log"', script)
-        self.assertIn("galaxy-kylin", script)
+        self.assertNotIn("packaging/kylin", script)
+        self.assertNotIn("/etc/os-release", script)
+        self.assertIn("NEUROBRIDGE_EIGEN_LOCK_KEY", script)
         self.assertIn("CMake 3.22 or newer", script)
         self.assertTrue((ROOT / "third_party" / "AffectiveCloud-Algorithm-SDK" / "cpp" / "package" / "CMakeLists.txt").is_file())
         self.assertTrue((ROOT / "third_party" / "NumCpp" / "CMakeLists.txt").is_file())
@@ -1227,14 +1229,14 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("std::vector<std::uint8_t>", header)
 
     def test_dhcp_is_an_optional_isolated_service(self) -> None:
-        install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
-        service = (ROOT / "linux" / "systemd" / "neurobridge-dhcp.service").read_text(encoding="utf-8")
+        install_script = (ROOT / "linux" / "ubuntu" / "install-ubuntu.sh").read_text(encoding="utf-8")
+        service = (ROOT / "linux" / "ubuntu" / "systemd" / "neurobridge-dhcp.service").read_text(encoding="utf-8")
         self.assertIn("systemctl enable neurobridge-dhcp.service", install_script)
         self.assertIn("ExecCondition=", service)
         self.assertIn("--check-enabled", service)
 
     def test_example_defaults_to_local_browser_and_keeps_wired_switch_documented(self) -> None:
-        install_script = (ROOT / "linux" / "install-ubuntu.sh").read_text(encoding="utf-8")
+        install_script = (ROOT / "linux" / "ubuntu" / "install-ubuntu.sh").read_text(encoding="utf-8")
         example = (ROOT / "config" / "gateway.toml.example").read_text(encoding="utf-8")
         self.assertIn('mode = "local_browser"', example)
         self.assertIn('host = "127.0.0.1"', example)
@@ -1250,13 +1252,13 @@ class DeploymentTests(unittest.TestCase):
             install_script.index('if [[ ! -e "$config_dir/gateway.toml" ]]'),
             install_script.index(setup_command),
         )
-        service = (ROOT / "linux/systemd/neurobridge.service").read_text()
+        service = (ROOT / "linux/ubuntu/systemd/neurobridge.service").read_text()
         self.assertIn("ExecStartPre=+/opt/neurobridge/venv/bin/python -m neurobridge.wired_address", service)
         self.assertIn("neurobridge-wired-address.service", service)
         self.assertNotIn("network-online.target", service)
 
     def test_kylin_serial_setup_is_one_command_and_preserves_a_backup(self) -> None:
-        script_path = ROOT / "linux" / "setup-kylin-serial.sh"
+        script_path = ROOT / "linux" / "kylin" / "setup-kylin-serial.sh"
         script = script_path.read_text(encoding="utf-8")
         syntax = subprocess.run(["bash", "-n", str(script_path)], capture_output=True, text=True, check=False)
         self.assertEqual(syntax.returncode, 0, syntax.stderr)
@@ -1311,7 +1313,7 @@ class DeploymentTests(unittest.TestCase):
         ):
             self.assertIn(ignored_directory, ignore)
 
-        start_script = ROOT / "linux" / "start-kylin-gateway.sh"
+        start_script = ROOT / "linux" / "kylin" / "start-kylin-gateway.sh"
         self.assertTrue(os.access(start_script, os.X_OK))
         syntax = subprocess.run(
             ["bash", "-n", str(start_script)],
@@ -1344,7 +1346,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('runtime_root / "algorithm"', start_source)
         self.assertIn("algorithm.command is not an executable regular file", start_source)
 
-        algorithm_setup = ROOT / "linux" / "setup-kylin-algorithm.sh"
+        algorithm_setup = ROOT / "linux" / "kylin" / "setup-kylin-algorithm.sh"
         self.assertTrue(os.access(algorithm_setup, os.X_OK))
         syntax = subprocess.run(
             ["bash", "-n", str(algorithm_setup)],
@@ -1382,7 +1384,7 @@ class DeploymentTests(unittest.TestCase):
         algorithm_setup_module = (ROOT / "neurobridge" / "algorithm_setup.py").read_text(encoding="utf-8")
         self.assertIn("Algorithm bridge smoke test: OK", algorithm_setup_module)
 
-        python_setup = ROOT / "linux" / "setup-kylin-python.sh"
+        python_setup = ROOT / "linux" / "kylin" / "setup-kylin-python.sh"
         self.assertTrue(os.access(python_setup, os.X_OK))
         syntax = subprocess.run(
             ["bash", "-n", str(python_setup)],
@@ -1521,7 +1523,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("耳机 Profile 固定禁用 replay", design)
 
     def test_diagnostic_collector_excludes_sensitive_gateway_inputs(self) -> None:
-        script = (ROOT / "linux" / "collect-ubuntu-build-diagnostics.sh").read_text(encoding="utf-8")
+        script = (ROOT / "linux" / "ubuntu" / "collect-ubuntu-build-diagnostics.sh").read_text(encoding="utf-8")
         self.assertIn("build.log", script)
         self.assertIn("CMakeError.log", script)
         self.assertIn("neurobridge-journal", script)

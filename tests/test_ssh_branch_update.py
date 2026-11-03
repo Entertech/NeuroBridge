@@ -11,7 +11,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = (ROOT / "linux/configure-ssh-operations.sh").read_text(encoding="utf-8")
+SOURCE = (ROOT / "linux/ubuntu/configure-ssh-operations.sh").read_text(encoding="utf-8")
 
 
 def unprivileged(script: str) -> str:
@@ -25,7 +25,7 @@ def unprivileged(script: str) -> str:
 def template(variable: str) -> str:
     names = {"ops_cli_tmp": "neurobridge-ops", "command_tmp": "neurobridge-ops-command"}
     if variable in names:
-        return (ROOT / "linux/operations" / names[variable]).read_text()
+        return (ROOT / "linux/ubuntu/operations" / names[variable]).read_text()
     match = re.search(r'cat >"\$' + variable + r'" <<\'EOF\'\n(.*?)\nEOF', SOURCE, re.S)
     assert match is not None
     return match[1]
@@ -50,11 +50,11 @@ class BranchUpdateTests(unittest.TestCase):
             "DEPLOY_MARKER": str(self.marker),
         }
         self.git(self.root, "init", "-b", "baseline", str(self.seed))
-        (self.seed / "linux").mkdir()
-        for name in ("pyproject.toml", "requirements.lock", "linux/install-ubuntu.sh"):
+        (self.seed / "linux" / "ubuntu").mkdir(parents=True)
+        for name in ("pyproject.toml", "requirements.lock", "linux/ubuntu/install-ubuntu.sh"):
             (self.seed / name).write_text("# Fixture\n")
-        reload = self.seed / "linux/reload-ubuntu.sh"
-        reload.write_text('#!/bin/bash\ngit -C "$(dirname "$0")/.." rev-parse HEAD > "$DEPLOY_MARKER"\n')
+        reload = self.seed / "linux/ubuntu/reload-ubuntu.sh"
+        reload.write_text('#!/bin/bash\ngit -C "$(dirname "$0")/../.." rev-parse HEAD > "$DEPLOY_MARKER"\n')
         reload.chmod(0o755)
         self.git(self.seed, "add", ".")
         self.git(self.seed, "commit", "-m", "baseline")

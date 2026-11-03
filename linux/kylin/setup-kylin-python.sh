@@ -7,7 +7,7 @@ fail() {
   exit 1
 }
 
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 runtime_dir="$root_dir/.runtime"
 venv_dir="$root_dir/.venv"
 wheelhouse_dir="$root_dir/wheelhouse"
@@ -22,7 +22,7 @@ requirements="$root_dir/config/kylin-serial-requirements.lock"
 
 usage() {
   cat <<EOF
-Usage: ./linux/setup-kylin-python.sh
+Usage: ./linux/kylin/setup-kylin-python.sh
 
 Detects Galaxy Kylin V10 OS/CPU; checks interpreter ABI and, prepares a project-local Python 3.11 when the
 system only has Python 3.8, creates .venv, installs serial-only requirements, and
@@ -230,4 +230,4 @@ nb_event python_ready "architecture=$NB_ARCH bits=$NB_BITS install_mode=$install
 echo "Python environment ready"
 echo "mode=$install_mode"
 echo "python=$venv_dir/bin/python"
-echo "next=sudo $root_dir/linux/diagnose-kylin-usb-serial.sh"
+echo "next=sudo $root_dir/linux/kylin/diagnose-kylin-usb-serial.sh"

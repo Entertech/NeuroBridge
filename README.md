@@ -24,13 +24,13 @@ Ubuntu x86_64 使用 `ubuntu_headband_wired` Profile：头环 BLE → 网关 →
 git clone https://github.com/Entertech/NeuroBridge.git
 cd NeuroBridge
 # 切到经批准的 Ubuntu 分支/提交后再准备与部署
-./linux/prepare-ubuntu24.04-environment.sh  # 一次性联网准备
-sudo ./linux/install-ubuntu.sh             # 使用本地源码构建、安装；不会首次启动服务
+./linux/ubuntu/prepare-ubuntu24.04-environment.sh  # 一次性联网准备
+sudo ./linux/ubuntu/install-ubuntu.sh             # 使用本地源码构建、安装；不会首次启动服务
 sudoedit /etc/neurobridge/gateway.toml
 sudo systemctl start neurobridge
 ```
 
-首次配置来自 [Ubuntu 专属模板](config/gateway.ubuntu.toml.example)。示例网关为 `192.168.88.10/24`，B 端为 `192.168.88.20/24`，WS 为 `ws://192.168.88.10:8765/neurobridge/v1/ws`；地址、端口、网卡与扫描匹配条件必须在现场确认。安装和 systemd 启动追加专用地址并保留已有地址、路由与 DNS；多网口必须指定目标接口。部署后更新使用 `./linux/update-ubuntu.sh`，会重启服务，B 端须重新连接、查询状态并订阅。SSH 运维继续使用 `neurobridge-ops branch`、`update [--branch 分支]`、`status` 和 `logs --follow`。详见 [Linux 部署与运维](linux/README.md)。
+首次配置来自 [Ubuntu 专属模板](config/gateway.ubuntu.toml.example)。示例网关为 `192.168.88.10/24`，B 端为 `192.168.88.20/24`，WS 为 `ws://192.168.88.10:8765/neurobridge/v1/ws`；地址、端口、网卡与扫描匹配条件必须在现场确认。安装和 systemd 启动追加专用地址并保留已有地址、路由与 DNS；多网口必须指定目标接口。部署后更新使用 `./linux/ubuntu/update-ubuntu.sh`，会重启服务，B 端须重新连接、查询状态并订阅。SSH 运维继续使用 `neurobridge-ops branch`、`update [--branch 分支]`、`status` 和 `logs --follow`。详见 [Linux 部署与运维](linux/README.md)。
 
 Ubuntu 的采集控制台由下载服务提供：`http://192.168.88.10:8766/capture/`；兼容 B 端页面位于 `/b-client-test/`。也可生成独立静态包后双击打开：
 
@@ -59,7 +59,7 @@ sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control status
 - `neurobridge/adapters/`、`profiles/`、`bootstrap/`：I/O 实现、固定 Deployment Profile 和唯一运行时组合根。
 - `web/`：由网关托管、无构建步骤的静态网页；`capture/` 是通过网关 WebSocket 查看耳机原始数据的页面，`b-client-test/` 是完整的 B 端协议联调页。
 - `mac/`：仅 macOS POC 的启动器、蓝牙验证、原生算法 bridge 与本机配置模板。
-- `linux/`：银河麒麟项目一键流程、Ubuntu 兼容部署脚本、systemd 单元与日志轮转配置。
+- `linux/kylin/`、`linux/ubuntu/`：分别维护麒麟与 Ubuntu 部署；`linux/common/` 只提供共享构建内核，两个平台互不依赖。
 - `windows/`：Windows COM Source 配置、Service 入口与后续目标机验收说明；`packaging/` 提供银河麒麟/Windows unsigned 候选安装骨架。
 
 网页不再放入平台目录。两个页面都由当前网关的回环 HTTP 服务托管并连接同一个北向 WebSocket，不直接访问 USB 串口，也不控制 systemd 进程。
@@ -68,8 +68,8 @@ sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control status
 
 | 场景 | 入口 | 当前状态 |
 | --- | --- | --- |
-| 银河麒麟 V10 x86_64 网关 | [`linux/neurobridge-kylin-bootstrap.sh`](linux/neurobridge-kylin-bootstrap.sh) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。菜单 `1` 完成项目内配置并默认安装/启动 systemd 开机自启服务；菜单 `9` 可查看状态或显式配置为非自启。 |
-| Ubuntu x86_64 网关部署 | [`linux/install-ubuntu.sh`](linux/install-ubuntu.sh) | 固定 BLE 头环与专用 B 端 Profile；共用分层管线，支持受控采集、诊断和录播策略；实机验收待完成。 |
+| 银河麒麟 V10 x86_64 网关 | [`linux/kylin/neurobridge-kylin-bootstrap.sh`](linux/kylin/neurobridge-kylin-bootstrap.sh) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。菜单 `1` 完成项目内配置并默认安装/启动 systemd 开机自启服务；菜单 `9` 可查看状态或显式配置为非自启。 |
+| Ubuntu x86_64 网关部署 | [`linux/ubuntu/install-ubuntu.sh`](linux/ubuntu/install-ubuntu.sh) | 固定 BLE 头环与专用 B 端 Profile；共用分层管线，支持受控采集、诊断和录播策略；实机验收待完成。 |
 | macOS 历史 POC | [`mac/start-poc.command`](mac/start-poc.command) | 已接入统一 Bootstrap/BLE Profile，不属于当前 M1 验收。 |
 | Windows 网关 | [`windows/README.md`](windows/README.md)；[一键操作教程](doc/tech/麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。双击 `windows/neurobridge-windows-bootstrap.cmd` 自动准备配置、构建自检算法，首次管理员授权后安装开机自启服务并打开本机页面；可在菜单关闭自启。用户已确认上述 Windows x64 实机运行成功，新增开机自启仍待实机重启验证。串口发现与算法准备并行，直接 E1 后以合法帧验证；真实耳机新流程复测待完成。Windows 7 与 32 位系统不在交付范围内；签名不属于当前发布门禁。 |
 | 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；明确区分实时耳机连接与 `live`/`replay` 数据来源，原始数据区与解析数据区固定上下排列。 |

@@ -12,8 +12,8 @@ fail() {
 usage() {
   cat <<'EOF'
 Usage:
-  ./linux/setup-kylin-release-runner.sh prepare
-  ./linux/setup-kylin-release-runner.sh register
+  ./linux/kylin/setup-kylin-release-runner.sh prepare
+  ./linux/kylin/setup-kylin-release-runner.sh register
 
 prepare clones the public repository (if needed), builds the local runtime,
 and copies it to the four package targets for this machine's architecture.
@@ -70,7 +70,7 @@ runner_asset_arch() {
   esac
 }
 
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 repo_url=${NEUROBRIDGE_REPO_URL:-https://github.com/Entertech/NeuroBridge.git}
 repo_ref=${NEUROBRIDGE_REPO_REF:-codex/workflow-release-packaging}
 runtime_root=${NEUROBRIDGE_KYLIN_RUNTIME_ROOT:-/opt/neurobridge-release-inputs}
@@ -107,10 +107,10 @@ prepare_runtime() {
     sudo apt-get install -y dpkg-dev rpm
   fi
 
-  "$root_dir/linux/setup-kylin-python.sh"
+  "$root_dir/linux/kylin/setup-kylin-python.sh"
   install -d -m 0750 "$root_dir/.runtime/config"
   [[ -f $root_dir/.runtime/config/gateway.toml ]] || cp "$root_dir/config/gateway.toml.example" "$root_dir/.runtime/config/gateway.toml"
-  "$root_dir/linux/setup-kylin-algorithm.sh"
+  "$root_dir/linux/kylin/setup-kylin-algorithm.sh"
 
   python_runtime=$root_dir/python-runtime/python
   bridge_bin=$root_dir/.runtime/algorithm/neurobridge_affective_bridge

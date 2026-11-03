@@ -102,6 +102,7 @@ flowchart TB
 - Ports 定义 Application 需要的能力，Adapters 实现这些能力；
 - Application 负责编排，不创建 pyserial、Bleak、WebSocket 或文件对象；
 - Bootstrap 是唯一同时认识接口和具体实现的组合根；
+- Linux 部署按 `linux/kylin/` 与 `linux/ubuntu/` 分开维护；两边只依赖 `linux/common/` 的构建内核，不互相调用。麒麟引导包仅收录 kylin/common，根目录历史入口只转发以兼容既有服务和已发布命令。
 - 进程级 `GatewayRuntime` 监督 Source 的真实生产任务，先清理旧会话再按配置恢复；主动停止取消重试，清理失败阻断替换。监听与仓库保留，应用/设备/算法通过 Bootstrap 重建；
 - `getStatus` 和纯状态订阅只投影内存，不等待录播目录；目录后台预热与离线数据请求使用有期限、可失效且并发去重的缓存。具体配置和回归边界见 [Ubuntu 头环接入整合](Ubuntu头环接入整合.md)。
 - Profile 在启动阶段一次性绑定 Source、Parser、DeviceControl 和能力，运行期不再按 `sourceType` 选择 Parser；

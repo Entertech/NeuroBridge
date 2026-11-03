@@ -71,8 +71,14 @@ macOS POC 的开始/停止与 Ubuntu 使用同一个 Runtime。停止仅关闭�
 
 自动验证覆盖 Profile/依赖方向、首通知会话、订阅后才启动、全部原始状态字节落盘、设备遥测、停止后重启、录播禁止不读历史、旧配置迁移、网络发送失败/超时隔离、WS 重连与旧订阅失效。Ubuntu 24.04 x86_64 容器单独构建 C++17 算法桥并运行合成 SDK 回归；编译器、CMake、Eigen 和 NumCpp 版本保存在构建日志并对照 `sdk.lock`。
 
-本轮构建记录：Ubuntu 24.04 `linux/amd64` 容器（ARM 宿主上的 x86_64 仿真）、CMake 3.28.3、GCC 13.3.0、Eigen 3.4.0、NumCpp 2.11.0；SDK 合成测试通过。该环境复用了部署使用的 `linux/build-algorithm-bridge.sh`，以普通构建账户执行。
+本轮构建记录：Ubuntu 24.04 `linux/amd64` 容器（ARM 宿主上的 x86_64 仿真）、CMake 3.28.3、GCC 13.3.0、Eigen 3.4.0、NumCpp 2.11.0；SDK 合成测试通过。该环境以普通构建账户执行部署用的构建入口；目录拆分后入口为 `linux/ubuntu/build-algorithm-bridge.sh`，内部调用共享构建内核。
 
 完整回归记录：在普通用户拥有的 Ubuntu 24.04 x86_64 隔离 checkout 执行 `PYTHONPATH=tests:. python -m unittest discover -s tests -v`，本轮审查修复后的 633 个用例完成，7 项 Windows 专属用例按平台跳过，无失败；采集启停与首通知落盘场景另行重复 20 次通过。三个 Node 页面/连接顺序脚本、静态 ZIP 构建、compileall、协议/版本门禁及 source-train workflow 契约通过。本分支此前完成的原生桥 JSON 烟雾和 SDK CTest 通过，本轮未改原生算法源码。
 
 目标 N100/N150 Ubuntu 主机仍需验证真实头环扫描/首包、拔断与重连、关机重启、自启与权限、有线断开/恢复、多客户端、录播循环和长时间运行；用真实且获准使用的录制数据比对 SDK。容器与合成测试不能作为这些项目的验收证明。
+
+## Linux 部署目录分离
+
+Ubuntu 部署与 SSH 运维、systemd、logrotate 均归入 `linux/ubuntu/`，麒麟项目脚本与 systemd 渲染器归入 `linux/kylin/`。两边各自校验发行版与编译器，只调用 `linux/common/` 的共享 CMake 构建内核；共享内核不选择平台、不导入麒麟打包器。麒麟引导源码包只收录 kylin/common，不携带 Ubuntu 部署策略。根目录旧命令作为兼容转发，保留已发布文档、SSH 更新器和旧服务入口；新调用均使用平台路径。现场数据和配置位置不变，目录整理不代表新的实机验收。
+
+目录拆分验证：Ubuntu 24.04 `linux/amd64` 仿真容器、普通用户与可写隔离 checkout 的完整 Python 回归完成 636 项，7 项 Windows 专属测试跳过，无失败（424.579 秒）。新 Ubuntu 平台入口构建算法桥成功，SDK CTest、JSON 冒烟、旧构建入口分派、麒麟入口拒绝错误宿主、全部 Linux Shell 语法、README 链接、页面脚本和版本/协议门禁通过。新增回归验证平台依赖方向、兼容转发的参数/退出码/工作目录、旧 systemd 单元归属和麒麟包不含 Ubuntu 部署目录。真实麒麟/Ubuntu 主机的服务升级、SSH 更新及设备验收仍待现场执行。

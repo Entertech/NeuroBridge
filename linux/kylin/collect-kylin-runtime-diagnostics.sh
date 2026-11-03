@@ -5,12 +5,12 @@
 # credentials/keys, recordings, raw EEG/HR packets, and algorithm payloads.
 set -u -o pipefail
 
-root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 default_output_dir="$root_dir/.runtime/logs/diagnostics"
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./linux/collect-kylin-runtime-diagnostics.sh [options]
+Usage: sudo ./linux/kylin/collect-kylin-runtime-diagnostics.sh [options]
 
 Options:
   --output-dir DIR       Absolute directory below project .runtime/logs/diagnostics
