@@ -132,6 +132,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-11-03-headband-disconnected-chinese-message"
+date = "2026-11-03"
+scope = "gateway_error_message"
+summary = "禁止录播且头环未连接时，getLatest 与 subscribe 的错误提示统一改为中文“头环未连接”；保持既有 503、错误标识、retryable 与响应结构，允许录播时的逻辑不变。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户明确要求该场景提示头环未连接并使用中文；仅修改可读消息与内部说明、现有回归断言，不修改应用/报文版本或已锁定对外文档，现场更新验收待完成。"
+
+[[change_records]]
 id = "2026-11-03-operator-replay-policy-commands"
 date = "2026-11-03"
 scope = "gateway_operation"

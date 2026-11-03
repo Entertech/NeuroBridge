@@ -338,7 +338,7 @@ neurobridge-ops start
 
 ### 5.0 允许与禁止录播
 
-网关运维命令：`neurobridge-ops replay enable`、`neurobridge-ops replay disable`、`neurobridge-ops replay status`。命令仅接受这三个动作，不新增 B 端 WS 请求，也不允许 B 端选择数据源。它们持久化 `/etc/neurobridge/gateway.toml` 的 `[recording].replay_enabled`（布尔；省略默认 `true`，保持旧部署行为）。`enable` 允许无头环时由 `getLatest`/`subscribe` 按需启动录播，不强制切换已连接头环；`disable` 禁止一切录播读取与启动，录制文件与实时采集配置保留。禁止时 `getStatus` 仍成功，无头环的取数请求返回既有录播不可用错误，`message` 明确说明已由部署配置禁止，不新增错误码或报文字段。
+网关运维命令：`neurobridge-ops replay enable`、`neurobridge-ops replay disable`、`neurobridge-ops replay status`。命令仅接受这三个动作，不新增 B 端 WS 请求，也不允许 B 端选择数据源。它们持久化 `/etc/neurobridge/gateway.toml` 的 `[recording].replay_enabled`（布尔；省略默认 `true`，保持旧部署行为）。`enable` 允许无头环时由 `getLatest`/`subscribe` 按需启动录播，不强制切换已连接头环；`disable` 禁止一切录播读取与启动，录制文件与实时采集配置保留。禁止时 `getStatus` 仍成功，无头环的取数请求返回既有录播不可用错误，`message` 固定为中文“头环未连接”，不新增错误码或报文字段。
 
 启用/禁用使用互斥锁、完整配置校验和原子替换，保留其他字段、注释、文件权限和归属。正在运行的网关会重启以应用新值，中断当前录播与采集、完成当前录制并断开 WS；B 端须重连、`getStatus`、重新订阅。网关原本停止时仅保存配置，不启动服务；下次启动生效。重复设置同一值也会在服务运行时重启，以确保配置已应用。重启失败返回非零，明确区分已保存配置与未确认生效，不报告成功应用，也不回退用户选择的禁止策略。`status` 只报告配置值与服务活动状态，不修改配置或重启，不将配置值冒充运行时验收结果。
 

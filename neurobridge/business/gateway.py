@@ -419,7 +419,7 @@ class Gateway:
             raise ProtocolError(400, "INVALID_REQUEST", "Request contains unsupported params.", details={"params": sorted(unknown)})
 
     def replay_unavailable_error(self) -> ProtocolError:
-        message = "No replay data is available." if self.config.recording.replay_enabled else "Replay is disabled by gateway deployment configuration."
+        message = "No replay data is available." if self.config.recording.replay_enabled else "头环未连接"
         return ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, message, True)
 
     async def subscribe(self, session: ClientSession, params: dict, send: Any, *, start_replay: bool = True) -> dict:
