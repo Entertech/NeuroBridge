@@ -22,6 +22,7 @@ LOG = logging.getLogger(__name__)
 
 class BluetoothBleakSource:
     def __init__(self, config: BleConfig, device_ready, error=None, *, queue_size: int = 64, enqueue_timeout_ms: int = 50, telemetry=None, diagnostics_interval_seconds: float = 30) -> None:
+        self.enabled = config.enabled
         self._chunks: asyncio.Queue[RawChunk | None] = asyncio.Queue(maxsize=queue_size)
         self._events: asyncio.Queue[DeviceConnectionEvent | None] = asyncio.Queue(maxsize=queue_size)
         self._session_id: str | None = None
@@ -45,13 +46,22 @@ class BluetoothBleakSource:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._adapter.run())
 
-    async def stop(self) -> None:
+    async def wait_stopped(self) -> None:
+        if self._task is None:
+            raise RuntimeError("Source must be started before supervision")
+        # Session cancellation must leave the producer alive for ordered cleanup.
+        await asyncio.shield(self._task)
+
+    async def stop(self, *, drain=False) -> None:
         if self._session_id is not None:
             await self.control.stop_stream(self._session_id)
         await self._adapter.stop()
-        if self._task and not self._task.done():
-            self._task.cancel()
+        if self._task:
+            if not self._task.done():
+                self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
+        if drain:
+            await self._chunks.join()
         self._finish_queue(self._chunks)
         self._finish_queue(self._events)
 
@@ -59,8 +69,14 @@ class BluetoothBleakSource:
         return self._status
 
     async def chunks(self) -> AsyncIterator[RawChunk]:
-        while (item := await self._chunks.get()) is not None:
-            yield item
+        while True:
+            item = await self._chunks.get()
+            try:
+                if item is None:
+                    return
+                yield item
+            finally:
+                self._chunks.task_done()
 
     async def connection_events(self) -> AsyncIterator[DeviceConnectionEvent]:
         while (item := await self._events.get()) is not None:

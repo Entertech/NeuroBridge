@@ -50,6 +50,8 @@ sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control status
 
 旧 Ubuntu 配置可在加载时迁移为蓝牙专网配置，保留现场地址、录播许可和算法期限；已声明新 schema 的配置仍须显式选择数据源。新部署使用共享的有界分段存储，兼容读取旧录制；原始数据与算法结果分别持久化，回放不重新计算算法。录制格式、运行诊断和旧安装回退见整合说明。Ubuntu 源码集成与合成回归不等于真实头环、N100/N150 或现场验收。
 
+采集生命周期由共享 `GatewayRuntime` 监督：设备生产任务异常会更新错误状态、清理旧会话并按配置重建，不关闭 HTTP/WS。`getStatus` 与纯状态订阅只读取内存；离线取数的录播目录检查有独立期限与缓存，详见整合说明。macOS POC 停止采集后同样保留监听，重新开始使用新会话。
+
 ## 仓库结构
 
 - `neurobridge/`：跨平台网关核心，不依赖 macOS、Windows 或 Linux 的启动方式。

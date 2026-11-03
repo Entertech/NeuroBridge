@@ -12,7 +12,7 @@
 
 ## 固定组合与依赖方向
 
-`entrypoints → Bootstrap → Profile → RawDataSource → RawDataParser → ApplicationService → RecordingRepository / AlgorithmEngine / NorthboundSink`。
+Bootstrap 选择 Profile 并装配依赖；入口持有进程级 `GatewayRuntime`，每轮采集由一次性 `AcquisitionSession` 连接 `RawDataSource → RawDataParser → ApplicationService → RecordingRepository / AlgorithmEngine / NorthboundSink`。HTTP/WS 与录制仓库在进程级保留，采集恢复只替换设备、应用和算法会话。
 
 | 层 | Ubuntu 实现与职责 |
 | --- | --- |
@@ -22,7 +22,7 @@
 | Application | 准备会话、600 ms 窗口、算法串行处理、原始与结果持久化、快照、订阅与录播许可；不导入设备 I/O。 |
 | Storage | 复用共享有界分段 writer、manifest、容量状态和崩溃恢复，避免重复写一套旧格式。原始设备帧携带通道、会话及接收时间；算法结果关联原采集窗口。 |
 | Northbound | 复用共享 Controller/Codec 与 WebSocket 服务；业务错误使用中文，码值、标识和结构沿用既有契约。 |
-| 运维 | `CaptureControl` 持有统一采集适配器工厂；停止和重启采集均经过同一组合根，监听服务持续存在，重启创建新的应用/设备/算法会话。 |
+| Runtime / 运维 | `CaptureControl` 与 macOS POC 委托共享 `GatewayRuntime`，Bootstrap 提供会话工厂；监督真实设备生产任务，清理后才创建新的应用/设备/算法会话。 |
 
 旧 `business.Gateway` 和 `device` 入口保留兼容调用与测试用途。Ubuntu 生产入口只通过 Bootstrap 的 `GatewayApplication` 与 ApplicationService，页面不选择设备类型或数据源。
 
@@ -34,6 +34,18 @@
 4. 同时识别 Bleak 0.19 wrapper 与 backend 的断线回调，忽略旧连接回调，并以连接轮询兜底。断线排空已排队回调，清空当前电量/佩戴并关闭对应会话。
 5. 算法继续使用默认分支更新后的 SDK 和原始输入，不重新编码或重采样。交换串行化，超时/取消废弃旧响应流；终止有期限，失败升级 kill。
 6. 实时分发沿用默认分支的每流最新值合并，内存不随慢连接无限增长；录播使用有界队列。超时或发送失败关闭该连接，采集、落盘与其他客户端继续；恢复后重新 `getStatus` 和订阅。
+
+## 架构审查修复：任务监督与状态隔离
+
+`RawDataSource.wait_stopped()` 将底层生产任务的异常、意外正常返回和意外取消传递给 `AcquisitionSession`。会话内消费者与监督任务处于同一 TaskGroup，生产者失败不会继续显示为采集中。`GatewayRuntime` 上报错误、清理旧会话、复用仓库和监听，并按对应 BLE/串口 `reconnect_delay_seconds` 重建。主动停止取消重试；清理失败暂停恢复并拒绝新开采集，须先成功停止，避免新旧设备/算法同时占用。清理各阶段受 `pipeline.shutdown_timeout_ms` 约束。
+
+正常停止先停止生产，保留消费者排空已接收原始字节，再关闭应用与算法、收尾录制，最后取消剩余观察任务。故障导致消费者已退出时不等待其排空；错误必须保留为可观测状态，不能声称故障前排队数据全部持久化。
+
+`getStatus` 与只订阅 `status` 的路径不读取录播文件。可用流由实时状态或最近一次验证成功的目录快照投影；启动后目录未就绪时保守返回 `status`。启动预热在后台执行，离线 `getLatest`/数据订阅在独立期限内准备目录；超时或不可读使用既有不可用错误，不新增协议字段或错误标识。
+
+`pipeline.replay_catalog_timeout_ms`（默认 2000 毫秒，正整数）限制每次离线查询等待，`replay_catalog_refresh_ms`（默认 30000 毫秒，正整数）控制目录检查结果缓存期限；数据请求触发过期重查，完成录制时主动失效。并发查询与多次超时共用一个检查任务，取消后也等待物理读线程退出才重开，防止慢盘反复创建扫描线程。目录扫描不重新运行算法。
+
+macOS POC 的开始/停止与 Ubuntu 使用同一个 Runtime。停止仅关闭当前采集会话，保留网关、HTTP/WS 与仓库；再次开始通过 Bootstrap 创建新应用，避免复用已关闭的应用或重新绑定仓库。只有进程退出才关闭监听和仓库。
 
 ## 配置与升级
 
@@ -55,10 +67,12 @@
 
 ## 验证与验收
 
+新增回归覆盖生产任务抛错、正常返回与取消后的恢复、恢复期间主动停止、清理失败阻断替换、macOS 连续启停与监听保留、慢目录下状态响应、查询超时、目录缓存失效和并发扫描去重。
+
 自动验证覆盖 Profile/依赖方向、首通知会话、订阅后才启动、全部原始状态字节落盘、设备遥测、停止后重启、录播禁止不读历史、旧配置迁移、网络发送失败/超时隔离、WS 重连与旧订阅失效。Ubuntu 24.04 x86_64 容器单独构建 C++17 算法桥并运行合成 SDK 回归；编译器、CMake、Eigen 和 NumCpp 版本保存在构建日志并对照 `sdk.lock`。
 
 本轮构建记录：Ubuntu 24.04 `linux/amd64` 容器（ARM 宿主上的 x86_64 仿真）、CMake 3.28.3、GCC 13.3.0、Eigen 3.4.0、NumCpp 2.11.0；SDK 合成测试通过。该环境复用了部署使用的 `linux/build-algorithm-bridge.sh`，以普通构建账户执行。
 
-完整回归记录：在普通用户拥有的 Ubuntu 24.04 x86_64 隔离 checkout 执行 `PYTHONPATH=tests:. python -m unittest discover -s tests -v`，623 个用例完成，8 项按平台或前置条件跳过，无失败；原生桥 JSON 烟雾、SDK CTest、两个静态页面与连接顺序脚本、静态 ZIP 清单及协议/版本门禁通过。
+完整回归记录：在普通用户拥有的 Ubuntu 24.04 x86_64 隔离 checkout 执行 `PYTHONPATH=tests:. python -m unittest discover -s tests -v`，本轮审查修复后的 633 个用例完成，7 项 Windows 专属用例按平台跳过，无失败；采集启停与首通知落盘场景另行重复 20 次通过。三个 Node 页面/连接顺序脚本、静态 ZIP 构建、compileall、协议/版本门禁及 source-train workflow 契约通过。本分支此前完成的原生桥 JSON 烟雾和 SDK CTest 通过，本轮未改原生算法源码。
 
 目标 N100/N150 Ubuntu 主机仍需验证真实头环扫描/首包、拔断与重连、关机重启、自启与权限、有线断开/恢复、多客户端、录播循环和长时间运行；用真实且获准使用的录制数据比对 SDK。容器与合成测试不能作为这些项目的验收证明。

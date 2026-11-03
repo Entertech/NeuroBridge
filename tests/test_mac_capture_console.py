@@ -22,7 +22,7 @@ class MacCaptureTests(unittest.IsolatedAsyncioTestCase):
         adapter = object()
         container = SimpleNamespace(gateway=gateway, device_adapter=adapter)
         config = object()
-        with patch.object(poc, 'build_container', return_value=container) as build:
+        with patch.object(poc, 'build_runtime'), patch.object(poc, 'build_container', return_value=container) as build:
             controller = poc.CaptureController(config)
         build.assert_called_once_with(config)
         self.assertIs(controller.gateway, gateway)

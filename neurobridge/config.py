@@ -52,6 +52,8 @@ class PipelineConfig:
     shutdown_timeout_ms: int = 5000
     send_timeout_ms: int = 5000
     metrics_interval_seconds: int = 10
+    replay_catalog_timeout_ms: int = 2000
+    replay_catalog_refresh_ms: int = 30000
 
 
 @dataclass(frozen=True)

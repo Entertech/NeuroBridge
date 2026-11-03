@@ -140,7 +140,7 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             response = await request("getStatus", {})
             self.assertEqual(response["code"], 200)
             self.assertEqual(response["data"]["result"]["connectionState"], "disconnected")
-            self.assertIn("eeg", response["data"]["result"]["availableStreams"])
+            self.assertEqual(response["data"]["result"]["availableStreams"], ["status"])
             response = await request("subscribe", {"streams": ["eeg"]})
             self.assertEqual(response["code"], 200)
             event = json.loads(await asyncio.wait_for(client.recv(), timeout=1))

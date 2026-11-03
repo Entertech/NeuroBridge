@@ -15,13 +15,21 @@ class FakeRawDataSource:
         self._chunks: asyncio.Queue[RawChunk | None] = asyncio.Queue(maxsize=queue_size)
         self._events: asyncio.Queue[DeviceConnectionEvent | None] = asyncio.Queue(maxsize=queue_size)
         self._status = SourceStatus(ConnectionState.DISCONNECTED)
+        self._stopped = asyncio.Event()
         self._started = False
 
     async def start(self) -> None:
+        self._stopped.clear()
         self._started = True
 
-    async def stop(self) -> None:
+    async def wait_stopped(self) -> None:
+        await self._stopped.wait()
+
+    async def stop(self, *, drain=False) -> None:
+        self._stopped.set()
         self._started = False
+        if drain:
+            await self._chunks.join()
         await self._chunks.put(None)
         await self._events.put(None)
         self._status = SourceStatus(ConnectionState.DISCONNECTED)
@@ -41,8 +49,14 @@ class FakeRawDataSource:
         await self._events.put(event)
 
     async def chunks(self) -> AsyncIterator[RawChunk]:
-        while (item := await self._chunks.get()) is not None:
-            yield item
+        while True:
+            item = await self._chunks.get()
+            try:
+                if item is None:
+                    return
+                yield item
+            finally:
+                self._chunks.task_done()
 
     async def connection_events(self) -> AsyncIterator[DeviceConnectionEvent]:
         while (item := await self._events.get()) is not None:

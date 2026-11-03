@@ -249,7 +249,7 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_periodic_metrics_keep_internal_storage_off_wire(self):
         await self.connect()
-        with self.assertLogs("neurobridge.bootstrap.container", "INFO") as logs:
+        with self.assertLogs("neurobridge.runtime", "INFO") as logs:
             task = asyncio.create_task(self.container.device_adapter._observe())
             await asyncio.sleep(0.01)
             task.cancel()
@@ -264,7 +264,7 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
         await self.connect()
         adapter = self.container.device_adapter
         self.assertIsNone(self.service.metrics()["last_frame_age_ms"])
-        with self.assertLogs("neurobridge.bootstrap.container", "INFO") as logs:
+        with self.assertLogs("neurobridge.runtime", "INFO") as logs:
             adapter._log_metrics()
             await self.capture(2)
             await self.service.flush()
@@ -291,10 +291,10 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
         await self.connect()
         adapter = self.container.device_adapter
         with patch.object(adapter._metrics, "sample", side_effect=OSError("synthetic counter failure")):
-            with self.assertLogs("neurobridge.bootstrap.container", "ERROR"):
+            with self.assertLogs("neurobridge.runtime", "ERROR"):
                 adapter._log_metrics()
         await self.capture()
-        with self.assertLogs("neurobridge.bootstrap.container", "INFO") as logs:
+        with self.assertLogs("neurobridge.runtime", "INFO") as logs:
             await adapter.stop()
         final = json.loads(next(line.split("Runtime metrics: ", 1)[1] for line in logs.output if "Runtime metrics: " in line))
         self.assertEqual(final["phase"], "acquisition_shutdown")

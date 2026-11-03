@@ -152,3 +152,6 @@ persistence_timeout_ms = 1000
 shutdown_timeout_ms = 5000
 send_timeout_ms = 5000
 metrics_interval_seconds = 10
+# Offline data-query deadline and replay catalogue cache lifetime; getStatus never scans files.
+replay_catalog_timeout_ms = 2000
+replay_catalog_refresh_ms = 30000

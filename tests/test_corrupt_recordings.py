@@ -47,8 +47,10 @@ class CorruptRecordingTests(unittest.IsolatedAsyncioTestCase):
         file = self.file(recording_id)
         file.write_bytes(file.read_bytes() + b'\n')
         original = file.read_bytes()
+        result = await self.request()
         with self.assertLogs('neurobridge.business.recording', level='WARNING') as logs:
-            result = await self.request()
+            unavailable = await self.request('getLatest', {'streams':['eeg']})
+        self.assertEqual(unavailable['data']['reason'], REPLAY_NOT_AVAILABLE_REASON)
         self.assertEqual(result['code'], 200)
         self.assertEqual(result['data']['result']['availableStreams'], ['status'])
         self.assertIn(str(file), logs.output[0])
@@ -69,6 +71,7 @@ class CorruptRecordingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.gateway.replay_recording_id, older)
         self.assertNotIn('PRIVATE_VALUE', '\n'.join(logs.output))
         self.assertIn('algorithm/attention.jsonl', logs.output[0])
+        await self.gateway.prepare_query()
         result = await self.request()
         self.assertEqual(result['code'], 200)
         self.assertIn('eeg', result['data']['result']['availableStreams'])
@@ -84,6 +87,7 @@ class CorruptRecordingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.gateway.replay_recording_id)
         file.write_bytes(good)
         self.assertEqual(self.gateway.replay_recording_id, recording_id)
+        await self.gateway.prepare_query()
         self.assertIn('eeg.raw', (await self.request())['data']['result']['availableStreams'])
 
     async def test_legacy_corruption_is_excluded_without_partial_data(self):
@@ -132,8 +136,8 @@ class CorruptRecordingTests(unittest.IsolatedAsyncioTestCase):
         recording_id = self.recording()
         self.file(recording_id).write_text('PRIVATE_INVALID_JSON\n')
         with self.assertLogs('neurobridge.business.recording', level='WARNING') as logs:
-            await self.request()
-            await self.request()
+            await self.request('getLatest', {'streams':['eeg']})
+            await self.request('getLatest', {'streams':['eeg']})
         self.assertEqual(len(logs.output), 1)
         self.assertNotIn('PRIVATE_INVALID_JSON', logs.output[0])
         self.gateway.store._diagnostics_interval = 0

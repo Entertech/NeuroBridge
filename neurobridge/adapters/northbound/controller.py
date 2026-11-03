@@ -69,7 +69,8 @@ class NorthboundController:
             key = action if action in self.gateway.requests_by_action else "invalid"
             self.gateway.requests_by_action[key] += 1
             params = request["params"]
-            if action in {"getStatus", "getLatest", "subscribe"}:
+            status_only = isinstance(params.get("streams"), list) and params["streams"] and all(stream == "status" for stream in params["streams"])
+            if action == "getLatest" or (action == "subscribe" and not status_only):
                 await self.gateway.prepare_query()
             safe_request_id = request_id.replace("\n", " ").replace("\r", " ")[:96]
             start_replay = False

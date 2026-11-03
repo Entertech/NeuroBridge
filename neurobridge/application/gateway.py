@@ -67,6 +67,7 @@ class GatewayApplication:
         self.supports_replay = supports_replay and config.recording.replay_enabled
         self.replay_reader = replay_reader if supports_replay else None
         self._replay_selection = (None, frozenset(), None, None)
+        self._catalog_task: asyncio.Task | None = None
         self._project_window = project_window
         self.boot_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:4]}"
         self.store = store
@@ -119,6 +120,8 @@ class GatewayApplication:
         # a Flowtime connection has subscribed all notifications and started capture.
         self.status["algorithmState"] = "unavailable"
         self.recording_repository = await asyncio.to_thread(self._recording_factory)
+        if self.supports_replay and self.replay_reader is not None:
+            self._catalog_task = asyncio.create_task(self._warm_catalog(), name="neurobridge-replay-catalog")
         self.log.info(
             "Gateway started: bootId=%s transport=%s recordingDirectory=%s networkMode=%s algorithmEnabled=%s",
             self.boot_id,
@@ -129,6 +132,12 @@ class GatewayApplication:
         )
 
     async def stop(self) -> None:
+        if self._catalog_task:
+            self._catalog_task.cancel()
+            await asyncio.gather(self._catalog_task, return_exceptions=True)
+            self._catalog_task = None
+        if self.replay_reader is not None and hasattr(self.replay_reader, "close"):
+            await self.replay_reader.close()
         for session in tuple(self.sessions):
             await self.close_session(session)
         await self._stop_replay()
@@ -185,6 +194,8 @@ class GatewayApplication:
             await asyncio.to_thread(self.store.stop)
             if recording_id and self.recording_repository is not None:
                 await self.recording_repository.close_session(recording_id)
+            if self.replay_reader is not None and hasattr(self.replay_reader, "invalidate"):
+                self.replay_reader.invalidate()
             self.log.info("Device disconnected; algorithm and recording stopped")
         if previous != value:
             if name == "connectionState":
@@ -289,9 +300,40 @@ class GatewayApplication:
             return self._active_replay_recording_id or self._replay_selection[0]
         return self._active_replay_recording_id or self.store.replay_recording_id(self.config.recording.replay_recording_id)
 
+    async def _warm_catalog(self) -> None:
+        try:
+            await self.prepare_query()
+        except ProtocolError:
+            # Catalogue readiness must not delay HTTP/WS startup or status.
+            pass
+
+    def _inspect_legacy_replay(self):
+        recording_id = self.store.replay_recording_id(self.config.recording.replay_recording_id)
+        streams, latest, timestamp = set(), None, None
+        for event in self.store.events(recording_id) if recording_id else ():
+            algorithm = event["payload"].get("algorithm", {})
+            if any(key not in {"hr", "pressure", "coherence", "arousal"} for key in algorithm):
+                streams.add("eeg")
+            if any(key in algorithm for key in {"hr", "pressure", "coherence", "arousal"}):
+                streams.add("hr")
+            if event["valid"] and algorithm:
+                latest, timestamp = algorithm, event["timestampMs"]
+        return recording_id, frozenset(streams), latest, timestamp
+
     async def prepare_query(self) -> None:
-        if self.supports_replay and self.replay_reader is not None and not self.live and self._replay_task is None:
-            self._replay_selection = await self.replay_reader.inspect(self.config.recording.replay_recording_id)
+        if self.supports_replay and not self.live and self._replay_task is None:
+            try:
+                result = await asyncio.wait_for(
+                    (self.replay_reader.inspect(self.config.recording.replay_recording_id) if self.replay_reader is not None
+                     else asyncio.to_thread(self._inspect_legacy_replay)),
+                    self.config.pipeline.replay_catalog_timeout_ms / 1000)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self.log.warning("Replay catalogue unavailable: errorType=%s", type(error).__name__)
+                raise self._offline_data_error() from None
+            if not self.live and self.supports_replay and self._replay_task is None:
+                self._replay_selection = result
 
     def mode(self) -> str:
         # ``mode`` is constrained by the released northbound contract to
@@ -372,6 +414,18 @@ class GatewayApplication:
 
     def _northbound_status(self):
         return self.wire.northbound_status(self)
+
+    def status_streams(self) -> set[str]:
+        """Constant-time status projection; never reads the recording filesystem."""
+        available = {"status"}
+        if self.live:
+            available.update({"eeg.raw", "hr.raw"})
+            if self.algorithm.available or self.status.get("algorithmState") == "ready":
+                available.update({"eeg", "hr"})
+        elif self.supports_replay and (self._active_replay_recording_id or self._replay_selection[0]):
+            available.update({"eeg.raw", "hr.raw"})
+            available.update(self._replay_selection[1])
+        return available
 
     def available_streams(self) -> set[str]:
         available = {"status"}

@@ -10,6 +10,7 @@ import time
 from typing import Callable
 
 from .ble.flowtime import FlowtimeAdapter
+from .runtime import GatewayRuntime
 from .application.gateway import GatewayApplication as Gateway
 
 LOG = logging.getLogger(__name__)
@@ -60,10 +61,11 @@ def metric_summary(value):
 
 
 class CaptureControl:
-    def __init__(self, gateway: Gateway, adapter_factory: Callable = FlowtimeAdapter, *, pipeline_factory: Callable | None = None) -> None:
+    def __init__(self, gateway: Gateway, adapter_factory: Callable = FlowtimeAdapter, *, pipeline_factory: Callable | None = None, runtime: GatewayRuntime | None = None) -> None:
         self.gateway = gateway
         self.adapter_factory = adapter_factory
         self.pipeline_factory = pipeline_factory
+        self.runtime = runtime or (GatewayRuntime(gateway, pipeline_factory, restart_delay_seconds=gateway.config.ble.reconnect_delay_seconds, shutdown_timeout_seconds=gateway.config.pipeline.shutdown_timeout_ms / 1000) if pipeline_factory is not None else None)
         self.logs = CaptureLogBuffer()
         self._adapter = None
         self._task: asyncio.Task | None = None
@@ -76,7 +78,7 @@ class CaptureControl:
 
     @property
     def running(self) -> bool:
-        return bool(self._task and not self._task.done())
+        return self.runtime.running if self.runtime is not None else bool(self._task and not self._task.done())
 
     def snapshot(self) -> dict:
         store = self.gateway.store
@@ -101,6 +103,10 @@ class CaptureControl:
                 raise CaptureError(503, "Capture service is shutting down.")
             if not self.gateway.config.ble.enabled:
                 raise CaptureError(503, "Device capture is disabled in deployment configuration (ble.enabled=false).")
+            if self.runtime is not None:
+                await self.runtime.start()
+                self._adapter = self.runtime.session
+                return self.snapshot()
             if self._stop_failed:
                 raise CaptureError(503, "Previous device stop failed; stop it successfully before restarting.")
             if not self.running:
@@ -125,6 +131,10 @@ class CaptureControl:
 
     async def stop(self) -> dict:
         async with self._lock:
+            if self.runtime is not None:
+                await self.runtime.stop()
+                self._adapter = None
+                return self.snapshot()
             adapter, task = self._adapter, self._task
             failure = None
             try:
@@ -172,7 +182,10 @@ class CaptureControl:
             return
         self._closing = True
         try:
-            await self.stop()
+            if self.runtime is not None:
+                await self.runtime.close()
+            else:
+                await self.stop()
         finally:
             self.gateway.window_observer = self._previous_observer
             logging.getLogger().removeHandler(self.logs)

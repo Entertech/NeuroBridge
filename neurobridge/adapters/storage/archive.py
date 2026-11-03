@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
+import time
 from contextlib import contextmanager
 import queue
 from threading import Event, Thread
@@ -175,17 +176,61 @@ class SegmentedArchive(RecordingStore):
 
 
 class ArchiveReplayReader:
-    def __init__(self, archive):
+    def __init__(self, archive, *, cache_ttl_seconds=30):
         self.archive = archive
+        self.cache_ttl_seconds = cache_ttl_seconds
         self._inspection = None
+        self._inspection_lock = asyncio.Lock()
+        self._inspection_preference = None
+        self._cached_preference = None
+        self._cached_selection = None
+        self._cache_deadline = 0
+        self._generation = 0
+        self._scan_done = Event()
+        self._scan_done.set()
+
+    def invalidate(self):
+        self._generation += 1
+        self._cache_deadline = 0
 
     async def inspect(self, preferred_recording_id):
-        if self._inspection is None or self._inspection.done():
-            self._inspection = asyncio.create_task(self._inspect_async(preferred_recording_id))
-        return await asyncio.shield(self._inspection)
+        while True:
+            if self._cached_selection is not None and self._cached_preference == preferred_recording_id and time.monotonic() < self._cache_deadline:
+                return self._cached_selection
+            async with self._inspection_lock:
+                if self._cached_selection is not None and self._cached_preference == preferred_recording_id and time.monotonic() < self._cache_deadline:
+                    return self._cached_selection
+                if self._inspection is None or self._inspection.done():
+                    # Cancelling a coroutine cannot interrupt a blocked OS read.
+                    # Serialize replacement scans until the physical reader exits.
+                    while not self._scan_done.is_set():
+                        await asyncio.sleep(.005)
+                    self._inspection_generation = self._generation
+                    self._inspection_preference = preferred_recording_id
+                    self._inspection = asyncio.create_task(self._inspect_async(preferred_recording_id))
+            task, preference, generation = self._inspection, self._inspection_preference, self._inspection_generation
+            result = await asyncio.shield(task)
+            if preference == preferred_recording_id and generation == self._generation:
+                return result
+
+    async def close(self):
+        if self._inspection and not self._inspection.done():
+            self._inspection.cancel()
+            await asyncio.gather(self._inspection, return_exceptions=True)
 
     async def _inspect_async(self, preferred_recording_id):
-        async for value in self._read(lambda: iter((self._inspect(preferred_recording_id),))):
+        generation = self._generation
+        self._scan_done.clear()
+        def scan():
+            try:
+                yield self._inspect(preferred_recording_id)
+            finally:
+                self._scan_done.set()
+        async for value in self._read(scan):
+            if generation == self._generation:
+                self._cached_selection = value
+                self._cached_preference = preferred_recording_id
+                self._cache_deadline = time.monotonic() + self.cache_ttl_seconds
             return value
 
     @staticmethod

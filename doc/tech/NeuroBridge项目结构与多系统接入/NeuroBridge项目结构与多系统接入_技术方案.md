@@ -74,7 +74,9 @@ flowchart TB
     BOOT --> RESOLVER[Deployment Profile Resolver]
     RESOLVER --> PROFILE[已校验 Profile + Capabilities]
 
-    BOOT --> SOURCE[RawDataSource]
+    BOOT --> RT[GatewayRuntime 进程级监督]
+    RT --> SESSION[AcquisitionSession 一次性采集会话]
+    SESSION --> SOURCE[RawDataSource]
     BOOT --> CONTROL[DeviceControl]
     BOOT --> PARSER[RawDataParser]
     BOOT --> APP[Application Pipeline]
@@ -82,8 +84,9 @@ flowchart TB
     BOOT --> ALG[AlgorithmEngine]
     BOOT --> NB[Northbound Adapter]
 
-    SOURCE -->|RawChunk| APP
-    SOURCE -->|DeviceConnectionEvent| APP
+    SOURCE -->|RawChunk / DeviceConnectionEvent| SESSION
+    SESSION --> APP
+    SOURCE -->|wait_stopped 异常或意外退出| RT
     APP --> PARSER
     APP --> CONTROL
     APP --> STORAGE
@@ -99,6 +102,8 @@ flowchart TB
 - Ports 定义 Application 需要的能力，Adapters 实现这些能力；
 - Application 负责编排，不创建 pyserial、Bleak、WebSocket 或文件对象；
 - Bootstrap 是唯一同时认识接口和具体实现的组合根；
+- 进程级 `GatewayRuntime` 监督 Source 的真实生产任务，先清理旧会话再按配置恢复；主动停止取消重试，清理失败阻断替换。监听与仓库保留，应用/设备/算法通过 Bootstrap 重建；
+- `getStatus` 和纯状态订阅只投影内存，不等待录播目录；目录后台预热与离线数据请求使用有期限、可失效且并发去重的缓存。具体配置和回归边界见 [Ubuntu 头环接入整合](Ubuntu头环接入整合.md)。
 - Profile 在启动阶段一次性绑定 Source、Parser、DeviceControl 和能力，运行期不再按 `sourceType` 选择 Parser；
 - Northbound 只做协议适配，不能决定录播能力、设备状态或算法流程。
 
@@ -268,7 +273,7 @@ class RawDataSource(Protocol):
 
 职责：设备发现、底层连接、验证、原始字节读取、读取边界打时戳、断线检测和重连。禁止解析业务字段、组成算法窗口或发送北向消息。
 
-每个 Source 实例是底层 BLE Client 或串口对象的唯一所有者。`chunks()` 与 `connection_events()` 均为单消费者流，由 `AcquisitionSupervisor` 消费；需要多方观察时由 Application 转换为领域事件后扇出，不能让多个模块直接争抢 Source 迭代器。
+每个 Source 实例是底层 BLE Client 或串口对象的唯一所有者。`chunks()` 与 `connection_events()` 均为单消费者流，由 `AcquisitionSession` 消费；需要多方观察时由 Application 转换为领域事件后扇出，不能让多个模块直接争抢 Source 迭代器。
 
 ### 7.2 DeviceControl
 

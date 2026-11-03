@@ -18,7 +18,7 @@ import threading
 from typing import Any
 from urllib.parse import urlparse
 
-from neurobridge.bootstrap import build_container
+from neurobridge.bootstrap import build_container, build_runtime
 from neurobridge.config import GatewayConfig, load
 from neurobridge.northbound.websocket import create_server
 
@@ -59,10 +59,10 @@ class CaptureController:
         self.container = build_container(config)
         self.gateway = self.container.gateway
         self.gateway.window_observer = self.log_algorithm_output
+        self.runtime = build_runtime(self.container)
         self.adapter = self.container.device_adapter
         self.server: Any | None = None
-        self.adapter_task: asyncio.Task[None] | None = None
-        self.started = False
+        self._gateway_started = False
         self.lock = asyncio.Lock()
 
     async def log_algorithm_output(self, _window: object, algorithm: dict | None, reasons: list[str], valid: bool) -> None:
@@ -86,40 +86,46 @@ class CaptureController:
             rendered = rendered[:2048] + "…(truncated)"
         LOG.info("Algorithm output (valid=%s): %s", valid, rendered)
 
+    @property
+    def started(self) -> bool:
+        return self.runtime.running
+
+    @property
+    def adapter_task(self):
+        return self.runtime.session_task
+
     async def start(self) -> dict[str, Any]:
         async with self.lock:
-            if self.started:
-                return self.snapshot()
-            await self.gateway.start()
-            self.server = await create_server(self.gateway, self.container.northbound_controller)
-            self.adapter_task = asyncio.create_task(self.adapter.run(), name="flowtime-adapter")
-            self.started = True
-            LOG.info("Capture requested: scanning for the configured Flowtime headband")
+            if not self._gateway_started:
+                try:
+                    await self.gateway.start()
+                    self.server = await create_server(self.gateway, self.container.northbound_controller)
+                except BaseException:
+                    await self.gateway.stop()
+                    raise
+                self._gateway_started = True
+            if self.gateway.config.ble.enabled:
+                await self.runtime.start()
+                self.adapter = self.runtime.session
             return self.snapshot()
 
     async def stop(self) -> dict[str, Any]:
         async with self.lock:
-            if not self.started:
-                return self.snapshot()
-            await self.adapter.stop()
-            if self.adapter_task:
-                try:
-                    await asyncio.wait_for(self.adapter_task, timeout=4)
-                except TimeoutError:
-                    self.adapter_task.cancel()
-                    try:
-                        await self.adapter_task
-                    except asyncio.CancelledError:
-                        pass
-            if self.server:
-                self.server.close()
-                await self.server.wait_closed()
-            await self.gateway.stop()
-            self.server = None
-            self.adapter_task = None
-            self.started = False
-            LOG.info("Capture stopped")
+            await self.runtime.stop()
             return self.snapshot()
+
+    async def shutdown(self) -> None:
+        async with self.lock:
+            try:
+                await self.runtime.close()
+            finally:
+                if self.server:
+                    self.server.close()
+                    await self.server.wait_closed()
+                    self.server = None
+                if self._gateway_started:
+                    await self.gateway.stop()
+                    self._gateway_started = False
 
     async def export_current_recording(self) -> Path:
         recording_id = self.gateway.store.recording_id or self.gateway.store.last_recording_id
@@ -302,7 +308,7 @@ async def run(args: argparse.Namespace) -> None:
     finally:
         httpd.shutdown()
         httpd.server_close()
-        await controller.stop()
+        await controller.shutdown()
         root_logger.removeHandler(logs)
         logs.close()
 

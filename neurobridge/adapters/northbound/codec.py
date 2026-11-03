@@ -64,7 +64,7 @@ class GatewayWireCodec:
         from time import time
         return {"gatewayBootId": gateway.boot_id, "subjectId": gateway.config.recording.subject_id,
                 "mode": gateway.mode(), **self.northbound_status(gateway),
-                "availableStreams": sorted(gateway.available_streams()), "serverTimeMs": int(time() * 1000)}
+                "availableStreams": sorted(gateway.status_streams()), "serverTimeMs": int(time() * 1000)}
 
     def error(self, request_id, error):
         data = {"reason": error.reason, "retryable": error.retryable, "details": error.details}

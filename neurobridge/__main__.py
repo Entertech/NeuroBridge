@@ -12,7 +12,7 @@ import signal
 import time
 
 from .configuration.runtime import load_runtime_config
-from .bootstrap import build_container
+from .bootstrap import build_container, build_runtime
 from .download import serve_downloads
 from .diagnostics import NetworkDiagnostics
 from .capture_control import CaptureControl
@@ -102,14 +102,11 @@ async def run(config_path: str, *, override_path: str | None = None, development
             config.serial.rts,
         )
     gateway = container.gateway
-    adapter = container.device_adapter
+    runtime = build_runtime(container)
     capture = None
     diagnostics = None
     if container.profile.profile_id == "ubuntu_headband_wired":
-        first_adapter = [adapter]
-        def pipeline_factory():
-            return first_adapter.pop() if first_adapter else build_container(config, gateway=gateway).device_adapter
-        capture = CaptureControl(gateway, pipeline_factory=pipeline_factory)
+        capture = CaptureControl(gateway, runtime=runtime)
         diagnostics = NetworkDiagnostics(config, gateway.boot_id)
         gateway.network_diagnostic = diagnostics.request_snapshot
     loop = asyncio.get_running_loop()
@@ -125,7 +122,7 @@ async def run(config_path: str, *, override_path: str | None = None, development
         await gateway.start()
         async with asyncio.TaskGroup() as group:
             group.create_task(serve(gateway, container.northbound_controller))
-            group.create_task(capture.run() if capture is not None else adapter.run())
+            group.create_task(capture.run() if capture is not None else runtime.run(auto_start=container.profile.transport != "bluetooth" or config.ble.enabled))
             if diagnostics is not None:
                 group.create_task(diagnostics.run())
             if strategy.serves_local_ui(config):
@@ -141,7 +138,7 @@ async def run(config_path: str, *, override_path: str | None = None, development
             if capture is not None:
                 await capture.shutdown()
             else:
-                await adapter.stop()
+                await runtime.close()
         finally:
             try:
                 await gateway.stop()
