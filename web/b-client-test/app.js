@@ -235,7 +235,7 @@ function connect() {
 
 elements.connectButton.addEventListener("click", connect);
 elements.disconnectButton.addEventListener("click", () => {
-  if (socket) socket.close(1000, "B-side test console disconnect");
+  if (socket) socket.close(1000, "客户端主动断开连接");
 });
 elements.getStatusButton.addEventListener("click", () => sendRequest("getStatus", {}));
 elements.getLatestButton.addEventListener("click", () => {

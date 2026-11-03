@@ -316,13 +316,13 @@ class Gateway:
         try:
             request = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise ProtocolError(400, "INVALID_REQUEST", "Request is not valid JSON.") from exc
+            raise ProtocolError(400, "INVALID_REQUEST", "请求内容格式错误，请检查 JSON 格式后重试") from exc
         if not isinstance(request, dict) or set(request) != {"protocolVersion", "messageType", "requestId", "action", "params"}:
-            raise ProtocolError(400, "INVALID_REQUEST", "Request root fields are invalid.")
+            raise ProtocolError(400, "INVALID_REQUEST", "请求信息不完整或包含多余字段，请检查后重试")
         if request["protocolVersion"] != PROTOCOL_VERSION:
-            raise ProtocolError(505, "UNSUPPORTED_VERSION", "Protocol version is not supported.")
+            raise ProtocolError(505, "UNSUPPORTED_VERSION", "通信协议版本不匹配，请使用网关支持的版本")
         if request["messageType"] != "request" or not isinstance(request["requestId"], str) or not isinstance(request["params"], dict):
-            raise ProtocolError(400, "INVALID_REQUEST", "Request fields are invalid.")
+            raise ProtocolError(400, "INVALID_REQUEST", "请求类型、请求编号或参数格式不正确")
         return request
 
     async def handle(self, session: ClientSession, raw: str, send: Any) -> None:
@@ -352,14 +352,14 @@ class Gateway:
                 self.validate_params(params, {"subscriptionId"})
                 result = await self.unsubscribe(session, params)
             else:
-                raise ProtocolError(400, "INVALID_REQUEST", "Unknown action.", details={"action": action})
+                raise ProtocolError(400, "INVALID_REQUEST", "当前操作不受支持，请检查操作名称", details={"action": action})
             response = envelope(200, {"requestId": request_id, "action": action, "result": result})
         except ProtocolError as error:
             response = self.error(request_id, error)
             start_replay_after_response = False
         except Exception:
             LOG.exception("Request handling failed: bootId=%s sessionId=%s requestId=%s action=%s", self.boot_id, session.id, request_id, action)
-            response = self.error(request_id, ProtocolError(500, "INTERNAL_ERROR", "Gateway request failed.", True))
+            response = self.error(request_id, ProtocolError(500, "INTERNAL_ERROR", "网关处理请求失败，请稍后重试或联系运维人员", True))
             start_replay_after_response = False
         # Sending belongs outside the request error handler: a failed transport
         # cannot deliver a second INTERNAL_ERROR response over that same link.
@@ -380,7 +380,7 @@ class Gateway:
             raise self.replay_unavailable_error()
         unavailable = set(streams) - self.available_streams()
         if unavailable:
-            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
+            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "请求的数据类型不受支持或暂不可用，请重新选择", details={"streams": sorted(unavailable)})
         algorithm, timestamp = self.latest_algorithm, self.latest_algorithm_timestamp
         if not self.live and self.replay_available:
             if start_replay:
@@ -392,11 +392,11 @@ class Gateway:
 
     def validate_streams(self, streams: object, allowed: set[str] | None = None, require: bool = True) -> list[str]:
         if not isinstance(streams, list) or (require and not streams) or any(not isinstance(item, str) for item in streams):
-            raise ProtocolError(400, "INVALID_REQUEST", "params.streams must be a non-empty string array.")
+            raise ProtocolError(400, "INVALID_REQUEST", "数据类型填写错误，请至少选择一种数据类型")
         unique = list(dict.fromkeys(streams))
         invalid = set(unique) - (allowed or STREAMS)
         if invalid:
-            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(invalid)})
+            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "请求的数据类型不受支持或暂不可用，请重新选择", details={"streams": sorted(invalid)})
         return unique
 
     def latest_replay_algorithm(self) -> tuple[dict | None, int | None]:
@@ -418,28 +418,28 @@ class Gateway:
     def validate_params(params: dict, allowed: set[str]) -> None:
         unknown = set(params) - allowed
         if unknown:
-            raise ProtocolError(400, "INVALID_REQUEST", "Request contains unsupported params.", details={"params": sorted(unknown)})
+            raise ProtocolError(400, "INVALID_REQUEST", "请求包含不支持的参数，请删除后重试", details={"params": sorted(unknown)})
 
     def replay_unavailable_error(self) -> ProtocolError:
-        message = "No replay data is available." if self.config.recording.replay_enabled else "头环未连接"
+        message = "头环未连接，且暂无可用的录播数据" if self.config.recording.replay_enabled else "头环未连接"
         return ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, message, True)
 
     async def subscribe(self, session: ClientSession, params: dict, send: Any, *, start_replay: bool = True) -> dict:
         streams = self.validate_streams(params.get("streams"))
         include_invalid = params.get("includeInvalid", False)
         if not isinstance(include_invalid, bool):
-            raise ProtocolError(400, "INVALID_REQUEST", "params.includeInvalid must be boolean.")
+            raise ProtocolError(400, "INVALID_REQUEST", "无效数据接收选项填写错误，请使用 true 或 false")
         if len(session.subscriptions) >= 4:
-            raise ProtocolError(429, "RATE_LIMITED", "Subscription limit exceeded.", True)
+            raise ProtocolError(429, "RATE_LIMITED", "订阅数量已达上限，请先取消不需要的订阅", True)
         already_subscribed = set().union(*(item.streams for item in session.subscriptions.values())) if session.subscriptions else set()
         duplicate_streams = set(streams) & already_subscribed
         if duplicate_streams:
-            raise ProtocolError(429, "RATE_LIMITED", "A stream is already subscribed on this connection.", True, {"streams": sorted(duplicate_streams)})
+            raise ProtocolError(429, "RATE_LIMITED", "该数据已在当前连接中订阅，请勿重复订阅", True, {"streams": sorted(duplicate_streams)})
         if not self.live and not self.replay_available:
             raise self.replay_unavailable_error()
         unavailable = set(streams) - self.available_streams()
         if unavailable:
-            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
+            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "请求的数据类型不受支持或暂不可用，请重新选择", details={"streams": sorted(unavailable)})
         subscription = Subscription(f"sub-{uuid.uuid4().hex}", frozenset(streams), include_invalid, send, asyncio.Queue(maxsize=self.config.server.delivery_queue_size))
         self.sessions.add(session)
         session.subscriptions[subscription.id] = subscription
@@ -452,10 +452,10 @@ class Gateway:
     async def unsubscribe(self, session: ClientSession, params: dict) -> dict:
         subscription_id = params.get("subscriptionId")
         if not isinstance(subscription_id, str):
-            raise ProtocolError(400, "INVALID_REQUEST", "params.subscriptionId is required.")
+            raise ProtocolError(400, "INVALID_REQUEST", "缺少有效的订阅编号，请先确认需要取消的订阅")
         subscription = session.subscriptions.get(subscription_id)
         if not subscription:
-            raise ProtocolError(404, "SUBSCRIPTION_NOT_FOUND", "Subscription does not exist.")
+            raise ProtocolError(404, "SUBSCRIPTION_NOT_FOUND", "订阅不存在或已失效，请检查订阅编号")
         await self._remove_subscription(session, subscription)
         return {"subscriptionId": subscription_id}
 

@@ -334,7 +334,7 @@ neurobridge-ops replay status
 | --- | --- |
 | 头环未连接，禁止录播 | `getStatus` 返回 200、`mode="live"`、`connectionState="disconnected"`；`getLatest`/`subscribe` 返回 503，`message="头环未连接"` |
 | 头环未连接，允许录播且有正常历史会话 | 按需取数/订阅使用录播，输出 `mode="replay"` |
-| 头环未连接，允许录播但没有可读历史会话 | 状态查询成功；取数返回 503，`message="No replay data is available."` |
+| 头环未连接，允许录播但没有可读历史会话 | 状态查询成功；取数返回 503，`message="头环未连接，且暂无可用的录播数据"` |
 | 头环已连接 | 使用实时可用流，关注算法状态和数据 `valid`；录播开关不强制切换数据源 |
 
 禁止录播时，`mode` 必须为 `live`，即使头环未连接；这表示等待实时设备，不代表实时数据已就绪。允许录播且头环未连接时才可为 `replay`，但仍须核对可读会话和实际取数结果。业务错误码、消息原文及异常场景见 [B 端异常消息与场景排查表](../doc/tech/B端异常消息与场景排查表.md)。

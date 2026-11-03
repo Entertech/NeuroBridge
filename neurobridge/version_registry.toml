@@ -132,6 +132,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-11-03-b-side-chinese-error-reasons"
+date = "2026-11-03"
+scope = "northbound_error_presentation"
+summary = "B 端 WS 业务失败 message 全部改为接入方可直接理解的中文原因，同步错误场景表与运行说明；握手拒绝和网关主动关闭原因使用 UTF-8 中文，客户端主动断开提示同步中文。保留业务错误码、reason、retryable、details、请求关联规则及关闭码，补充中文传输回归。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求错误原因全部使用外部人员能理解的中文；同步运行时与未发布参考文档，不修改已锁定对外文档、应用或报文版本，不生成正式 PDF。接入程序须按错误码和标识处理，不能依赖旧英文 message；现场升级验证待完成。"
+
+[[change_records]]
 id = "2026-11-03-replay-policy-mode-and-operations-reference"
 date = "2026-11-03"
 scope = "gateway_mode_and_internal_documentation"
