@@ -9,6 +9,7 @@ import time
 import uuid
 from typing import Any, Awaitable, Callable
 
+from ..hrv_diagnostics import HrvTrace
 from ..domain.result import WindowResult
 from ..ports.recording import RecordingRepository
 from .subscriptions import SubscriptionFanout
@@ -62,6 +63,7 @@ class GatewayApplication:
             raise ValueError("A northbound codec must be supplied by Bootstrap")
         self.wire = wire
         self.config = config
+        self.hrv_trace = HrvTrace(config.logging.diagnostics_interval_seconds)
         self.log = logging.getLogger(__name__)
         self._recording_factory = recording_factory
         self.supports_replay = supports_replay and config.recording.replay_enabled
@@ -216,6 +218,13 @@ class GatewayApplication:
             raise ValueError("Serial headset results must always use live mode")
         self._last_live_update = time.monotonic()
         algorithm_payload = dict(result.algorithm_result.metrics) or None
+        hrv_context = dict(batchId=result.batch.batch_id, connectionSessionId=result.batch.connection_session_id,
+            recordingSessionId=result.batch.recording_session_id, gatewayBootId=self.boot_id,
+            windowStartMs=result.batch.window_start_ms, windowEndMs=result.batch.window_end_ms,
+            timestampMs=result.batch.window_end_ms, mode=result.mode)
+        self.hrv_trace.observe("gateway_received", algorithm_payload, upstream=result.algorithm_result.metrics,
+            expected_hr=any(signal.signal_type == "hr" for signal in result.batch.signals),
+            valid=result.valid, **hrv_context)
         if result.valid and algorithm_payload:
             self.latest_algorithm = algorithm_payload
             self.latest_algorithm_timestamp = result.batch.window_end_ms
@@ -247,7 +256,8 @@ class GatewayApplication:
                 self.log.exception("Capture window observer failed")
         for session in tuple(self.sessions):
             for subscription in tuple(session.subscriptions.values()):
-                payload = self.filtered_payload(raw, algorithm_payload, subscription.streams)
+                payload = self.filtered_payload(raw, algorithm_payload, subscription.streams,
+                    diagnostic_context={**hrv_context, "subscriptionId": subscription.id})
                 algorithm_requested = bool(subscription.streams & {"eeg", "hr"})
                 subscription_valid = result.batch.valid and (
                     result.algorithm_result.valid if algorithm_requested else True
@@ -258,6 +268,10 @@ class GatewayApplication:
                 if algorithm_requested and not algorithm_payload and not result.algorithm_result.valid:
                     payload["algorithm"] = {}
                 if not payload or (not subscription_valid and not subscription.include_invalid):
+                    self.hrv_trace.observe("subscription_skipped", algorithm_payload,
+                        hrRequested="hr" in subscription.streams, valid=subscription_valid,
+                        outcome="invalid_filtered" if not subscription_valid else "empty_payload",
+                        subscriptionId=subscription.id, **hrv_context)
                     continue
                 if not subscription_valid:
                     payload["invalidReasons"] = subscription_reasons
@@ -403,8 +417,12 @@ class GatewayApplication:
             sum(len(session.subscriptions) for session in self.sessions),
         )
 
-    def filtered_payload(self, raw, algorithm_payload, streams):
-        return self.wire.filtered_payload(raw, algorithm_payload, streams)
+    def filtered_payload(self, raw, algorithm_payload, streams, *, diagnostic_context=None, diagnostic_stage="payload_projection"):
+        payload = self.wire.filtered_payload(raw, algorithm_payload, streams)
+        self.hrv_trace.observe(diagnostic_stage, payload.get("algorithm"), upstream=algorithm_payload,
+            hrRequested="hr" in streams, outcome="selected" if "hr" in streams else "not_requested",
+            **(diagnostic_context or {}))
+        return payload
 
     def event_data(self, event, subscription_id, timestamp_ms, mode, valid, payload):
         return self.wire.event_data(self, event, subscription_id, timestamp_ms, mode, valid, payload)
@@ -476,6 +494,9 @@ class GatewayApplication:
                 algorithm = dict(snapshot.algorithm_result.metrics) or None
                 timestamp = snapshot.batch.window_end_ms
                 latest_valid = snapshot.valid and algorithm is not None
+                self.hrv_trace.observe("latest_snapshot", algorithm, batchId=snapshot.batch.batch_id,
+                    recordingSessionId=snapshot.batch.recording_session_id, gatewayBootId=self.boot_id,
+                    timestampMs=timestamp, mode="live", valid=latest_valid, hrRequested="hr" in streams)
             if self._last_live_update is not None and (time.monotonic() - self._last_live_update) * 1000 >= self.config.data_source.stale_after_ms:
                 latest_valid = False
         if not self.live and self.replay_available:
@@ -483,9 +504,14 @@ class GatewayApplication:
                 self._start_replay_if_needed()
             algorithm, timestamp = self.latest_replay_algorithm()
             latest_valid = algorithm is not None and timestamp is not None
+        self.hrv_trace.observe("latest_selected", algorithm, timestampMs=timestamp,
+            mode=self.mode(), valid=latest_valid, hrRequested="hr" in streams, gatewayBootId=self.boot_id,
+            outcome="selected" if algorithm and timestamp is not None else "no_result")
         if not algorithm or timestamp is None:
             return {"mode": self.mode(), "timestampMs": now_ms(), "valid": False, "payload": {}}
-        return {"mode": self.mode(), "timestampMs": timestamp, "valid": latest_valid, "payload": self.filtered_payload({}, algorithm, frozenset(streams))}
+        return {"mode": self.mode(), "timestampMs": timestamp, "valid": latest_valid, "payload": self.filtered_payload({}, algorithm, frozenset(streams),
+            diagnostic_context={"mode": self.mode(), "timestampMs": timestamp, "gatewayBootId": self.boot_id},
+            diagnostic_stage="latest_projection")}
 
     def validate_streams(self, streams: object, allowed: set[str] | None = None, require: bool = True) -> list[str]:
         if not isinstance(streams, list) or (require and not streams) or any(not isinstance(item, str) for item in streams):
@@ -615,6 +641,7 @@ class GatewayApplication:
         overwritten = self.fanout.offer(subscription.id, streams, message)
         self.snapshot_overwrite_count += overwritten
         if overwritten:
+            self.hrv_trace.envelope("subscription_overwritten", message, hrRequested="hr" in subscription.streams, outcome="coalesced")
             self.log.warning("Live subscriber latest value overwritten: subscriptionId=%s snapshotOverwriteCount=%s", subscription.id, self.snapshot_overwrite_count)
 
     async def _deliver_live(self, session: ClientSession, subscription: Subscription) -> None:
@@ -626,7 +653,10 @@ class GatewayApplication:
                     grouped.setdefault(id(message), (message, set()))[1].add(stream)
                 for message, streams in grouped.values():
                     payload = message["data"]["payload"]
-                    filtered = self.filtered_payload(payload, payload.get("algorithm"), frozenset(streams))
+                    filtered = self.filtered_payload(payload, payload.get("algorithm"), frozenset(streams),
+                        diagnostic_context={"timestampMs": message["data"].get("timestampMs"),
+                            "mode": message["data"].get("mode"), "gatewayBootId": self.boot_id,
+                            "subscriptionId": subscription.id}, diagnostic_stage="delivery_projection")
                     if "status" in streams:
                         filtered["status"] = payload["status"]
                     if "algorithm" in payload and streams & {"eeg", "hr"}:
@@ -649,12 +679,14 @@ class GatewayApplication:
         try:
             async with asyncio.timeout(min(self.config.pipeline.send_timeout_ms / 1000, self.config.server.send_timeout_seconds)):
                 await subscription.send(message)
+            self.hrv_trace.envelope("subscription_sent", message, hrRequested="hr" in streams, outcome="sent")
             self.delivery_metrics["sent"] += 1
             self.delivery_metrics["lastSuccessfulAtMs"] = now_ms()
             for values in counters:
                 values["sent"] += 1
                 values["lastSuccessfulAtMs"] = self.delivery_metrics["lastSuccessfulAtMs"]
         except Exception:
+            self.hrv_trace.envelope("subscription_failed", message, hrRequested="hr" in streams, outcome="send_failed")
             self.delivery_metrics["failed"] += 1
             for values in counters:
                 values["failed"] += 1
@@ -728,6 +760,9 @@ class GatewayApplication:
                 previous: int | None = None
                 self._reset_replay_progress()
                 async for item in self._replay_events(recording_id):
+                    self.hrv_trace.observe("replay_read", item.get("payload", {}).get("algorithm"),
+                        recordingSessionId=recording_id, gatewayBootId=self.boot_id,
+                        timestampMs=item.get("timestampMs"), mode="replay", valid=item.get("valid"))
                     if not self._replay_should_continue():
                         return
                     if previous is not None:
@@ -739,7 +774,9 @@ class GatewayApplication:
                         self._replay_algorithm = item["payload"]["algorithm"]
                         self._replay_algorithm_timestamp = item["timestampMs"]
                     for session, subscription in self._subscription_entries():
-                        payload = self.filtered_payload(item["payload"], item["payload"].get("algorithm"), subscription.streams)
+                        payload = self.filtered_payload(item["payload"], item["payload"].get("algorithm"), subscription.streams,
+                            diagnostic_context={"mode": "replay", "timestampMs": item["timestampMs"], "recordingSessionId": recording_id,
+                                "gatewayBootId": self.boot_id, "subscriptionId": subscription.id}, diagnostic_stage="replay_projection")
                         algorithm_requested = bool(subscription.streams & {"eeg", "hr"})
                         valid = item["valid"] if algorithm_requested else item.get("rawValid", item["valid"])
                         reasons = item["invalidReasons"] if algorithm_requested else item.get("rawInvalidReasons", item["invalidReasons"])

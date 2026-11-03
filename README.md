@@ -52,6 +52,8 @@ sudo /opt/neurobridge/venv/bin/python -I -m neurobridge.replay_control status
 
 采集生命周期由共享 `GatewayRuntime` 监督：设备生产任务异常会更新错误状态、清理旧会话并按配置重建，不关闭 HTTP/WS。`getStatus` 与纯状态订阅只读取内存；离线取数的录播目录检查有独立期限与缓存，详见整合说明。macOS POC 停止采集后同样保留监听，重新开始使用新会话。
 
+HRV 缺失或为 null 时，可使用 [HRV 链路诊断](doc/tech/NeuroBridge项目结构与多系统接入/Ubuntu头环接入整合.md#hrv-链路诊断) 对照 SDK、桥接、应用结果、录制、投影与实际发送的字段状态。新增 HRV trace 不记录心率/HRV 数值或原始字节；默认按状态变化和周期记录，DEBUG 可逐窗口追踪。
+
 ## 仓库结构
 
 - `neurobridge/`：跨平台网关核心，不依赖 macOS、Windows 或 Linux 的启动方式。

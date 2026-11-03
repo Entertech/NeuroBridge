@@ -48,6 +48,8 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     if gateway is not None and gateway.config != config:
         raise ValueError("An acquisition restart must retain its gateway configuration and profile")
     engine = AffectiveSdkAlgorithmEngine(config.algorithm)
+    if hasattr(engine, "configure_diagnostics"):
+        engine.configure_diagnostics(config.logging.diagnostics_interval_seconds)
     def recording_factory():
         values = vars(config.storage).copy()
         values["queue_size"] = values.pop("writer_queue_size")
@@ -86,6 +88,7 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
         algorithm_queue_size=config.pipeline.algorithm_queue_size,
         persistence_timeout_ms=config.pipeline.persistence_timeout_ms,
         shutdown_timeout_ms=config.pipeline.shutdown_timeout_ms,
+        diagnostics_interval_seconds=config.logging.diagnostics_interval_seconds,
     )
     bridge_ref: dict[str, _ApplicationPipelineAdapter] = {}
 
@@ -95,6 +98,8 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     async def prepare_algorithm() -> bool:
         nonlocal prepared_engine, prepared_state
         prepared_engine = type(engine)(config.algorithm)
+        if hasattr(prepared_engine, "configure_diagnostics"):
+            prepared_engine.configure_diagnostics(config.logging.diagnostics_interval_seconds)
         prepared_state = AlgorithmState.INITIALIZING
         LOG.info("Serial algorithm preparation started: parallelWithDiscovery=true")
         try:

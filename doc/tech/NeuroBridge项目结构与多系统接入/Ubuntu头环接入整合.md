@@ -82,3 +82,43 @@ macOS POC 的开始/停止与 Ubuntu 使用同一个 Runtime。停止仅关闭�
 Ubuntu 部署与 SSH 运维、systemd、logrotate 均归入 `linux/ubuntu/`，麒麟项目脚本与 systemd 渲染器归入 `linux/kylin/`。两边各自校验发行版与编译器，只调用 `linux/common/` 的共享 CMake 构建内核；共享内核不选择平台、不导入麒麟打包器。麒麟引导源码包只收录 kylin/common，不携带 Ubuntu 部署策略。根目录旧命令作为兼容转发，保留已发布文档、SSH 更新器和旧服务入口；新调用均使用平台路径。现场数据和配置位置不变，目录整理不代表新的实机验收。
 
 目录拆分验证：Ubuntu 24.04 `linux/amd64` 仿真容器、普通用户与可写隔离 checkout 的完整 Python 回归完成 636 项，7 项 Windows 专属测试跳过，无失败（424.579 秒）。新 Ubuntu 平台入口构建算法桥成功，SDK CTest、JSON 冒烟、旧构建入口分派、麒麟入口拒绝错误宿主、全部 Linux Shell 语法、README 链接、页面脚本和版本/协议门禁通过。新增回归验证平台依赖方向、兼容转发的参数/退出码/工作目录、旧 systemd 单元归属和麒麟包不含 Ubuntu 部署目录。真实麒麟/Ubuntu 主机的服务升级、SSH 更新及设备验收仍待现场执行。
+
+## HRV 链路诊断
+
+日志统一以 `HRV trace:` 开头，后接结构化 JSON。它只记录字段形态、输入字节/包计数、窗口时间、会话和批次标识、投递结果，不记录心率、HRV 数值、原始字节、完整算法输出或主体标识。输入计数不能用来推定已确认采样率。
+
+| 阶段 | 可判断的问题 |
+| --- | --- |
+| `bridge_response` | 算法进程是否响应、有无 HR 输入；`sdkHrvState` 表示 C++ SDK 返回值形态，`serializedHrvState` 表示桥接序列化形态，`hrvState` 是 Python 实际解析到的字段。`sdkHrvState=non_finite` 且 `serializedHrvState=null` 明确定位到 C++ 序列化；`outcome=error/not_ready/cancelled` 与 SDK 返回 null 分开。 |
+| `engine_result` / `application_result` | 同一 `batchId` 是否仍保留字段；无结果时可见错误原因及 backlog。 |
+| `recording_enqueue` / `recording_confirmed` | 保存的字段形态、入队是否接受和持久化是否确认；入队成功不等于写盘完成。 |
+| `late_result` / `application_skipped` | 算法迟到只保存而未再发布，或结果已过期/连接会话结束。 |
+| `gateway_received` | 网关收到的应用结果、`gatewayBootId`、采集窗口与会话标识。 |
+| `payload_projection` / `delivery_projection` | `upstreamHrvState`、`hrvState` 与 `change` 显示投影前后是否丢失；`hrRequested=false`、`outcome=not_requested` 表示该次投影未选择 HR，属于正常过滤。 |
+| `latest_snapshot` / `latest_selected` / `latest_projection` / `latest_response` | `getLatest` 实际选择的快照、投影与待发送结果；不读取额外历史文件。 |
+| `subscription_overwritten` / `subscription_skipped` / `subscription_failed` | 最新值合并、非法结果过滤或发送失败；与某个字段变成 null 分开判断。 |
+| `subscription_sent` / `websocket_sent` | 回调成功与 WebSocket 实际编码、发送后的 JSON 字段状态；后者带投影前状态，发现编码后字段变化时显示 `change`。 |
+| `replay_read` / `replay_projection` | 已保存数据读取和录播投影，`mode=replay`；不运行或重算算法。 |
+
+字段状态为 `missing`、`null`、`zero`、`number`、`non_finite`、`invalid_type`。`zero` 只表示算法返回有限的 0，不推断其是否完成预热。`hrState` 与 `hrValueState` 分别说明 HR 对象、心率字段是否存在。旧桥接程序没有 SDK 诊断元数据时，`sdkHrvState=unavailable`；仍能观察返回 JSON，不能据此推断 SDK 返回了 null。更新源码后按平台既有部署流程重建 bridge，Ubuntu 使用 `linux/ubuntu/update-ubuntu.sh`。
+
+默认 INFO 下记录首次观测、状态变化和周期摘要；`logging.diagnostics_interval_seconds` 控制稳定状态的摘要间隔，0 仅关闭周期摘要。`logging.level="DEBUG"` 可记录每个窗口，排查结束恢复 INFO。沿用既有日志轮转，不把 DEBUG 逐窗口日志作为长期运行配置。
+
+先在同一 `batchId` 中比较 `bridge_response → engine_result → application_result → gateway_received`，再用 `timestampMs`（对应 `windowEndMs`）、`gatewayBootId`、`mode` 与 `subscriptionId` 关联投递日志。录播还应对照 `recordingSessionId`；循环录播会重复原始时间戳。日志字段不加入北向报文，算法输入、数值结果、有效性与订阅行为保持原规则。
+
+在 Ubuntu 服务日志中检索：
+
+```bash
+sudo journalctl -u neurobridge --since '10 minutes ago' --no-pager | grep 'HRV trace:'
+```
+
+合成诊断示例（不代表真实输入频率）：
+
+```text
+HRV trace: {"stage":"bridge_response","batchId":"batch-example","timestampMs":600,"sdkHrvState":"non_finite","serializedHrvState":"null","hrvState":"null"}
+HRV trace: {"stage":"payload_projection","timestampMs":600,"hrRequested":true,"upstreamHrvState":"number","hrvState":"missing","change":"number->missing"}
+```
+
+前者说明 SDK 的非有限值在 C++ 桥接时转成 null；后者说明该次投影丢失了上游数值字段。若 `websocket_sent` 仍为 `number/zero`，继续检查客户端接收与显示。本轮自动测试与合成 SDK 验证不替代现场异常数据定位。
+
+HRV 诊断验证：Ubuntu 24.04 x86_64 仿真容器的完整 Python 回归完成 648 项，7 项 Windows 专属用例跳过，无失败（355.683 秒）；原生 CTest 两项通过，覆盖 SDK EEG 回归及 HRV 非有限值序列化、诊断启用/关闭。对 900 个合成 HR 样本、300 个窗口比较诊断前后 bridge，算法输出完全一致，新增 SDK 状态元数据完整；实际 WebSocket JSON、录播、持久化确认、脱敏、状态变化和节流均有自动回归。现场 HRV 缺失的根因仍需部署后日志确认。

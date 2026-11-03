@@ -94,7 +94,11 @@ class NorthboundController:
                 result = await self.gateway.unsubscribe(session, params)
             else:
                 raise ProtocolError(400, "INVALID_REQUEST", "当前操作不受支持，请检查操作名称", details={"action": action})
-            await send(envelope(200, {"requestId": request_id, "action": action, "result": result}))
+            response = envelope(200, {"requestId": request_id, "action": action, "result": result})
+            if action == "getLatest":
+                self.gateway.hrv_trace.envelope("latest_response", response,
+                    hrRequested="hr" in params.get("streams", ["eeg", "hr"]), outcome="before_send")
+            await send(response)
             LOG.info("Northbound request handled: action=%s requestId=%s code=200", action, safe_request_id)
             if start_replay:
                 self.gateway._start_replay_if_needed()

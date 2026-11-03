@@ -15,6 +15,9 @@ from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, Record
 from neurobridge.business.gateway import Gateway
 from neurobridge.ble.packets import DataWindow, RawPacket
 from neurobridge.northbound.websocket import SUBPROTOCOL, create_server, require_subprotocol
+from neurobridge.domain.algorithm import AlgorithmResult
+from neurobridge.domain.result import WindowResult
+from neurobridge.domain.signal import ParsedSignal, ParsedSignalBatch
 from websockets.datastructures import Headers
 
 
@@ -45,6 +48,37 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await self.server.wait_closed()
         await self.gateway.stop()
         self.directory.cleanup()
+
+    async def test_hrv_trace_reaches_actual_json_send_and_latest_without_wire_changes(self):
+        await self.gateway.update_status("connectionState", "connected")
+        signal = ParsedSignal("hr", b"P", "bytes", None, {}, ("frame-test",), 500)
+        batch = ParsedSignalBatch("batch-hrv", "headband_ble", "conn-test", self.gateway.store.recording_id,
+                                  0, 600, (signal,), ("frame-test",))
+        result = WindowResult(batch, AlgorithmResult("batch-hrv", None, 600, 600,
+                              {"hr": {"value": 80, "hrv": 6.5}}), "live", 600, True)
+        with patch.object(type(self.gateway.algorithm), "available", new_callable=PropertyMock, return_value=True):
+            with self.assertLogs("neurobridge.hrv", "DEBUG") as logs:
+                async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None, origin=self.origin) as client:
+                    async def request(action):
+                        await client.send(json.dumps({"protocolVersion":"1.0", "messageType":"request", "requestId":action,
+                                                      "action":action, "params":{"streams":["hr"]}}))
+                        return json.loads(await asyncio.wait_for(client.recv(), 1))
+                    self.assertEqual((await request("subscribe"))["code"], 200)
+                    await self.gateway.publish_window_result(result)
+                    event = json.loads(await asyncio.wait_for(client.recv(), 1))
+                    self.assertEqual(event["data"]["payload"]["algorithm"]["hr"]["hrv"], 6.5)
+                    latest = await request("getLatest")
+                    self.assertEqual(latest["data"]["result"]["payload"]["algorithm"]["hr"]["hrv"], 6.5)
+                    self.assertEqual(set(latest), {"protocolVersion", "code", "data", "message"})
+                    self.assertNotIn("hrvDiagnostics", json.dumps(latest))
+                    await asyncio.sleep(0)
+        entries = [json.loads(line.split("HRV trace: ", 1)[1]) for line in logs.output if "HRV trace: " in line]
+        stages = {entry["stage"] for entry in entries}
+        self.assertTrue({"gateway_received", "payload_projection", "delivery_projection", "subscription_sent",
+                         "latest_selected", "latest_projection", "latest_response", "websocket_sent"} <= stages, stages)
+        self.assertTrue(all(entry["hrvState"] == "number" for entry in entries), entries)
+        self.assertTrue(all(entry["timestampMs"] == 600 for entry in entries), entries)
+        self.assertNotIn("6.5", " ".join(logs.output))
 
     async def test_requires_neurobridge_subprotocol(self) -> None:
         for offered in (None, ["other.v1"]):

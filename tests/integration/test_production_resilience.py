@@ -10,7 +10,7 @@ import threading
 import time
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 import zipfile
 
 from neurobridge.adapters.northbound.protocol import project_window
@@ -61,6 +61,25 @@ class Algorithm:
 
 
 class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hrv_states_survive_application_recording_and_latest_snapshot(self):
+        await self.connect()
+        async def evaluate(value):
+            return AlgorithmResult(value.batch_id, "test", 1, 2, {"hr": {"value": 80, "hrv": 6.5}})
+        with patch.object(self.service.algorithm, "evaluate", new=AsyncMock(side_effect=evaluate)):
+            with self.assertLogs("neurobridge.hrv", "DEBUG") as logs:
+                await self.capture()
+                await self.service.flush()
+                latest = self.gateway.get_latest(ClientSession(), {"streams": ["hr"]})
+        self.assertEqual(latest["payload"]["algorithm"]["hr"]["hrv"], 6.5)
+        entries = [json.loads(line.split("HRV trace: ", 1)[1]) for line in logs.output if "HRV trace: " in line]
+        stages = {entry["stage"] for entry in entries}
+        self.assertTrue({"application_result", "recording_enqueue", "recording_confirmed", "gateway_received",
+                         "latest_snapshot", "latest_projection"} <= stages, stages)
+        correlated = [entry for entry in entries if "batchId" in entry]
+        self.assertEqual(len({entry["batchId"] for entry in correlated}), 1)
+        self.assertTrue(all(entry["hrvState"] == "number" for entry in entries))
+        self.assertNotIn("6.5", " ".join(logs.output))
+
     async def asyncSetUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)

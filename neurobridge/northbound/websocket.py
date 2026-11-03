@@ -45,7 +45,11 @@ async def create_server(gateway: Gateway, controller=None):
         async def send(message: dict) -> None:
             async with send_lock:
                 async with asyncio.timeout(gateway.config.pipeline.send_timeout_ms / 1000):
-                    await websocket.send(json.dumps(message, separators=(",", ":"), ensure_ascii=False))
+                    wire = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
+                    await websocket.send(wire)
+                    subscription = session.subscriptions.get(message.get("data", {}).get("subscriptionId"))
+                    gateway.hrv_trace.serialized(wire, message,
+                        hrRequested="hr" in subscription.streams if subscription else None, outcome="sent")
         try:
             async for message in websocket:
                 if not isinstance(message, str):
