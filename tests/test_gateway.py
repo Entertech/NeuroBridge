@@ -194,7 +194,7 @@ class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(gateway.status["algorithmState"], "ready")
             self.assertEqual(broadcasts[-1]["algorithmState"], "ready")
 
-    async def test_algorithm_not_ready_is_logged_and_returns_false(self) -> None:
+    async def test_algorithm_not_ready_is_logged_and_ble_raw_capture_remains_available(self) -> None:
         class FakeAlgorithm:
             available = False
             error = "bridge process unavailable"
@@ -207,7 +207,7 @@ class AlgorithmLifecycleTests(unittest.IsolatedAsyncioTestCase):
             gateway = Gateway(config(Path(directory)))
             gateway.algorithm = FakeAlgorithm()
             with self.assertLogs("neurobridge.business.gateway", level="ERROR") as logs:
-                self.assertFalse(await gateway.on_device_ready())
+                self.assertTrue(await gateway.on_device_ready())
             self.assertEqual(gateway.status["algorithmState"], "error")
             self.assertIn("bridge process unavailable", "\n".join(logs.output))
 

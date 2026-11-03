@@ -106,7 +106,7 @@ class DeliveryIsolationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stalled_sender_cannot_block_capture_or_another_client(self) -> None:
         entered, cancelled, retired = asyncio.Event(), asyncio.Event(), asyncio.Event()
-        self.gateway.config = replace(self.gateway.config, server=replace(self.gateway.config.server, send_timeout_seconds=60))
+        self.gateway.config = replace(self.gateway.config, server=replace(self.gateway.config.server, send_timeout_seconds=.1))
         slow = ClientSession(close_transport=AsyncMock(side_effect=retired.set))
         healthy = ClientSession()
         received: asyncio.Queue[dict] = asyncio.Queue()
@@ -159,7 +159,8 @@ class DeliveryIsolationTests(unittest.IsolatedAsyncioTestCase):
 class BluetoothRecoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_notification_error_is_observed_and_later_packets_are_processed(self) -> None:
         calls: list[bytes] = []
-        async def packet(_: str, value: bytes) -> None:
+        async def packet(packet) -> None:
+            value = packet.value
             calls.append(value)
             if len(calls) == 1:
                 raise OSError(errno.EIO, "capture failure")
@@ -301,15 +302,22 @@ class DurableLoggingTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             config = path / "gateway.toml"
-            config.write_text(f'[logging]\ndirectory = {json.dumps(directory)}\nlevel = "DEBUG"\n[recording]\ndirectory = {json.dumps(str(path / "recordings"))}\n[algorithm]\nenabled = false\n')
+            config.write_text('[data_source]\ntype="bluetooth"\n' + f'[logging]\ndirectory = {json.dumps(directory)}\nlevel = "DEBUG"\n[recording]\ndirectory = {json.dumps(str(path / "recordings"))}\n[algorithm]\nenabled = false\n')
             try:
-                with patch("neurobridge.__main__.serve", AsyncMock(side_effect=OSError(errno.EADDRNOTAVAIL, "listener address unavailable"))):
+                from neurobridge.bootstrap import build_container
+                from neurobridge.config import load
+                from neurobridge.profiles.resolver import RuntimePlatform
+                runtime_config = load(config)
+                from neurobridge.config import AccessConfig, LocalUiConfig
+                runtime_config = replace(runtime_config, server=replace(runtime_config.server, host="192.168.88.10"), access=AccessConfig("wired_b_side"), local_ui=LocalUiConfig(enabled=False))
+                container = build_container(runtime_config, RuntimePlatform("ubuntu", "x86_64"))
+                with patch("neurobridge.__main__.build_container", return_value=container), patch("neurobridge.__main__.load_runtime_config", return_value=runtime_config), patch("neurobridge.__main__.serve", AsyncMock(side_effect=OSError(errno.EADDRNOTAVAIL, "listener address unavailable"))):
                     with self.assertRaises(ExceptionGroup):
                         await run(str(config))
                 logging.getLogger("websockets.server").setLevel(logging.DEBUG)
                 logging.getLogger("websockets.server").debug("PRIVATE_FULL_FRAME")
                 contents = (path / "neurobridge.log").read_text()
-                self.assertIn("Gateway runtime failed", contents)
+                self.assertIn("Gateway runtime task failed", contents)
                 self.assertIn("listener address unavailable", contents)
                 self.assertNotIn("PRIVATE_FULL_FRAME", contents)
             finally:

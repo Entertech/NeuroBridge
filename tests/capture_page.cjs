@@ -3,8 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const source = fs.readFileSync(path.join(__dirname, '../web/capture/app.js'), 'utf8');
-const html = fs.readFileSync(path.join(__dirname, '../web/capture/index.html'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../web/ubuntu/capture/app.js'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../web/ubuntu/capture/index.html'), 'utf8');
 assert.ok(html.includes('href="./styles.css"'));
 assert.ok(html.includes('src="./app.js"'));
 

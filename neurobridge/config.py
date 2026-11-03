@@ -86,6 +86,11 @@ class AlgorithmConfig:
     enabled: bool
     command: tuple[str, ...]
     request_timeout_ms: int = 2000
+    stop_timeout_seconds: float = 1.0
+
+    @property
+    def evaluation_timeout_seconds(self) -> float:
+        return self.request_timeout_ms / 1000
 
 
 @dataclass(frozen=True)
@@ -189,13 +194,13 @@ def load(
             raw = _merge_config(raw, tomllib.load(file))
     raw = migrate(raw)
     section_fields = {
-        "server": {"host", "port", "path"},
+        "server": {"host", "port", "path", "send_timeout_seconds", "delivery_queue_size"},
         "ble": {"enabled", "device_name", "model_nbr_uuid", "scan_timeout_seconds", "reconnect_delay_seconds"},
-        "recording": {"directory", "subject_id", "replay_recording_id", "replay_speed", "transport_trace_enabled", "transport_trace_max_bytes"},
-        "algorithm": {"enabled", "command", "request_timeout_ms"},
-        "download": {"enabled", "host", "port", "path"},
-        "logging": {"directory", "filename", "level", "rotation_mode", "max_bytes", "backup_count"},
-        "network": {"mode", "interface", "subnet_cidr", "dhcp_range_start", "dhcp_range_end", "dhcp_lease_time"},
+        "recording": {"directory", "subject_id", "replay_recording_id", "replay_speed", "transport_trace_enabled", "transport_trace_max_bytes", "replay_enabled"},
+        "algorithm": {"enabled", "command", "request_timeout_ms", "evaluation_timeout_seconds", "stop_timeout_seconds"},
+        "download": {"enabled", "host", "port", "path", "capture_control_enabled", "capture_allowed_origins"},
+        "logging": {"directory", "filename", "level", "rotation_mode", "max_bytes", "backup_count", "diagnostics_interval_seconds"},
+        "network": {"mode", "interface", "subnet_cidr", "dhcp_range_start", "dhcp_range_end", "dhcp_lease_time", "ensure_static_address", "address_check_interval_seconds"},
         "access": {"mode"},
         "local_ui": {"enabled", "host", "port", "directory"},
         "data_source": {"type", "window_interval_ms", "stale_after_ms"},
@@ -447,7 +452,16 @@ def load(
             dtr=dtr,
             rts=rts,
         )
-    algorithm_timeout_ms = algorithm.get("request_timeout_ms", 2000)
+    legacy_timeout = algorithm.get("evaluation_timeout_seconds")
+    stop_timeout = float(algorithm.get("stop_timeout_seconds", 1))
+    if not math.isfinite(stop_timeout) or stop_timeout <= 0:
+        raise ValueError("algorithm timeouts must be finite and greater than zero")
+    if legacy_timeout is not None:
+        if not isinstance(legacy_timeout, (int, float)) or isinstance(legacy_timeout, bool) or not math.isfinite(legacy_timeout) or legacy_timeout <= 0:
+            raise ValueError("algorithm timeouts must be finite and greater than zero")
+        if "request_timeout_ms" in algorithm and algorithm["request_timeout_ms"] != legacy_timeout * 1000:
+            raise ValueError("algorithm request_timeout_ms and evaluation_timeout_seconds conflict")
+    algorithm_timeout_ms = algorithm.get("request_timeout_ms", int(legacy_timeout * 1000) if legacy_timeout is not None else 2000)
     if not isinstance(algorithm_timeout_ms, int) or isinstance(algorithm_timeout_ms, bool) or not 100 <= algorithm_timeout_ms <= 120000:
         raise ValueError("algorithm.request_timeout_ms must be an integer between 100 and 120000")
     storage_values = {
@@ -483,6 +497,7 @@ def load(
             bool(algorithm.get("enabled", True)),
             tuple(algorithm.get("command") or DEFAULT_ALGORITHM_COMMAND),
             algorithm_timeout_ms,
+            stop_timeout,
         ),
         download=DownloadConfig(bool(download.get("enabled", False)), download_host, download_port, download_path, capture_control_enabled, tuple(capture_origins)),
         logging=LoggingConfig(log_directory, log_filename, log_level, rotation_mode, max_bytes, backup_count, diagnostics_interval),
@@ -525,15 +540,15 @@ def _validate_types(raw: dict) -> None:
     transport parameters are consumed or used to load drivers.
     """
     boolean = {"ble.enabled", "algorithm.enabled", "download.enabled", "local_ui.enabled",
-               "serial.dtr", "serial.rts", "storage.auto_cleanup_enabled", "recording.transport_trace_enabled"}
+               "serial.dtr", "serial.rts", "storage.auto_cleanup_enabled", "recording.transport_trace_enabled", "recording.replay_enabled", "network.ensure_static_address", "download.capture_control_enabled"}
     integer = {"server.port", "download.port", "local_ui.port", "ble.scan_timeout_seconds",
                "ble.reconnect_delay_seconds", "serial.baud_rate", "serial.handshake_timeout_ms",
                "serial.command_response_timeout_ms", "serial.max_buffer_bytes",
                "algorithm.request_timeout_ms", "data_source.window_interval_ms", "data_source.stale_after_ms",
-               "logging.max_bytes", "logging.backup_count", "recording.transport_trace_max_bytes"}
+               "logging.max_bytes", "logging.backup_count", "recording.transport_trace_max_bytes", "server.delivery_queue_size"}
     number = {"serial.data_timeout_seconds", "serial.reconnect_delay_seconds", "serial.stats_interval_seconds",
-              "recording.replay_speed"}
-    arrays = {"algorithm.command", "serial.candidate_types"}
+              "recording.replay_speed", "algorithm.evaluation_timeout_seconds", "algorithm.stop_timeout_seconds", "server.send_timeout_seconds", "logging.diagnostics_interval_seconds", "network.address_check_interval_seconds"}
+    arrays = {"algorithm.command", "serial.candidate_types", "download.capture_allowed_origins"}
     for section, fields in raw.items():
         if not isinstance(fields, dict):
             continue

@@ -37,13 +37,13 @@ class DeviceTelemetryTests(unittest.IsolatedAsyncioTestCase):
             await adapter._subscribe()
         self.assertEqual(set(handlers), set(REQUIRED_NOTIFICATION_CHARACTERISTICS))
         await adapter._read_battery()
-        adapter.packet.assert_awaited_once_with('battery', b'\x52')
+        self.assertEqual((adapter.packet.await_args.args[0].channel, adapter.packet.await_args.args[0].value), ('battery', b'\x52'))
         adapter.status.assert_awaited_once_with('batteryPercent', 82)
         handlers[FF51](None, bytearray(b'\x50'))
         handlers[FF32](None, bytearray(b'\x00\x01'))
         await adapter._drain_callbacks()
-        adapter.packet.assert_any_await('ff51', b'\x50')
-        adapter.packet.assert_any_await('ff32', b'\x00\x01')
+        self.assertIn(('ff51', b'\x50'), [(c.args[0].channel, c.args[0].value) for c in adapter.packet.await_args_list])
+        self.assertIn(('ff32', b'\x00\x01'), [(c.args[0].channel, c.args[0].value) for c in adapter.packet.await_args_list])
         adapter.status.assert_any_await('wearState', 'notWorn')
 
     async def test_failed_or_stale_battery_read_cannot_publish_false_state(self):
@@ -91,6 +91,6 @@ class DeviceTelemetryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(gateway.status['wearState'], 'unknown')
                 self.assertIsNone(gateway.status['batteryPercent'])
                 manifest = json.loads((Path(directory) / 'sessions' / recording_id / 'manifest.json').read_text())
-                self.assertIn('raw/wear.jsonl', [item['path'] for item in manifest['files']])
+                self.assertNotIn('raw/wear.jsonl', [item['path'] for item in manifest['files']])
             finally:
                 await gateway.stop()

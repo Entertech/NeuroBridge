@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -25,7 +26,7 @@ class NorthboundController:
         try:
             request = json.loads(raw)
         except json.JSONDecodeError as error:
-            raise ProtocolError(400, "INVALID_REQUEST", "Request is not valid JSON.") from error
+            raise ProtocolError(400, "INVALID_REQUEST", "请求内容格式错误，请检查 JSON 格式后重试") from error
         if not isinstance(request, dict) or set(request) != {
             "protocolVersion",
             "messageType",
@@ -33,19 +34,29 @@ class NorthboundController:
             "action",
             "params",
         }:
-            raise ProtocolError(400, "INVALID_REQUEST", "Request root fields are invalid.")
+            raise ProtocolError(400, "INVALID_REQUEST", "请求信息不完整或包含多余字段，请检查后重试")
         if request["protocolVersion"] != NORTHBOUND_PROTOCOL_VERSION:
-            raise ProtocolError(505, "UNSUPPORTED_VERSION", "Protocol version is not supported.")
+            raise ProtocolError(505, "UNSUPPORTED_VERSION", "通信协议版本不匹配，请使用网关支持的版本")
         if (
             request["messageType"] != "request"
             or not isinstance(request["requestId"], str)
             or not isinstance(request["action"], str)
             or not isinstance(request["params"], dict)
         ):
-            raise ProtocolError(400, "INVALID_REQUEST", "Request fields are invalid.")
+            raise ProtocolError(400, "INVALID_REQUEST", "请求类型、请求编号或参数格式不正确")
         return request
 
     async def handle(self, session: ClientSession, raw: str, send: Any) -> None:
+        async def send_once(message):
+            try:
+                async with asyncio.timeout(min(self.gateway.config.pipeline.send_timeout_ms / 1000, self.gateway.config.server.send_timeout_seconds)):
+                    await send(message)
+            except Exception:
+                self.gateway._fail_session(session)
+                raise
+        await self._handle(session, raw, send_once)
+
+    async def _handle(self, session: ClientSession, raw: str, send: Any) -> None:
         self.gateway.delivery_metrics["requests"] += 1
         self.gateway.sessions.add(session)
         request_id: str | None = None
@@ -81,7 +92,7 @@ class NorthboundController:
                 self.gateway.validate_params(params, {"subscriptionId"})
                 result = await self.gateway.unsubscribe(session, params)
             else:
-                raise ProtocolError(400, "INVALID_REQUEST", "Unknown action.", details={"action": action})
+                raise ProtocolError(400, "INVALID_REQUEST", "当前操作不受支持，请检查操作名称", details={"action": action})
             await send(envelope(200, {"requestId": request_id, "action": action, "result": result}))
             LOG.info("Northbound request handled: action=%s requestId=%s code=200", action, safe_request_id)
             if start_replay:
@@ -98,10 +109,12 @@ class NorthboundController:
             )
             await send(self.gateway.error(request_id, error))
         except Exception:
+            if session.failed:
+                return
             LOG.exception("Northbound request failed: action=%s requestId=%s", action, safe_request_id)
             await send(
                 self.gateway.error(
                     request_id,
-                    ProtocolError(500, "INTERNAL_ERROR", "Gateway request failed.", True),
+                    ProtocolError(500, "INTERNAL_ERROR", "网关处理请求失败，请稍后重试或联系运维人员", True),
                 )
             )

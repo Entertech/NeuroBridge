@@ -10,13 +10,15 @@ from ...ports.raw_parser import FlushReason
 
 
 class HeadbandBleParser:
-    _CHANNELS = {"ff31": ("eeg", 20), "ff51": ("hr", 1), "ff32": ("device_status", None)}
+    _CHANNELS = {"ff31": ("eeg", 20), "ff51": ("hr", 1), "ff32": ("device_status", 2), "battery": ("device_status", 1)}
 
     def feed(self, chunk: RawChunk) -> ParseOutcome:
         definition = self._CHANNELS.get(chunk.channel.lower())
         if definition is None:
             diagnostic = ParseDiagnostic("unsupported_channel", "warning", len(chunk.data), chunk.received_at_ms, details={"channel": chunk.channel})
             return ParseOutcome(diagnostics=(diagnostic,), discarded_bytes=len(chunk.data))
+        if not chunk.data:
+            return ParseOutcome(diagnostics=(ParseDiagnostic("empty_packet", "warning", 0, chunk.received_at_ms, details={"channel": chunk.channel}),))
         signal_type, expected = definition
         valid = expected is None or len(chunk.data) == expected
         reasons = () if valid else (f"{signal_type.upper()}_PACKET_LENGTH_INVALID",)

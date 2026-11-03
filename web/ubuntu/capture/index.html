@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NeuroBridge · 头环采集控制台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">NEUROBRIDGE / CAPTURE</p>
+      <h1>头环采集控制台</h1>
+      <p class="intro">直接打开即可连接网关，查看头环、算法与录制状态。扫描、采集、算法和数据保存均由网关执行；可在此开始或停止采集，并下载已完成会话。</p>
+      <section class="card endpoint-card">
+        <label for="apiBase">网关 HTTP 地址</label>
+        <div class="endpoint-row">
+          <input id="apiBase" type="url" value="http://192.168.88.10:8766" spellcheck="false" />
+          <button id="connectButton" type="button">连接网关</button>
+        </div>
+        <p>默认使用部署地址；无需本机安装 Python 或运行采集服务。</p>
+      </section>
+
+      <section class="card status-card" aria-live="polite">
+        <div class="status-heading">
+          <div>
+            <p class="label">连接状态</p>
+            <p id="connectionState" class="state">正在连接网关…</p>
+          </div>
+          <span id="indicator" class="indicator" aria-label="连接状态指示灯"></span>
+        </div>
+        <dl>
+          <div><dt>算法 bridge</dt><dd id="algorithmState">—</dd></div>
+          <div><dt>录制会话</dt><dd id="recordingId">等待连接</dd></div>
+          <div><dt>WebSocket</dt><dd id="websocketUrl">—</dd></div>
+          <div class="connection-error"><dt>采集初始化</dt><dd id="connectionError">等待扫描</dd></div>
+        </dl>
+      </section>
+
+      <section class="actions" aria-label="采集操作">
+        <button id="startButton" type="button" disabled>开始扫描</button>
+        <button id="stopButton" class="secondary" type="button">停止采集</button>
+        <a id="saveButton" class="secondary" href="#" aria-disabled="true">一键保存 ZIP</a>
+        <a id="bClientLink" class="b-client-link" href="../b-client-test/index.html" target="_blank" rel="noopener">打开 B 端订阅页</a>
+      </section>
+
+      <section class="card note">
+        <p>保存当前会话时会先停止采集，完成会话后再下载 ZIP；WS 和 HTTP 服务继续运行。仅限已授权操作员在专用有线或受控现场网络使用。诊断区不展示原始字节或连续波形。</p>
+      </section>
+      <p id="message" class="message" role="status"></p>
+      <section class="logs" aria-label="蓝牙接收数据日志">
+        <div class="logs-title"><h2>蓝牙接收数据</h2><span>窗口时间、包数与有效性</span></div>
+        <pre id="dataLogs" aria-live="polite">等待头环数据…</pre>
+      </section>
+      <section class="logs" aria-label="算法输出日志">
+        <div class="logs-title"><h2>算法输出</h2><span>指标摘要，不展示连续波形</span></div>
+        <pre id="algorithmLogs" aria-live="polite">等待算法 bridge 输出…</pre>
+      </section>
+      <section class="logs" aria-label="连接与运行日志">
+        <div class="logs-title"><h2>连接与运行日志</h2><span>扫描、连接、订阅和异常</span></div>
+        <pre id="systemLogs" aria-live="polite">等待网关运行日志…</pre>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>

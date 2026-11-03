@@ -10,6 +10,8 @@ bash linux/neurobridge-kylin-bootstrap.sh
 
 从新系统开始安装时，先阅读[安装部署指南评审稿](../doc/tech/对外/头环数据网关安装部署指南/头环数据网关安装部署指南_v0.1.md)。该指南限定 `codex/linux-headband-ethernet-gateway`，明确首次安装先配置、使用 `install-ubuntu.sh` 后显式启动，以及联网准备停用默认 SSH、SSH 默认更新当前分支、可用 `--branch` 选择分支和 `branch` 查询分支的规则。本页的 `update-ubuntu.sh` 会立即重启网关；它不适用于需要等待确认再启动的首次安装步骤。
 
+Ubuntu 24.04 x86_64 使用 `ubuntu_headband_wired`，首次配置来自 `config/gateway.ubuntu.toml.example`，固定蓝牙头环、有线 B 端和可配置录播。麒麟和 Windows 使用各自的串口本机 Profile；它们的页面、源码入口和发行包继续按原流程工作。Ubuntu 本轮是源码部署支持，尚未加入正式安装包矩阵。整合与旧配置迁移见 [Ubuntu 头环接入整合](../doc/tech/NeuroBridge项目结构与多系统接入/Ubuntu头环接入整合.md)。
+
 本目录同时保存 Ubuntu x86_64 部署及银河麒麟项目运行脚本：
 
 - `update-ubuntu.sh`：目标机一键部署入口；只使用当前源码目录，不执行 Git 或网络操作。
@@ -79,13 +81,11 @@ cd NeuroBridge
 ./linux/prepare-ubuntu24.04-environment.sh
 ```
 
-脚本成功后可断开互联网；后续使用 `./linux/update-ubuntu.sh` 即可完成安装、更新和 bridge 重建。
+脚本成功后可断开互联网；首次安装按第 4 节执行，后续使用 `./linux/update-ubuntu.sh` 完成更新和 bridge 重建。
 
-## 3. 访问策略与兼容有线网络
+## 3. Ubuntu 访问策略与有线网络
 
-首次安装默认使用 `local_browser`：安装器读取配置后跳过 Netplan 专线变更，网页通过 `http://127.0.0.1:8080/` 加载，WebSocket 使用 `ws://127.0.0.1:8765/neurobridge/v1/ws`。网页服务校验 Host，WebSocket 校验固定 Origin。
-
-以下专用网络内容只适用于显式切换到 `wired_b_side` 的旧方案。
+Ubuntu 首次安装使用 `config/gateway.ubuntu.toml.example`，固定 `profile="ubuntu_headband_wired"` 与 `access.mode="wired_b_side"`，关闭 `local_ui`；B 端通过批准的专用有线地址访问 WS 和采集控制台。本节描述这一 Ubuntu 直连部署。麒麟/Windows 的本机 Profile 才使用回环页面及固定 Origin，不应复制其模板到 Ubuntu。
 
 安装及每次 `neurobridge.service` 启动时，辅助程序从 `/etc/neurobridge/gateway.toml` 读取 `[server].host` 与 `[network].subnet_cidr`，检查所选有线口的链路、现有地址和路由；缺少固定地址时只追加该地址，不清空已有地址，不改 DHCP、默认路由或 DNS，也不覆盖 Netplan 文件。不以公网 ping、DNS 或互联网可达性判断专用网络是否可用。
 
@@ -136,13 +136,15 @@ sudo /opt/neurobridge/venv/bin/neurobridge-network-config \
 
 ## 4. 安装网关
 
-安装脚本会创建 `neurobridge` 服务账户，将源码同步至 `/opt/neurobridge`，在本地构建并安装算法 bridge，并安装与启用 systemd 单元。它不会安装系统包或 Python 包，缺少基础镜像前提时会失败。使用一键入口：
+安装脚本会创建 `neurobridge` 服务账户，将源码同步至 `/opt/neurobridge`，在本地构建并安装算法 bridge，并安装与启用 systemd 单元。它不会联网安装系统包或下载 Python 依赖，只从本地源码更新网关包；缺少环境准备前提时会失败。首次使用安装入口，确认配置后显式启动：
 
 ```bash
-./linux/update-ubuntu.sh
+sudo ./linux/install-ubuntu.sh
+sudoedit /etc/neurobridge/gateway.toml
+sudo systemctl start neurobridge
 ```
 
-安装后会创建但**不会自动启动**网关，避免使用未确认的示例网络参数。关键位置如下：
+`install-ubuntu.sh` 创建并启用服务，但**不会首次自动启动**。后续 `update-ubuntu.sh` 则立即重启服务，B 端需要重新连接与订阅。关键位置如下：
 
 | 位置 | 用途 |
 | --- | --- |
@@ -256,7 +258,7 @@ sudo systemctl --no-pager --full status ssh.service
 
 ## 5. 填写现场配置
 
-编辑安装脚本生成的配置，不要编辑 `/opt/neurobridge/config/gateway.toml.example`，因为后者会在后续部署时被源码覆盖：
+编辑安装脚本生成的配置，不要编辑 `/opt/neurobridge/config/gateway.ubuntu.toml.example`，因为后者会在后续部署时被源码覆盖：
 
 ```bash
 sudoedit /etc/neurobridge/gateway.toml
@@ -266,16 +268,14 @@ sudoedit /etc/neurobridge/gateway.toml
 
 | 配置项 | 首次部署要求 |
 | --- | --- |
-| `[access] mode` | 默认 `local_browser`；只有恢复独立 B 端时改为 `wired_b_side`。 |
-| `[local_ui]` | 本机模式启用并固定 `127.0.0.1:8080`；旧有线模式必须关闭。 |
-| `[server] host` | 本机模式固定 `127.0.0.1`；旧有线模式填写专用网卡静态 IP。 |
+| `[access] mode` | Ubuntu 固定 `wired_b_side`；不要复制麒麟的 `local_browser` 配置。 |
+| `[local_ui]` | Ubuntu 固定关闭；采集控制与静态页面使用独立的下载服务。 |
+| `[server] host` | Ubuntu 为已批准的专用网卡地址，模板为 `192.168.88.10`。 |
 | `[server] port`、`path` | 填写双方确认的固定 WebSocket 端口和路径。 |
-| `[network] mode` | 本机模式保持 `static` 且不填写接口/子网；旧有线模式才配置静态或 DHCP。 |
+| `[network] mode` | Ubuntu 默认 `static`；单物理网口可用 `auto`，多网口必须显式选择接口。 |
 | `[ble] enabled` | 无头环/冒烟验证时保持 `false`；完成该 Ubuntu 主机的真实头环 POC 后才改为 `true`，同时确认扫描匹配字段。 |
 | `[recording] directory` | 保持默认的 `/var/lib/neurobridge/recordings`，除非已按权限和容量要求另行配置。 |
 | `[recording] subject_id` | 填写演示或采集使用的受试者标识；无值可留空。 |
-| `[recording] replay_recording_id` | 仅兼容支持录播的非串口策略可选填写；银河麒麟耳机 `data_source.type="serial"` 必须留空，串口离线不会回放历史会话。 |
-| `[download]` | 本机模式绑定 `127.0.0.1`；旧有线模式绑定批准的私网地址。 |
 | `[recording] replay_enabled` | 默认 `true`；`false` 禁止离线录播，保留实时采集及历史文件。可由运维命令持久化并重启生效。 |
 | `[recording] replay_recording_id` | 可选：填写一个存在且非空的录制会话 ID 以固定回放目标；留空、填写已删除 ID 或空会话时，离线录播自动选择该目录中最新的非空历史会话。 |
 | `[download]` | 仅在专用有线网络确有导出需求时启用；`host` 必须是网关静态 IP，端口由双方确认。 |
@@ -308,7 +308,7 @@ sudo journalctl -u neurobridge.service -n 100 --no-pager
 sudo ss -lntp
 ```
 
-默认在同机浏览器访问 `http://127.0.0.1:8080/`，页面自动连接回环 WebSocket 并提供 `neurobridge.v1` 子协议。连接后先调用 `getStatus`，再调用 `getLatest` 或 `subscribe`；断线重连后重新订阅。旧有线策略才从独立 B 端连接批准的私网地址。
+Ubuntu 从 B 端访问 `http://192.168.88.10:8766/capture/` 或 `/b-client-test/`（以配置为准），并使用 `neurobridge.v1` 子协议连接专网 WS。连接后先调用 `getStatus`，再调用 `getLatest` 或 `subscribe`；断线重连后重新订阅。麒麟/Windows 本机 Profile 才使用回环网页。
 
 兼容 BLE 策略的无头环冒烟验证可保持 `[ble].enabled = false`，此时 `getStatus` 应显示未连接并按兼容策略验证录播；当前银河麒麟耳机 `data_source.type="serial"` 不适用该回放流程，离线 `getLatest` 或 `subscribe` 必须返回 `409 STREAM_NOT_AVAILABLE_REASON`。实时采集验收还应覆盖耳机串口连接、数据到达、断线重连和服务重启后的恢复。
 录播开关（更新到支持该功能的版本后，在网关/SSH 运维终端执行）：

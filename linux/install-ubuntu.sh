@@ -63,4 +63,4 @@ systemctl disable --now dnsmasq.socket 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable neurobridge.service
 systemctl enable neurobridge-dhcp.service
-echo "NeuroBridge is enabled for every boot with access strategy $access_mode from $config_dir/gateway.toml. Confirm the deployment values, then run: systemctl start neurobridge"
+echo "NeuroBridge is enabled for every boot using the Ubuntu headband profile from $config_dir/gateway.toml. Confirm the deployment values, then run: systemctl start neurobridge"

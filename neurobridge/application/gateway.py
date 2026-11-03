@@ -49,6 +49,9 @@ class Subscription:
 @dataclass(eq=False)
 class ClientSession:
     subscriptions: dict[str, Subscription] = field(default_factory=dict)
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    close_transport: Any = None
+    failed: bool = False
 
 
 class GatewayApplication:
@@ -61,7 +64,7 @@ class GatewayApplication:
         self.config = config
         self.log = logging.getLogger(__name__)
         self._recording_factory = recording_factory
-        self.supports_replay = supports_replay
+        self.supports_replay = supports_replay and config.recording.replay_enabled
         self.replay_reader = replay_reader if supports_replay else None
         self._replay_selection = (None, frozenset(), None, None)
         self._project_window = project_window
@@ -77,6 +80,8 @@ class GatewayApplication:
         # POC control page.
         self.connection_error: str | None = None
         self.sessions: set[Any] = set()
+        self.network_diagnostic = None
+        self._session_cleanup_tasks: set[asyncio.Task] = set()
         self.latest_algorithm: dict | None = None
         self.latest_algorithm_timestamp: int | None = None
         self._last_live_update: float | None = None
@@ -127,6 +132,8 @@ class GatewayApplication:
         for session in tuple(self.sessions):
             await self.close_session(session)
         await self._stop_replay()
+        if self._session_cleanup_tasks:
+            await asyncio.gather(*tuple(self._session_cleanup_tasks), return_exceptions=True)
         await self.algorithm.stop()
         if not self._capture_final_summary_logged and (
             int(self._capture_stats["eegPackets"] or 0) or int(self._capture_stats["hrPackets"] or 0)
@@ -142,6 +149,17 @@ class GatewayApplication:
             self.recording_repository = None
         self.log.info("Gateway stopped: bootId=%s", self.boot_id)
 
+    async def prepare_live_session(self) -> str:
+        """Open persistence before notifications without publishing connected yet."""
+        if self.store.recording_id is None:
+            self.latest_snapshot.clear()
+            self.latest_algorithm = self.latest_algorithm_timestamp = None
+            self._last_live_update = None
+            await self._stop_replay()
+            self._reset_capture_stats()
+            return await asyncio.to_thread(self.store.start, now_ms())
+        return self.store.recording_id
+
     async def update_status(self, name: str, value: object) -> None:
         previous = self.status.get(name)
         was_live = name == "connectionState" and self._connection_state_is_live(previous)
@@ -150,12 +168,7 @@ class GatewayApplication:
         if name == "connectionState" and value in {"connected", "validated"} and previous != value:
             self.connection_error = None
         if becomes_live and not was_live:
-            self.latest_snapshot.clear()
-            self.latest_algorithm = self.latest_algorithm_timestamp = None
-            self._last_live_update = None
-            await self._stop_replay()
-            self._reset_capture_stats()
-            recording_id = await asyncio.to_thread(self.store.start, now_ms())
+            recording_id = await self.prepare_live_session()
             self.log.info(
                 "Device data path ready; recording started: transport=%s connectionState=%s recordingId=%s",
                 self.config.data_source.type,
@@ -165,6 +178,7 @@ class GatewayApplication:
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
             await self.algorithm.stop()
             self.status["algorithmState"] = "unavailable"
+            self.status.update(wearState="unknown", batteryPercent=None, signalQuality=None)
             self._log_capture_summary("disconnected")
             self._capture_final_summary_logged = True
             recording_id = self.store.recording_id
@@ -276,7 +290,7 @@ class GatewayApplication:
         return self._active_replay_recording_id or self.store.replay_recording_id(self.config.recording.replay_recording_id)
 
     async def prepare_query(self) -> None:
-        if self.replay_reader is not None and not self.live and self._replay_task is None:
+        if self.supports_replay and self.replay_reader is not None and not self.live and self._replay_task is None:
             self._replay_selection = await self.replay_reader.inspect(self.config.recording.replay_recording_id)
 
     def mode(self) -> str:
@@ -365,8 +379,8 @@ class GatewayApplication:
             available.update({"eeg.raw", "hr.raw"})
         if self.algorithm.available or self.status.get("algorithmState") == "ready":
             available.update({"eeg", "hr"})
-        recording_id = self.replay_recording_id
-        if not self.live and recording_id:
+        recording_id = None if self.live else self.replay_recording_id
+        if recording_id:
             if self.replay_reader is not None:
                 return available | set(self._replay_selection[1])
             for event in self.store.events(recording_id):
@@ -399,7 +413,7 @@ class GatewayApplication:
             raise self._offline_data_error()
         unavailable = set(streams) - self.available_streams()
         if unavailable:
-            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
+            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "请求的数据类型不受支持或暂不可用，请重新选择", details={"streams": sorted(unavailable)})
         algorithm, timestamp = self.latest_algorithm, self.latest_algorithm_timestamp
         latest_valid = algorithm is not None and timestamp is not None
         if self.live:
@@ -421,11 +435,11 @@ class GatewayApplication:
 
     def validate_streams(self, streams: object, allowed: set[str] | None = None, require: bool = True) -> list[str]:
         if not isinstance(streams, list) or (require and not streams) or any(not isinstance(item, str) for item in streams):
-            raise ProtocolError(400, "INVALID_REQUEST", "params.streams must be a non-empty string array.")
+            raise ProtocolError(400, "INVALID_REQUEST", "数据类型填写错误，请至少选择一种数据类型")
         unique = list(dict.fromkeys(streams))
         invalid = set(unique) - (allowed or STREAMS)
         if invalid:
-            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(invalid)})
+            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "请求的数据类型不受支持或暂不可用，请重新选择", details={"streams": sorted(invalid)})
         return unique
 
     def latest_replay_algorithm(self) -> tuple[dict | None, int | None]:
@@ -447,26 +461,26 @@ class GatewayApplication:
     def validate_params(params: dict, allowed: set[str]) -> None:
         unknown = set(params) - allowed
         if unknown:
-            raise ProtocolError(400, "INVALID_REQUEST", "Request contains unsupported params.", details={"params": sorted(unknown)})
+            raise ProtocolError(400, "INVALID_REQUEST", "请求包含不支持的参数，请删除后重试", details={"params": sorted(unknown)})
 
     async def subscribe(self, session: ClientSession, params: dict, send: Any, *, start_replay: bool = True) -> dict:
         streams = self.validate_streams(params.get("streams"))
         data_streams = set(streams) - {"status"}
         include_invalid = params.get("includeInvalid", False)
         if not isinstance(include_invalid, bool):
-            raise ProtocolError(400, "INVALID_REQUEST", "params.includeInvalid must be boolean.")
+            raise ProtocolError(400, "INVALID_REQUEST", "无效数据接收选项填写错误，请使用 true 或 false")
         if len(session.subscriptions) >= 4:
-            raise ProtocolError(429, "RATE_LIMITED", "Subscription limit exceeded.", True)
+            raise ProtocolError(429, "RATE_LIMITED", "订阅数量已达上限，请先取消不需要的订阅", True)
         already_subscribed = set().union(*(item.streams for item in session.subscriptions.values())) if session.subscriptions else set()
         duplicate_streams = set(streams) & already_subscribed
         if duplicate_streams:
-            raise ProtocolError(429, "RATE_LIMITED", "A stream is already subscribed on this connection.", True, {"streams": sorted(duplicate_streams)})
+            raise ProtocolError(429, "RATE_LIMITED", "该数据已在当前连接中订阅，请勿重复订阅", True, {"streams": sorted(duplicate_streams)})
         if data_streams and not self.live and not self.replay_available:
             raise self._offline_data_error()
         unavailable = set(streams) - self.available_streams()
         if unavailable:
-            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
-        subscription = Subscription(f"sub-{uuid.uuid4().hex}", frozenset(streams), include_invalid, send)
+            raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "请求的数据类型不受支持或暂不可用，请重新选择", details={"streams": sorted(unavailable)})
+        subscription = Subscription(f"sub-{uuid.uuid4().hex}", frozenset(streams), include_invalid, send, replay_outbox=asyncio.Queue(maxsize=self.config.server.delivery_queue_size))
         self.sessions.add(session)
         session.subscriptions[subscription.id] = subscription
         self.fanout.subscribe(subscription.id, subscription.streams)
@@ -480,10 +494,10 @@ class GatewayApplication:
     async def unsubscribe(self, session: ClientSession, params: dict) -> dict:
         subscription_id = params.get("subscriptionId")
         if not isinstance(subscription_id, str):
-            raise ProtocolError(400, "INVALID_REQUEST", "params.subscriptionId is required.")
+            raise ProtocolError(400, "INVALID_REQUEST", "缺少有效的订阅编号，请先确认需要取消的订阅")
         subscription = session.subscriptions.get(subscription_id)
         if not subscription:
-            raise ProtocolError(404, "SUBSCRIPTION_NOT_FOUND", "Subscription does not exist.")
+            raise ProtocolError(404, "SUBSCRIPTION_NOT_FOUND", "订阅不存在或已失效，请检查订阅编号")
         await self._remove_subscription(session, subscription)
         self.log.info("Subscription removed: subscriptionId=%s", subscription_id)
         return {"subscriptionId": subscription_id}
@@ -517,24 +531,23 @@ class GatewayApplication:
         self._replay_algorithm_timestamp = None
 
     def _replay_should_continue(self) -> bool:
-        return not self.live and bool(self.sessions)
+        return self.supports_replay and not self.live and bool(self.sessions)
 
     def _subscription_entries(self) -> tuple[tuple[ClientSession, Subscription], ...]:
         return tuple((session, subscription) for session in tuple(self.sessions) for subscription in tuple(session.subscriptions.values()))
 
     def _queue_replay_message(self, session: ClientSession, subscription: Subscription, message: dict) -> None:
         """Do not let a slow or failed client stall the single replay clock."""
-        if session.subscriptions.get(subscription.id) is not subscription:
+        if session.failed or session.subscriptions.get(subscription.id) is not subscription:
             return
         try:
             subscription.replay_outbox.put_nowait(message)
         except asyncio.QueueFull:
             self.log.warning("Replay subscriber backlog exceeded limit; dropping subscriptionId=%s", subscription.id)
-            if subscription.replay_delivery_task:
-                subscription.replay_delivery_task.cancel()
+            self._fail_session(session)
 
     def _queue_live_message(self, session: ClientSession, subscription: Subscription, message: dict) -> None:
-        if session.subscriptions.get(subscription.id) is not subscription:
+        if session.failed or session.subscriptions.get(subscription.id) is not subscription:
             return
         if subscription.live_delivery_task is None or subscription.live_delivery_task.done():
             subscription.live_delivery_task = asyncio.create_task(self._deliver_live(session, subscription))
@@ -570,7 +583,8 @@ class GatewayApplication:
         except asyncio.CancelledError:
             raise
         except Exception:
-            self.log.warning("Live subscriber delivery failed; dropping subscriptionId=%s", subscription.id, exc_info=True)
+            self.log.warning("Live subscriber delivery failed; closing sessionId=%s subscriptionId=%s", session.id, subscription.id, exc_info=True)
+            self._fail_session(session)
         finally:
             self._drop_subscription(session, subscription)
 
@@ -579,7 +593,7 @@ class GatewayApplication:
         streams = (subscription.streams - {"status"}) if streams is None else streams
         counters = [self.stream_metrics[stream] for stream in streams if stream in self.stream_metrics]
         try:
-            async with asyncio.timeout(self.config.pipeline.send_timeout_ms / 1000):
+            async with asyncio.timeout(min(self.config.pipeline.send_timeout_ms / 1000, self.config.server.send_timeout_seconds)):
                 await subscription.send(message)
             self.delivery_metrics["sent"] += 1
             self.delivery_metrics["lastSuccessfulAtMs"] = now_ms()
@@ -605,9 +619,32 @@ class GatewayApplication:
         except asyncio.CancelledError:
             raise
         except Exception:
-            self.log.warning("Replay subscriber delivery failed; dropping subscriptionId=%s", subscription.id, exc_info=True)
+            self.log.warning("Replay subscriber delivery failed; closing sessionId=%s subscriptionId=%s", session.id, subscription.id, exc_info=True)
+            self._fail_session(session)
         finally:
             self._drop_subscription(session, subscription)
+
+    def _fail_session(self, session: ClientSession) -> None:
+        if session.failed:
+            return
+        session.failed = True
+        if self.network_diagnostic:
+            try:
+                self.network_diagnostic("delivery_failure")
+            except Exception:
+                self.log.exception("Network diagnostic request failed: sessionId=%s", session.id)
+        task = asyncio.create_task(self._close_failed_session(session))
+        self._session_cleanup_tasks.add(task)
+        task.add_done_callback(self._session_cleanup_tasks.discard)
+
+    async def _close_failed_session(self, session: ClientSession) -> None:
+        try:
+            await self.close_session(session)
+            if session.close_transport:
+                async with asyncio.timeout(min(self.config.pipeline.send_timeout_ms / 1000, self.config.server.send_timeout_seconds)):
+                    await session.close_transport()
+        except Exception:
+            self.log.exception("Failed-client cleanup failed: sessionId=%s", session.id)
 
     def _drop_subscription(self, session: ClientSession, subscription: Subscription) -> None:
         self.fanout.unsubscribe(subscription.id)

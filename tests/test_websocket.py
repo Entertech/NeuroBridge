@@ -74,7 +74,7 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(error.exception.reason, '请求格式不支持，请使用 JSON 文本发送')
 
     async def test_wrong_endpoint_is_closed_with_a_readable_chinese_reason(self) -> None:
-        async with websockets.connect(self.url + '/wrong', subprotocols=[SUBPROTOCOL], ping_interval=None) as client:
+        async with websockets.connect(self.url + '/wrong', subprotocols=[SUBPROTOCOL], ping_interval=None, origin=self.origin) as client:
             with self.assertRaises(websockets.exceptions.ConnectionClosedError) as error:
                 await client.recv()
             self.assertEqual(error.exception.code, 1008)
@@ -99,7 +99,7 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             (request('getLatest',{'streams':['unknown']}),409,'请求的数据类型不受支持或暂不可用，请重新选择'),
             (request('getLatest',{'streams':['eeg']}),503,'头环未连接，且暂无可用的录播数据'),
         ]
-        async with websockets.connect(self.url,subprotocols=[SUBPROTOCOL],ping_interval=None) as client:
+        async with websockets.connect(self.url,subprotocols=[SUBPROTOCOL],ping_interval=None, origin=self.origin) as client:
             async def exchange(raw,code,message=None):
                 await client.send(raw)
                 result=json.loads(await asyncio.wait_for(client.recv(),timeout=1))
@@ -133,7 +133,7 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.gateway.store.stop()
         path = Path(self.directory.name) / "sessions" / broken / "raw/eeg.jsonl"
         path.write_text("\n", encoding="utf-8")
-        async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None) as client:
+        async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None, origin=self.origin) as client:
             async def request(action, params):
                 await client.send(json.dumps({"protocolVersion": "1.0", "messageType": "request", "requestId": action, "action": action, "params": params}))
                 return json.loads(await asyncio.wait_for(client.recv(), timeout=1))
@@ -152,7 +152,7 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
         async def request(client, action, params):
             await client.send(json.dumps({"protocolVersion": "1.0", "messageType": "request", "requestId": action, "action": action, "params": params}))
             return json.loads(await asyncio.wait_for(client.recv(), timeout=1))
-        async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None) as failed, websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None) as healthy:
+        async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None, origin=self.origin) as failed, websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None, origin=self.origin) as healthy:
             self.assertTrue(all(protocol.ping_interval is None for protocol in self.server.websockets))
             confirmation = await request(failed, "subscribe", {"streams": ["eeg.raw"]})
             old_id = confirmation["data"]["result"]["subscriptionId"]
@@ -168,7 +168,7 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(failed.close_code, 1011)
             self.assertEqual(failed.close_reason, '数据发送失败或接收过慢，请重新连接并订阅')
             self.assertTrue(self.gateway.live)
-            async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None) as restored:
+            async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None, origin=self.origin) as restored:
                 status = await request(restored, "getStatus", {})
                 self.assertEqual(status["data"]["result"]["connectionState"], "connected")
                 confirmation = await request(restored, "subscribe", {"streams": ["eeg.raw"]})

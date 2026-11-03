@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
-const html = fs.readFileSync(path.join(root, "web/b-client-test/index.html"), "utf8");
+const html = fs.readFileSync(path.join(root, "web/ubuntu/b-client-test/index.html"), "utf8");
 const defaultEndpoint = html.match(/id="endpoint"[^>]*value="([^"]+)"/)[1];
 
 class Element {
@@ -48,7 +48,7 @@ function page(injected, search = '') {
     WebSocket: Socket, URLSearchParams, console,
   };
   if (injected) context.window.NEUROBRIDGE_B_CLIENT_ENDPOINT = injected;
-  vm.runInNewContext(fs.readFileSync(path.join(root, "web/b-client-test/app.js"), "utf8"), context);
+  vm.runInNewContext(fs.readFileSync(path.join(root, "web/ubuntu/b-client-test/app.js"), "utf8"), context);
   return { nodes, sockets, node };
 }
 

@@ -10,7 +10,7 @@ import time
 from typing import Callable
 
 from .ble.flowtime import FlowtimeAdapter
-from .business.gateway import Gateway
+from .application.gateway import GatewayApplication as Gateway
 
 LOG = logging.getLogger(__name__)
 MAX_LOG_ENTRIES = 200
@@ -60,14 +60,16 @@ def metric_summary(value):
 
 
 class CaptureControl:
-    def __init__(self, gateway: Gateway, adapter_factory: Callable = FlowtimeAdapter) -> None:
+    def __init__(self, gateway: Gateway, adapter_factory: Callable = FlowtimeAdapter, *, pipeline_factory: Callable | None = None) -> None:
         self.gateway = gateway
         self.adapter_factory = adapter_factory
+        self.pipeline_factory = pipeline_factory
         self.logs = CaptureLogBuffer()
         self._adapter = None
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
         self._closing = False
+        self._stop_failed = False
         self._previous_observer = gateway.window_observer
         gateway.window_observer = self.observe_window
         logging.getLogger().addHandler(self.logs)
@@ -99,10 +101,12 @@ class CaptureControl:
                 raise CaptureError(503, "Capture service is shutting down.")
             if not self.gateway.config.ble.enabled:
                 raise CaptureError(503, "Device capture is disabled in deployment configuration (ble.enabled=false).")
+            if self._stop_failed:
+                raise CaptureError(503, "Previous device stop failed; stop it successfully before restarting.")
             if not self.running:
                 if self._adapter and getattr(getattr(self._adapter, "_client", None), "is_connected", False):
                     raise CaptureError(503, "Previous device link is still connected; stop it successfully before restarting.")
-                self._adapter = self.adapter_factory(self.gateway.config.ble, self.gateway.receive_packet, self.gateway.update_status, self.gateway.on_device_ready, self.gateway.update_connection_error, diagnostics_interval_seconds=self.gateway.config.logging.diagnostics_interval_seconds)
+                self._adapter = self.pipeline_factory() if self.pipeline_factory is not None else self.adapter_factory(self.gateway.config.ble, self.gateway.receive_packet, self.gateway.update_status, self.gateway.on_device_ready, self.gateway.update_connection_error, diagnostics_interval_seconds=self.gateway.config.logging.diagnostics_interval_seconds)
                 self._task = asyncio.create_task(self._run_adapter(self._adapter), name="capture-device")
                 LOG.info("Operator capture started: bootId=%s", self.gateway.boot_id)
             return self.snapshot()
@@ -138,6 +142,7 @@ class CaptureControl:
                     await asyncio.gather(task, return_exceptions=True)
                 self._task = None
                 await self.gateway.update_status("connectionState", "disconnected")
+            self._stop_failed = failure is not None
             if failure:
                 raise CaptureError(503, "Device capture stop could not be confirmed; inspect gateway logs.") from failure
             self._adapter = None
@@ -145,7 +150,11 @@ class CaptureControl:
             return self.snapshot()
 
     async def observe_window(self, window, algorithm, reasons, valid) -> None:
-        self.logs.append(f"Received headband data: windowStartMs={window.start_ms} windowEndMs={window.end_ms} eegPackets={len(window.eeg)} hrPackets={len(window.hr)} valid={valid}")
+        start = getattr(window, "window_start_ms", getattr(window, "start_ms", None))
+        end = getattr(window, "window_end_ms", getattr(window, "end_ms", None))
+        eeg_count = len(window.eeg) if hasattr(window, "eeg") else sum(s.signal_type == "eeg" for s in window.signals)
+        hr_count = len(window.hr) if hasattr(window, "hr") else sum(s.signal_type == "hr" for s in window.signals)
+        self.logs.append(f"Received headband data: windowStartMs={start} windowEndMs={end} eegPackets={eeg_count} hrPackets={hr_count} valid={valid}")
         self.logs.append("Algorithm output: " + json.dumps({"valid": valid, "reasons": reasons, "algorithm": metric_summary(algorithm)}, ensure_ascii=False, separators=(",", ":")))
         if self._previous_observer:
             await self._previous_observer(window, algorithm, reasons, valid)

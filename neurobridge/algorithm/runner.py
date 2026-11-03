@@ -25,6 +25,7 @@ class AlgorithmRunner:
         self.config = config
         self.process: asyncio.subprocess.Process | None = None
         self.error: str | None = None
+        self._exchange_lock = asyncio.Lock()
 
     @property
     def available(self) -> bool:
@@ -69,14 +70,14 @@ class AlgorithmRunner:
             except ProcessLookupError:
                 pass
             try:
-                await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
+                await asyncio.wait_for(process.wait(), self.config.stop_timeout_seconds)
             except TimeoutError:
                 LOG.error("Algorithm bridge ignored terminate; killing pid=%s", process.pid)
                 try:
                     process.kill()
                 except ProcessLookupError:
                     pass
-                await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
+                await asyncio.wait_for(process.wait(), self.config.stop_timeout_seconds)
             LOG.info("Algorithm bridge stopped: returncode=%s", process.returncode)
 
     async def _discard_exchange(self, process: asyncio.subprocess.Process) -> None:
@@ -114,6 +115,11 @@ class AlgorithmRunner:
     ) -> tuple[dict | None, list[str]]:
         """Evaluate transport-neutral bytes without requiring legacy BLE models."""
 
+        async with self._exchange_lock:
+            return await self._evaluate_raw(eeg, hr, start_ms=start_ms, end_ms=end_ms,
+                eeg_packet_count=eeg_packet_count, hr_packet_count=hr_packet_count)
+
+    async def _evaluate_raw(self, eeg, hr, *, start_ms, end_ms, eeg_packet_count=0, hr_packet_count=0):
         if not eeg and not hr:
             return None, []
         process = self.process

@@ -307,6 +307,17 @@ default_external_document_action = "record_only"
 change_log_path = "doc/tech/对外/头环数据网关北向网络协议/版本变更记录.md"
 
 [[change_records]]
+id = "2026-11-03-ubuntu-unified-architecture"
+date = "2026-11-03"
+scope = "ubuntu_profile_and_shared_pipeline"
+summary = "从既有 Ubuntu 分支创建独立分支并 rebase 默认分支，沿用共享 Bootstrap/Profile/ApplicationService 和分段存储；整合 BLE 首包、backend 断线、电量/佩戴、录播许可、中文错误、发送故障隔离、直连地址与运维重启，兼容旧部署配置并隔离 Ubuntu 静态页面。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "用户要求基于当前分支新建分支、rebase 默认分支并按统一架构支持 Ubuntu。仅作源码整合与验证，不修改已锁定对外文档、应用或报文版本，不发布 PDF 或安装包；Ubuntu 现场设备及真实算法数据验收待完成。"
+
+[[change_records]]
 id = "2026-11-03-ble-lifecycle-and-algorithm-isolation"
 date = "2026-11-03"
 scope = "gateway_capture_reliability"

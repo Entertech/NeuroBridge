@@ -2,15 +2,18 @@
 
 ## 项目目标
 
-本仓库实现设备数据到本机可视化前端或兼容第三方 B 端的 Linux/PC 网关。当前交付需求仅为[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)；历史头环 BLE 与 B 端方案见[对接方案 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%AF%B9%E6%8E%A5%E6%96%B9%E6%A1%88_v0.1.md)，不属于本次实现或验收范围。README 仅作项目入口和摘要；报文语义仍以双方最终签字的北向协议为准。
+本仓库实现设备数据到本机可视化前端或兼容第三方 B 端的 Linux/PC 网关。耳机平台需求为[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)；Ubuntu 头环 BLE 与 B 端需求见[对接方案 v0.1](doc/tech/%E5%A4%B4%E7%8E%AF%E8%93%9D%E7%89%99%E7%BD%91%E5%85%B3%E5%AF%B9%E6%8E%A5%E6%96%B9%E6%A1%88_v0.1.md)；两类设备按固定 Profile 分别实现与验收。Ubuntu 24.04 x86_64 的本轮整合见 `doc/tech/NeuroBridge项目结构与多系统接入/Ubuntu头环接入整合.md`。README 仅作项目入口和摘要；报文语义仍以双方最终签字的北向协议为准。
 
 ## 架构边界
 
-- 当前交付链路固定为：耳机 → USB 派生 TTY → 银河麒麟 V10 网关后台 → `127.0.0.1` 回环 WebSocket → 同机浏览器，不需要 B 端专用网线。
-- 当前目标机配置固定使用 `data_source.type="serial"` 与 `access.mode="local_browser"`；不得自动切换到 BLE、原生 USB 或旧专网策略。仓库既有兼容代码不等于本次交付能力。
+- 耳机 Profile 链路固定为：耳机 → USB 派生 TTY → 银河麒麟 V10 网关后台 → `127.0.0.1` 回环 WebSocket → 同机浏览器，不需要 B 端专用网线。
+- 耳机目标机配置固定使用 `data_source.type="serial"` 与 `access.mode="local_browser"`；不得自动切换到 BLE、原生 USB 或旧专网策略。仓库既有兼容代码不等于本次交付能力。
 - 网关拥有设备连接、配对、重连、数据解析、时间戳、缓存、算法调用、录播和北向协议适配。
 - 同机浏览器负责展示，网关继续负责设备、算法与持久化；浏览器不得使用 Web Serial 或 WebUSB 直接访问耳机。
 - 既有正式部署基线为银河麒麟 V10 x86_64（N100/N150）。用户授权引导源码扩展 aarch64、loongarch64、mips64el、sw64、x86 32 位与 armhf；新架构保持 candidate，必须分别完成目标机编译、算法比对与现场验收。Ubuntu、macOS、Windows 或另一架构不得替代该架构目标机结果。
+
+- Ubuntu 24.04 x86_64 固定使用 `ubuntu_headband_wired` / `data_source.type="bluetooth"` / `access.mode="wired_b_side"`，链路为头环 → BLE → 网关 → 专用有线网络 → B 端，禁用 `local_ui`。Ubuntu 使用 `config/gateway.ubuntu.toml.example`，不得套用串口耳机模板。
+- 各平台共用 Bootstrap、ApplicationService、算法和存储接口；平台入口不得自行创建第二套生产 Gateway 或直接把设备回调接到旧兼容 facade。Ubuntu 录播还受 `[recording].replay_enabled` 约束；该策略不得使串口 Profile 开启录播。
 
 ## 数据与协议规则
 

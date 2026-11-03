@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -154,7 +155,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
 
     async def bridge(self, body, timeout=1):
         self.path.write_text(body)
-        self.runner = AlgorithmRunner(AlgorithmConfig(True, (sys.executable, str(self.path)), timeout, .1))
+        self.runner = AlgorithmRunner(AlgorithmConfig(True, (sys.executable, str(self.path)), int(timeout * 1000), .1))
         await self.runner.start()
         return self.runner
 
@@ -171,6 +172,8 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(r.error)
         self.assertEqual(await r.evaluate(window(1800)), (None, ['ALGORITHM_NOT_READY']))
         self.path.write_text('import sys,json\nfor line in sys.stdin:\n q=json.loads(line); print(json.dumps({"algorithm":{"attention":q["timestampMs"]}}),flush=True)\n')
+        # Recovery checks response ownership, not interpreter cold-start latency.
+        r.config = replace(r.config, request_timeout_ms=1000)
         await r.initialize()
         self.assertEqual((await r.evaluate(window(2400)))[0]['attention'], 2400)
 
@@ -192,7 +195,7 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         await g.update_status('connectionState','connected')
         with self.assertLogs('neurobridge.algorithm.runner', level='WARNING') as logs:
             await asyncio.wait_for(g.update_status('connectionState','disconnected'), 1)
-        self.assertIn('forcing termination', '\n'.join(logs.output))
+        self.assertIn('killing pid=', '\n'.join(logs.output))
         self.assertIsNotNone(process.returncode)
         self.assertIsNone(g.store.recording_id)
         await g.stop()
@@ -215,11 +218,11 @@ class MonitorTests(unittest.TestCase):
     def test_algorithm_timeouts_validate_and_keep_old_configuration_compatible(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'config.toml'
-            path.write_text('')
+            path.write_text('[data_source]\ntype="bluetooth"\n' + '')
             self.assertEqual(load(path).algorithm.stop_timeout_seconds, 1)
             for key in ('evaluation_timeout_seconds', 'stop_timeout_seconds'):
                 for value in ('0', '-1', 'nan', 'inf'):
-                    path.write_text(f'[algorithm]\n{key} = {value}\n')
+                    path.write_text('[data_source]\ntype="bluetooth"\n' + f'[algorithm]\n{key} = {value}\n')
                     with self.assertRaises(ValueError): load(path)
 
 

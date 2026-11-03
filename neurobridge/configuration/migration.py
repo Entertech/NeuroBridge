@@ -26,6 +26,14 @@ def migrate(values: Mapping[str, object]) -> dict[str, object]:
         raise ValueError("config_schema_version must be an integer")
     if version < 0 or version > CURRENT_SCHEMA_VERSION:
         raise ValueError(f"No configuration migration is available from schema {version}")
+    if version == 0 and "data_source" not in result and "ble" in result:
+        # The pre-profile headband deployment used only BLE on a dedicated wire.
+        # New configurations still require an explicit source and profile.
+        result["data_source"] = {"type": "bluetooth", "window_interval_ms": 600, "stale_after_ms": 1800}
+        server = result.get("server", {})
+        wired = isinstance(server, dict) and server.get("host", "127.0.0.1") != "127.0.0.1"
+        result.setdefault("access", {"mode": "wired_b_side" if wired else "local_browser"})
+        result.setdefault("local_ui", {"enabled": not wired})
     if version == 0:
         result["config_schema_version"] = 1
         version = 1

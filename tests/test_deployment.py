@@ -840,7 +840,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('VERSION_ID:-} != "24.04"', install_script)
         self.assertIn("python3 rsync cmake c++", install_script)
         self.assertIn("import bleak, serial, websockets", install_script)
-        self.assertIn("required by wired_b_side", install_script)
+        self.assertIn("neurobridge.wired_address", install_script)
         self.assertIn('[[ $# -eq 0 ]]', install_script)
         self.assertIn("systemctl enable neurobridge.service", install_script)
 
@@ -1243,7 +1243,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('command_response_timeout_ms = 1000', example)
         self.assertIn('stats_interval_seconds = 10', example)
         self.assertNotIn('\ninterface = "auto"', example)
-        self.assertIn('neurobridge-network-config" --config "$config_dir/gateway.toml" --apply', install_script)
+        self.assertIn('neurobridge.wired_address --config "$config_dir/gateway.toml"', install_script)
+        self.assertIn("config/gateway.ubuntu.toml.example", install_script)
         setup_command = '"$install_dir/venv/bin/python" -m neurobridge.wired_address --config "$config_dir/gateway.toml"'
         self.assertLess(
             install_script.index('if [[ ! -e "$config_dir/gateway.toml" ]]'),

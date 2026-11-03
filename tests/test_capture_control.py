@@ -8,7 +8,7 @@ import socket
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import websockets
 
@@ -128,7 +128,7 @@ class CaptureHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 200)
         self.assertTrue(body.startswith(b'PK'))
         url = f'ws://127.0.0.1:{self.gateway.config.server.port}/neurobridge/v1/ws'
-        async with websockets.connect(url, subprotocols=['neurobridge.v1'], ping_interval=None) as client:
+        async with websockets.connect(url, subprotocols=['neurobridge.v1'], ping_interval=None, origin='http://127.0.0.1:8080') as client:
             await client.send(json.dumps({'protocolVersion': '1.0', 'messageType': 'request', 'requestId': 'status', 'action': 'getStatus', 'params': {}}))
             result = json.loads(await client.recv())
             self.assertEqual(result['data']['result']['mode'], 'replay')
@@ -163,6 +163,19 @@ class CaptureHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, 404)
         code, _, _ = await http_request(self.port, '/downloads')
         self.assertEqual(code, 200)
+
+    async def test_installed_package_serves_ubuntu_assets_and_shared_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'ubuntu/capture').mkdir(parents=True)
+            (root / 'b-client-test').mkdir()
+            (root / 'ubuntu/capture/app.js').write_text('installed Ubuntu console')
+            (root / 'b-client-test/version.js').write_text('shared protocol version')
+            with patch('neurobridge.download.__file__', str(root / 'venv/site-packages/neurobridge/download.py')), patch('neurobridge.download.DEPLOYED_WEB_ROOT', root):
+                for url, expected in [('/capture/app.js', b'installed Ubuntu console'), ('/b-client-test/version.js', b'shared protocol version')]:
+                    code, _, body = await http_request(self.port, url)
+                    self.assertEqual(code, 200)
+                    self.assertEqual(body, expected)
 
     async def test_existing_task_survives_an_abruptly_closed_http_client(self):
         await self.start_capture()
@@ -251,7 +264,7 @@ class CaptureSupportTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             file = Path(directory) / 'gateway.toml'
             for value in ['["*"]', '["http://example.test/path"]', '["http://user:password@example.test"]']:
-                file.write_text(f'[download]\ncapture_allowed_origins = {value}\n')
+                file.write_text('[data_source]\ntype="bluetooth"\n' + f'[download]\ncapture_allowed_origins = {value}\n')
                 with self.assertRaises(ValueError): load(file)
-            file.write_text('[download]\ncapture_allowed_origins = ["null", "http://127.0.0.1:8080"]\n')
+            file.write_text('[data_source]\ntype="bluetooth"\n' + '[download]\ncapture_allowed_origins = ["null", "http://127.0.0.1:8080"]\n')
             self.assertEqual(load(file).download.capture_allowed_origins, ('null', 'http://127.0.0.1:8080'))

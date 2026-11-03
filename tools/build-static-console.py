@@ -16,8 +16,9 @@ CAPTURE_FILES = ('index.html', 'app.js', 'styles.css', 'README.md')
 
 
 def build(output: Path) -> Path:
-    entries = [(f'capture/{name}', ROOT / 'web/capture' / name) for name in CAPTURE_FILES]
-    entries.extend((f'b-client-test/{path.name}', path) for path in collect_web_client_files())
+    entries = [(f'capture/{name}', ROOT / 'web/ubuntu/capture' / name) for name in CAPTURE_FILES]
+    entries.extend((f'b-client-test/{path.name}', ROOT / 'web/ubuntu/b-client-test' / path.name if path.name in {'index.html', 'app.js', 'styles.css', 'README.md'} else path) for path in collect_web_client_files() if path.name != "runtime-config.js")
+    entries.extend((f"b-client-test/{name}", ROOT / "web/b-client-test" / name) for name in ("configure-wired-ip.bat", "configure-wired-ip.ps1"))
     payloads = {}
     for name, path in entries:
         if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to((ROOT / 'web').resolve()):

@@ -197,6 +197,7 @@ class ApplicationService:
         *,
         existing_stream: bool = False,
         prepared_algorithm_state: AlgorithmState | None = None,
+        start_stream: bool = True,
     ) -> AlgorithmState:
         """Bind a clean algorithm session, optionally reusing an unused prepared engine."""
 
@@ -247,7 +248,7 @@ class ApplicationService:
             self._algorithm_state.value,
             existing_stream,
         )
-        if self.control is not None:
+        if start_stream and self.control is not None:
             if connection_session_id != self._connection_session_id:
                 return AlgorithmState.ERROR
             if algorithm_state == AlgorithmState.READY or existing_stream or not self.requires_algorithm_to_start:
@@ -324,11 +325,17 @@ class ApplicationService:
                         "connectionSessionId": frame.connection_session_id,
                         "sequence": frame.sequence,
                         "sourceChunkIds": frame.source_chunk_ids,
+                        "channel": chunk.channel,
                         "rawBytes": frame.raw_bytes,
                     },
                 )
             )
         for signal in outcome.signals:
+            if signal.signal_type == "device_status":
+                for frame_id in signal.frame_refs:
+                    self._frames.pop(frame_id, None)
+                    self._frame_receipts.pop(frame_id, None)
+                continue
             batches = self.assembler.append(
                 signal,
                 device_protocol=self.device_protocol,

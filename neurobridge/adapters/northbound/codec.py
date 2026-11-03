@@ -73,10 +73,12 @@ class GatewayWireCodec:
         return envelope(error.code, data, error.message)
 
     def offline_data_error(self, gateway) -> ProtocolError:
+        if gateway.config.data_source.type == "bluetooth" and not gateway.config.recording.replay_enabled:
+            return ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "头环未连接", True)
         if not gateway.supports_replay:
             if gateway.status["connectionState"] == "validation_failed":
                 message = "Serial device validation failed: no complete valid data frame was received after starting acquisition."
             else:
                 message = "Serial data source is not connected; live data is unavailable and replay is not supported."
             return ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, message, True)
-        return ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "No replay data is available.", True)
+        return ProtocolError(503, REPLAY_NOT_AVAILABLE_REASON, "头环未连接，且暂无可用的录播数据", True)

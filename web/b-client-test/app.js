@@ -2,7 +2,6 @@
 
 const PROTOCOL_VERSION = window.NEUROBRIDGE_VERSION.protocolVersion;
 const SUBPROTOCOL = "neurobridge.v1";
-const LOG_LIMIT = 500;
 let socket = null;
 let subscriptions = new Map();
 let logEntries = [];
@@ -41,9 +40,6 @@ const elements = {
 
 if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
   elements.endpoint.value = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
-} else if (window.location.search) {
-  const linkedEndpoint = new URLSearchParams(window.location.search).get("endpoint");
-  if (linkedEndpoint) elements.endpoint.value = linkedEndpoint;
 }
 
 function isConnected() {
@@ -65,11 +61,11 @@ function setConnectionState(state, label) {
 }
 
 function timeLabel(date = new Date()) {
-  return date.toISOString();
+  return date.toLocaleTimeString("zh-CN", { hour12: false });
 }
 
 function appendLog(kind, label, body) {
-  const entry = { time: timeLabel(), kind, label, body: typeof body === "string" ? body : JSON.stringify(body, (key, value) => ["bytesBase64", "wave"].includes(key) ? "[原始波形已省略]" : value, 2) };
+  const entry = { time: timeLabel(), kind, label, body: typeof body === "string" ? body : JSON.stringify(body, null, 2) };
   logEntries.push(entry);
   const node = document.createElement("div");
   node.className = `log-entry ${kind}`;
@@ -84,10 +80,6 @@ function appendLog(kind, label, body) {
   content.textContent = entry.body;
   node.append(time, tag, content);
   elements.log.append(node);
-  if (logEntries.length > LOG_LIMIT) {
-    logEntries.shift();
-    elements.log.firstElementChild.remove();
-  }
   elements.log.scrollTop = elements.log.scrollHeight;
 }
 
@@ -208,12 +200,7 @@ function sendPayload(payload) {
     appendLog("error", "ERROR", "尚未建立 WebSocket 连接，无法发送请求。");
     return false;
   }
-  try {
-    socket.send(JSON.stringify(payload));
-  } catch (error) {
-    appendLog("error", "ERROR", `发送失败：${error.message}`);
-    return false;
-  }
+  socket.send(JSON.stringify(payload));
   appendLog("out", "OUT →", payload);
   return true;
 }
@@ -230,7 +217,6 @@ function sendRequest(action, params) {
 }
 
 function connect() {
-  if (socket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(socket.readyState)) return;
   const endpoint = elements.endpoint.value.trim();
   if (!endpoint.startsWith("ws://") && !endpoint.startsWith("wss://")) {
     appendLog("error", "ERROR", "地址必须以 ws:// 或 wss:// 开头。");
@@ -238,46 +224,38 @@ function connect() {
   }
   try {
     setConnectionState("wait", "正在连接");
-    appendLog("system", "SYSTEM", `连接 ${endpoint}（子协议 ${SUBPROTOCOL}，页面来源 ${window.location.protocol}）`);
+    appendLog("system", "SYSTEM", `连接 ${endpoint}（子协议 ${SUBPROTOCOL}）`);
     socket = new WebSocket(endpoint, SUBPROTOCOL);
   } catch (error) {
     setConnectionState("off", "未连接");
     appendLog("error", "ERROR", error.message);
     return;
   }
-  const connection = socket;
-  const startedAt = Date.now();
-  connection.addEventListener("open", () => {
-    if (socket !== connection) return;
+  socket.addEventListener("open", () => {
     setConnectionState("on", "已连接");
     appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。" );
     sendRequest("getStatus", {});
   });
-  connection.addEventListener("message", (event) => {
-    if (socket !== connection) return;
+  socket.addEventListener("message", (event) => {
     try {
       handleGatewayMessage(JSON.parse(event.data));
     } catch {
-      appendLog("error", "ERROR", `收到无法处理的消息（字符数 ${String(event.data).length}）。`);
+      appendLog("error", "ERROR", `收到非 JSON 文本帧：${event.data}`);
     }
   });
-  connection.addEventListener("error", () => {
-    if (socket !== connection) return;
-    appendLog("error", "ERROR", `连接 ${endpoint} 失败或中断；浏览器不提供底层原因，请对照网关网络日志、两端 IP/掩码、端口和子协议。`);
-  });
-  connection.addEventListener("close", (event) => {
-    if (socket !== connection) return;
+  socket.addEventListener("error", () => appendLog("error", "ERROR", "WebSocket 发生网络错误或网关拒绝了子协议。"));
+  socket.addEventListener("close", (event) => {
     setConnectionState("off", "已断开");
     subscriptions.clear();
     refreshSubscriptionSelect();
-    appendLog("system", "SYSTEM", `连接已关闭（地址=${endpoint}，code=${event.code}，clean=${event.wasClean}，持续=${Date.now() - startedAt} ms${event.reason ? `，${event.reason}` : ""}）。重新连接后需重新订阅。`);
+    appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`);
     socket = null;
   });
 }
 
 elements.connectButton.addEventListener("click", connect);
 elements.disconnectButton.addEventListener("click", () => {
-  if (socket) socket.close(1000, "客户端主动断开连接");
+  if (socket) socket.close(1000, "B-side test console disconnect");
 });
 elements.getStatusButton.addEventListener("click", () => sendRequest("getStatus", {}));
 elements.getLatestButton.addEventListener("click", () => {

@@ -149,7 +149,7 @@ class _ApplicationPipelineAdapter:
             finally:
                 self._log_metrics(phase="acquisition_shutdown")
 
-    async def device_ready(self, activate_algorithm=None) -> bool:
+    async def device_ready(self, activate_algorithm=None, *, start_stream=True) -> bool:
         """Bind the validated connection to its recording and algorithm."""
 
         try:
@@ -173,6 +173,7 @@ class _ApplicationPipelineAdapter:
             connection_session_id,
             recording_session_id,
             existing_stream=existing_stream,
+            **({"start_stream": False} if not start_stream else {}),
             **({"prepared_algorithm_state": prepared_state} if prepared_state is not None else {}),
         )
         await self.gateway.update_status("algorithmState", state.value)
@@ -200,7 +201,10 @@ class _ApplicationPipelineAdapter:
             if event.state == ConnectionState.CONNECTED:
                 self._offline_since = None
                 gateway_state = "validated" if self.profile.transport == "serial" else "connected"
-                await self.gateway.update_status("connectionState", gateway_state)
+                if event.reason == "preparing_capture":
+                    await self.gateway.prepare_live_session()
+                else:
+                    await self.gateway.update_status("connectionState", gateway_state)
                 await self.application.on_connection(event)
                 self._connected_seen.set()
                 continue
@@ -234,8 +238,10 @@ class _ApplicationPipelineAdapter:
             )
 
 
-def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = None) -> ApplicationContainer:
+def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = None, *, gateway=None) -> ApplicationContainer:
     profile = resolve_profile(config, runtime)
+    if gateway is not None and gateway.config != config:
+        raise ValueError("An acquisition restart must retain its gateway configuration and profile")
     engine = AffectiveSdkAlgorithmEngine(config.algorithm)
     def recording_factory():
         values = vars(config.storage).copy()
@@ -243,7 +249,7 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
         return SegmentedRecordingRepository(config.recording.directory, shutdown_timeout_ms=config.pipeline.shutdown_timeout_ms, **values)
 
     archive = SegmentedArchive(config.recording.directory)
-    gateway = Gateway(config, store=archive,
+    gateway = gateway or Gateway(config, store=archive,
                       algorithm=engine, snapshots=InMemoryLatestSnapshotStore(),
                       recording_factory=recording_factory,
                       supports_replay=profile.capabilities.supports_replay,
@@ -251,6 +257,7 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
                       project_window=project_window, wire=GatewayWireCodec(),
                       live_connection_states=frozenset({"validated" if profile.transport == "serial" else "connected"}),
                       initial_connection_state="not_connected" if profile.transport == "serial" else "disconnected")
+    gateway.algorithm = engine
     parser: RawDataParser
     if profile.device_protocol == "headset_rev181":
         parser = HeadsetRev181Parser(config.serial.max_buffer_bytes)
@@ -313,6 +320,7 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     async def device_ready() -> bool:
         return await bridge_ref["bridge"].device_ready(
             activate_algorithm=activate_algorithm if profile.transport == "serial" else None,
+            start_stream=profile.transport == "serial",
         )
 
     if profile.os_family in {"kylin", "windows"}:
@@ -331,7 +339,9 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     else:
         source = BluetoothBleakSource(config.ble, device_ready, gateway.update_connection_error,
                                       queue_size=config.pipeline.source_queue_size,
-                                      enqueue_timeout_ms=config.pipeline.source_enqueue_timeout_ms)
+                                      enqueue_timeout_ms=config.pipeline.source_enqueue_timeout_ms,
+                                      telemetry=gateway.update_status,
+                                      diagnostics_interval_seconds=config.logging.diagnostics_interval_seconds)
     adapter = _ApplicationPipelineAdapter(source, application, gateway, profile)
     application.control = getattr(source, "control", None)
     bridge_ref["bridge"] = adapter

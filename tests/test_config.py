@@ -18,7 +18,7 @@ class AlgorithmConfigurationTests(unittest.TestCase):
     def test_delivery_and_diagnostic_settings_are_backward_compatible_and_validated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gateway.toml"
-            path.write_text("", encoding="utf-8")
+            path.write_text(BLUETOOTH_DATA_SOURCE, encoding="utf-8")
             config = load(path)
             self.assertEqual(config.server.send_timeout_seconds, 5)
             self.assertEqual(config.server.delivery_queue_size, 16)

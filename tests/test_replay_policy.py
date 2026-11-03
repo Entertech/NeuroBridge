@@ -30,13 +30,13 @@ class ReplayPolicyConfigTests(unittest.TestCase):
     def test_default_is_compatible_and_only_boolean_is_accepted(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'gateway.toml'
-            path.write_text('[recording]\n')
+            path.write_text('[data_source]\ntype="bluetooth"\n' + '[recording]\n')
             self.assertTrue(load(path).recording.replay_enabled)
             for value in ['false', 'true']:
-                path.write_text('[recording]\nreplay_enabled = ' + value)
+                path.write_text('[data_source]\ntype="bluetooth"\n' + '[recording]\nreplay_enabled = ' + value)
                 self.assertEqual(load(path).recording.replay_enabled, value == 'true')
             for value in ['"false"', '0', '[]']:
-                path.write_text('[recording]\nreplay_enabled = ' + value)
+                path.write_text('[data_source]\ntype="bluetooth"\n' + '[recording]\nreplay_enabled = ' + value)
                 with self.assertRaises(ValueError): load(path)
 
     def test_editor_preserves_all_other_values_and_comments(self):
@@ -64,7 +64,7 @@ class ReplayPolicyConfigTests(unittest.TestCase):
     def test_running_service_restart_and_config_persistence_preserve_mode_and_owner(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'gateway.toml'
-            path.write_text('[recording]\nreplay_enabled = true # preserve\n[ble]\nenabled = false\n')
+            path.write_text('[data_source]\ntype="bluetooth"\n' + '[recording]\nreplay_enabled = true # preserve\n[ble]\nenabled = false\n')
             path.chmod(0o640)
             old = path.stat()
             calls = []
@@ -84,7 +84,7 @@ class ReplayPolicyConfigTests(unittest.TestCase):
 
     def test_stopped_service_is_not_started_and_status_is_read_only(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'gateway.toml'; path.write_text('[recording]\n')
+            path = Path(directory) / 'gateway.toml'; path.write_text('[data_source]\ntype="bluetooth"\n' + '[recording]\n')
             with patch('neurobridge.replay_control.subprocess.run', return_value=subprocess.CompletedProcess([],3)) as run:
                 result = apply('disable', path)
                 self.assertFalse(result['applied'])
@@ -97,7 +97,7 @@ class ReplayPolicyConfigTests(unittest.TestCase):
 
     def test_failed_restart_keeps_requested_policy_and_reports_not_applied(self):
         with tempfile.TemporaryDirectory() as directory:
-            path=Path(directory)/'gateway.toml';path.write_text('[recording]\nreplay_enabled=true\n')
+            path=Path(directory)/'gateway.toml';path.write_text('[data_source]\ntype="bluetooth"\n' + '[recording]\nreplay_enabled=true\n')
             with patch('neurobridge.replay_control.subprocess.run', side_effect=[subprocess.CompletedProcess([],0),subprocess.CompletedProcess([],1)]):
                 with self.assertRaisesRegex(ReplayControlError, 'was saved.*failed'):
                     apply('disable',path)
@@ -105,7 +105,7 @@ class ReplayPolicyConfigTests(unittest.TestCase):
 
     def test_invalid_configuration_and_symlink_do_not_change_files_or_restart(self):
         with tempfile.TemporaryDirectory() as directory:
-            path=Path(directory)/'gateway.toml';path.write_text('[recording]\nreplay_enabled="bad"\n')
+            path=Path(directory)/'gateway.toml';path.write_text('[data_source]\ntype="bluetooth"\n' + '[recording]\nreplay_enabled="bad"\n')
             before=path.read_bytes()
             with patch('neurobridge.replay_control.subprocess.run') as run:
                 with self.assertRaises(ValueError): apply('disable',path)
@@ -155,7 +155,7 @@ class ReplayGatewayTests(unittest.IsolatedAsyncioTestCase):
     async def test_policy_survives_config_reload_and_normal_replay_is_restored(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);path=root/'gateway.toml'
-            path.write_text('[recording]\ndirectory='+json.dumps(str(root/'data'))+'\n[algorithm]\nenabled=false\n')
+            path.write_text('[data_source]\ntype="bluetooth"\n' + '[recording]\ndirectory='+json.dumps(str(root/'data'))+'\n[algorithm]\nenabled=false\n')
             gateway=Gateway(load(path));await gateway.start()
             gateway.store.start(1000)
             gateway.store.save_algorithm(timestamp_ms=1200,valid=True,invalid_reasons=[],algorithm={'attention':7})
@@ -175,7 +175,7 @@ class ReplayGatewayTests(unittest.IsolatedAsyncioTestCase):
     async def test_disable_command_restarts_active_replay_into_live_mode_for_ws_and_capture(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); path=root/'gateway.toml'; port=unused_port()
-            path.write_text('[server]\nhost="127.0.0.1"\nport='+str(port)+'\n[recording]\ndirectory='+json.dumps(str(root/'data'))+'\n[algorithm]\nenabled=false\n')
+            path.write_text('[data_source]\ntype="bluetooth"\n' + '[server]\nhost="127.0.0.1"\nport='+str(port)+'\n[recording]\ndirectory='+json.dumps(str(root/'data'))+'\n[algorithm]\nenabled=false\n')
             runtime={}
             async def boot():
                 gateway=Gateway(load(path))
@@ -206,7 +206,7 @@ class ReplayGatewayTests(unittest.IsolatedAsyncioTestCase):
                 await client.send(json.dumps({'protocolVersion':'1.0','messageType':'request','requestId':action,'action':action,'params':params}))
                 return json.loads(await asyncio.wait_for(client.recv(),timeout=1))
             try:
-                async with websockets.connect(url,subprotocols=['neurobridge.v1'],ping_interval=None) as client:
+                async with websockets.connect(url,subprotocols=['neurobridge.v1'],ping_interval=None,origin='http://127.0.0.1:8080') as client:
                     response=await request(client,'subscribe',{'streams':['eeg']})
                     self.assertEqual(response['data']['result']['mode'],'replay')
                     event=json.loads(await asyncio.wait_for(client.recv(),timeout=1))
@@ -217,7 +217,7 @@ class ReplayGatewayTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(result['applied'])
                     await asyncio.wait_for(client.wait_closed(),timeout=1)
                     self.assertIsNone(gateway._replay_task)
-                async with websockets.connect(url,subprotocols=['neurobridge.v1'],ping_interval=None) as client:
+                async with websockets.connect(url,subprotocols=['neurobridge.v1'],ping_interval=None,origin='http://127.0.0.1:8080') as client:
                     response=await request(client,'getStatus',{})
                     self.assertEqual(response['code'],200)
                     status=response['data']['result']

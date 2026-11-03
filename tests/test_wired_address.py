@@ -152,11 +152,11 @@ class WiredAddressTests(unittest.TestCase):
 
     def test_new_configuration_defaults_and_validation(self):
         path = self.root / "gateway.toml"
-        path.write_text("")
+        path.write_text('[data_source]\ntype="bluetooth"\n' + "")
         self.assertTrue(load(path).network.ensure_static_address)
         self.assertEqual(load(path).network.address_check_interval_seconds, 5)
         for value in ("0", "nan", "inf", "3601"):
-            path.write_text(f"[network]\naddress_check_interval_seconds = {value}\n")
+            path.write_text('[data_source]\ntype="bluetooth"\n' + f"[network]\naddress_check_interval_seconds = {value}\n")
             with self.assertRaises(ValueError):
                 load(path)
 

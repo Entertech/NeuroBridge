@@ -47,6 +47,7 @@ class Gateway(GatewayApplication):
         )
         self.log = LOG
         self.assembler = WindowAssembler()
+        self._capture_lock = asyncio.Lock()
 
     async def handle(self, session: ClientSession, raw: str, send: Any) -> None:
         await NorthboundController(self).handle(session, raw, send)
@@ -87,6 +88,8 @@ class Gateway(GatewayApplication):
             self.config.data_source.type,
             self.config.algorithm.enabled,
         )
+        if self.config.data_source.type == "bluetooth" and self.store.recording_id is None:
+            await self.prepare_live_session()
         try:
             if not already_prepared:
                 await self.algorithm.initialize()
@@ -116,12 +119,12 @@ class Gateway(GatewayApplication):
             algorithm_state,
             safe_log_text(reason),
         )
-        return False
+        return self.config.data_source.type == "bluetooth"
 
-    async def receive_packet(self, characteristic: str, value: bytes) -> None:
+    async def receive_packet(self, characteristic: str | DevicePacket, value: bytes | None = None) -> None:
         """Compatibility entry point for tests and older in-process callers."""
 
-        await self.receive_device_packet(DevicePacket(self.config.data_source.type, characteristic, bytes(value), now_ms()))
+        await self.receive_device_packet(characteristic if isinstance(characteristic, DevicePacket) else DevicePacket(self.config.data_source.type, characteristic, bytes(value), now_ms()))
 
     async def receive_device_packet(self, packet: DevicePacket) -> None:
         """Consume the transport-neutral event emitted by a selected adapter."""
@@ -170,6 +173,11 @@ class Gateway(GatewayApplication):
                     self.store.recording_id,
                     receipt.reason,
                 )
+        if characteristic in {"ff32", "battery"}:
+            self.store.save_raw_packet(stream={"ff32": "wear", "battery": "battery"}[characteristic], received_at_ms=received_at_ms,
+                window_start_ms=received_at_ms - received_at_ms % 600,
+                window_end_ms=received_at_ms - received_at_ms % 600 + 600, value=value)
+            return
         raw_stream = {"ff31": "eeg", "ff51": "hr"}.get(characteristic)
         if raw_stream is None:
             if characteristic not in {"ff32", "serial.frame"}:
@@ -204,9 +212,10 @@ class Gateway(GatewayApplication):
                 window_end_ms=window_start_ms + self.assembler.interval_ms,
                 value=value,
             )
-        for window in self.assembler.add(characteristic, value, received_at_ms):
-            await self.publish_window(window)
-        self._schedule_window_flush()
+        async with self._capture_lock:
+            for window in self.assembler.add(characteristic, value, received_at_ms):
+                await self._publish_window(window)
+            self._schedule_window_flush()
 
     def _schedule_window_flush(self) -> None:
         deadline = self.assembler.window_end_ms
@@ -242,6 +251,10 @@ class Gateway(GatewayApplication):
                 await task
 
     async def publish_window(self, window: DataWindow) -> None:
+        async with self._capture_lock:
+            await self._publish_window(window)
+
+    async def _publish_window(self, window: DataWindow) -> None:
         self._capture_stats["windows"] = int(self._capture_stats["windows"] or 0) + 1
         raw = window.raw_payload()
         reasons = list(window.reasons)
