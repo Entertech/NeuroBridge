@@ -36,13 +36,15 @@ PowerShell 环境准备、COM 检查、配置、前台启动、日志排障与�
 
 ## 使用蓝牙头环
 
-Windows 10/11 x64 可配置 Flowtime BLE 头环采集。先打开 Windows 蓝牙与头环电源，并停止当前网关。源码部署使用菜单 `11` 停止项目服务，前台运行时按 `Ctrl+C`。安装包部署在管理员 PowerShell 中执行 `Stop-Service NeuroBridge`。
+Windows 10/11 x64 首次生成的配置默认同时启用 USB 串口耳机和 Flowtime BLE 头环。打开 Windows 蓝牙与头环电源后，网关自动扫描和重连。可以只接其中一种设备，联调页按实际连接情况显示。
 
-编辑现有配置。源码部署使用 `.runtime\config\windows-gateway.toml`，安装包部署使用 `%ProgramData%\NeuroBridge\gateway.toml`。
+从 v0.3.2 覆盖安装时，网关首次启动会识别原厂默认配置，将其备份至 `%ProgramData%\NeuroBridge\config-backups`，再换成带中文注释的双设备配置。修改过的配置和已明确设置头环开关的配置继续沿用。可在 Windows 事件查看器的应用程序日志中确认迁移结果。
+
+已有配置需要开启头环或补注释时，参照带中文注释的 [Windows 配置模板](gateway.toml.example)。源码部署的配置是 `.runtime\config\windows-gateway.toml`，安装包部署是 `%ProgramData%\NeuroBridge\gateway.toml`。修改前停止网关。源码部署使用菜单 `11` 停止项目服务，前台运行时按 `Ctrl+C`。安装包部署在管理员 PowerShell 中执行 `Stop-Service NeuroBridge`。
 
 - 同时采集时，使用 `profile = "windows_headset_local"`，在 `[data_source]` 设置 `type = "serial"` 与 `include_headband = true`。
 - 只采集头环时，使用 `profile = "windows_headband_local"`，在 `[data_source]` 设置 `type = "bluetooth"` 与 `include_headband = false`。
-- 核对 `[ble]` 使用 `enabled = true`。旧配置若没有该表，从 [Windows 配置模板](gateway.toml.example) 复制整个 `[ble]` 段。按实际广播名称配置 `device_name`。
+- 双设备或仅头环模式须将 `[ble].enabled` 设为 `true`，扫描超时和重连间隔都要大于 0 秒。默认分别为 5 秒和 3 秒。旧配置没有 `[ble]` 时，从模板复制该段。已有此段时直接修改对应字段，并按实际广播名称设置 `device_name`。
 
 源码部署双击启动器重新启动，安装包部署执行 `Start-Service NeuroBridge`。打开 `http://127.0.0.1:8080/`（自定义端口以配置为准），等待「头环蓝牙」区显示设备已连接。点击 `getLatest` 查看最新算法结果，或点击 `subscribe` 接收连续窗口。需要确认原始数据时，先勾选 EEG 和 HR 原始字节流再订阅。旧的 `/capture/` 入口在头环模式下跳转至联调页。
 
@@ -139,6 +141,16 @@ powershell -ExecutionPolicy Bypass -File 'C:\Program Files\NeuroBridge\windows\e
 
 网关自带的 HTTP 导出（`http://127.0.0.1:8766/downloads/logs/neurobridge-logs.zip`）只在网关运行且下载服务启用时可用，且按设计不含事件日志与 COM 端口信息；排障时优先用上面的命令。
 
+## 局域网 SSH 排障
+
+在 Windows 10/11 双击 `windows\remote-support.cmd`。源码部署从项目目录打开，MSI / EXE 安装后从 `C:\Program Files\NeuroBridge\windows\remote-support.cmd` 打开。网关服务停止时也可以使用。
+
+- 选 `1` 并同意 Windows 管理员授权。工具按需安装系统 OpenSSH Server，将其标准防火墙规则限制在本地子网，启动 `sshd`，并显示服务状态和可用的局域网连接地址。首次安装系统组件可能需要 Windows Update。
+- 选 `3` 查看服务状态、标准防火墙规则的来源范围和连接地址。用平时登录的 Windows 账号从 Mac 等同一子网的电脑连接。
+- 排障后选 `2`。此操作会关闭整台电脑的 Windows OpenSSH 服务，将其设为手动启动，并禁用标准 SSH 防火墙规则。如果其他人也在使用该服务，他们的连接会受到影响。
+
+安装 NeuroBridge 不会自动启用 SSH。卸载 NeuroBridge 前可先用菜单关闭 SSH。网关的本机网页和 WebSocket 继续使用回环地址。
+
 ## MSI / EXE 安装包部署
 
 源码部署与安装包部署是两套独立形态，服务名和数据位置都不同，不要混用：
@@ -153,7 +165,7 @@ powershell -ExecutionPolicy Bypass -File 'C:\Program Files\NeuroBridge\windows\e
 
 卸载时服务正在运行不会冲突：WiX 的 `ServiceControl Stop="both" Wait="yes" Remove="uninstall"` 会先停止 `NeuroBridge`、等待其进入 Stopped，再删除文件，最后删除服务注册。服务进程持有 `C:\Program Files\NeuroBridge` 下的文件也不会阻断删除。
 
-服务首次启动时会自建数据目录：创建 `C:\ProgramData\NeuroBridge` 下的 `logs` 和 `recordings`，并在 `gateway.toml` 不存在时从随包模板复制一份。已存在的配置不会被覆盖，重装和卸载都不会丢现场数据。`C:\ProgramData\NeuroBridge` 不归 MSI 所有，卸载后保留，需要彻底清除时手动删除。
+服务首次启动时会自建数据目录：创建 `C:\ProgramData\NeuroBridge` 下的 `logs` 和 `recordings`，并在 `gateway.toml` 不存在时从随包模板复制一份。配置升级规则见上面的「使用蓝牙头环」。`C:\ProgramData\NeuroBridge` 不归 MSI 所有，卸载后保留。
 
 安装包部署不要用启动器菜单里的服务动作：那些动作针对源码形态的 `NeuroBridgeProject`。菜单 `13` 与 `export-logs.ps1` 是例外——它按布局自动识别，两种形态都正确。
 
@@ -161,7 +173,7 @@ powershell -ExecutionPolicy Bypass -File 'C:\Program Files\NeuroBridge\windows\e
 
 本目录包含：
 
-- `gateway.toml.example`：`windows_headset_local`、COM 耳机和 `127.0.0.1` 本机页面配置；安装包会把它作为 `C:\ProgramData\NeuroBridge\gateway.toml` 的模板；
+- `gateway.toml.example`：带中文注释的 Windows 双设备配置模板；安装包用它首次生成 `C:\ProgramData\NeuroBridge\gateway.toml`；
 - `neurobridge-windows-bootstrap.cmd` / `setup-windows-gateway.ps1`：双击入口和数字菜单；
 - `export-logs.ps1`：导出运行日志，自动识别源码与安装包布局；
 - `diagnose-service.ps1`：只针对源码形态的服务诊断；

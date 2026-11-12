@@ -113,7 +113,14 @@ def build(platform_name: str, output: Path, runtime: Path | None) -> Path:
                 shutil.copy2(source, stage / source.name)
         config_source = ROOT / ("config/gateway.toml.example" if platform_name == "kylin" else "windows/gateway.toml.example")
         shutil.copy2(config_source, stage / "gateway.toml.example")
-        shutil.copy2(config_source, payload / "defaults.toml")
+        if platform_name == "windows":
+            # Fresh installs copy the full template. Older configs without an
+            # explicit switch retain the loader's serial-only fallback.
+            template_lines = config_source.read_text(encoding="utf-8").splitlines(keepends=True)
+            defaults = "".join(line for line in template_lines if not line.startswith("include_headband = "))
+            (payload / "defaults.toml").write_text(defaults, encoding="utf-8")
+        else:
+            shutil.copy2(config_source, payload / "defaults.toml")
         if runtime is not None:
             shutil.copytree(runtime, payload / "runtime", dirs_exist_ok=True)
         metadata = stage / "metadata"

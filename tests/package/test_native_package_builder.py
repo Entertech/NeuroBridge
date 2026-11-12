@@ -321,6 +321,8 @@ class NativePackageBuilderTests(unittest.TestCase):
                     self.assertIn(expected, template)
                     if target_id.startswith("windows"):
                         self.assertIn('candidate_types = ["COM"]', template)
+                        self.assertIn('include_headband = true', template)
+                        self.assertIn('每轮扫描的最长等待时间', template)
                         self.assertIn(r'directory = "C:\\ProgramData\\NeuroBridge\\logs"', template)
                         self.assertNotIn("ttyACM", template)
                         self.assertNotIn("/opt/neurobridge", template)

@@ -5,11 +5,13 @@ cannot start until that layout exists.  Provisioning lives in the service host
 rather than in WiX so it is covered by tests and works for any install shape.
 """
 
+from hashlib import sha256
 from pathlib import Path
 import sys
 import tempfile
 import types
 import unittest
+from unittest.mock import patch
 
 from windows import service as host
 
@@ -41,6 +43,23 @@ class DataLayoutTests(unittest.TestCase):
 
             self.assertFalse(host.provision_data_layout(config, template))
             self.assertEqual(config.read_text(encoding="utf-8"), "# operator edit\n")
+
+    def test_upgrade_backs_up_known_default_once_and_preserves_operator_edits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "gateway.toml"
+            old_default = b'# factory config\nprofile = "windows_headset_local"\n'
+            original = old_default.replace(b"\n", b"\r\n")
+            config.write_bytes(original)
+            with patch.object(host, "LEGACY_DEFAULT_SHA256", sha256(old_default).hexdigest()):
+                backup = host.upgrade_legacy_default(config, host.CONFIG_TEMPLATE)
+                self.assertIsNotNone(backup)
+                self.assertEqual(backup.read_bytes(), original)
+                self.assertEqual(config.read_bytes(), host.CONFIG_TEMPLATE.read_bytes())
+                self.assertIsNone(host.upgrade_legacy_default(config, host.CONFIG_TEMPLATE))
+                custom = original + b"# my settings\r\n"
+                config.write_bytes(custom)
+                self.assertIsNone(host.upgrade_legacy_default(config, host.CONFIG_TEMPLATE))
+                self.assertEqual(config.read_bytes(), custom)
 
     def test_a_missing_template_fails_loudly_instead_of_starting_without_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

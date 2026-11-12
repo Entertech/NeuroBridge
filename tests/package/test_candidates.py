@@ -35,6 +35,11 @@ class CandidatePackageTests(unittest.TestCase):
                         names = bundle.namelist()
                         manifest_name = next(name for name in names if name.endswith("metadata/manifest.json"))
                         manifest = json.loads(bundle.read(manifest_name))
+                        prefix = manifest_name.removesuffix("metadata/manifest.json")
+                        template = bundle.read(prefix + "gateway.toml.example").decode("utf-8")
+                        defaults = bundle.read(prefix + "payload/defaults.toml").decode("utf-8")
+                        self.assertTrue(tomllib.loads(template)["data_source"]["include_headband"])
+                        self.assertNotIn("include_headband", tomllib.loads(defaults)["data_source"])
                 else:
                     with tarfile.open(archive) as bundle:
                         names = bundle.getnames()

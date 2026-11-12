@@ -99,7 +99,7 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         template = (root / "windows/gateway.toml.example").read_text(encoding="utf-8")
         directory = self.enterContext(tempfile.TemporaryDirectory())
         config_path = Path(directory) / "gateway.toml"
-        config_path.write_text(template.replace("include_headband = false", "include_headband = true"), encoding="utf-8")
+        config_path.write_text(template, encoding="utf-8")
         config = load(config_path)
         config = replace(config, server=replace(config.server, port=0),
                          recording=replace(config.recording, directory=Path(directory) / "recordings"))
@@ -209,8 +209,12 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "gateway.toml"
             template = (root / "windows/gateway.toml.example").read_text(encoding="utf-8")
-            config_path.write_text(template.replace('profile = "windows_headset_local"', 'profile = "windows_headband_local"')
-                                   .replace('type = "serial"', 'type = "bluetooth"'), encoding="utf-8")
+            config_path.write_text(
+                template.replace('profile = "windows_headset_local"', 'profile = "windows_headband_local"')
+                .replace('\ntype = "serial"', '\ntype = "bluetooth"')
+                .replace('include_headband = true', 'include_headband = false'),
+                encoding="utf-8",
+            )
             config = load(config_path)
             config = replace(config, server=replace(config.server, port=0),
                              recording=replace(config.recording, directory=Path(directory) / "recordings"))

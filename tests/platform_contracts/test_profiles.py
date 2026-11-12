@@ -32,10 +32,10 @@ class PlatformProfileTests(unittest.TestCase):
     def test_windows_headband_requires_an_explicit_enabled_ble_profile(self) -> None:
         serial = load(ROOT / "windows/gateway.toml.example")
         runtime = RuntimePlatform("windows", "x86_64")
-        bluetooth = replace(serial, data_source=replace(serial.data_source, type="bluetooth"))
+        bluetooth = replace(serial, data_source=replace(serial.data_source, type="bluetooth", include_headband=False))
         with self.assertRaisesRegex(ValueError, "transport expected=serial"):
             resolve_profile(bluetooth, runtime)
-        headband = replace(bluetooth, profile="windows_headband_local")
+        headband = replace(bluetooth, profile="windows_headband_local", ble=replace(bluetooth.ble, enabled=False))
         with self.assertRaisesRegex(ValueError, "ble.enabled=true"):
             resolve_profile(headband, runtime)
         headband = replace(headband, ble=replace(headband.ble, enabled=True))

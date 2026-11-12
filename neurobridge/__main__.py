@@ -56,7 +56,7 @@ async def run(config_path: str, *, override_path: str | None = None, development
         _file_sha256(config_path),
     )
     LOG.info(
-        "Runtime configuration: profile=%s transport=%s deviceProtocol=%s accessMode=%s accessSummary=%s bleEnabled=%s scanTimeoutSeconds=%s reconnectDelaySeconds=%s "
+        "Runtime configuration: profile=%s transport=%s deviceProtocol=%s accessMode=%s accessSummary=%s includeHeadband=%s bleEnabled=%s scanTimeoutSeconds=%s reconnectDelaySeconds=%s "
         "server=%s:%s%s networkMode=%s networkInterface=%s subnet=%s downloadEnabled=%s "
         "downloadEndpoint=%s:%s%s recordingDirectory=%s replaySpeed=%s algorithmEnabled=%s "
         "algorithmCommand=%s loggingLevel=%s logFile=%s",
@@ -65,6 +65,7 @@ async def run(config_path: str, *, override_path: str | None = None, development
         container.profile.device_protocol,
         config.access.mode,
         strategy.summary(config),
+        config.data_source.include_headband,
         config.ble.enabled,
         config.ble.scan_timeout_seconds,
         config.ble.reconnect_delay_seconds,
