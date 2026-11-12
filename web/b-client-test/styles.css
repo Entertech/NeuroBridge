@@ -67,6 +67,8 @@ code { color: #9ee7f5; font-family: ui-monospace, SFMono-Regular, Menlo, Consola
 .source-panel h2 { margin: 0; }
 .source-status { color: #9eb1c9; font-size: .82rem; white-space: nowrap; }
 .source-active .source-status { color: #73d7ed; }
+.algorithm-waiting { margin-bottom: 18px; padding: 16px 20px; }
+.algorithm-waiting .hint { margin-top: 4px; }
 .action-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
 .action-card { min-height: 212px; display: flex; flex-direction: column; gap: 12px; padding: 15px; border: 1px solid rgba(83, 120, 159, .45); border-radius: 12px; background: rgba(5, 17, 31, .4); }
 .action-card-accent { border-color: rgba(72, 183, 206, .6); background: linear-gradient(145deg, rgba(21, 77, 98, .36), rgba(6, 20, 34, .42)); }

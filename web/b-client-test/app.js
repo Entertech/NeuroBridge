@@ -29,6 +29,7 @@ const elements = {
   dataSource: document.querySelector("#dataSource"),
   sourceHint: document.querySelector("#sourceHint"),
   sourcePanels: document.querySelector("#sourcePanels"),
+  algorithmWaiting: document.querySelector("#algorithmWaiting"),
   sourcePanelTemplate: document.querySelector("#sourcePanelTemplate"),
   connectButton: document.querySelector("#connectButton"),
   disconnectButton: document.querySelector("#disconnectButton"),
@@ -213,6 +214,7 @@ function refreshSubscriptionSelect() {
 
 function setPanelSource(source, label) {
   activeSource = source;
+  elements.algorithmWaiting.hidden = source !== null;
   for (const [key, panel] of Object.entries(panels)) {
     const active = key === source;
     panel.article.hidden = key === "unknown" && !active;
