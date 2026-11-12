@@ -31,6 +31,10 @@ const elements = {
   sourcePanels: document.querySelector("#sourcePanels"),
   algorithmSource: document.querySelector("#algorithmSource"),
   algorithmMetrics: document.querySelector("#algorithmMetrics"),
+  waveform: document.querySelector("#waveform"),
+  waveformMeta: document.querySelector("#waveformMeta"),
+  spectrum: document.querySelector("#spectrum"),
+  spectrumMeta: document.querySelector("#spectrumMeta"),
   sourcePanelTemplate: document.querySelector("#sourcePanelTemplate"),
   connectButton: document.querySelector("#connectButton"),
   disconnectButton: document.querySelector("#disconnectButton"),
@@ -180,8 +184,8 @@ function resetAlgorithmReadings(panel, reason) {
   panel.channels = {};
   panel.bandPower = {};
   panel.eegTimestamp = null;
-  panel.fields.waveformMeta.textContent = reason;
-  panel.fields.spectrumMeta.textContent = reason;
+  elements.waveformMeta.textContent = reason;
+  elements.spectrumMeta.textContent = reason;
   drawCharts();
 }
 
@@ -287,7 +291,10 @@ function refreshSubscriptionSelect() {
 function setPanelSource(source, label) {
   activeSource = source;
   elements.algorithmSource.textContent = source === null ? "未连接" : sourceLabels[source];
-  resetOverview(source === null ? "等待连接网关" : "等待算法数据");
+  const waiting = source === null ? "等待连接网关" : "等待算法数据";
+  resetOverview(waiting);
+  elements.waveformMeta.textContent = waiting;
+  elements.spectrumMeta.textContent = waiting;
   for (const [key, panel] of Object.entries(panels)) {
     const active = key === source;
     panel.article.hidden = key === "unknown" && !active;
@@ -297,8 +304,6 @@ function setPanelSource(source, label) {
     if (active) {
       for (const value of panel.article.querySelectorAll("dd")) value.textContent = "—";
       panel.fields.summary.textContent = "尚未收到网关数据。";
-      panel.fields.waveformMeta.textContent = "等待数据";
-      panel.fields.spectrumMeta.textContent = "等待数据";
       for (const group of panel.algorithmGroups) showAlgorithmWindow(group, "waiting", null, "等待实时窗口");
       panel.channels = {};
       panel.bandPower = {};
@@ -335,10 +340,9 @@ function updateSnapshot(data, panel) {
 }
 
 function drawCharts() {
-  if (!activeSource) return;
-  const { fields, channels, bandPower } = panels[activeSource];
-  drawWaveform(fields.waveform, channels);
-  drawSpectrum(fields.spectrum, bandPower);
+  const panel = panels[activeSource];
+  drawWaveform(elements.waveform, panel?.channels ?? {});
+  drawSpectrum(elements.spectrum, panel?.bandPower ?? {});
 }
 
 function fitCanvas(canvas) {
@@ -440,7 +444,6 @@ function updateVisuals(data, panel) {
   if (panel.eegTimestamp !== null && result.timestampMs < panel.eegTimestamp) return;
   panel.eegTimestamp = result.timestampMs ?? null;
 
-  const { fields } = panel;
   panel.channels = {};
   panel.bandPower = invalid ? {} : eeg?.bandPower || {};
   if (!invalid) {
@@ -451,14 +454,14 @@ function updateVisuals(data, panel) {
       if (values.some(Number.isFinite)) panel.channels[channel] = values;
     }
   }
-  fields.waveformMeta.replaceChildren(...Object.entries(panel.channels).map(([channel, values]) => {
+  elements.waveformMeta.replaceChildren(...Object.entries(panel.channels).map(([channel, values]) => {
     const label = document.createElement("span");
     label.className = `channel-${channel}`;
     label.textContent = `${channelStyles[channel].label} · ${values.length} 点`;
     return label;
   }));
-  if (!fields.waveformMeta.childElementCount) fields.waveformMeta.textContent = invalid ? "无效窗口" : "未提供波形";
-  fields.spectrumMeta.textContent = invalid ? "无效窗口" : Object.values(panel.bandPower).some(Number.isFinite)
+  if (!elements.waveformMeta.childElementCount) elements.waveformMeta.textContent = invalid ? "无效窗口" : "未提供波形";
+  elements.spectrumMeta.textContent = invalid ? "无效窗口" : Object.values(panel.bandPower).some(Number.isFinite)
     ? readableTimestamp(result.timestampMs) : "未提供频段能量";
   drawCharts();
 }

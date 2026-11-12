@@ -137,7 +137,9 @@ dd { margin: 0; max-width: 170px; color: #f2f7fc; font-size: .82rem; text-align:
 }
 
 .visuals { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(300px, .85fr); gap: 18px; margin-top: 18px; }
-.chart-card { min-width: 0; }
+.chart-card { min-width: 0; padding: 12px; border: 1px solid #385577; border-radius: 10px; background: #08192b; }
+.chart-card h3 { margin: 0; }
+.chart-card .hint { margin: 6px 0 0; }
 .chart-heading { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .chart-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; color: #73d7ed; font-size: .75rem; }
 .channel-right { color: #bd9af5; }

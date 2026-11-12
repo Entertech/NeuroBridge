@@ -53,6 +53,18 @@
         </div>
         <div id="algorithmMetrics" class="metric-grid"></div>
         <p class="hint">连接网关后，使用<a href="#subscribeButton">连续订阅</a>更新指标，或用 <code>getLatest</code> 查看一次。</p>
+        <div class="visuals">
+          <section class="chart-card" aria-labelledby="waveformTitle">
+            <div class="chart-heading"><h3 id="waveformTitle">脑波波形</h3><span id="waveformMeta" class="chart-meta">等待连接网关</span></div>
+            <p class="hint">横轴为样本序号，纵轴为算法幅度原值。</p>
+            <canvas id="waveform" role="img" aria-label="脑波波形图"></canvas>
+          </section>
+          <section class="chart-card" aria-labelledby="spectrumTitle">
+            <div class="chart-heading"><h3 id="spectrumTitle">频段能量</h3><span id="spectrumMeta" class="chart-meta">等待连接网关</span></div>
+            <p class="hint">纵轴为各频段的能量原值。</p>
+            <canvas id="spectrum" role="img" aria-label="脑波频段能量图"></canvas>
+          </section>
+        </div>
       </section>
       <section id="sourcePanels" class="source-panels" aria-label="按设备来源显示数据"></section>
 
@@ -89,18 +101,6 @@
                 </section>
               </div>
             </details>
-            <div class="visuals">
-              <div class="chart-card">
-                <div class="chart-heading"><h3>脑电波形</h3><span data-field="waveformMeta" class="chart-meta">等待数据</span></div>
-                <p class="hint">横轴为样本序号，纵轴为算法幅度原值。</p>
-                <canvas data-field="waveform" aria-label="脑电波形图"></canvas>
-              </div>
-              <div class="chart-card">
-                <div class="chart-heading"><h3>频谱能量</h3><span data-field="spectrumMeta" class="chart-meta">等待数据</span></div>
-                <p class="hint">纵轴为各频段的能量原值。</p>
-                <canvas data-field="spectrum" aria-label="脑电频谱图"></canvas>
-              </div>
-            </div>
           </div>
         </article>
       </template>
