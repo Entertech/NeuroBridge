@@ -75,13 +75,14 @@ code { color: #9ee7f5; font-family: ui-monospace, SFMono-Regular, Menlo, Consola
 .action-card { min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 15px; border: 1px solid rgba(83, 120, 159, .45); border-radius: 12px; background: rgba(5, 17, 31, .4); }
 .action-card h4 { margin: 0; font-size: .9rem; }
 .action-card-wide { grid-column: 1 / -1; }
-#sourceRequests > :only-child { grid-column: 1 / -1; }
+#sourceRequests > :only-child, .source-windows:has(> [hidden]) > :not([hidden]) { grid-column: 1 / -1; }
 .action-card-accent { border-color: rgba(72, 183, 206, .6); background: linear-gradient(145deg, rgba(21, 77, 98, .36), rgba(6, 20, 34, .42)); }
 .action-card > p { margin-bottom: auto; font-size: .82rem; }
 .stream-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; padding: 0; border: 0; color: #c8d5e6; font-size: .81rem; }
 .stream-options.compact { margin: 4px 0 0; }
 .stream-options legend { grid-column: 1 / -1; padding: 0; margin-bottom: 1px; color: #899fb9; font-size: .74rem; }
 .stream-options label, .checkline { display: flex; gap: 7px; align-items: center; }
+.stream-options label[hidden] { display: none; }
 .stream-options input, .checkline input { width: auto; min-height: auto; accent-color: #63d2e9; }
 .checkline { color: #bdcee0; font-size: .81rem; }
 .custom-request { margin-top: 18px; padding-top: 16px; border-top: 1px solid rgba(83, 120, 159, .4); }

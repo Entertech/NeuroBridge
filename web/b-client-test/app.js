@@ -10,6 +10,7 @@ const configuredEndpoint = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
 const fixedSource = configuredSource === "serial" || configuredSource === "bluetooth";
 const sharedConnection = configuredSource === "dual";
 const localConnection = fixedSource || sharedConnection;
+const showConnectedDevicesOnly = sharedConnection || window.NEUROBRIDGE_B_CLIENT_WINDOWS === true;
 const spectrumBands = ["delta", "theta", "alpha", "lowBeta", "highBeta", "beta", "gamma"];
 const algorithmMetrics = {
   eeg: [
@@ -27,10 +28,14 @@ const elements = {
   connectionRows: document.querySelector("#connectionRows"),
   connectionRowTemplate: document.querySelector("#connectionRowTemplate"),
   algorithmMetrics: document.querySelector("#algorithmMetrics"),
+  algorithmHint: document.querySelector("#algorithmHint"),
+  waitingForDevice: document.querySelector("#waitingForDevice"),
   sourceWindows: document.querySelector("#sourceWindows"),
   sourceWindowTemplate: document.querySelector("#sourceWindowTemplate"),
   sourceRequests: document.querySelector("#sourceRequests"),
   sourceRequestTemplate: document.querySelector("#sourceRequestTemplate"),
+  protocolRequests: document.querySelector("#protocolRequests"),
+  protocolLogs: document.querySelector("#protocolLogs"),
   connectionDot: document.querySelector("#connectionDot"),
   connectionLabel: document.querySelector("#connectionLabel"),
   sourceLogs: document.querySelector("#sourceLogs"),
@@ -106,7 +111,8 @@ function createSourcePanel(source) {
   });
   return {
     source, section, fields, algorithmGroups, overview: createOverview(source),
-    socket: null, initialStatusRequestId: null,
+    socket: null, initialStatusRequestId: null, statusSubscriptionRequestId: null, statusSubscriptionId: null,
+    deviceStatusTimestamp: null,
     subscriptions: new Map(), channels: {}, bandPower: {}, identity: {}, eegTimestamp: null,
   };
 }
@@ -153,7 +159,7 @@ function refreshConnectionControls(panel) {
 
   const active = Object.values(panels).filter((item) => item.socket?.readyState === WebSocket.OPEN);
   const pending = Object.values(panels).some((item) => item.socket);
-  const labels = active.length && sharedConnection ? "Windows 网关" : active.map((item) => sourceLabels[item.source]).join("、");
+  const labels = active.length && showConnectedDevicesOnly ? "Windows 网关" : active.map((item) => sourceLabels[item.source]).join("、");
   elements.connectionLabel.textContent = labels ? `${labels} · 已连接` : pending ? "连接处理中" : "未连接";
   elements.connectionDot.className = `dot dot-${labels ? "on" : pending ? "wait" : "off"}`;
 }
@@ -191,7 +197,7 @@ function createSourceLog(source) {
     }
   });
   elements.sourceLogs.append(section);
-  return { list, entries };
+  return { section, list, entries };
 }
 
 const sourceLogs = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourceLog(source)]));
@@ -334,11 +340,11 @@ function getCheckedValues(section, name) {
 }
 
 function refreshSubscriptionSelect(panel) {
-  const { subscriptions } = panel;
+  const subscriptions = [...panel.subscriptions].filter(([id]) => id !== panel.statusSubscriptionId);
   const { subscriptionSelect, unsubscribeButton } = panel.requests;
   const oldValue = subscriptionSelect.value;
   subscriptionSelect.replaceChildren();
-  if (subscriptions.size === 0) {
+  if (subscriptions.length === 0) {
     const option = new Option("暂无订阅", "");
     subscriptionSelect.add(option);
     subscriptionSelect.disabled = true;
@@ -350,16 +356,47 @@ function refreshSubscriptionSelect(panel) {
   for (const [id, streams] of subscriptions) {
     subscriptionSelect.add(new Option(`${id} · ${streams.join(", ")}`, id));
   }
-  subscriptionSelect.value = subscriptions.has(oldValue) ? oldValue : subscriptions.keys().next().value;
+  subscriptionSelect.value = subscriptions.some(([id]) => id === oldValue) ? oldValue : subscriptions[0][0];
+}
+
+function showDevice(panel, visible) {
+  if (!showConnectedDevicesOnly || panel.section.hidden === !visible) return;
+  panel.overview.section.hidden = !visible;
+  panel.section.hidden = !visible;
+  sourceLogs[panel.source].section.hidden = !visible;
+  if (panel.requests) panel.requests.section.hidden = !visible;
+
+  const hasDevice = Object.values(panels).some((item) => !item.section.hidden);
+  elements.algorithmHint.hidden = !hasDevice;
+  elements.waitingForDevice.hidden = hasDevice;
+  elements.protocolRequests.hidden = !hasDevice;
+  elements.protocolLogs.hidden = !hasDevice;
+  drawCharts();
 }
 
 function resetSource(panel, status, waiting) {
+  panel.deviceStatusTimestamp = null;
+  showDevice(panel, false);
   panel.fields.details.hidden = panel.socket === null;
   for (const value of panel.fields.details.querySelectorAll(".status-list dd")) value.textContent = "—";
   panel.fields.summary.textContent = "尚未收到网关数据。";
   panel.identity = {};
   setSourceStatus(panel, status);
   resetAlgorithmReadings(panel, waiting);
+}
+
+function updateDeviceState(data, panel) {
+  const result = data?.result || data;
+  const state = result?.payload?.status?.connectionState ?? result?.connectionState;
+  if (state === undefined) return !panel.section.hidden;
+
+  const timestamp = result.serverTimeMs ?? result.timestampMs;
+  if (Number.isFinite(timestamp)) {
+    if (panel.deviceStatusTimestamp !== null && timestamp < panel.deviceStatusTimestamp) return false;
+    panel.deviceStatusTimestamp = timestamp;
+  }
+  showDevice(panel, state === "connected");
+  return true;
 }
 
 function updateSnapshot(data, panel) {
@@ -536,22 +573,41 @@ function handleGatewayMessage(message, panel) {
     appendLog("error", `← ${message.code ?? "ERR"}`, message, panel);
     return;
   }
-  updateAlgorithmOverview(data, panel);
-  updateSnapshot(data, panel);
-  updateLiveAlgorithm(data, panel);
-  updateVisuals(data, panel);
+  if (!showConnectedDevicesOnly || updateDeviceState(data, panel)) {
+    updateAlgorithmOverview(data, panel);
+    updateSnapshot(data, panel);
+    updateLiveAlgorithm(data, panel);
+    updateVisuals(data, panel);
+  }
 
   const subscriptionId = data?.result?.subscriptionId;
   if (data?.action === "subscribe" && subscriptionId) {
     panel.subscriptions.set(subscriptionId, data.result.streams || []);
+    if (data.requestId === panel.statusSubscriptionRequestId) {
+      panel.statusSubscriptionRequestId = null;
+      panel.statusSubscriptionId = subscriptionId;
+      // A device may connect between the initial status query and the subscription.
+      sendRequest("getStatus", {}, panel);
+    }
   }
-  if (data?.action === "unsubscribe" && subscriptionId) panel.subscriptions.delete(subscriptionId);
+  if (data?.action === "unsubscribe" && subscriptionId) {
+    panel.subscriptions.delete(subscriptionId);
+    if (subscriptionId === panel.statusSubscriptionId) {
+      panel.statusSubscriptionId = null;
+      subscribeToStatus(panel);
+    }
+  }
   if (subscriptionId) refreshSubscriptionSelect(panel);
   appendLog("in", "← IN", message, panel);
   if (panel.initialStatusRequestId && data?.requestId === panel.initialStatusRequestId) {
     panel.initialStatusRequestId = null;
-    sendRequest("subscribe", { streams: ["status"] }, panel);
+    subscribeToStatus(panel);
   }
+}
+
+function subscribeToStatus(panel) {
+  const requestId = sendRequest("subscribe", { streams: ["status"] }, panel);
+  if (showConnectedDevicesOnly) panel.statusSubscriptionRequestId = requestId;
 }
 
 function sendPayload(payload, panel) {
@@ -637,6 +693,8 @@ function connect(panel) {
     for (const item of connectedPanels) {
       item.socket = null;
       item.initialStatusRequestId = null;
+      item.statusSubscriptionRequestId = null;
+      item.statusSubscriptionId = null;
       item.subscriptions.clear();
       resetSource(item, "已断开", "等待连接网关");
       refreshSubscriptionSelect(item);
@@ -661,7 +719,11 @@ function createRequestSection(panel) {
   customRequest.value = JSON.stringify({
     protocolVersion: PROTOCOL_VERSION, messageType: "request", requestId: "", action: "getStatus", params: {},
   }, null, 2);
-  if (localConnection) section.querySelector('input[name="subscribeStream"][value="status"]').checked = false;
+  if (localConnection) {
+    const statusOption = section.querySelector('input[name="subscribeStream"][value="status"]');
+    statusOption.checked = false;
+    statusOption.closest("label").hidden = showConnectedDevicesOnly;
+  }
 
   section.querySelector("[data-get-status]").addEventListener("click", () => sendRequest("getStatus", {}, panel));
   section.querySelector("[data-get-latest]").addEventListener("click", () => {
@@ -689,7 +751,7 @@ function createRequestSection(panel) {
     }
   });
   elements.sourceRequests.append(section);
-  return { subscriptionSelect, unsubscribeButton };
+  return { section, subscriptionSelect, unsubscribeButton };
 }
 
 for (const panel of Object.values(panels)) {

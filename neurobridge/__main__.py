@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from contextlib import AsyncExitStack
+from dataclasses import replace
 from hashlib import sha256
 import logging
 import os
@@ -122,7 +123,7 @@ async def run(config_path: str, *, override_path: str | None = None, development
                 for pipeline in containers:
                     group.create_task(pipeline.device_adapter.run())
                 if strategy.serves_local_ui(config):
-                    group.create_task(serve_local_ui(config))
+                    group.create_task(serve_local_ui(replace(config, profile=container.profile.profile_id)))
                 if gateway.config.download.enabled:
                     group.create_task(serve_downloads(gateway, tuple(pipeline.gateway for pipeline in containers[1:])))
     except Exception:

@@ -45,7 +45,8 @@
           <h2 id="algorithmTitle">实时算法数据</h2>
         </div>
         <div id="algorithmMetrics" class="source-windows"></div>
-        <p class="hint">连接网关后，可在对应设备的<a href="#commandTitle">协议请求</a>中连续订阅或用 <code>getLatest</code> 查看一次。</p>
+        <p id="algorithmHint" class="hint">连接网关后，可在对应设备的<a href="#commandTitle">协议请求</a>中连续订阅或用 <code>getLatest</code> 查看一次。</p>
+        <p id="waitingForDevice" class="hint" hidden>等待设备接入。</p>
         <div id="sourceWindows" class="source-windows"></div>
       </section>
 
@@ -98,7 +99,7 @@
         </section>
       </template>
 
-      <section class="card commands" aria-labelledby="commandTitle">
+      <section id="protocolRequests" class="card commands" aria-labelledby="commandTitle">
         <h2 id="commandTitle">协议请求</h2>
         <div id="sourceRequests" class="source-windows"></div>
       </section>
@@ -158,7 +159,7 @@
         </section>
       </template>
 
-      <section class="card log-card" aria-labelledby="logTitle">
+      <section id="protocolLogs" class="card log-card" aria-labelledby="logTitle">
         <h2 id="logTitle">协议日志</h2>
         <p>显示连接状态、发送请求和接收帧。原始字节只显示长度。</p>
         <div id="sourceLogs" class="source-windows"></div>

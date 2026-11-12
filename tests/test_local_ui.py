@@ -76,12 +76,14 @@ class LocalUiIntegrationTests(unittest.IsolatedAsyncioTestCase):
             response,
         )
         self.assertIn(b'window.NEUROBRIDGE_B_CLIENT_SOURCE = "bluetooth";', response)
+        self.assertIn(b"window.NEUROBRIDGE_B_CLIENT_WINDOWS = false;", response)
 
     async def test_windows_headband_redirects_the_serial_capture_view(self) -> None:
         self.server.close()
         await self.server.wait_closed()
         config = replace(self.config, profile="windows_headband_local", data_source=DataSourceConfig("bluetooth"))
         self.server = await create_local_ui_server(config)
+        self.assertIn(b"window.NEUROBRIDGE_B_CLIENT_WINDOWS = true;", await self.request("/runtime-config.js"))
         for path in ("/capture", "/capture/", "/capture/index.html"):
             with self.subTest(path=path):
                 response = await self.request(path)
