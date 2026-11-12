@@ -169,6 +169,24 @@ class NativePackageBuilderTests(unittest.TestCase):
             self.assertNotIn("Win64=", rendered)
             self.assertNotIn("-m windows.service", service)
 
+    def test_windows_msi_registers_only_the_cli_directory_on_path(self) -> None:
+        target = BUILDER.target_for("windows-10-x86_64-msi")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = self.runtime(root, target["id"])
+            stage = root / "stage"
+            BUILDER.copy_source(stage, target, runtime)
+            source_root = stage / "opt/neurobridge"
+            self.assertTrue((source_root / "windows/cli/neurobridge.cmd").is_file())
+            self.assertTrue((source_root / "windows/remote-support.ps1").is_file())
+            _, components = BUILDER.wix_directory_tree(source_root, source_root, "INSTALLFOLDER")
+            entries = [component for component in components if "<Environment " in component]
+            self.assertEqual(len(entries), 1)
+            self.assertIn("neurobridge.cmd", entries[0])
+            self.assertIn('Name="PATH" Action="set" Part="last" System="yes" Permanent="no"', entries[0])
+            cli_id = BUILDER.wix_id("D_", "windows/cli")
+            self.assertIn(f'Value="[{cli_id}]"', entries[0])
+
     def test_missing_runtime_is_rejected(self) -> None:
         target = BUILDER.target_for("windows-10-x86_64-msi")
         with tempfile.TemporaryDirectory() as directory:

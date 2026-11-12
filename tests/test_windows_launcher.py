@@ -15,6 +15,36 @@ from windows import gateway_helper as helper
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@unittest.skipUnless(sys.platform == 'win32', 'Windows cmd and PowerShell command dispatch')
+class WindowsSshCommandTests(unittest.TestCase):
+    def test_cli_forwards_ssh_actions_and_exit_status(self):
+        with tempfile.TemporaryDirectory(prefix='neurobridge cli ') as directory:
+            root = Path(directory)
+            (root / 'cli').mkdir()
+            launcher = root / 'cli/neurobridge.cmd'
+            shutil.copy2(ROOT / 'windows/cli/neurobridge.cmd', launcher)
+            (root / 'remote-support.ps1').write_text(
+                'param([string]$Action, [switch]$RequireGateway)\n'
+                'if (!$RequireGateway) { exit 3 }\n'
+                'Write-Output $Action\n'
+                'exit 7\n',
+                encoding='ascii',
+            )
+            for action in ('enable', 'status', 'disable'):
+                with self.subTest(action=action):
+                    result = subprocess.run(
+                        ['cmd.exe', '/d', '/c', 'cli\\neurobridge.cmd', 'ssh', action],
+                        cwd=root, capture_output=True, text=True, timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 7, result.stderr)
+                    self.assertEqual(result.stdout.strip(), action.title())
+            result = subprocess.run(
+                ['cmd.exe', '/d', '/c', 'cli\\neurobridge.cmd', 'ssh', 'unknown'],
+                cwd=root, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+
+
 @unittest.skipUnless(sys.platform == 'win32', 'Windows PowerShell 5.1 diagnostic workflow')
 class ServiceDiagnosisTests(unittest.TestCase):
     def test_service_diagnosis_handles_states_and_preserves_processes(self):

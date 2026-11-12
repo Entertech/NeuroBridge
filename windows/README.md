@@ -143,11 +143,19 @@ powershell -ExecutionPolicy Bypass -File 'C:\Program Files\NeuroBridge\windows\e
 
 ## 局域网 SSH 排障
 
-在 Windows 10/11 双击 `windows\remote-support.cmd`。源码部署从项目目录打开，MSI / EXE 安装后从 `C:\Program Files\NeuroBridge\windows\remote-support.cmd` 打开。网关服务停止时也可以使用。
+在 Windows 10/11 安装带此命令的 NeuroBridge MSI / EXE 后，重新打开终端，从任意目录运行以下命令。
 
-- 选 `1` 并同意 Windows 管理员授权。工具按需安装系统 OpenSSH Server，将其标准防火墙规则限制在本地子网，启动 `sshd`，并显示服务状态和可用的局域网连接地址。首次安装系统组件可能需要 Windows Update。
-- 选 `3` 查看服务状态、标准防火墙规则的来源范围和连接地址。用平时登录的 Windows 账号从 Mac 等同一子网的电脑连接。
-- 排障后选 `2`。此操作会关闭整台电脑的 Windows OpenSSH 服务，将其设为手动启动，并禁用标准 SSH 防火墙规则。如果其他人也在使用该服务，他们的连接会受到影响。
+```powershell
+neurobridge ssh enable
+neurobridge ssh status
+neurobridge ssh disable
+```
+
+`enable` 按需安装和启动 Windows OpenSSH Server，并将标准 SSH 防火墙规则限制在本地子网。`status` 显示状态和可用的 SSH 连接地址。`disable` 停止 Windows OpenSSH Server，将服务设为手动启动，并禁用标准 SSH 防火墙规则。按提示同意 Windows 管理员授权。NeuroBridge 服务可以处于停止状态，但必须已安装。
+
+也可以双击 `windows\remote-support.cmd` 使用交互菜单，选 `1` 启用、`3` 查询、`2` 关闭。源码部署从项目目录打开，安装包部署从安装目录打开。
+
+首次安装 OpenSSH Server 可能需要 Windows Update。启用后，用平时登录的 Windows 账号从同一子网的电脑连接。关闭的是整台电脑的 Windows OpenSSH 服务，会影响同一服务上的其他连接。
 
 安装 NeuroBridge 不会自动启用 SSH。卸载 NeuroBridge 前可先用菜单关闭 SSH。网关的本机网页和 WebSocket 继续使用回环地址。
 

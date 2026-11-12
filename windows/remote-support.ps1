@@ -1,7 +1,8 @@
 param(
     [ValidateSet('Menu', 'Enable', 'Disable', 'Status')]
     [string]$Action = 'Menu',
-    [switch]$PauseOnExit
+    [switch]$PauseOnExit,
+    [switch]$RequireGateway
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,6 +44,10 @@ function Show-SshStatus {
 
 $exitCode = 0
 try {
+    if ($RequireGateway -and -not (Get-Service -Name NeuroBridge -ErrorAction SilentlyContinue)) {
+        throw 'Install the NeuroBridge Windows gateway before using this command.'
+    }
+
     if ($Action -eq 'Menu') {
         Write-Host 'NeuroBridge Windows remote support'
         Write-Host "Signed-in user running this tool: $([Environment]::UserName)"
@@ -63,6 +68,9 @@ try {
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "{0}" -Action {1} -PauseOnExit' -f $PSCommandPath, $Action
+        if ($RequireGateway) {
+            $arguments += ' -RequireGateway'
+        }
         $process = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $arguments -Verb RunAs -Wait -PassThru
         exit $process.ExitCode
     }

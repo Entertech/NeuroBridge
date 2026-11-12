@@ -197,17 +197,22 @@ def wix_directory_tree(root: Path, source_root: Path, install_id: str) -> tuple[
                 file_id = wix_id("F_", relative)
                 if relative == "windows/service.py":
                     file_id = "SERVICE_SCRIPT"
-                service = ""
+                registration = ""
                 if relative.replace("/", "\\") == r"runtime\python.exe":
-                    service = (
+                    registration = (
                         '<ServiceInstall Name="NeuroBridge" DisplayName="NeuroBridge Gateway" '
                         'Description="USB serial gateway to loopback WebSocket" Type="ownProcess" '
                         'Start="auto" ErrorControl="normal" Arguments="&quot;[#SERVICE_SCRIPT]&quot;" />'
                         '<ServiceControl Name="NeuroBridge" Start="install" Stop="both" Remove="uninstall" Wait="yes" />'
                     )
+                elif relative == "windows/cli/neurobridge.cmd":
+                    registration = (
+                        '<Environment Id="NeuroBridgeCliPath" Name="PATH" Action="set" '
+                        f'Part="last" System="yes" Permanent="no" Value="[{parent_id}]" />'
+                    )
                 components.append(
                     f'<Component Id="{component_id}" Guid="*" Directory="{parent_id}">'
-                    f'<File Id="{file_id}" Source="{xml_escape(str(item))}" KeyPath="yes" />{service}</Component>'
+                    f'<File Id="{file_id}" Source="{xml_escape(str(item))}" KeyPath="yes" />{registration}</Component>'
                 )
 
     visit(source_root, install_id)
