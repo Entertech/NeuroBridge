@@ -52,34 +52,35 @@ const overviewMetrics = [
   ["注意力", "eeg", ["attention"]], ["Flow", "eeg", ["flow", "meditation"]],
 ];
 
-function createMetricRow(source) {
-  const row = document.createElement("section");
-  row.className = "source-reading";
-  row.dataset.source = source;
-  const header = document.createElement("div");
-  header.className = "chart-heading";
-  const name = document.createElement("h3");
-  name.textContent = sourceLabels[source];
-  const state = document.createElement("span");
-  state.className = "source-status";
-  header.append(name, state);
-  const grid = document.createElement("div");
-  grid.className = "metric-grid";
-  row.append(header, grid);
-  elements.algorithmMetrics.append(row);
-  const metrics = overviewMetrics.map(([name, stream, path, unit = ""]) => {
+function createOverview() {
+  const bySource = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, []]));
+  for (const [name, stream, path, unit = ""] of overviewMetrics) {
     const card = document.createElement("article");
-    const title = document.createElement("h4");
-    const output = document.createElement("output");
-    const meta = document.createElement("p");
+    const title = document.createElement("h3");
     card.className = "metric";
     title.textContent = name;
-    card.append(title, output, meta);
-    grid.append(card);
-    return { stream, path, unit, output, meta, timestamp: null };
-  });
-  return { row, state, metrics };
+    card.append(title);
+    for (const [source, metrics] of Object.entries(bySource)) {
+      const row = document.createElement("div");
+      const label = document.createElement("div");
+      const state = document.createElement("span");
+      const output = document.createElement("output");
+      const meta = document.createElement("p");
+      row.className = "metric-reading";
+      row.dataset.source = source;
+      label.className = "metric-reading-label";
+      label.append(sourceLabels[source], state);
+      output.setAttribute("aria-label", `${sourceLabels[source]}${name}`);
+      row.append(label, output, meta);
+      card.append(row);
+      metrics.push({ stream, path, unit, row, state, output, meta, timestamp: null });
+    }
+    elements.algorithmMetrics.append(card);
+  }
+  return bySource;
 }
+
+const overviewBySource = createOverview();
 
 function createSourcePanel(source) {
   const section = elements.sourceWindowTemplate.content.firstElementChild.cloneNode(true);
@@ -108,7 +109,7 @@ function createSourcePanel(source) {
       status: section.querySelector("[data-window-status]") };
   });
   return {
-    source, section, fields, algorithmGroups, overview: createMetricRow(source),
+    source, section, fields, algorithmGroups, overview: overviewBySource[source],
     socket: null, endpoint: elements.endpoint.value, initialStatusRequestId: null,
     subscriptions: new Map(), channels: {}, bandPower: {}, identity: {}, eegTimestamp: null,
   };
@@ -152,7 +153,7 @@ function refreshConnectionControls() {
 
 function setSourceStatus(panel, label) {
   panel.fields.state.textContent = label;
-  panel.overview.state.textContent = label;
+  for (const metric of panel.overview) metric.state.textContent = label;
 }
 
 function timeLabel(date = new Date()) {
@@ -197,7 +198,7 @@ const algorithmTimeFormat = new Intl.DateTimeFormat("zh-CN", {
 });
 
 function resetOverview(panel, reason) {
-  for (const metric of panel.overview.metrics) {
+  for (const metric of panel.overview) {
     metric.output.textContent = "—";
     metric.meta.textContent = reason;
     metric.timestamp = null;
@@ -236,7 +237,7 @@ function updateAlgorithmOverview(data, panel) {
   if ((data.event !== "data" && !query) || !algorithm || !Number.isFinite(result.timestampMs)) return;
 
   const streams = panel.subscriptions.get(data.subscriptionId) || [];
-  for (const metric of panel.overview.metrics) {
+  for (const metric of panel.overview) {
     const value = metric.path.reduce((node, key) => node?.[key], algorithm);
     if (value === undefined && (result.valid !== false || !streams.includes(metric.stream))) continue;
     if (metric.timestamp !== null && result.timestampMs < metric.timestamp) continue;
@@ -366,7 +367,9 @@ function applyChartView() {
     const unspecified = panel.source === "unknown";
     const showUnknown = unspecified && Boolean(panel.socket);
     panel.section.hidden = unspecified ? !showUnknown || view !== "both" : view !== "both" && panel.source !== view;
-    panel.overview.row.hidden = unspecified && !showUnknown;
+    if (unspecified) {
+      for (const metric of panel.overview) metric.row.hidden = !showUnknown;
+    }
   }
   drawCharts();
 }
