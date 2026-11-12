@@ -2,8 +2,8 @@
 
 const PROTOCOL_VERSION = window.NEUROBRIDGE_VERSION.protocolVersion;
 const SUBPROTOCOL = "neurobridge.v1";
-let logEntries = [];
 const sourceLabels = { serial: "耳机串口", bluetooth: "头环蓝牙", unknown: "来源未指定" };
+const sourceByDevice = new Map([["headset", "serial"], ["headband", "bluetooth"]]);
 const configuredSource = window.NEUROBRIDGE_B_CLIENT_SOURCE;
 const configuredEndpoint = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
 const fixedSource = configuredSource === "serial" || configuredSource === "bluetooth";
@@ -41,10 +41,14 @@ const elements = {
   includeInvalid: document.querySelector("#includeInvalid"),
   customRequest: document.querySelector("#customRequest"),
   sendCustomButton: document.querySelector("#sendCustomButton"),
-  clearLogButton: document.querySelector("#clearLogButton"),
-  copyLogButton: document.querySelector("#copyLogButton"),
-  log: document.querySelector("#log"),
+  sourceLogs: document.querySelector("#sourceLogs"),
+  sourceLogTemplate: document.querySelector("#sourceLogTemplate"),
 };
+
+document.querySelector("#protocolVersion").textContent = `v${PROTOCOL_VERSION}`;
+elements.customRequest.value = JSON.stringify({
+  protocolVersion: PROTOCOL_VERSION, messageType: "request", requestId: "", action: "getStatus", params: {},
+}, null, 2);
 
 const overviewMetrics = [
   ["放松度", "eeg", ["relaxation"]], ["压力值", "hr", ["pressure"]],
@@ -163,18 +167,51 @@ function timeLabel(date = new Date()) {
   return date.toLocaleTimeString("zh-CN", { hour12: false });
 }
 
-function appendLog(kind, label, body, panel = selectedPanel()) {
+function createSourceLog(source) {
+  const section = elements.sourceLogTemplate.content.firstElementChild.cloneNode(true);
+  const title = section.querySelector("h3");
+  const list = section.querySelector(".log");
+  const entries = [];
+  section.dataset.source = source;
+  section.hidden = source === "unknown";
+  title.id = `log-${source}`;
+  title.textContent = sourceLabels[source];
+  section.setAttribute("aria-labelledby", title.id);
+  list.setAttribute("aria-label", `${sourceLabels[source]}协议日志`);
+  section.querySelector("[data-log-clear]").addEventListener("click", () => {
+    entries.length = 0;
+    list.replaceChildren();
+    if (source === "unknown") section.hidden = true;
+  });
+  section.querySelector("[data-log-copy]").addEventListener("click", async () => {
+    const text = entries.map((entry) => `[${entry.time}] ${sourceLabels[source]} ${entry.label}\n${entry.body}`).join("\n\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      appendLog("system", "SYSTEM", "协议日志已复制到剪贴板。", panels[source], source);
+    } catch {
+      appendLog("error", "ERROR", "浏览器未授予剪贴板权限，请手动复制日志。", panels[source], source);
+    }
+  });
+  elements.sourceLogs.append(section);
+  return { section, list, entries };
+}
+
+const sourceLogs = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourceLog(source)]));
+
+function appendLog(kind, label, body, panel = selectedPanel(), source = panel.reportedSource ?? panel.source) {
+  const { section, list, entries } = sourceLogs[source];
   const entry = {
-    time: timeLabel(), kind, label, source: sourceLabels[panel.source],
+    time: timeLabel(), label,
     body: typeof body === "string" ? body : JSON.stringify(body, (key, value) =>
       key === "bytesBase64" ? undefined : value, 2),
   };
-  logEntries.push(entry);
+  entries.push(entry);
+  section.hidden = false;
   const node = document.createElement("div");
   node.className = `log-entry ${kind}`;
   const time = document.createElement("span");
   time.className = "log-time";
-  time.textContent = `${entry.time} ${entry.source}`;
+  time.textContent = entry.time;
   const tag = document.createElement("span");
   tag.className = "log-tag";
   tag.textContent = label;
@@ -182,12 +219,12 @@ function appendLog(kind, label, body, panel = selectedPanel()) {
   content.className = "log-body";
   content.textContent = entry.body;
   node.append(time, tag, content);
-  elements.log.append(node);
-  if (logEntries.length > 200) {
-    logEntries.shift();
-    elements.log.firstElementChild.remove();
+  list.append(node);
+  if (entries.length > 200) {
+    entries.shift();
+    list.firstElementChild.remove();
   }
-  elements.log.scrollTop = elements.log.scrollHeight;
+  list.scrollTop = list.scrollHeight;
 }
 
 function readableTimestamp(timestampMs) {
@@ -504,6 +541,18 @@ function updateVisuals(data, panel) {
 function handleGatewayMessage(message, panel) {
   if (!message || typeof message !== "object") return;
   const data = message.data;
+  if (message.protocolVersion === PROTOCOL_VERSION) {
+    const source = sourceByDevice.get(data?.source);
+    const expected = panel.source === "unknown" ? panel.reportedSource : panel.source;
+    if (!source || (expected && source !== expected)) {
+      const warning = source ? `网关报告来源为「${sourceLabels[source]}」，与当前连接来源不符。` : "报文缺少有效的设备来源。";
+      panel.fields.summary.textContent = warning;
+      appendLog("error", "ERROR", warning, panel);
+      appendLog("error", "← ERR", message, panel);
+      return;
+    }
+    panel.reportedSource = source;
+  }
   if (message.code !== 200) {
     if (message.message) panel.fields.summary.textContent = message.message;
     appendLog("error", `← ${message.code ?? "ERR"}`, message, panel);
@@ -594,6 +643,7 @@ function connect() {
     applyChartView();
     refreshConnectionControls();
     appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`, panel);
+    panel.reportedSource = null;
   });
 }
 
@@ -637,20 +687,6 @@ elements.sendCustomButton.addEventListener("click", () => {
     appendLog("error", "ERROR", `自定义 JSON 无法解析：${error.message}`);
   }
 });
-elements.clearLogButton.addEventListener("click", () => {
-  logEntries = [];
-  elements.log.replaceChildren();
-});
-elements.copyLogButton.addEventListener("click", async () => {
-  const text = logEntries.map((entry) => `[${entry.time}] ${entry.source} ${entry.label}\n${entry.body}`).join("\n\n");
-  try {
-    await navigator.clipboard.writeText(text);
-    appendLog("system", "SYSTEM", "协议日志已复制到剪贴板。");
-  } catch {
-    appendLog("error", "ERROR", "浏览器未授予剪贴板权限，请手动复制日志。");
-  }
-});
-
 let savedChartView;
 try { savedChartView = window.localStorage.getItem(chartViewKey); } catch { /* Storage may be disabled. */ }
 const defaultView = fixedSource ? configuredSource : "both";
@@ -661,9 +697,6 @@ for (const panel of Object.values(panels)) {
 elements.endpoint.value = selectedPanel().endpoint;
 applyChartView();
 refreshConnectionControls();
-appendLog("system", "SYSTEM", configuredEndpoint
-  ? `网关联调台已就绪；已使用本机服务地址 ${elements.endpoint.value}，不会发送任何保活帧。`
-  : "网关联调台已就绪；不会发送任何保活帧。");
 if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
   connect();
 }

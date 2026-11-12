@@ -16,6 +16,7 @@ from neurobridge.ble.flowtime import FF51, REQUIRED_NOTIFICATION_CHARACTERISTICS
 from neurobridge.business.gateway import ClientSession, Gateway, ProtocolError, REPLAY_NOT_AVAILABLE_REASON, STREAM_NOT_AVAILABLE_REASON, Subscription
 from neurobridge.ble.packets import DataWindow, EEG_PACKET_BYTES, HR_PACKET_BYTES, RawPacket, WindowAssembler
 from neurobridge.business.recording import RecordingStore
+from neurobridge.versioning import NORTHBOUND_PROTOCOL_VERSION
 
 
 def config(root: Path, replay_id: str | None = None, replay_speed: float = 1000, data_source_type: str = "bluetooth") -> GatewayConfig:
@@ -770,10 +771,18 @@ class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
                     replay_ended.set()
 
             session = ClientSession()
-            await gateway.subscribe(session, {"streams": ["eeg"]}, send)
+            await gateway.handle(session, json.dumps({
+                "protocolVersion": NORTHBOUND_PROTOCOL_VERSION, "messageType": "request",
+                "requestId": "replay-sub", "action": "subscribe", "params": {"streams": ["eeg"]},
+            }), send)
             await asyncio.wait_for(replay_ended.wait(), timeout=1)
             ended = next(item["data"] for item in received if item["data"].get("event") == "replayEnded")
             self.assertEqual(ended["recordingId"], recording_id)
+            self.assertTrue(all(item["protocolVersion"] == NORTHBOUND_PROTOCOL_VERSION for item in received))
+            self.assertTrue(all(item["data"]["source"] == "headband" for item in received))
+            replay_data = next(item["data"] for item in received if item["data"].get("event") == "data")
+            self.assertEqual(replay_data["mode"], "replay")
+            self.assertEqual(replay_data["payload"]["algorithm"]["attention"], 1)
             await gateway.close_session(session)
             await gateway.stop()
 

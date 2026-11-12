@@ -50,7 +50,8 @@ version = "0.0.1"
 build = 1
 
 [northbound_wire_protocol]
-version = "1.0"
+version = "1.1"
+legacy_version = "1.0"
 
 [documents.integration_plan]
 version = "0.1"
@@ -2034,3 +2035,14 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "调整联调页布局，沿用现有算法数据报文与按连接管理的订阅。"
+
+[[change_records]]
+id = "2026-11-12-northbound-wire-source-and-device-logs"
+date = "2026-11-12"
+scope = "northbound_wire_protocol_and_b_side_test_console"
+summary = "报文 v1.1 在响应和连续事件中增加 data.source，标注头环或耳机；联调页为两种来源分别展示、复制和清空协议日志。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "v1.0 客户端继续使用原报文结构。更新内部预发布契约与自动验证，已发布协议正文保持锁定。"

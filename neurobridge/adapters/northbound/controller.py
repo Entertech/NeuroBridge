@@ -8,10 +8,11 @@ from typing import Any
 
 from ...application.gateway import ClientSession, GatewayApplication, ProtocolError
 from .protocol import envelope
-from ...versioning import NORTHBOUND_PROTOCOL_VERSION
+from ...versioning import LEGACY_NORTHBOUND_PROTOCOL_VERSION, NORTHBOUND_PROTOCOL_VERSION
 
 
 LOG = logging.getLogger(__name__)
+DEVICE_SOURCES = {"bluetooth": "headband", "serial": "headset"}
 
 
 class NorthboundController:
@@ -34,7 +35,7 @@ class NorthboundController:
             "params",
         }:
             raise ProtocolError(400, "INVALID_REQUEST", "Request root fields are invalid.")
-        if request["protocolVersion"] != NORTHBOUND_PROTOCOL_VERSION:
+        if request["protocolVersion"] not in (NORTHBOUND_PROTOCOL_VERSION, LEGACY_NORTHBOUND_PROTOCOL_VERSION):
             raise ProtocolError(505, "UNSUPPORTED_VERSION", "Protocol version is not supported.")
         if (
             request["messageType"] != "request"
@@ -51,8 +52,17 @@ class NorthboundController:
         request_id: str | None = None
         action: str | None = None
         safe_request_id: str | None = None
+        version = NORTHBOUND_PROTOCOL_VERSION
+
+        async def send_versioned(message: dict) -> None:
+            data = message["data"]
+            if version == NORTHBOUND_PROTOCOL_VERSION:
+                data = {**data, "source": DEVICE_SOURCES[self.gateway.config.data_source.type]}
+            await send({**message, "protocolVersion": version, "data": data})
+
         try:
             request = self.parse_request(raw)
+            version = request["protocolVersion"]
             request_id = request["requestId"]
             action = request["action"]
             key = action if action in self.gateway.requests_by_action else "invalid"
@@ -71,7 +81,7 @@ class NorthboundController:
                 start_replay = not self.gateway.live and self.gateway.replay_available
             elif action == "subscribe":
                 self.gateway.validate_params(params, {"streams", "includeInvalid"})
-                result = await self.gateway.subscribe(session, params, send, start_replay=False)
+                result = await self.gateway.subscribe(session, params, send_versioned, start_replay=False)
                 start_replay = (
                     any(stream != "status" for stream in result["streams"])
                     and not self.gateway.live
@@ -82,7 +92,7 @@ class NorthboundController:
                 result = await self.gateway.unsubscribe(session, params)
             else:
                 raise ProtocolError(400, "INVALID_REQUEST", "Unknown action.", details={"action": action})
-            await send(envelope(200, {"requestId": request_id, "action": action, "result": result}))
+            await send_versioned(envelope(200, {"requestId": request_id, "action": action, "result": result}))
             LOG.info("Northbound request handled: action=%s requestId=%s code=200", action, safe_request_id)
             if start_replay:
                 self.gateway._start_replay_if_needed()
@@ -96,10 +106,10 @@ class NorthboundController:
                 error.code,
                 error.reason,
             )
-            await send(self.gateway.error(request_id, error))
+            await send_versioned(self.gateway.error(request_id, error))
         except Exception:
             LOG.exception("Northbound request failed: action=%s requestId=%s", action, safe_request_id)
-            await send(
+            await send_versioned(
                 self.gateway.error(
                     request_id,
                     ProtocolError(500, "INTERNAL_ERROR", "Gateway request failed.", True),

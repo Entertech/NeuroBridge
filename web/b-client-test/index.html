@@ -12,7 +12,7 @@
       <header class="masthead">
         <div>
           <h1>网关联调台</h1>
-          <p class="intro">按 v1.0 北向协议连接网关，发送请求并查看实时数据事件。</p>
+          <p class="intro">按北向协议 <span id="protocolVersion"></span> 连接网关，发送请求并查看实时数据事件。</p>
         </div>
         <div class="connection-badge" aria-live="polite">
           <span id="connectionDot" class="dot dot-off"></span>
@@ -167,32 +167,29 @@
         <details class="custom-request">
           <summary>发送自定义请求 JSON</summary>
           <p>仅用于临时排查。内容必须符合请求根对象：<code>{protocolVersion, messageType, requestId, action, params}</code>。</p>
-          <textarea id="customRequest" spellcheck="false" aria-label="自定义 JSON 请求">{
-  "protocolVersion": "1.0",
-  "messageType": "request",
-  "requestId": "",
-  "action": "getStatus",
-  "params": {}
-}</textarea>
+          <textarea id="customRequest" spellcheck="false" aria-label="自定义 JSON 请求"></textarea>
           <button id="sendCustomButton" class="button" type="button">发送 JSON</button>
         </details>
       </section>
 
       <section class="card log-card" aria-labelledby="logTitle">
-        <div class="log-header">
-          <div class="section-heading">
-            <div>
-              <h2 id="logTitle">协议日志</h2>
-              <p>显示连接状态、发送请求和接收帧。原始字节只显示长度，不展开 Base64 内容。</p>
+        <h2 id="logTitle">协议日志</h2>
+        <p>显示连接状态、发送请求和接收帧。原始字节只显示长度。</p>
+        <div id="sourceLogs" class="source-windows" data-view="both"></div>
+      </section>
+
+      <template id="sourceLogTemplate">
+        <section class="source-window">
+          <div class="chart-heading">
+            <h3></h3>
+            <div class="button-row">
+              <button class="button button-quiet" type="button" data-log-copy>复制日志</button>
+              <button class="button button-quiet" type="button" data-log-clear>清空</button>
             </div>
           </div>
-          <div class="button-row">
-            <button id="copyLogButton" class="button button-quiet" type="button">复制日志</button>
-            <button id="clearLogButton" class="button button-quiet" type="button">清空</button>
-          </div>
-        </div>
-        <div id="log" class="log" aria-live="polite" aria-label="协议日志"></div>
-      </section>
+          <div class="log" role="log"></div>
+        </section>
+      </template>
     </main>
     <script src="./version.js"></script>
     <script src="./runtime-config.js"></script>

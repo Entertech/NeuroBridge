@@ -133,7 +133,7 @@ Windows 10/11 x64 新增蓝牙头环源码候选 `windows_headband_local`。通�
 | `unsubscribe` | 停止连续数据 | 确认响应 |
 | `getStatus` | 查询连接、信号、电量和当前模式 | 状态响应 |
 
-网关所有输出统一为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 固定为 `1.0`，`code=200` 成功，非 `200` 时 `message` 为错误原因。连续数据事件的 `data` 中包含 `gatewayBootId`、`mode`（`live`/`replay`）、`subjectId`、`timestampMs`、`valid` 与 `payload`。当前为单耳机、单网关实例，不传 `deviceId` 或 `gatewayId`。原始波形和节律数据使用批量 JSON 或二进制帧，避免单采样点逐条 JSON 发送。
+网关所有输出统一为 `{protocolVersion, code, data, message}`。`code=200` 表示成功，非 `200` 时 `message` 为错误原因。当前源码在报文的 `data.source` 中标注 `headband`（头环）或 `headset`（耳机），同时兼容已发布协议的旧版报文。连续数据事件还携带 `gatewayBootId`、`mode`（`live`/`replay`）、`subjectId`、`timestampMs`、`valid` 与 `payload`。原始波形和节律数据按窗口批量发送。字段和迁移说明见[北向协议预发布](doc/tech/头环数据网关北向网络协议_预发布.md)。
 
 北向消息名称、字段和 WebSocket 传输以版本台账登记的当前对外协议为准；设备采样率、每 600 ms 实际样本数等未确认值继续配置化或由运行日志实测，不在 README 中假定。
 
