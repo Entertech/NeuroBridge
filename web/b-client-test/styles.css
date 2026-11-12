@@ -60,13 +60,8 @@ code { color: #9ee7f5; font-family: ui-monospace, SFMono-Regular, Menlo, Consola
 .button-quiet { background: transparent; }
 .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
 
-.commands, .source-panel, .log-card { padding: 20px; }
-.source-panels { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
-.source-panel { flex: 1 1 240px; min-width: 0; }
-.source-panel.source-active { flex-basis: 100%; order: 1; border-color: #44889c; }
-.source-panel h2 { margin: 0; }
+.commands, .log-card { padding: 20px; }
 .source-status { color: #9eb1c9; font-size: .82rem; white-space: nowrap; }
-.source-active .source-status { color: #73d7ed; }
 .algorithm-overview { margin-bottom: 18px; padding: 16px 20px; }
 .algorithm-overview .hint a { color: #9ee7f5; }
 .metric-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
@@ -136,7 +131,11 @@ dd { margin: 0; max-width: 170px; color: #f2f7fc; font-size: .82rem; text-align:
   .log-entry { grid-template-columns: 62px 54px minmax(0, 1fr); gap: 7px; padding: 9px; }
 }
 
-.visuals { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(300px, .85fr); gap: 18px; margin-top: 18px; }
+.chart-toolbar { display: flex; justify-content: flex-end; margin-top: 16px; }
+.chart-toolbar .field { display: flex; align-items: center; }
+.chart-toolbar select { width: auto; }
+.visuals { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 14px; margin-top: 10px; }
+.visuals[data-layout="stacked"] { grid-template-columns: minmax(0, 1fr); }
 .chart-card { min-width: 0; padding: 12px; border: 1px solid #385577; border-radius: 10px; background: #08192b; }
 .chart-card h3 { margin: 0; }
 .chart-card .hint { margin: 6px 0 0; }
@@ -144,4 +143,7 @@ dd { margin: 0; max-width: 170px; color: #f2f7fc; font-size: .82rem; text-align:
 .chart-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; color: #73d7ed; font-size: .75rem; }
 .channel-right { color: #bd9af5; }
 .chart-card canvas { display: block; width: 100%; height: 220px; margin-top: 14px; border: 1px solid rgba(83,120,159,.4); border-radius: 10px; background: #061321; }
-@media (max-width: 950px) { .visuals { grid-template-columns: 1fr; } }
+@media (max-width: 700px) {
+  .visuals:not([data-layout="stacked"]) { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .chart-heading { flex-wrap: wrap; }
+}

@@ -28,14 +28,15 @@ const elements = {
   endpoint: document.querySelector("#endpoint"),
   dataSource: document.querySelector("#dataSource"),
   sourceHint: document.querySelector("#sourceHint"),
-  sourcePanels: document.querySelector("#sourcePanels"),
+  deviceDetails: document.querySelector("#deviceDetails"),
   algorithmSource: document.querySelector("#algorithmSource"),
   algorithmMetrics: document.querySelector("#algorithmMetrics"),
   waveform: document.querySelector("#waveform"),
   waveformMeta: document.querySelector("#waveformMeta"),
   spectrum: document.querySelector("#spectrum"),
   spectrumMeta: document.querySelector("#spectrumMeta"),
-  sourcePanelTemplate: document.querySelector("#sourcePanelTemplate"),
+  algorithmCharts: document.querySelector("#algorithmCharts"),
+  chartLayout: document.querySelector("#chartLayout"),
   connectButton: document.querySelector("#connectButton"),
   disconnectButton: document.querySelector("#disconnectButton"),
   connectionDot: document.querySelector("#connectionDot"),
@@ -69,14 +70,11 @@ const overviewMetrics = [
   return { stream, path, unit, output, meta, timestamp: null };
 });
 
-function createSourcePanel(source) {
-  const article = elements.sourcePanelTemplate.content.firstElementChild.cloneNode(true);
-  article.dataset.source = source;
-  article.hidden = source === "unknown";
+function createDataPanel() {
   const fields = Object.fromEntries(
-    [...article.querySelectorAll("[data-field]")].map((field) => [field.dataset.field, field]),
+    [...elements.deviceDetails.querySelectorAll("[data-field]")].map((field) => [field.dataset.field, field]),
   );
-  const algorithmGroups = [...article.querySelectorAll("[data-algorithm]")].map((section) => {
+  const algorithmGroups = [...elements.deviceDetails.querySelectorAll("[data-algorithm]")].map((section) => {
     const stream = section.dataset.algorithm;
     const list = section.querySelector(".algorithm-metrics");
     const metrics = algorithmMetrics[stream].map(([key, title]) => {
@@ -92,12 +90,10 @@ function createSourcePanel(source) {
     return { section, stream, metrics, time: section.querySelector("[data-window-time]"),
       status: section.querySelector("[data-window-status]") };
   });
-  fields.title.textContent = sourceLabels[source];
-  elements.sourcePanels.append(article);
-  return { article, fields, algorithmGroups, channels: {}, bandPower: {}, identity: {}, eegTimestamp: null };
+  return { fields, algorithmGroups, channels: {}, bandPower: {}, identity: {}, eegTimestamp: null };
 }
 
-const panels = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourcePanel(source)]));
+const dataPanel = createDataPanel();
 if (typeof configuredEndpoint === "string") {
   elements.endpoint.value = configuredEndpoint;
 }
@@ -288,30 +284,14 @@ function refreshSubscriptionSelect() {
   elements.subscriptionSelect.value = subscriptions.has(oldValue) ? oldValue : subscriptions.keys().next().value;
 }
 
-function setPanelSource(source, label) {
+function setPanelSource(source) {
   activeSource = source;
   elements.algorithmSource.textContent = source === null ? "未连接" : sourceLabels[source];
-  const waiting = source === null ? "等待连接网关" : "等待算法数据";
-  resetOverview(waiting);
-  elements.waveformMeta.textContent = waiting;
-  elements.spectrumMeta.textContent = waiting;
-  for (const [key, panel] of Object.entries(panels)) {
-    const active = key === source;
-    panel.article.hidden = key === "unknown" && !active;
-    panel.article.classList.toggle("source-active", active);
-    panel.fields.details.hidden = !active;
-    panel.fields.state.textContent = active ? label : "未连接";
-    if (active) {
-      for (const value of panel.article.querySelectorAll("dd")) value.textContent = "—";
-      panel.fields.summary.textContent = "尚未收到网关数据。";
-      for (const group of panel.algorithmGroups) showAlgorithmWindow(group, "waiting", null, "等待实时窗口");
-      panel.channels = {};
-      panel.bandPower = {};
-      panel.identity = {};
-      panel.eegTimestamp = null;
-    }
-  }
-  drawCharts();
+  elements.deviceDetails.hidden = source === null;
+  for (const value of elements.deviceDetails.querySelectorAll(".status-list dd")) value.textContent = "—";
+  dataPanel.fields.summary.textContent = "尚未收到网关数据。";
+  dataPanel.identity = {};
+  resetAlgorithmReadings(dataPanel, source === null ? "等待连接网关" : "等待算法数据");
 }
 
 function updateSnapshot(data, panel) {
@@ -340,10 +320,22 @@ function updateSnapshot(data, panel) {
 }
 
 function drawCharts() {
-  const panel = panels[activeSource];
-  drawWaveform(elements.waveform, panel?.channels ?? {});
-  drawSpectrum(elements.spectrum, panel?.bandPower ?? {});
+  drawWaveform(elements.waveform, dataPanel.channels);
+  drawSpectrum(elements.spectrum, dataPanel.bandPower);
 }
+
+const chartLayoutKey = "neurobridge-chart-layout";
+function setChartLayout(layout) {
+  elements.chartLayout.value = layout;
+  elements.algorithmCharts.dataset.layout = layout;
+}
+
+elements.chartLayout.addEventListener("change", () => {
+  const layout = elements.chartLayout.value;
+  setChartLayout(layout);
+  drawCharts();
+  try { window.localStorage.setItem(chartLayoutKey, layout); } catch { /* The current page still applies the choice. */ }
+});
 
 function fitCanvas(canvas) {
   const ratio = window.devicePixelRatio || 1, rect = canvas.getBoundingClientRect();
@@ -469,7 +461,7 @@ function updateVisuals(data, panel) {
 function handleGatewayMessage(message) {
   if (!message || typeof message !== "object") return;
   const data = message.data;
-  const panel = panels[activeSource];
+  const panel = activeSource === null ? null : dataPanel;
   if (message.code !== 200) {
     if (panel && message.message) panel.fields.summary.textContent = message.message;
     appendLog("error", `← ${message.code ?? "ERR"}`, message);
@@ -530,7 +522,7 @@ function connect() {
     setConnectionState("wait", "正在连接");
     appendLog("system", "SYSTEM", `连接 ${endpoint}（子协议 ${SUBPROTOCOL}）`);
     socket = new WebSocket(endpoint, SUBPROTOCOL);
-    setPanelSource(source, "网关连接中");
+    setPanelSource(source);
   } catch (error) {
     setConnectionState("off", "未连接");
     appendLog("error", "ERROR", error.message);
@@ -538,7 +530,6 @@ function connect() {
   }
   socket.addEventListener("open", () => {
     setConnectionState("on", "已连接");
-    panels[source].fields.state.textContent = "网关已连接";
     appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。" );
     const requestId = sendRequest("getStatus", {});
     if (fixedSource) initialStatusRequestId = requestId;
@@ -608,6 +599,10 @@ elements.copyLogButton.addEventListener("click", async () => {
   }
 });
 
+let savedChartLayout;
+try { savedChartLayout = window.localStorage.getItem(chartLayoutKey); } catch { /* Storage may be disabled. */ }
+const defaultChartLayout = window.matchMedia("(max-width: 700px)").matches ? "stacked" : "side-by-side";
+setChartLayout(savedChartLayout === "stacked" || savedChartLayout === "side-by-side" ? savedChartLayout : defaultChartLayout);
 setPanelSource(null);
 refreshSubscriptionSelect();
 appendLog("system", "SYSTEM", configuredEndpoint
