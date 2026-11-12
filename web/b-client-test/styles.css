@@ -58,6 +58,7 @@ code { color: #9ee7f5; font-family: ui-monospace, SFMono-Regular, Menlo, Consola
 .button-danger { border-color: #ad6374; background: #5b2939; }
 .button-danger:hover:not(:disabled) { border-color: #f08ea4; background: #7a3449; }
 .button-quiet { background: transparent; }
+.button[aria-pressed="true"] { border-color: #78d7ee; background: #17314f; }
 .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .commands, .log-card { padding: 20px; }
@@ -130,16 +131,9 @@ dd { margin: 0; max-width: 170px; color: #f2f7fc; font-size: .82rem; text-align:
   .log-entry { grid-template-columns: 62px 54px minmax(0, 1fr); gap: 7px; padding: 9px; }
 }
 
-.chart-toolbar { display: flex; justify-content: flex-end; margin-top: 16px; }
-.chart-toolbar .field { display: flex; align-items: center; }
-.chart-toolbar select { width: auto; }
-.visuals { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 14px; margin-top: 10px; }
-.source-windows { display: grid; gap: 14px; margin-top: 10px; }
-.source-windows[data-view="both"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.visuals, .source-windows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 10px; }
 .source-window { min-width: 0; padding: 14px; border: 1px solid #385577; border-radius: 12px; }
-.source-windows[data-view="both"] .visuals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-@media (max-width: 1150px) { .source-windows[data-view="both"] .visuals { grid-template-columns: minmax(0, 1fr); } }
-.source-window[data-source="unknown"] { grid-column: 1 / -1; }
+@media (max-width: 1150px) { .visuals { grid-template-columns: minmax(0, 1fr); } }
 .chart-card { min-width: 0; padding: 12px; border: 1px solid #385577; border-radius: 10px; background: #08192b; }
 .chart-card h4 { margin: 0; }
 .chart-card .hint { margin: 6px 0 0; }
@@ -148,6 +142,6 @@ dd { margin: 0; max-width: 170px; color: #f2f7fc; font-size: .82rem; text-align:
 .channel-right { color: #bd9af5; }
 .chart-card canvas { display: block; width: 100%; height: 220px; margin-top: 14px; border: 1px solid rgba(83,120,159,.4); border-radius: 10px; background: #061321; }
 @media (max-width: 700px) {
-  .source-windows[data-view="both"], .visuals { grid-template-columns: minmax(0, 1fr); }
+  .source-windows { grid-template-columns: minmax(0, 1fr); }
   .chart-heading { flex-wrap: wrap; }
 }

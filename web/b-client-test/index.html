@@ -27,41 +27,27 @@
             <p>页面会使用子协议 <code>neurobridge.v1</code> 建立 WebSocket 连接；不发送 Ping/Pong 或 JSON 心跳。</p>
           </div>
         </div>
-        <div class="connect-row">
-          <label class="field endpoint-field" for="endpoint">
-            <span>WebSocket 地址</span>
-            <input id="endpoint" type="url" value="ws://127.0.0.1:8765/neurobridge/v1/ws" spellcheck="false" />
-          </label>
-          <label class="field" for="dataSource">
-            <span>数据来源</span>
-            <select id="dataSource" aria-describedby="sourceHint">
-              <option value="unknown">未指定</option>
-              <option value="serial">耳机串口</option>
-              <option value="bluetooth">头环蓝牙</option>
-            </select>
-          </label>
-          <button id="connectButton" class="button button-primary" type="button">连接</button>
-          <button id="disconnectButton" class="button button-quiet" type="button" disabled>断开</button>
-        </div>
-        <p id="sourceHint" class="hint">独立联调时，请按网关实际配置选择数据来源。连接一路后，可切换来源并连接另一台网关。</p>
+        <div id="connectionRows"></div>
       </section>
 
+      <template id="connectionRowTemplate">
+        <div class="connect-row" role="group">
+          <label class="field endpoint-field">
+            <span></span>
+            <input type="url" placeholder="ws://127.0.0.1:8765/neurobridge/v1/ws" spellcheck="false" />
+          </label>
+          <button class="button button-primary" type="button" data-connect>连接</button>
+          <button class="button button-quiet" type="button" data-disconnect>断开</button>
+          <button class="button button-quiet" type="button" data-request-target hidden>请求目标</button>
+        </div>
+      </template>
       <section class="card algorithm-overview" aria-labelledby="algorithmTitle">
         <div class="chart-heading">
           <h2 id="algorithmTitle">实时算法数据</h2>
         </div>
-        <div id="algorithmMetrics" class="source-windows" data-view="both"></div>
+        <div id="algorithmMetrics" class="source-windows"></div>
         <p class="hint">连接网关后，使用<a href="#subscribeButton">连续订阅</a>更新所选来源，或用 <code>getLatest</code> 查看一次。</p>
-        <div class="chart-toolbar">
-          <label class="field" for="chartView">图表窗口
-            <select id="chartView">
-              <option value="both">同时显示两个来源</option>
-              <option value="serial">只看耳机串口</option>
-              <option value="bluetooth">只看头环蓝牙</option>
-            </select>
-          </label>
-        </div>
-        <div id="sourceWindows" class="source-windows" data-view="both"></div>
+        <div id="sourceWindows" class="source-windows"></div>
       </section>
 
       <template id="sourceWindowTemplate">
@@ -175,7 +161,7 @@
       <section class="card log-card" aria-labelledby="logTitle">
         <h2 id="logTitle">协议日志</h2>
         <p>显示连接状态、发送请求和接收帧。原始字节只显示长度。</p>
-        <div id="sourceLogs" class="source-windows" data-view="both"></div>
+        <div id="sourceLogs" class="source-windows"></div>
       </section>
 
       <template id="sourceLogTemplate">

@@ -2,7 +2,7 @@
 
 const PROTOCOL_VERSION = window.NEUROBRIDGE_VERSION.protocolVersion;
 const SUBPROTOCOL = "neurobridge.v1";
-const sourceLabels = { serial: "耳机串口", bluetooth: "头环蓝牙", unknown: "来源未指定" };
+const sourceLabels = { serial: "耳机串口", bluetooth: "头环蓝牙" };
 const sourceByDevice = new Map([["headset", "serial"], ["headband", "bluetooth"]]);
 const configuredSource = window.NEUROBRIDGE_B_CLIENT_SOURCE;
 const configuredEndpoint = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
@@ -21,16 +21,12 @@ const algorithmMetrics = {
 };
 
 const elements = {
-  endpoint: document.querySelector("#endpoint"),
-  dataSource: document.querySelector("#dataSource"),
-  sourceHint: document.querySelector("#sourceHint"),
+  connectionRows: document.querySelector("#connectionRows"),
+  connectionRowTemplate: document.querySelector("#connectionRowTemplate"),
   algorithmMetrics: document.querySelector("#algorithmMetrics"),
   sourceWindows: document.querySelector("#sourceWindows"),
   sourceWindowTemplate: document.querySelector("#sourceWindowTemplate"),
-  chartView: document.querySelector("#chartView"),
   commandSource: document.querySelector("#commandSource"),
-  connectButton: document.querySelector("#connectButton"),
-  disconnectButton: document.querySelector("#disconnectButton"),
   connectionDot: document.querySelector("#connectionDot"),
   connectionLabel: document.querySelector("#connectionLabel"),
   getStatusButton: document.querySelector("#getStatusButton"),
@@ -117,25 +113,51 @@ function createSourcePanel(source) {
   });
   return {
     source, section, fields, algorithmGroups, overview: createOverview(source),
-    socket: null, endpoint: elements.endpoint.value, initialStatusRequestId: null,
+    socket: null, initialStatusRequestId: null,
     subscriptions: new Map(), channels: {}, bandPower: {}, identity: {}, eegTimestamp: null,
   };
 }
 
 const panels = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourcePanel(source)]));
+let requestPanel = panels[configuredSource] || panels.serial;
 if (fixedSource) {
-  elements.endpoint.readOnly = true;
-  elements.dataSource.value = configuredSource;
-  elements.dataSource.disabled = true;
   document.querySelector('input[name="subscribeStream"][value="status"]').checked = false;
-  elements.sourceHint.textContent = "本机页面使用网关配置的来源。两路联调可在独立页面分别连接两个网关地址。";
 }
 
 function selectedPanel() {
-  return panels[elements.dataSource.value];
+  return requestPanel;
 }
 
-if (typeof configuredEndpoint === "string") selectedPanel().endpoint = configuredEndpoint;
+function createConnectionRow(panel) {
+  const row = elements.connectionRowTemplate.content.firstElementChild.cloneNode(true);
+  const title = sourceLabels[panel.source];
+  row.setAttribute("aria-label", title);
+  row.querySelector("span").textContent = `${title} WebSocket 地址`;
+  const endpoint = row.querySelector("input");
+  const connectButton = row.querySelector("[data-connect]");
+  const disconnectButton = row.querySelector("[data-disconnect]");
+  const targetButton = row.querySelector("[data-request-target]");
+  if (panel === selectedPanel() && typeof configuredEndpoint === "string") endpoint.value = configuredEndpoint;
+  endpoint.readOnly = fixedSource;
+  connectButton.addEventListener("click", () => {
+    if (fixedSource) window.location.reload();
+    else connect(panel);
+  });
+  disconnectButton.addEventListener("click", () => {
+    panel.socket?.close(1000, "B-side test console disconnect");
+    refreshConnectionControls();
+  });
+  targetButton.addEventListener("click", () => {
+    requestPanel = panel;
+    refreshConnectionControls();
+  });
+  elements.connectionRows.append(row);
+  return { endpoint, connectButton, disconnectButton, targetButton };
+}
+
+for (const panel of Object.values(panels)) {
+  if (!fixedSource || panel.source === configuredSource) panel.connection = createConnectionRow(panel);
+}
 
 function createRequestId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -151,9 +173,18 @@ function refreshConnectionControls() {
   const pending = state === WebSocket.CONNECTING || state === WebSocket.CLOSING;
   elements.connectionLabel.textContent = `${sourceLabels[panel.source]} · ${connected ? "已连接" : pending ? "连接处理中" : "未连接"}`;
   elements.connectionDot.className = `dot dot-${connected ? "on" : pending ? "wait" : "off"}`;
-  elements.connectButton.disabled = connected || pending;
-  elements.disconnectButton.disabled = state !== WebSocket.OPEN && state !== WebSocket.CONNECTING;
-  elements.endpoint.disabled = connected || pending;
+  const bothConnected = Object.values(panels).every((item) => item.socket?.readyState === WebSocket.OPEN);
+  for (const item of Object.values(panels)) {
+    if (!item.connection) continue;
+    const { endpoint, connectButton, disconnectButton, targetButton } = item.connection;
+    const itemState = item.socket?.readyState;
+    connectButton.disabled = Boolean(item.socket);
+    connectButton.textContent = itemState === WebSocket.OPEN ? "已连接" : item.socket ? "连接处理中" : "连接";
+    disconnectButton.disabled = itemState !== WebSocket.OPEN && itemState !== WebSocket.CONNECTING;
+    endpoint.disabled = Boolean(item.socket);
+    targetButton.hidden = !bothConnected;
+    targetButton.setAttribute("aria-pressed", String(item === panel));
+  }
   elements.commandSource.textContent = `当前请求目标：${sourceLabels[panel.source]}`;
   refreshSubscriptionSelect();
 }
@@ -173,7 +204,6 @@ function createSourceLog(source) {
   const list = section.querySelector(".log");
   const entries = [];
   section.dataset.source = source;
-  section.hidden = source === "unknown";
   title.id = `log-${source}`;
   title.textContent = sourceLabels[source];
   section.setAttribute("aria-labelledby", title.id);
@@ -181,32 +211,30 @@ function createSourceLog(source) {
   section.querySelector("[data-log-clear]").addEventListener("click", () => {
     entries.length = 0;
     list.replaceChildren();
-    if (source === "unknown") section.hidden = true;
   });
   section.querySelector("[data-log-copy]").addEventListener("click", async () => {
     const text = entries.map((entry) => `[${entry.time}] ${sourceLabels[source]} ${entry.label}\n${entry.body}`).join("\n\n");
     try {
       await navigator.clipboard.writeText(text);
-      appendLog("system", "SYSTEM", "协议日志已复制到剪贴板。", panels[source], source);
+      appendLog("system", "SYSTEM", "协议日志已复制到剪贴板。", panels[source]);
     } catch {
-      appendLog("error", "ERROR", "浏览器未授予剪贴板权限，请手动复制日志。", panels[source], source);
+      appendLog("error", "ERROR", "浏览器未授予剪贴板权限，请手动复制日志。", panels[source]);
     }
   });
   elements.sourceLogs.append(section);
-  return { section, list, entries };
+  return { list, entries };
 }
 
 const sourceLogs = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourceLog(source)]));
 
-function appendLog(kind, label, body, panel = selectedPanel(), source = panel.reportedSource ?? panel.source) {
-  const { section, list, entries } = sourceLogs[source];
+function appendLog(kind, label, body, panel = selectedPanel()) {
+  const { list, entries } = sourceLogs[panel.source];
   const entry = {
     time: timeLabel(), label,
     body: typeof body === "string" ? body : JSON.stringify(body, (key, value) =>
       key === "bytesBase64" ? undefined : value, 2),
   };
   entries.push(entry);
-  section.hidden = false;
   const node = document.createElement("div");
   node.className = `log-entry ${kind}`;
   const time = document.createElement("span");
@@ -399,24 +427,6 @@ function drawCharts() {
   for (const panel of Object.values(panels)) drawSourceCharts(panel);
 }
 
-const chartViewKey = "neurobridge-chart-view";
-function applyChartView() {
-  const view = elements.chartView.value;
-  elements.sourceWindows.dataset.view = view;
-  for (const panel of Object.values(panels)) {
-    const unspecified = panel.source === "unknown";
-    const showUnknown = unspecified && Boolean(panel.socket);
-    panel.section.hidden = unspecified ? !showUnknown || view !== "both" : view !== "both" && panel.source !== view;
-    if (unspecified) panel.overview.section.hidden = !showUnknown;
-  }
-  drawCharts();
-}
-
-elements.chartView.addEventListener("change", () => {
-  applyChartView();
-  try { window.localStorage.setItem(chartViewKey, elements.chartView.value); } catch { /* The current page still applies the choice. */ }
-});
-
 function fitCanvas(canvas) {
   const ratio = window.devicePixelRatio || 1, rect = canvas.getBoundingClientRect();
   canvas.width = Math.max(1, rect.width * ratio); canvas.height = Math.max(1, rect.height * ratio);
@@ -543,15 +553,13 @@ function handleGatewayMessage(message, panel) {
   const data = message.data;
   if (message.protocolVersion === PROTOCOL_VERSION) {
     const source = sourceByDevice.get(data?.source);
-    const expected = panel.source === "unknown" ? panel.reportedSource : panel.source;
-    if (!source || (expected && source !== expected)) {
+    if (source !== panel.source) {
       const warning = source ? `网关报告来源为「${sourceLabels[source]}」，与当前连接来源不符。` : "报文缺少有效的设备来源。";
       panel.fields.summary.textContent = warning;
       appendLog("error", "ERROR", warning, panel);
       appendLog("error", "← ERR", message, panel);
       return;
     }
-    panel.reportedSource = source;
   }
   if (message.code !== 200) {
     if (message.message) panel.fields.summary.textContent = message.message;
@@ -597,13 +605,12 @@ function sendRequest(action, params, panel = selectedPanel()) {
   return sendPayload(request, panel) ? request.requestId : null;
 }
 
-function connect() {
-  const panel = selectedPanel();
+function connect(panel = selectedPanel()) {
   if (panel.socket) return;
   let endpoint;
   let socket;
   try {
-    endpoint = new URL(panel.endpoint.trim());
+    endpoint = new URL(panel.connection.endpoint.value.trim());
     if (!["ws:", "wss:"].includes(endpoint.protocol)) throw new Error("地址必须以 ws:// 或 wss:// 开头。");
     if (Object.values(panels).some((other) => other.socket?.url === endpoint.href)) {
       throw new Error("此网关已关联其他来源，请为当前来源填写独立的 WebSocket 地址。");
@@ -614,13 +621,13 @@ function connect() {
     return;
   }
   panel.socket = socket;
+  requestPanel = panel;
   resetSource(panel, "正在连接", "等待算法数据");
-  if (panel.source === "unknown") elements.chartView.value = "both";
-  applyChartView();
   refreshConnectionControls();
   appendLog("system", "SYSTEM", `连接 ${endpoint.href}（子协议 ${SUBPROTOCOL}）`, panel);
 
   socket.addEventListener("open", () => {
+    if (!selectedPanel().socket) requestPanel = panel;
     setSourceStatus(panel, "网关已连接");
     refreshConnectionControls();
     appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。", panel);
@@ -640,28 +647,14 @@ function connect() {
     panel.initialStatusRequestId = null;
     panel.subscriptions.clear();
     resetSource(panel, "已断开", "等待连接网关");
-    applyChartView();
+    if (panel === selectedPanel()) {
+      requestPanel = Object.values(panels).find((item) => item.socket?.readyState === WebSocket.OPEN) || panel;
+    }
     refreshConnectionControls();
     appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`, panel);
-    panel.reportedSource = null;
   });
 }
 
-elements.dataSource.addEventListener("change", () => {
-  elements.endpoint.value = selectedPanel().endpoint;
-  refreshConnectionControls();
-});
-elements.endpoint.addEventListener("input", () => {
-  selectedPanel().endpoint = elements.endpoint.value;
-});
-elements.connectButton.addEventListener("click", () => {
-  if (fixedSource) window.location.reload();
-  else connect();
-});
-elements.disconnectButton.addEventListener("click", () => {
-  selectedPanel().socket?.close(1000, "B-side test console disconnect");
-  refreshConnectionControls();
-});
 elements.getStatusButton.addEventListener("click", () => sendRequest("getStatus", {}));
 elements.getLatestButton.addEventListener("click", () => {
   const streams = getCheckedValues("latestStream");
@@ -687,15 +680,9 @@ elements.sendCustomButton.addEventListener("click", () => {
     appendLog("error", "ERROR", `自定义 JSON 无法解析：${error.message}`);
   }
 });
-let savedChartView;
-try { savedChartView = window.localStorage.getItem(chartViewKey); } catch { /* Storage may be disabled. */ }
-const defaultView = fixedSource ? configuredSource : "both";
-elements.chartView.value = ["both", "serial", "bluetooth"].includes(savedChartView) ? savedChartView : defaultView;
 for (const panel of Object.values(panels)) {
   resetSource(panel, "未连接", fixedSource && panel.source !== configuredSource ? "等待其他网关接入" : "等待连接网关");
 }
-elements.endpoint.value = selectedPanel().endpoint;
-applyChartView();
 refreshConnectionControls();
 if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
   connect();
