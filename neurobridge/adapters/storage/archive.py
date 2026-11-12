@@ -91,6 +91,10 @@ class SegmentedArchive(RecordingStore):
                                               p.get("sourceType"), p.get("schemaVersion", 1))
                     saved = algorithms.execute("SELECT payload FROM results WHERE batch=?", (batch.batch_id,)).fetchone()
                     a = json.loads(saved[0]) if saved else None
+                    provenance = {"deviceProtocol": batch.device_protocol, "sourceType": batch.source_type,
+                                  "connectionSessionId": batch.connection_session_id}
+                    if a is not None and any(key in a and a[key] != value for key, value in provenance.items()):
+                        a = None
                     result = AlgorithmResult(batch.batch_id, a.get("algorithmVersion") if a else None,
                         a["startedAtMs"] if a else batch.window_end_ms,
                         a["completedAtMs"] if a else batch.window_end_ms,

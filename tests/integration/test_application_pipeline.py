@@ -184,7 +184,8 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             records = [json.loads(line) for path in config.recording.directory.glob("sessions/*/*/*.jsonl")
                        for line in path.read_text(encoding="utf-8").splitlines()]
             self.assertIn("raw.device_frame", {row["recordType"] for row in records})
-            self.assertIn("algorithm.result", {row["recordType"] for row in records})
+            result = next(row["payload"] for row in records if row["recordType"] == "algorithm.result")
+            self.assertEqual((result["deviceProtocol"], result["sourceType"]), ("headband_ble", "bluetooth"))
 
     async def test_existing_serial_stream_opens_raw_pipeline_when_algorithm_is_unavailable(self) -> None:
         class Source:
@@ -248,6 +249,9 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 AlgorithmState.READY,
             )
             frame = headset_frame(0x1234)
+            wrong_source = await service.process(RawChunk("bluetooth", "ff31", frame, 601, 1, "conn-1", "trace-ble"))
+            self.assertEqual(wrong_source.discarded_bytes, len(frame))
+            self.assertEqual(wrong_source.frames, ())
             await service.process(RawChunk("serial", "serial", frame, 601, 1, "conn-1", "trace-1"))
             await service.flush()
             self.assertEqual(len(sink.events), 1)
@@ -256,6 +260,8 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.batch.connection_session_id, "conn-1")
             self.assertEqual(result.batch.frame_refs, tuple(result.batch.signals[0].frame_refs))
             self.assertEqual(result.algorithm_result.metrics["attention"], 42)
+            self.assertEqual(len(algorithm.inputs), 1)
+            self.assertEqual(algorithm.inputs[0].device_protocol, "headset_rev181")
             self.assertEqual(base64.b64decode(algorithm.inputs[0].payload["eegRawBase64"]), frame[4:24])
             self.assertEqual(snapshots.get(frozenset({"eeg"})).version.batch_id, result.batch.batch_id)
             await repository.close_session("rec-1")
@@ -267,6 +273,8 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             raw = next(row for row in rows if row["recordType"] == "raw.device_frame")
             parsed = next(row for row in rows if row["recordType"] == "parsed.signal_batch")
             algorithm_row = next(row for row in rows if row["recordType"] == "algorithm.result")
+            self.assertEqual((algorithm_row["payload"]["deviceProtocol"], algorithm_row["payload"]["sourceType"]),
+                             ("headset_rev181", "serial"))
             self.assertEqual(raw["correlationId"], parsed["payload"]["frameRefs"][0])
             self.assertEqual(parsed["correlationId"], algorithm_row["correlationId"])
 

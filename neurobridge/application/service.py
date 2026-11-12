@@ -24,6 +24,7 @@ from .windowing import SignalWindowAssembler
 
 
 LOG = logging.getLogger(__name__)
+_SOURCE_BY_DEVICE_PROTOCOL = {"headset_rev181": "serial", "headband_ble": "bluetooth"}
 
 
 class ApplicationService:
@@ -270,6 +271,12 @@ class ApplicationService:
                 chunk.connection_session_id,
             )
             return ParseOutcome()
+        expected_source = _SOURCE_BY_DEVICE_PROTOCOL.get(self.device_protocol)
+        if expected_source is not None and chunk.source_type != expected_source:
+            self.diagnostics["source_mismatch_chunks"] = self.diagnostics.get("source_mismatch_chunks", 0) + 1
+            LOG.warning("Raw chunk rejected: deviceProtocol=%s expectedSource=%s actualSource=%s byteCount=%s",
+                        self.device_protocol, expected_source, chunk.source_type, len(chunk.data))
+            return ParseOutcome(discarded_bytes=len(chunk.data))
         if self.transport_trace_enabled:
             if self._trace_bytes + len(chunk.data) <= self.transport_trace_max_bytes:
                 self._trace_bytes += len(chunk.data)
@@ -583,6 +590,8 @@ class ApplicationService:
                 {
                     "batchId": batch.batch_id,
                     "algorithmVersion": result.algorithm_version,
+                    "deviceProtocol": batch.device_protocol,
+                    "sourceType": batch.source_type,
                     "connectionSessionId": batch.connection_session_id,
                     "windowStartMs": batch.window_start_ms,
                     "windowEndMs": batch.window_end_ms,
