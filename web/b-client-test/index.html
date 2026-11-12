@@ -68,6 +68,22 @@
               <div><dt>HR 原始字节</dt><dd data-field="hrRaw">—</dd></div>
             </dl>
             <div class="latest-summary" data-field="summary">尚未收到网关数据。</div>
+            <section class="algorithm-window" aria-label="实时算法数据">
+              <h3>实时算法数据</h3>
+              <p class="hint">在<a href="#subscribeButton">连续订阅</a>中选择 EEG 或 HR 算法流。</p>
+              <div class="algorithm-groups">
+                <section class="algorithm-group" data-algorithm="eeg">
+                  <div class="chart-heading"><h4>脑电算法</h4><span class="chart-meta" data-window-time>—</span></div>
+                  <p class="algorithm-validity" data-window-status>等待实时窗口</p>
+                  <dl class="algorithm-metrics"></dl>
+                </section>
+                <section class="algorithm-group" data-algorithm="hr">
+                  <div class="chart-heading"><h4>心率算法</h4><span class="chart-meta" data-window-time>—</span></div>
+                  <p class="algorithm-validity" data-window-status>等待实时窗口</p>
+                  <dl class="algorithm-metrics"></dl>
+                </section>
+              </div>
+            </section>
             <div class="visuals">
               <div class="chart-card">
                 <div class="chart-heading"><h3>脑电波形</h3><span data-field="waveformMeta" class="chart-meta">等待数据</span></div>

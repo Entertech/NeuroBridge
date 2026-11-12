@@ -12,6 +12,17 @@ const configuredSource = window.NEUROBRIDGE_B_CLIENT_SOURCE;
 const configuredEndpoint = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
 const fixedSource = configuredSource === "serial" || configuredSource === "bluetooth";
 const spectrumBands = ["delta", "theta", "alpha", "lowBeta", "highBeta", "beta", "gamma"];
+const algorithmMetrics = {
+  eeg: [
+    ["eeg.quality", "脑电质量"], ["attention", "注意力"], ["relaxation", "放松度"], ["pleasure", "愉悦度"],
+    ...spectrumBands.map((band) => [`eeg.bandPower.${band}`, `${band} 能量`]),
+    ["flow.meditation", "冥想"], ["flow.meditationTips", "冥想提示"], ["sleep.updated", "睡眠结果更新"],
+    ["sleep.degree", "睡眠程度"], ["sleep.state", "睡眠状态"], ["sleep.stage", "睡眠分期"], ["sleep.spindle", "睡眠纺锤"],
+  ],
+  hr: [
+    ["hr.value", "心率（bpm）"], ["hr.hrv", "HRV"], ["pressure", "压力"], ["coherence", "和谐度"], ["arousal", "激活度"],
+  ],
+};
 
 const elements = {
   endpoint: document.querySelector("#endpoint"),
@@ -43,9 +54,25 @@ function createSourcePanel(source) {
   const fields = Object.fromEntries(
     [...article.querySelectorAll("[data-field]")].map((field) => [field.dataset.field, field]),
   );
+  const algorithmGroups = [...article.querySelectorAll("[data-algorithm]")].map((section) => {
+    const stream = section.dataset.algorithm;
+    const list = section.querySelector(".algorithm-metrics");
+    const metrics = algorithmMetrics[stream].map(([key, title]) => {
+      const item = document.createElement("div");
+      const label = document.createElement("dt");
+      const output = document.createElement("dd");
+      label.textContent = title;
+      output.textContent = "—";
+      item.append(label, output);
+      list.append(item);
+      return { path: key.split("."), output };
+    });
+    return { section, stream, metrics, time: section.querySelector("[data-window-time]"),
+      status: section.querySelector("[data-window-status]") };
+  });
   fields.title.textContent = sourceLabels[source];
   elements.sourcePanels.append(article);
-  return { article, fields, channels: {}, bandPower: {} };
+  return { article, fields, algorithmGroups, channels: {}, bandPower: {} };
 }
 
 const panels = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourcePanel(source)]));
@@ -117,6 +144,51 @@ function readableTimestamp(timestampMs) {
   return Number.isNaN(date.getTime()) ? String(timestampMs) : date.toLocaleString("zh-CN", { hour12: false });
 }
 
+const algorithmTimeFormat = new Intl.DateTimeFormat("zh-CN", {
+  hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3, hour12: false,
+});
+
+function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {}) {
+  group.section.dataset.validity = validity;
+  const date = new Date(timestampMs ?? NaN);
+  group.time.textContent = Number.isNaN(date.getTime()) ? "—" : algorithmTimeFormat.format(date);
+  group.status.textContent = status;
+  for (const { path, output } of group.metrics) {
+    const value = path.reduce((node, key) => node?.[key], algorithm);
+    if (typeof value === "boolean") output.textContent = value ? "是" : "否";
+    else output.textContent = Number.isFinite(value) ? String(value) : "—";
+  }
+}
+
+function updateLiveAlgorithm(data, panel) {
+  const result = data?.result || data;
+  const payload = result?.payload;
+  const connection = payload?.status?.connectionState ?? result?.connectionState;
+  if (result?.mode === "replay" || connection === "disconnected" || connection === "connecting") {
+    const status = result?.mode === "replay" ? "当前为录播" : "等待设备接入";
+    for (const group of panel.algorithmGroups) showAlgorithmWindow(group, "waiting", null, status);
+    return;
+  }
+  if (data?.event === "status" || data?.action === "getStatus") {
+    for (const group of panel.algorithmGroups) {
+      if (group.section.dataset.validity === "waiting") showAlgorithmWindow(group, "waiting", null, "等待实时窗口");
+    }
+    return;
+  }
+  const algorithm = payload?.algorithm;
+  if (data?.event !== "data" || result.mode !== "live" || !algorithm || typeof algorithm !== "object") return;
+
+  const requestedStreams = subscriptions.get(data.subscriptionId) || [];
+  const valid = result.valid === true;
+  const reasons = Array.isArray(payload.invalidReasons) ? payload.invalidReasons.join("、") : "";
+  for (const group of panel.algorithmGroups) {
+    const hasMetrics = group.metrics.some(({ path }) => Object.prototype.hasOwnProperty.call(algorithm, path[0]));
+    if (!hasMetrics && (valid || !requestedStreams.includes(group.stream))) continue;
+    showAlgorithmWindow(group, valid ? "valid" : "invalid", result.timestampMs,
+      valid ? "有效窗口" : `无效窗口${reasons ? ` · ${reasons}` : ""}`, valid ? algorithm : {});
+  }
+}
+
 function getCheckedValues(name) {
   return [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
 }
@@ -152,6 +224,7 @@ function setPanelSource(source, label) {
       panel.fields.summary.textContent = "尚未收到网关数据。";
       panel.fields.waveformMeta.textContent = "等待数据";
       panel.fields.spectrumMeta.textContent = "等待数据";
+      for (const group of panel.algorithmGroups) showAlgorithmWindow(group, "waiting", null, "等待实时窗口");
       panel.channels = {};
       panel.bandPower = {};
     }
@@ -280,6 +353,7 @@ function handleGatewayMessage(message) {
   }
   if (panel) {
     updateSnapshot(data, panel);
+    updateLiveAlgorithm(data, panel);
     updateVisuals(data, panel);
   }
 
