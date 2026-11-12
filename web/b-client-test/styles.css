@@ -67,8 +67,15 @@ code { color: #9ee7f5; font-family: ui-monospace, SFMono-Regular, Menlo, Consola
 .source-panel h2 { margin: 0; }
 .source-status { color: #9eb1c9; font-size: .82rem; white-space: nowrap; }
 .source-active .source-status { color: #73d7ed; }
-.algorithm-waiting { margin-bottom: 18px; padding: 16px 20px; }
-.algorithm-waiting .hint { margin-top: 4px; }
+.algorithm-overview { margin-bottom: 18px; padding: 16px 20px; }
+.algorithm-overview .hint a { color: #9ee7f5; }
+.metric-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.metric { min-width: 0; padding: 12px; border: 1px solid #385577; border-radius: 10px; background: #08192b; }
+.metric h3 { color: #aabbd2; font-size: .8rem; }
+.metric output { display: block; color: #87e0e4; font-size: clamp(1.25rem, 2.1vw, 1.8rem); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.metric p { color: #aabbd2; margin: 6px 0 0; font-size: .73rem; overflow-wrap: anywhere; }
+@media (max-width: 950px) { .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 500px) { .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .action-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
 .action-card { min-height: 212px; display: flex; flex-direction: column; gap: 12px; padding: 15px; border: 1px solid rgba(83, 120, 159, .45); border-radius: 12px; background: rgba(5, 17, 31, .4); }
 .action-card-accent { border-color: rgba(72, 183, 206, .6); background: linear-gradient(145deg, rgba(21, 77, 98, .36), rgba(6, 20, 34, .42)); }
@@ -90,9 +97,8 @@ dt { color: #91a6be; font-size: .8rem; }
 dd { margin: 0; max-width: 170px; color: #f2f7fc; font-size: .82rem; text-align: right; overflow-wrap: anywhere; }
 .latest-summary { padding: 12px; border-left: 3px solid #3fbed4; background: rgba(34, 103, 127, .13); color: #b8d0df; font-size: .82rem; line-height: 1.55; }
 .algorithm-window { margin-top: 20px; }
-.algorithm-window .hint { margin: 0 0 12px; }
-.algorithm-window a { color: #9ee7f5; }
-.algorithm-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.algorithm-window summary { color: #a7ddeb; font-weight: 650; cursor: pointer; }
+.algorithm-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
 .algorithm-group { min-width: 0; padding: 14px; border: 1px solid #385577; border-radius: 12px; background: #08192b; }
 .algorithm-group h4 { margin: 0; font-size: .9rem; }
 .algorithm-validity { margin: 6px 0 10px; color: #aabbd2; font-size: .78rem; overflow-wrap: anywhere; }
