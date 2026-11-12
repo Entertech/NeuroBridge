@@ -3,10 +3,13 @@
 const PROTOCOL_VERSION = window.NEUROBRIDGE_VERSION.protocolVersion;
 const SUBPROTOCOL = "neurobridge.v1";
 const sourceLabels = { serial: "耳机串口", bluetooth: "头环蓝牙" };
-const sourceByDevice = new Map([["headset", "serial"], ["headband", "bluetooth"]]);
+const deviceBySource = { serial: "headset", bluetooth: "headband" };
+const sourceByDevice = new Map(Object.entries(deviceBySource).map(([source, device]) => [device, source]));
 const configuredSource = window.NEUROBRIDGE_B_CLIENT_SOURCE;
 const configuredEndpoint = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
 const fixedSource = configuredSource === "serial" || configuredSource === "bluetooth";
+const sharedConnection = configuredSource === "dual";
+const localConnection = fixedSource || sharedConnection;
 const spectrumBands = ["delta", "theta", "alpha", "lowBeta", "highBeta", "beta", "gamma"];
 const algorithmMetrics = {
   eeg: [
@@ -113,16 +116,16 @@ const localPanel = fixedSource ? panels[configuredSource] : panels.serial;
 
 function createConnectionRow(panel) {
   const row = elements.connectionRowTemplate.content.firstElementChild.cloneNode(true);
-  const title = sourceLabels[panel.source];
+  const title = sharedConnection ? "Windows 网关" : sourceLabels[panel.source];
   row.setAttribute("aria-label", title);
   row.querySelector("span").textContent = `${title} WebSocket 地址`;
   const endpoint = row.querySelector("input");
   const connectButton = row.querySelector("[data-connect]");
   const disconnectButton = row.querySelector("[data-disconnect]");
   if (panel === localPanel && typeof configuredEndpoint === "string") endpoint.value = configuredEndpoint;
-  endpoint.readOnly = fixedSource;
+  endpoint.readOnly = localConnection && typeof configuredEndpoint === "string";
   connectButton.addEventListener("click", () => {
-    if (fixedSource) window.location.reload();
+    if (endpoint.readOnly) window.location.reload();
     else connect(panel);
   });
   disconnectButton.addEventListener("click", () => {
@@ -150,7 +153,7 @@ function refreshConnectionControls(panel) {
 
   const active = Object.values(panels).filter((item) => item.socket?.readyState === WebSocket.OPEN);
   const pending = Object.values(panels).some((item) => item.socket);
-  const labels = active.map((item) => sourceLabels[item.source]).join("、");
+  const labels = active.length && sharedConnection ? "Windows 网关" : active.map((item) => sourceLabels[item.source]).join("、");
   elements.connectionLabel.textContent = labels ? `${labels} · 已连接` : pending ? "连接处理中" : "未连接";
   elements.connectionDot.className = `dot dot-${labels ? "on" : pending ? "wait" : "off"}`;
 }
@@ -556,8 +559,22 @@ function sendPayload(payload, panel) {
     appendLog("error", "ERROR", "请先连接该来源的网关。", panel);
     return false;
   }
-  panel.socket.send(JSON.stringify(payload));
-  appendLog("out", "OUT →", payload, panel);
+  let request = payload;
+  if (sharedConnection) {
+    if (payload.protocolVersion !== PROTOCOL_VERSION && panel !== localPanel) {
+      appendLog("error", "ERROR", `头环请求必须使用 v${PROTOCOL_VERSION}。`, panel);
+      return false;
+    }
+    if (payload.protocolVersion === PROTOCOL_VERSION) {
+      if (!payload.params || typeof payload.params !== "object" || Array.isArray(payload.params)) {
+        appendLog("error", "ERROR", "双设备请求的 params 必须为 JSON 对象。", panel);
+        return false;
+      }
+      request = { ...payload, params: { ...payload.params, source: deviceBySource[panel.source] } };
+    }
+  }
+  panel.socket.send(JSON.stringify(request));
+  appendLog("out", "OUT →", request, panel);
   return true;
 }
 
@@ -587,34 +604,45 @@ function connect(panel) {
     appendLog("error", "ERROR", error.message, panel);
     return;
   }
-  panel.socket = socket;
-  resetSource(panel, "正在连接", "等待算法数据");
+  const connectedPanels = sharedConnection ? Object.values(panels) : [panel];
+  for (const item of connectedPanels) {
+    item.socket = socket;
+    resetSource(item, "正在连接", "等待算法数据");
+    appendLog("system", "SYSTEM", `连接 ${endpoint.href}（子协议 ${SUBPROTOCOL}）`, item);
+  }
   refreshConnectionControls(panel);
-  appendLog("system", "SYSTEM", `连接 ${endpoint.href}（子协议 ${SUBPROTOCOL}）`, panel);
 
   socket.addEventListener("open", () => {
-    setSourceStatus(panel, "网关已连接");
     refreshConnectionControls(panel);
-    appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。", panel);
-    const requestId = sendRequest("getStatus", {}, panel);
-    if (fixedSource) panel.initialStatusRequestId = requestId;
+    for (const item of connectedPanels) {
+      setSourceStatus(item, "网关已连接");
+      appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。", item);
+      const requestId = sendRequest("getStatus", {}, item);
+      if (localConnection) item.initialStatusRequestId = requestId;
+    }
   });
   socket.addEventListener("message", (event) => {
     try {
-      handleGatewayMessage(JSON.parse(event.data), panel);
+      const message = JSON.parse(event.data);
+      const source = sourceByDevice.get(message?.data?.source);
+      handleGatewayMessage(message, sharedConnection && source ? panels[source] : panel);
     } catch {
       appendLog("error", "ERROR", `无法读取网关消息（${event.data.length} 字符）。`, panel);
     }
   });
-  socket.addEventListener("error", () => appendLog("error", "ERROR", "WebSocket 发生网络错误或网关拒绝了子协议。", panel));
+  socket.addEventListener("error", () => {
+    for (const item of connectedPanels) appendLog("error", "ERROR", "WebSocket 发生网络错误或网关拒绝了子协议。", item);
+  });
   socket.addEventListener("close", (event) => {
-    panel.socket = null;
-    panel.initialStatusRequestId = null;
-    panel.subscriptions.clear();
-    resetSource(panel, "已断开", "等待连接网关");
-    refreshSubscriptionSelect(panel);
+    for (const item of connectedPanels) {
+      item.socket = null;
+      item.initialStatusRequestId = null;
+      item.subscriptions.clear();
+      resetSource(item, "已断开", "等待连接网关");
+      refreshSubscriptionSelect(item);
+      appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`, item);
+    }
     refreshConnectionControls(panel);
-    appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`, panel);
   });
 }
 
@@ -633,7 +661,7 @@ function createRequestSection(panel) {
   customRequest.value = JSON.stringify({
     protocolVersion: PROTOCOL_VERSION, messageType: "request", requestId: "", action: "getStatus", params: {},
   }, null, 2);
-  if (fixedSource) section.querySelector('input[name="subscribeStream"][value="status"]').checked = false;
+  if (localConnection) section.querySelector('input[name="subscribeStream"][value="status"]').checked = false;
 
   section.querySelector("[data-get-status]").addEventListener("click", () => sendRequest("getStatus", {}, panel));
   section.querySelector("[data-get-latest]").addEventListener("click", () => {
@@ -665,11 +693,11 @@ function createRequestSection(panel) {
 }
 
 for (const panel of Object.values(panels)) {
-  if (!fixedSource || panel === localPanel) {
+  if (!localConnection || panel === localPanel) {
     panel.connection = createConnectionRow(panel);
-    panel.requests = createRequestSection(panel);
     refreshConnectionControls(panel);
   }
+  if (!fixedSource || panel === localPanel) panel.requests = createRequestSection(panel);
   resetSource(panel, "未连接", fixedSource && panel.source !== configuredSource ? "等待其他网关接入" : "等待连接网关");
 }
 if (typeof configuredEndpoint === "string") {

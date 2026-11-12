@@ -127,10 +127,12 @@ def show_source(config) -> None:
         print('Data source: BLE headband. The running gateway scans and reconnects automatically.')
     else:
         serial_summary(config)
+        if config.data_source.include_headband:
+            print('Data source: BLE headband shares the headset WebSocket address.')
 
 
 def page_url(config) -> str:
-    path = '/' if config.data_source.type == 'bluetooth' else '/capture/'
+    path = '/' if config.data_source.type == 'bluetooth' or config.data_source.include_headband else '/capture/'
     return f'http://127.0.0.1:{config.local_ui.port}{path}'
 
 
@@ -150,6 +152,7 @@ def diagnostics(root: Path) -> Path:
             config = validate_config(path)
             report['configValid'] = True
             report['dataSource'] = config.data_source.type
+            report['includeHeadband'] = config.data_source.include_headband
             if config.data_source.type == 'serial':
                 report['comCandidates'] = serial_summary(config)
         except Exception as error:

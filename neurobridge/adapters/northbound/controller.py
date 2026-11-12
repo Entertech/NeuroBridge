@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AsyncExitStack, asynccontextmanager
 import json
 import logging
 from typing import Any
@@ -13,6 +14,13 @@ from ...versioning import LEGACY_NORTHBOUND_PROTOCOL_VERSION, NORTHBOUND_PROTOCO
 
 LOG = logging.getLogger(__name__)
 DEVICE_SOURCES = {"bluetooth": "headband", "serial": "headset"}
+
+
+def _versioned_message(message: dict, version: str, source: str) -> dict:
+    data = message["data"]
+    if version == NORTHBOUND_PROTOCOL_VERSION:
+        data = {**data, "source": source}
+    return {**message, "protocolVersion": version, "data": data}
 
 
 class NorthboundController:
@@ -46,22 +54,20 @@ class NorthboundController:
             raise ProtocolError(400, "INVALID_REQUEST", "Request fields are invalid.")
         return request
 
-    async def handle(self, session: ClientSession, raw: str, send: Any) -> None:
+    async def handle(self, session: ClientSession, raw: str | dict[str, Any], send: Any) -> None:
         self.gateway.delivery_metrics["requests"] += 1
         self.gateway.sessions.add(session)
         request_id: str | None = None
         action: str | None = None
         safe_request_id: str | None = None
         version = NORTHBOUND_PROTOCOL_VERSION
+        source = DEVICE_SOURCES[self.gateway.config.data_source.type]
 
         async def send_versioned(message: dict) -> None:
-            data = message["data"]
-            if version == NORTHBOUND_PROTOCOL_VERSION:
-                data = {**data, "source": DEVICE_SOURCES[self.gateway.config.data_source.type]}
-            await send({**message, "protocolVersion": version, "data": data})
+            await send(_versioned_message(message, version, source))
 
         try:
-            request = self.parse_request(raw)
+            request = self.parse_request(raw) if isinstance(raw, str) else raw
             version = request["protocolVersion"]
             request_id = request["requestId"]
             action = request["action"]
@@ -115,3 +121,37 @@ class NorthboundController:
                     ProtocolError(500, "INTERNAL_ERROR", "Gateway request failed.", True),
                 )
             )
+
+
+class SourceRouter:
+    """Route one WebSocket to independent device sessions and subscriptions."""
+
+    def __init__(self, headset: NorthboundController, headband: NorthboundController) -> None:
+        self.controllers = {"headset": headset, "headband": headband}
+
+    @asynccontextmanager
+    async def connection(self):
+        sessions = {source: ClientSession() for source in self.controllers}
+        async with AsyncExitStack() as cleanup:
+            for source, controller in self.controllers.items():
+                session = sessions[source]
+                controller.gateway.sessions.add(session)
+                cleanup.push_async_callback(controller.gateway.close_session, session)
+
+            async def dispatch(raw: str, send: Any) -> None:
+                headset = self.controllers["headset"]
+                try:
+                    request = headset.parse_request(raw)
+                except ProtocolError:
+                    await headset.handle(sessions["headset"], raw, send)
+                    return
+                version = request["protocolVersion"]
+                params = request["params"].copy()
+                source = params.pop("source", "headset") if version == NORTHBOUND_PROTOCOL_VERSION else "headset"
+                if not isinstance(source, str) or source not in self.controllers:
+                    error = ProtocolError(400, "INVALID_REQUEST", "params.source must be headset or headband.")
+                    await send(_versioned_message(headset.gateway.error(request["requestId"], error), version, "headset"))
+                    return
+                await self.controllers[source].handle(sessions[source], {**request, "params": params}, send)
+
+            yield dispatch

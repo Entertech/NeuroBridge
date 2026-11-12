@@ -30,11 +30,12 @@ class BleConfig:
 
 @dataclass(frozen=True)
 class DataSourceConfig:
-    """Select exactly one device-side transport strategy."""
+    """Select the primary transport and optional Windows headband acquisition."""
 
     type: str = "bluetooth"
     window_interval_ms: int = 600
     stale_after_ms: int = 1800
+    include_headband: bool = False
 
 
 @dataclass(frozen=True)
@@ -189,7 +190,7 @@ def load(
         "network": {"mode", "interface", "subnet_cidr", "dhcp_range_start", "dhcp_range_end", "dhcp_lease_time"},
         "access": {"mode"},
         "local_ui": {"enabled", "host", "port", "directory"},
-        "data_source": {"type", "window_interval_ms", "stale_after_ms"},
+        "data_source": {"type", "window_interval_ms", "stale_after_ms", "include_headband"},
         "serial": {"device", "candidate_types", "baud_rate", "handshake_timeout_ms", "command_response_timeout_ms", "data_timeout_seconds", "reconnect_delay_seconds", "stats_interval_seconds", "max_buffer_bytes", "dtr", "rts"},
         "storage": {"warning_threshold_bytes", "critical_threshold_bytes", "segment_duration_seconds", "segment_max_bytes", "writer_queue_size", "recovery_margin_bytes", "recovery_checks", "fsync_interval_records", "session_retention_days", "auto_cleanup_enabled"},
         "pipeline": set(PipelineConfig.__dataclass_fields__),
@@ -328,6 +329,9 @@ def load(
     data_source_type = str(data_source["type"])
     if data_source_type not in {"bluetooth", "serial", "usb"}:
         raise ValueError("data_source.type must be bluetooth, serial, or usb")
+    include_headband = data_source.get("include_headband", False)
+    if include_headband and (profile != "windows_headset_local" or data_source_type != "serial"):
+        raise ValueError("data_source.include_headband requires the Windows serial headset profile")
     window_interval_ms = data_source.get("window_interval_ms", 600)
     stale_after_ms = data_source.get("stale_after_ms", 1800)
     if not isinstance(window_interval_ms, int) or isinstance(window_interval_ms, bool) or window_interval_ms <= 0:
@@ -345,7 +349,7 @@ def load(
     # loading their drivers or being blocked by parameters that are not active.
     recording_directory = Path(recording.get("directory", "./recordings"))
     ble_config = BleConfig(False, None, "0000ff10-1212-abcd-1523-785feabcd123", 5, 3)
-    if data_source_type == "bluetooth":
+    if data_source_type == "bluetooth" or include_headband:
         ble_config = BleConfig(
             bool(ble.get("enabled", False)),
             ble.get("device_name") or None,
@@ -454,7 +458,7 @@ def load(
             local_ui_port,
             local_ui_directory,
         ),
-        data_source=DataSourceConfig(data_source_type, window_interval_ms, stale_after_ms),
+        data_source=DataSourceConfig(data_source_type, window_interval_ms, stale_after_ms, include_headband),
         serial=serial_config,
         storage=StorageConfig(**storage_values, auto_cleanup_enabled=auto_cleanup_enabled),
         pipeline=PipelineConfig(**pipeline_values),
@@ -484,7 +488,7 @@ def _validate_types(raw: dict) -> None:
     Inactive device sections keep their legacy ignore semantics; no dormant
     transport parameters are consumed or used to load drivers.
     """
-    boolean = {"ble.enabled", "algorithm.enabled", "download.enabled", "local_ui.enabled",
+    boolean = {"ble.enabled", "algorithm.enabled", "download.enabled", "local_ui.enabled", "data_source.include_headband",
                "serial.dtr", "serial.rts", "storage.auto_cleanup_enabled", "recording.transport_trace_enabled"}
     integer = {"server.port", "download.port", "local_ui.port", "ble.scan_timeout_seconds",
                "ble.reconnect_delay_seconds", "serial.baud_rate", "serial.handshake_timeout_ms",
@@ -494,11 +498,13 @@ def _validate_types(raw: dict) -> None:
     number = {"serial.data_timeout_seconds", "serial.reconnect_delay_seconds", "serial.stats_interval_seconds",
               "recording.replay_speed"}
     arrays = {"algorithm.command", "serial.candidate_types"}
+    data_source = raw.get("data_source", {})
+    selected = data_source.get("type")
+    validate_ble = selected == "bluetooth" or data_source.get("include_headband") is True
     for section, fields in raw.items():
         if not isinstance(fields, dict):
             continue
-        selected = raw.get("data_source", {}).get("type")
-        if (section == "ble" and selected != "bluetooth") or (section == "serial" and selected != "serial"):
+        if (section == "ble" and not validate_ble) or (section == "serial" and selected != "serial"):
             continue
         for field, value in fields.items():
             key = f"{section}.{field}"

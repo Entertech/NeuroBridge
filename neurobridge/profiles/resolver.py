@@ -96,7 +96,9 @@ def resolve_profile(config: GatewayConfig, runtime: RuntimePlatform | None = Non
         mismatches.append(f"access expected={profile.access_mode} actual={config.access.mode}")
     if profile.capabilities.supports_local_ui != config.local_ui.enabled:
         mismatches.append(f"local_ui expected={profile.capabilities.supports_local_ui} actual={config.local_ui.enabled}")
-    if profile_id == "windows_headband_local" and (
+    if config.data_source.include_headband and profile_id != "windows_headset_local":
+        mismatches.append("dual acquisition requires the Windows serial headset profile")
+    if (profile_id == "windows_headband_local" or config.data_source.include_headband) and (
         not config.ble.enabled or min(config.ble.scan_timeout_seconds, config.ble.reconnect_delay_seconds) <= 0
     ):
         mismatches.append("headband BLE requires ble.enabled=true and positive scan and reconnect intervals")

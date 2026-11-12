@@ -90,7 +90,7 @@ def _runtime_config(config: GatewayConfig) -> bytes:
         + json.dumps(endpoint, ensure_ascii=True)
         + ";\n"
         + "window.NEUROBRIDGE_B_CLIENT_SOURCE = "
-        + json.dumps(config.data_source.type, ensure_ascii=True)
+        + json.dumps("dual" if config.data_source.include_headband else config.data_source.type, ensure_ascii=True)
         + ";\n"
     ).encode("ascii")
 

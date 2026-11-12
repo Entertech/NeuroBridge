@@ -40,13 +40,13 @@ Windows 10/11 x64 可配置 Flowtime BLE 头环采集。先打开 Windows 蓝牙
 
 编辑现有配置。源码部署使用 `.runtime\config\windows-gateway.toml`，安装包部署使用 `%ProgramData%\NeuroBridge\gateway.toml`。
 
-- 把文件顶部的 `profile` 改成 `"windows_headband_local"`。
-- 把 `[data_source]` 中的 `type` 改成 `"bluetooth"`。
+- 同时采集时，使用 `profile = "windows_headset_local"`，在 `[data_source]` 设置 `type = "serial"` 与 `include_headband = true`。
+- 只采集头环时，使用 `profile = "windows_headband_local"`，在 `[data_source]` 设置 `type = "bluetooth"` 与 `include_headband = false`。
 - 核对 `[ble]` 使用 `enabled = true`。旧配置若没有该表，从 [Windows 配置模板](gateway.toml.example) 复制整个 `[ble]` 段。按实际广播名称配置 `device_name`。
 
 源码部署双击启动器重新启动，安装包部署执行 `Start-Service NeuroBridge`。打开 `http://127.0.0.1:8080/`（自定义端口以配置为准），等待「头环蓝牙」区显示设备已连接。点击 `getLatest` 查看最新算法结果，或点击 `subscribe` 接收连续窗口。需要确认原始数据时，先勾选 EEG 和 HR 原始字节流再订阅。旧的 `/capture/` 入口在头环模式下跳转至联调页。
 
-网关扫描匹配头环并在断开后重连，按会话分别保存原始数据和算法结果。每次启动只采集配置选中的来源，Windows 两种模式均为实时采集。切回耳机时停止网关，恢复 `profile = "windows_headset_local"` 和 `[data_source] type = "serial"` 后重启。
+双设备模式用同一个 WebSocket 地址和连接收两路数据，默认地址为 `ws://127.0.0.1:8765/neurobridge/v1/ws`。两路均为实时采集，响应和事件带有 `data.source`，协议请求在 `params.source` 指定设备。联调页每栏自动填写对应来源。双设备模式下头环录制保存在录制目录的 `headband` 子目录，两路均可从原下载地址导出。切回仅采集耳机时，在串口耳机配置中将 `include_headband` 设为 `false` 并重启。
 
 耳机串口与头环蓝牙各用独立的算法会话，结果随设备来源分别录制和显示。升级后请重新构建或替换算法桥。源码部署可先停止网关，再用启动器菜单 `6` 重建。耳机模式启动前会检查算法桥是否支持 SDK 耳道 EEG 模式。
 

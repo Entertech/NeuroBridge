@@ -21,6 +21,8 @@ mode = "static"
 # For a BLE headband set profile = "windows_headband_local" at the top
 # and type = "bluetooth" here, then restart the gateway.
 type = "serial"
+# Set true to collect the headset and BLE headband on the same WebSocket address.
+include_headband = false
 window_interval_ms = 600
 stale_after_ms = 1800
 

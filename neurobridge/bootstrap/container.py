@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import json
 import time
@@ -11,6 +11,7 @@ import time
 from ..adapters.algorithms import AffectiveSdkAlgorithmEngine
 from ..adapters.northbound.codec import GatewayWireCodec
 from ..adapters.northbound import GatewayNorthboundSink, NorthboundController
+from ..adapters.northbound.controller import SourceRouter
 from ..adapters.parsers import HeadbandBleParser, HeadsetRev181Parser
 from ..adapters.sources import BluetoothBleakSource, PosixSerialSource, WindowsSerialSource
 from ..application.service import ApplicationService
@@ -337,3 +338,21 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     bridge_ref["bridge"] = adapter
     controller = NorthboundController(gateway)
     return ApplicationContainer(config, profile, gateway, adapter, source, parser, application, controller)
+
+
+def build_runtime(
+    config: GatewayConfig, runtime: RuntimePlatform | None = None,
+) -> tuple[tuple[ApplicationContainer, ...], SourceRouter | None]:
+    """Compose the acquisition pipelines behind one northbound listener."""
+    primary = build_container(config, runtime)
+    if not config.data_source.include_headband:
+        return (primary,), None
+
+    headband_config = replace(
+        config,
+        profile="windows_headband_local",
+        data_source=replace(config.data_source, type="bluetooth", include_headband=False),
+        recording=replace(config.recording, directory=config.recording.directory / "headband"),
+    )
+    headband = build_container(headband_config, runtime)
+    return (primary, headband), SourceRouter(primary.northbound_controller, headband.northbound_controller)

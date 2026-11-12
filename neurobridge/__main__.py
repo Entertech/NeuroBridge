@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import AsyncExitStack
 from hashlib import sha256
 import logging
 import os
@@ -12,7 +13,7 @@ import signal
 import time
 
 from .configuration.runtime import load_runtime_config
-from .bootstrap import build_container
+from .bootstrap import build_runtime
 from .download import serve_downloads
 from .logging_setup import configure_logging
 from .northbound.local_ui import serve_local_ui
@@ -38,7 +39,8 @@ def _file_sha256(path: str) -> str:
 async def run(config_path: str, *, override_path: str | None = None, development: bool = False) -> None:
     started_at = time.monotonic()
     config = load_runtime_config(config_path, override_path=override_path, development=development)
-    container = build_container(config)
+    containers, router = build_runtime(config)
+    container = containers[0]
     strategy = access_strategy(config.access.mode)
     configure_logging(config.logging)
     LOG.info(
@@ -100,7 +102,6 @@ async def run(config_path: str, *, override_path: str | None = None, development
             config.serial.rts,
         )
     gateway = container.gateway
-    adapter = container.device_adapter
     loop = asyncio.get_running_loop()
     task = asyncio.current_task()
     handles_sigterm = False
@@ -111,27 +112,25 @@ async def run(config_path: str, *, override_path: str | None = None, development
         except (NotImplementedError, RuntimeError):
             pass  # Non-main-thread embedding keeps its own signal lifecycle.
     try:
-        await gateway.start()
-        async with asyncio.TaskGroup() as group:
-            group.create_task(serve(gateway, container.northbound_controller))
-            group.create_task(adapter.run())
-            if strategy.serves_local_ui(config):
-                group.create_task(serve_local_ui(config))
-            if gateway.config.download.enabled:
-                group.create_task(serve_downloads(gateway))
+        async with AsyncExitStack() as cleanup:
+            for pipeline in containers:
+                cleanup.push_async_callback(pipeline.gateway.stop)
+                cleanup.push_async_callback(pipeline.device_adapter.stop)
+                await pipeline.gateway.start()
+            async with asyncio.TaskGroup() as group:
+                group.create_task(serve(gateway, container.northbound_controller, router=router))
+                for pipeline in containers:
+                    group.create_task(pipeline.device_adapter.run())
+                if strategy.serves_local_ui(config):
+                    group.create_task(serve_local_ui(config))
+                if gateway.config.download.enabled:
+                    group.create_task(serve_downloads(gateway, tuple(pipeline.gateway for pipeline in containers[1:])))
     except Exception:
         LOG.exception("Gateway runtime task failed")
         raise
     finally:
-        LOG.info("Process shutdown started: uptimeSeconds=%.3f", time.monotonic() - started_at)
-        try:
-            await adapter.stop()
-        finally:
-            try:
-                await gateway.stop()
-            finally:
-                if handles_sigterm:
-                    loop.remove_signal_handler(signal.SIGTERM)
+        if handles_sigterm:
+            loop.remove_signal_handler(signal.SIGTERM)
         LOG.info("Process shutdown completed: uptimeSeconds=%.3f", time.monotonic() - started_at)
 
 

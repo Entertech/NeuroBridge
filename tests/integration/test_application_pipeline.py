@@ -21,14 +21,18 @@ from neurobridge.application.service import ApplicationService
 from neurobridge.application.snapshots import InMemoryLatestSnapshotStore
 from neurobridge.business.gateway import ClientSession, Gateway
 from neurobridge.ble.flowtime import FF21, FF31, FF51
+from neurobridge.bootstrap import build_runtime
 from neurobridge.bootstrap.container import _ApplicationPipelineAdapter, build_container
 from neurobridge.config import load
 from neurobridge.domain.algorithm import AlgorithmResult, AlgorithmState
 from neurobridge.domain.raw import RawChunk
+from neurobridge.domain.result import WindowResult
+from neurobridge.domain.signal import ParsedSignalBatch
 from neurobridge.domain.status import ConnectionState, DataState, DeviceConnectionEvent
 from neurobridge.northbound.websocket import SUBPROTOCOL, create_server
 from neurobridge.ports.raw_source import SourceStatus
 from neurobridge.profiles import RuntimePlatform
+from neurobridge.versioning import LEGACY_NORTHBOUND_PROTOCOL_VERSION, NORTHBOUND_PROTOCOL_VERSION
 
 
 def headset_frame(sequence: int = 1) -> bytes:
@@ -90,6 +94,86 @@ class SlowAlgorithm(FakeAlgorithm):
 
 
 class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_windows_two_sources_share_one_websocket_and_independent_subscriptions(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        template = (root / "windows/gateway.toml.example").read_text(encoding="utf-8")
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        config_path = Path(directory) / "gateway.toml"
+        config_path.write_text(template.replace("include_headband = false", "include_headband = true"), encoding="utf-8")
+        config = load(config_path)
+        config = replace(config, server=replace(config.server, port=0),
+                         recording=replace(config.recording, directory=Path(directory) / "recordings"))
+        (headset, headband), router = build_runtime(config, RuntimePlatform("windows", "x86_64"))
+        self.assertIsNot(headset.application.algorithm, headband.application.algorithm)
+        self.assertIsNot(headset.gateway.latest_snapshot, headband.gateway.latest_snapshot)
+        self.assertNotEqual(headset.config.recording.directory, headband.config.recording.directory)
+
+        for pipeline, state in ((headset, "validated"), (headband, "connected")):
+            self.addAsyncCleanup(pipeline.gateway.stop)
+            await pipeline.gateway.start()
+            await pipeline.gateway.update_status("connectionState", state)
+            await pipeline.gateway.update_status("algorithmState", "ready")
+        server = await create_server(headset.gateway, router=router)
+        self.addAsyncCleanup(server.wait_closed)
+        # Close the listener before waiting for it during async cleanup.
+        self.addAsyncCleanup(server.close)
+        port = server.sockets[0].getsockname()[1]
+
+        async def publish(pipeline, attention: int) -> None:
+            now = int(time.time() * 1000)
+            protocol = pipeline.profile.device_protocol
+            batch = ParsedSignalBatch(protocol, protocol, protocol, "test", now - 600, now, (), ())
+            algorithm = AlgorithmResult(batch.batch_id, "test", now, now, {"attention": attention})
+            await pipeline.gateway.publish_window_result(WindowResult(batch, algorithm, "live", now, True))
+
+        async with websockets.connect(
+            f"ws://127.0.0.1:{port}{config.server.path}", subprotocols=[SUBPROTOCOL],
+            origin=f"http://127.0.0.1:{config.local_ui.port}", ping_interval=None,
+        ) as ws:
+            async def receive():
+                return json.loads(await asyncio.wait_for(ws.recv(), 2))
+
+            async def request(action, params, version=NORTHBOUND_PROTOCOL_VERSION):
+                await ws.send(json.dumps({"protocolVersion": version, "messageType": "request",
+                                          "requestId": action, "action": action, "params": params}))
+                return await receive()
+
+            legacy = await request("getStatus", {}, LEGACY_NORTHBOUND_PROTOCOL_VERSION)
+            self.assertEqual(legacy["protocolVersion"], LEGACY_NORTHBOUND_PROTOCOL_VERSION)
+            self.assertEqual(legacy["data"]["result"]["gatewayBootId"], headset.gateway.boot_id)
+            self.assertNotIn("source", legacy["data"])
+            invalid = await request("getStatus", {"source": []})
+            self.assertEqual(invalid["code"], 400)
+            self.assertEqual(invalid["data"]["requestId"], "getStatus")
+            subscriptions = {}
+            for source in ("headset", "headband"):
+                response = await request("subscribe", {"source": source, "streams": ["eeg"]})
+                self.assertEqual(response["code"], 200)
+                self.assertEqual(response["data"]["source"], source)
+                subscriptions[source] = response["data"]["result"]["subscriptionId"]
+            await publish(headset, 42)
+            await publish(headband, 73)
+            events = [(await receive())["data"] for _ in subscriptions]
+            self.assertEqual({
+                event["source"]: (event["subscriptionId"], event["payload"]["algorithm"]["attention"])
+                for event in events
+            }, {"headset": (subscriptions["headset"], 42), "headband": (subscriptions["headband"], 73)})
+            latest = await request("getLatest", {"source": "headband", "streams": ["eeg"]})
+            self.assertEqual(latest["data"]["result"]["payload"]["algorithm"]["attention"], 73)
+            wrong = await request("unsubscribe", {"source": "headband", "subscriptionId": subscriptions["headset"]})
+            self.assertEqual(wrong["code"], 404)
+            stopped = await request("unsubscribe", {"source": "headset", "subscriptionId": subscriptions["headset"]})
+            self.assertEqual(stopped["code"], 200)
+            await publish(headset, 43)
+            await publish(headband, 74)
+            event = (await receive())["data"]
+            self.assertEqual(event["source"], "headband")
+            self.assertEqual(event["payload"]["algorithm"]["attention"], 74)
+        server.close()
+        await server.wait_closed()
+        self.assertFalse(headset.gateway.sessions)
+        self.assertFalse(headband.gateway.sessions)
+
     async def test_windows_ble_headband_to_live_websocket_and_recording(self) -> None:
         started = asyncio.Event()
         notifications = {}

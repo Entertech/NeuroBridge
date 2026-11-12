@@ -111,10 +111,14 @@ async def _send_error(writer: asyncio.StreamWriter, status: int, reason: str) ->
     await writer.drain()
 
 
-async def _send_index(writer: asyncio.StreamWriter, gateway: Gateway, method: str) -> None:
+async def _send_index(writer: asyncio.StreamWriter, gateway: Gateway, method: str, additional: tuple[Gateway, ...]) -> None:
     payload = json.dumps(
         {
-            "recordings": gateway.store.completed_recordings(),
+            "recordings": [
+                recording
+                for pipeline in (gateway, *additional)
+                for recording in pipeline.store.completed_recordings()
+            ],
             "recordingDownloadTemplate": f"{gateway.config.download.path}/recordings/{{recordingId}}.zip",
             "logDownload": f"{gateway.config.download.path}/logs/neurobridge-logs.zip",
         },
@@ -127,7 +131,8 @@ async def _send_index(writer: asyncio.StreamWriter, gateway: Gateway, method: st
     await writer.drain()
 
 
-async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, gateway: Gateway) -> None:
+async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, gateway: Gateway,
+                         additional: tuple[Gateway, ...]) -> None:
     temporary: Path | None = None
     peer = writer.get_extra_info("peername")
     try:
@@ -171,7 +176,7 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
         LOG.info("Download request received: peer=%s method=%s path=%s", peer, method, log_path)
         base = gateway.config.download.path
         if path in {base, base + "/"}:
-            await _send_index(writer, gateway, method)
+            await _send_index(writer, gateway, method, additional)
             return
         recording_prefix = base + "/recordings/"
         if path.startswith(recording_prefix) and path.endswith(".zip"):
@@ -179,11 +184,19 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             if "/" in recording_id or not gateway.store._safe_recording_id(recording_id):
                 await _send_error(writer, 404, "Recording not found")
                 return
-            if recording_id == gateway.store.recording_id:
+            stores = [pipeline.store for pipeline in (gateway, *additional)]
+            if any(recording_id == store.recording_id for store in stores):
                 await _send_error(writer, 409, "Recording is still active and cannot be exported")
                 return
             try:
-                archive = await asyncio.to_thread(gateway.store.export, recording_id)
+                for store in stores:
+                    try:
+                        archive = await asyncio.to_thread(store.export, recording_id)
+                        break
+                    except FileNotFoundError:
+                        continue
+                else:
+                    raise FileNotFoundError(recording_id)
             except FileNotFoundError:
                 await _send_error(writer, 404, "Recording not found")
                 return
@@ -224,20 +237,20 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
             await writer.wait_closed()
 
 
-async def create_download_server(gateway: Gateway) -> asyncio.Server:
+async def create_download_server(gateway: Gateway, additional: tuple[Gateway, ...] = ()) -> asyncio.Server:
     config = gateway.config.download
     if not config.enabled:
         raise ValueError("Download service is disabled")
     return await asyncio.start_server(
-        lambda reader, writer: _handle_client(reader, writer, gateway),
+        lambda reader, writer: _handle_client(reader, writer, gateway, additional),
         config.host,
         config.port,
         limit=MAX_REQUEST_HEADER_BYTES,
     )
 
 
-async def serve_downloads(gateway: Gateway) -> None:
-    server = await create_download_server(gateway)
+async def serve_downloads(gateway: Gateway, additional: tuple[Gateway, ...] = ()) -> None:
+    server = await create_download_server(gateway, additional)
     try:
         config = gateway.config.download
         LOG.info("Download service listening on http://%s:%s%s", config.host, config.port, config.path)
