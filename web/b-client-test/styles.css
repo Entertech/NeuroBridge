@@ -58,7 +58,6 @@ code { color: #9ee7f5; font-family: ui-monospace, SFMono-Regular, Menlo, Consola
 .button-danger { border-color: #ad6374; background: #5b2939; }
 .button-danger:hover:not(:disabled) { border-color: #f08ea4; background: #7a3449; }
 .button-quiet { background: transparent; }
-.button[aria-pressed="true"] { border-color: #78d7ee; background: #17314f; }
 .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .commands, .log-card { padding: 20px; }
@@ -72,8 +71,11 @@ code { color: #9ee7f5; font-family: ui-monospace, SFMono-Regular, Menlo, Consola
 .metric output { display: block; color: #87e0e4; font-size: clamp(1.25rem, 2.1vw, 1.8rem); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .metric p { color: #aabbd2; margin: 3px 0 0; font-size: .7rem; overflow-wrap: anywhere; }
 @media (max-width: 950px) { .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.action-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
-.action-card { min-height: 212px; display: flex; flex-direction: column; gap: 12px; padding: 15px; border: 1px solid rgba(83, 120, 159, .45); border-radius: 12px; background: rgba(5, 17, 31, .4); }
+.action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.action-card { min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 15px; border: 1px solid rgba(83, 120, 159, .45); border-radius: 12px; background: rgba(5, 17, 31, .4); }
+.action-card h4 { margin: 0; font-size: .9rem; }
+.action-card-wide { grid-column: 1 / -1; }
+#sourceRequests > :only-child { grid-column: 1 / -1; }
 .action-card-accent { border-color: rgba(72, 183, 206, .6); background: linear-gradient(145deg, rgba(21, 77, 98, .36), rgba(6, 20, 34, .42)); }
 .action-card > p { margin-bottom: auto; font-size: .82rem; }
 .stream-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; padding: 0; border: 0; color: #c8d5e6; font-size: .81rem; }
@@ -119,7 +121,6 @@ dd { margin: 0; max-width: 170px; color: #f2f7fc; font-size: .82rem; text-align:
 
 @media (max-width: 950px) {
   .action-grid { grid-template-columns: 1fr; }
-  .action-card { min-height: 0; }
 }
 
 @media (max-width: 650px) {

@@ -26,25 +26,15 @@ const elements = {
   algorithmMetrics: document.querySelector("#algorithmMetrics"),
   sourceWindows: document.querySelector("#sourceWindows"),
   sourceWindowTemplate: document.querySelector("#sourceWindowTemplate"),
-  commandSource: document.querySelector("#commandSource"),
+  sourceRequests: document.querySelector("#sourceRequests"),
+  sourceRequestTemplate: document.querySelector("#sourceRequestTemplate"),
   connectionDot: document.querySelector("#connectionDot"),
   connectionLabel: document.querySelector("#connectionLabel"),
-  getStatusButton: document.querySelector("#getStatusButton"),
-  getLatestButton: document.querySelector("#getLatestButton"),
-  subscribeButton: document.querySelector("#subscribeButton"),
-  unsubscribeButton: document.querySelector("#unsubscribeButton"),
-  subscriptionSelect: document.querySelector("#subscriptionSelect"),
-  includeInvalid: document.querySelector("#includeInvalid"),
-  customRequest: document.querySelector("#customRequest"),
-  sendCustomButton: document.querySelector("#sendCustomButton"),
   sourceLogs: document.querySelector("#sourceLogs"),
   sourceLogTemplate: document.querySelector("#sourceLogTemplate"),
 };
 
 document.querySelector("#protocolVersion").textContent = `v${PROTOCOL_VERSION}`;
-elements.customRequest.value = JSON.stringify({
-  protocolVersion: PROTOCOL_VERSION, messageType: "request", requestId: "", action: "getStatus", params: {},
-}, null, 2);
 
 const overviewMetrics = [
   ["放松度", "eeg", ["relaxation"]], ["压力值", "hr", ["pressure"]],
@@ -119,14 +109,7 @@ function createSourcePanel(source) {
 }
 
 const panels = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourcePanel(source)]));
-let requestPanel = panels[configuredSource] || panels.serial;
-if (fixedSource) {
-  document.querySelector('input[name="subscribeStream"][value="status"]').checked = false;
-}
-
-function selectedPanel() {
-  return requestPanel;
-}
+const localPanel = fixedSource ? panels[configuredSource] : panels.serial;
 
 function createConnectionRow(panel) {
   const row = elements.connectionRowTemplate.content.firstElementChild.cloneNode(true);
@@ -136,8 +119,7 @@ function createConnectionRow(panel) {
   const endpoint = row.querySelector("input");
   const connectButton = row.querySelector("[data-connect]");
   const disconnectButton = row.querySelector("[data-disconnect]");
-  const targetButton = row.querySelector("[data-request-target]");
-  if (panel === selectedPanel() && typeof configuredEndpoint === "string") endpoint.value = configuredEndpoint;
+  if (panel === localPanel && typeof configuredEndpoint === "string") endpoint.value = configuredEndpoint;
   endpoint.readOnly = fixedSource;
   connectButton.addEventListener("click", () => {
     if (fixedSource) window.location.reload();
@@ -145,18 +127,10 @@ function createConnectionRow(panel) {
   });
   disconnectButton.addEventListener("click", () => {
     panel.socket?.close(1000, "B-side test console disconnect");
-    refreshConnectionControls();
-  });
-  targetButton.addEventListener("click", () => {
-    requestPanel = panel;
-    refreshConnectionControls();
+    refreshConnectionControls(panel);
   });
   elements.connectionRows.append(row);
-  return { endpoint, connectButton, disconnectButton, targetButton };
-}
-
-for (const panel of Object.values(panels)) {
-  if (!fixedSource || panel.source === configuredSource) panel.connection = createConnectionRow(panel);
+  return { endpoint, connectButton, disconnectButton };
 }
 
 function createRequestId() {
@@ -166,27 +140,19 @@ function createRequestId() {
   return `btest-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function refreshConnectionControls() {
-  const panel = selectedPanel();
+function refreshConnectionControls(panel) {
+  const { endpoint, connectButton, disconnectButton } = panel.connection;
   const state = panel.socket?.readyState;
-  const connected = state === WebSocket.OPEN;
-  const pending = state === WebSocket.CONNECTING || state === WebSocket.CLOSING;
-  elements.connectionLabel.textContent = `${sourceLabels[panel.source]} · ${connected ? "已连接" : pending ? "连接处理中" : "未连接"}`;
-  elements.connectionDot.className = `dot dot-${connected ? "on" : pending ? "wait" : "off"}`;
-  const bothConnected = Object.values(panels).every((item) => item.socket?.readyState === WebSocket.OPEN);
-  for (const item of Object.values(panels)) {
-    if (!item.connection) continue;
-    const { endpoint, connectButton, disconnectButton, targetButton } = item.connection;
-    const itemState = item.socket?.readyState;
-    connectButton.disabled = Boolean(item.socket);
-    connectButton.textContent = itemState === WebSocket.OPEN ? "已连接" : item.socket ? "连接处理中" : "连接";
-    disconnectButton.disabled = itemState !== WebSocket.OPEN && itemState !== WebSocket.CONNECTING;
-    endpoint.disabled = Boolean(item.socket);
-    targetButton.hidden = !bothConnected;
-    targetButton.setAttribute("aria-pressed", String(item === panel));
-  }
-  elements.commandSource.textContent = `当前请求目标：${sourceLabels[panel.source]}`;
-  refreshSubscriptionSelect();
+  connectButton.disabled = Boolean(panel.socket);
+  connectButton.textContent = state === WebSocket.OPEN ? "已连接" : panel.socket ? "连接处理中" : "连接";
+  disconnectButton.disabled = state !== WebSocket.OPEN && state !== WebSocket.CONNECTING;
+  endpoint.disabled = Boolean(panel.socket);
+
+  const active = Object.values(panels).filter((item) => item.socket?.readyState === WebSocket.OPEN);
+  const pending = Object.values(panels).some((item) => item.socket);
+  const labels = active.map((item) => sourceLabels[item.source]).join("、");
+  elements.connectionLabel.textContent = labels ? `${labels} · 已连接` : pending ? "连接处理中" : "未连接";
+  elements.connectionDot.className = `dot dot-${labels ? "on" : pending ? "wait" : "off"}`;
 }
 
 function setSourceStatus(panel, label) {
@@ -227,7 +193,7 @@ function createSourceLog(source) {
 
 const sourceLogs = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourceLog(source)]));
 
-function appendLog(kind, label, body, panel = selectedPanel()) {
+function appendLog(kind, label, body, panel) {
   const { list, entries } = sourceLogs[panel.source];
   const entry = {
     time: timeLabel(), label,
@@ -360,27 +326,28 @@ function updateLiveAlgorithm(data, panel) {
   }
 }
 
-function getCheckedValues(name) {
-  return [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
+function getCheckedValues(section, name) {
+  return [...section.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
 }
 
-function refreshSubscriptionSelect() {
-  const { subscriptions } = selectedPanel();
-  const oldValue = elements.subscriptionSelect.value;
-  elements.subscriptionSelect.replaceChildren();
+function refreshSubscriptionSelect(panel) {
+  const { subscriptions } = panel;
+  const { subscriptionSelect, unsubscribeButton } = panel.requests;
+  const oldValue = subscriptionSelect.value;
+  subscriptionSelect.replaceChildren();
   if (subscriptions.size === 0) {
     const option = new Option("暂无订阅", "");
-    elements.subscriptionSelect.add(option);
-    elements.subscriptionSelect.disabled = true;
-    elements.unsubscribeButton.disabled = true;
+    subscriptionSelect.add(option);
+    subscriptionSelect.disabled = true;
+    unsubscribeButton.disabled = true;
     return;
   }
-  elements.subscriptionSelect.disabled = false;
-  elements.unsubscribeButton.disabled = false;
+  subscriptionSelect.disabled = false;
+  unsubscribeButton.disabled = false;
   for (const [id, streams] of subscriptions) {
-    elements.subscriptionSelect.add(new Option(`${id} · ${streams.join(", ")}`, id));
+    subscriptionSelect.add(new Option(`${id} · ${streams.join(", ")}`, id));
   }
-  elements.subscriptionSelect.value = subscriptions.has(oldValue) ? oldValue : subscriptions.keys().next().value;
+  subscriptionSelect.value = subscriptions.has(oldValue) ? oldValue : subscriptions.keys().next().value;
 }
 
 function resetSource(panel, status, waiting) {
@@ -576,7 +543,7 @@ function handleGatewayMessage(message, panel) {
     panel.subscriptions.set(subscriptionId, data.result.streams || []);
   }
   if (data?.action === "unsubscribe" && subscriptionId) panel.subscriptions.delete(subscriptionId);
-  if (subscriptionId && panel === selectedPanel()) refreshSubscriptionSelect();
+  if (subscriptionId) refreshSubscriptionSelect(panel);
   appendLog("in", "← IN", message, panel);
   if (panel.initialStatusRequestId && data?.requestId === panel.initialStatusRequestId) {
     panel.initialStatusRequestId = null;
@@ -584,7 +551,7 @@ function handleGatewayMessage(message, panel) {
   }
 }
 
-function sendPayload(payload, panel = selectedPanel()) {
+function sendPayload(payload, panel) {
   if (panel.socket?.readyState !== WebSocket.OPEN) {
     appendLog("error", "ERROR", "请先连接该来源的网关。", panel);
     return false;
@@ -594,7 +561,7 @@ function sendPayload(payload, panel = selectedPanel()) {
   return true;
 }
 
-function sendRequest(action, params, panel = selectedPanel()) {
+function sendRequest(action, params, panel) {
   const request = {
     protocolVersion: PROTOCOL_VERSION,
     messageType: "request",
@@ -605,7 +572,7 @@ function sendRequest(action, params, panel = selectedPanel()) {
   return sendPayload(request, panel) ? request.requestId : null;
 }
 
-function connect(panel = selectedPanel()) {
+function connect(panel) {
   if (panel.socket) return;
   let endpoint;
   let socket;
@@ -621,15 +588,13 @@ function connect(panel = selectedPanel()) {
     return;
   }
   panel.socket = socket;
-  requestPanel = panel;
   resetSource(panel, "正在连接", "等待算法数据");
-  refreshConnectionControls();
+  refreshConnectionControls(panel);
   appendLog("system", "SYSTEM", `连接 ${endpoint.href}（子协议 ${SUBPROTOCOL}）`, panel);
 
   socket.addEventListener("open", () => {
-    if (!selectedPanel().socket) requestPanel = panel;
     setSourceStatus(panel, "网关已连接");
-    refreshConnectionControls();
+    refreshConnectionControls(panel);
     appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。", panel);
     const requestId = sendRequest("getStatus", {}, panel);
     if (fixedSource) panel.initialStatusRequestId = requestId;
@@ -647,45 +612,68 @@ function connect(panel = selectedPanel()) {
     panel.initialStatusRequestId = null;
     panel.subscriptions.clear();
     resetSource(panel, "已断开", "等待连接网关");
-    if (panel === selectedPanel()) {
-      requestPanel = Object.values(panels).find((item) => item.socket?.readyState === WebSocket.OPEN) || panel;
-    }
-    refreshConnectionControls();
+    refreshSubscriptionSelect(panel);
+    refreshConnectionControls(panel);
     appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`, panel);
   });
 }
 
-elements.getStatusButton.addEventListener("click", () => sendRequest("getStatus", {}));
-elements.getLatestButton.addEventListener("click", () => {
-  const streams = getCheckedValues("latestStream");
-  if (streams.length === 0) return appendLog("error", "ERROR", "getLatest 至少选择 EEG 或 HR 一个流。");
-  sendRequest("getLatest", { streams });
-});
-elements.subscribeButton.addEventListener("click", () => {
-  const streams = getCheckedValues("subscribeStream");
-  if (streams.length === 0) return appendLog("error", "ERROR", "subscribe 至少选择一个流。");
-  sendRequest("subscribe", { streams, includeInvalid: elements.includeInvalid.checked });
-});
-elements.unsubscribeButton.addEventListener("click", () => {
-  const subscriptionId = elements.subscriptionSelect.value;
-  if (!subscriptionId) return appendLog("error", "ERROR", "没有可取消的订阅。");
-  sendRequest("unsubscribe", { subscriptionId });
-});
-elements.sendCustomButton.addEventListener("click", () => {
-  try {
-    const payload = JSON.parse(elements.customRequest.value);
-    if (payload.requestId === "") payload.requestId = createRequestId();
-    sendPayload(payload);
-  } catch (error) {
-    appendLog("error", "ERROR", `自定义 JSON 无法解析：${error.message}`);
-  }
-});
+function createRequestSection(panel) {
+  const section = elements.sourceRequestTemplate.content.firstElementChild.cloneNode(true);
+  section.dataset.source = panel.source;
+  const title = section.querySelector("[data-request-title]");
+  title.id = `requests-${panel.source}`;
+  title.textContent = sourceLabels[panel.source];
+  section.setAttribute("aria-labelledby", title.id);
+
+  const subscriptionSelect = section.querySelector("[data-subscription]");
+  const unsubscribeButton = section.querySelector("[data-unsubscribe]");
+  const includeInvalid = section.querySelector("[data-include-invalid]");
+  const customRequest = section.querySelector("textarea");
+  customRequest.value = JSON.stringify({
+    protocolVersion: PROTOCOL_VERSION, messageType: "request", requestId: "", action: "getStatus", params: {},
+  }, null, 2);
+  if (fixedSource) section.querySelector('input[name="subscribeStream"][value="status"]').checked = false;
+
+  section.querySelector("[data-get-status]").addEventListener("click", () => sendRequest("getStatus", {}, panel));
+  section.querySelector("[data-get-latest]").addEventListener("click", () => {
+    const streams = getCheckedValues(section, "latestStream");
+    if (streams.length === 0) return appendLog("error", "ERROR", "getLatest 至少选择 EEG 或 HR 一个流。", panel);
+    sendRequest("getLatest", { streams }, panel);
+  });
+  section.querySelector("[data-subscribe]").addEventListener("click", () => {
+    const streams = getCheckedValues(section, "subscribeStream");
+    if (streams.length === 0) return appendLog("error", "ERROR", "subscribe 至少选择一个流。", panel);
+    sendRequest("subscribe", { streams, includeInvalid: includeInvalid.checked }, panel);
+  });
+  unsubscribeButton.addEventListener("click", () => {
+    const subscriptionId = subscriptionSelect.value;
+    if (!subscriptionId) return appendLog("error", "ERROR", "没有可取消的订阅。", panel);
+    sendRequest("unsubscribe", { subscriptionId }, panel);
+  });
+  section.querySelector("[data-send-custom]").addEventListener("click", () => {
+    try {
+      const payload = JSON.parse(customRequest.value);
+      if (payload.requestId === "") payload.requestId = createRequestId();
+      sendPayload(payload, panel);
+    } catch (error) {
+      appendLog("error", "ERROR", `自定义 JSON 无法解析：${error.message}`, panel);
+    }
+  });
+  elements.sourceRequests.append(section);
+  return { subscriptionSelect, unsubscribeButton };
+}
+
 for (const panel of Object.values(panels)) {
+  if (!fixedSource || panel === localPanel) {
+    panel.connection = createConnectionRow(panel);
+    panel.requests = createRequestSection(panel);
+    refreshConnectionControls(panel);
+  }
   resetSource(panel, "未连接", fixedSource && panel.source !== configuredSource ? "等待其他网关接入" : "等待连接网关");
 }
-refreshConnectionControls();
-if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
-  connect();
+if (typeof configuredEndpoint === "string") {
+  connect(localPanel);
 }
 
 window.addEventListener("resize", drawCharts);
