@@ -52,35 +52,38 @@ const overviewMetrics = [
   ["注意力", "eeg", ["attention"]], ["Flow", "eeg", ["flow", "meditation"]],
 ];
 
-function createOverview() {
-  const bySource = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, []]));
-  for (const [name, stream, path, unit = ""] of overviewMetrics) {
-    const card = document.createElement("article");
-    const title = document.createElement("h3");
-    card.className = "metric";
-    title.textContent = name;
-    card.append(title);
-    for (const [source, metrics] of Object.entries(bySource)) {
-      const row = document.createElement("div");
-      const label = document.createElement("div");
-      const state = document.createElement("span");
-      const output = document.createElement("output");
-      const meta = document.createElement("p");
-      row.className = "metric-reading";
-      row.dataset.source = source;
-      label.className = "metric-reading-label";
-      label.append(sourceLabels[source], state);
-      output.setAttribute("aria-label", `${sourceLabels[source]}${name}`);
-      row.append(label, output, meta);
-      card.append(row);
-      metrics.push({ stream, path, unit, row, state, output, meta, timestamp: null });
-    }
-    elements.algorithmMetrics.append(card);
-  }
-  return bySource;
-}
+function createOverview(source) {
+  const section = document.createElement("section");
+  const heading = document.createElement("div");
+  const title = document.createElement("h3");
+  const state = document.createElement("span");
+  const grid = document.createElement("div");
+  section.className = "source-window";
+  section.dataset.source = source;
+  heading.className = "chart-heading";
+  title.id = `overview-${source}`;
+  title.textContent = sourceLabels[source];
+  section.setAttribute("aria-labelledby", title.id);
+  state.className = "source-status";
+  grid.className = "metric-grid";
+  heading.append(title, state);
+  section.append(heading, grid);
+  elements.algorithmMetrics.append(section);
 
-const overviewBySource = createOverview();
+  const metrics = overviewMetrics.map(([name, stream, path, unit = ""]) => {
+    const card = document.createElement("article");
+    const label = document.createElement("h4");
+    const output = document.createElement("output");
+    const meta = document.createElement("p");
+    card.className = "metric";
+    label.textContent = name;
+    output.setAttribute("aria-label", `${sourceLabels[source]}${name}`);
+    card.append(label, output, meta);
+    grid.append(card);
+    return { stream, path, unit, output, meta, timestamp: null };
+  });
+  return { section, state, metrics };
+}
 
 function createSourcePanel(source) {
   const section = elements.sourceWindowTemplate.content.firstElementChild.cloneNode(true);
@@ -109,7 +112,7 @@ function createSourcePanel(source) {
       status: section.querySelector("[data-window-status]") };
   });
   return {
-    source, section, fields, algorithmGroups, overview: overviewBySource[source],
+    source, section, fields, algorithmGroups, overview: createOverview(source),
     socket: null, endpoint: elements.endpoint.value, initialStatusRequestId: null,
     subscriptions: new Map(), channels: {}, bandPower: {}, identity: {}, eegTimestamp: null,
   };
@@ -153,7 +156,7 @@ function refreshConnectionControls() {
 
 function setSourceStatus(panel, label) {
   panel.fields.state.textContent = label;
-  for (const metric of panel.overview) metric.state.textContent = label;
+  panel.overview.state.textContent = label;
 }
 
 function timeLabel(date = new Date()) {
@@ -198,7 +201,7 @@ const algorithmTimeFormat = new Intl.DateTimeFormat("zh-CN", {
 });
 
 function resetOverview(panel, reason) {
-  for (const metric of panel.overview) {
+  for (const metric of panel.overview.metrics) {
     metric.output.textContent = "—";
     metric.meta.textContent = reason;
     metric.timestamp = null;
@@ -237,7 +240,7 @@ function updateAlgorithmOverview(data, panel) {
   if ((data.event !== "data" && !query) || !algorithm || !Number.isFinite(result.timestampMs)) return;
 
   const streams = panel.subscriptions.get(data.subscriptionId) || [];
-  for (const metric of panel.overview) {
+  for (const metric of panel.overview.metrics) {
     const value = metric.path.reduce((node, key) => node?.[key], algorithm);
     if (value === undefined && (result.valid !== false || !streams.includes(metric.stream))) continue;
     if (metric.timestamp !== null && result.timestampMs < metric.timestamp) continue;
@@ -367,9 +370,7 @@ function applyChartView() {
     const unspecified = panel.source === "unknown";
     const showUnknown = unspecified && Boolean(panel.socket);
     panel.section.hidden = unspecified ? !showUnknown || view !== "both" : view !== "both" && panel.source !== view;
-    if (unspecified) {
-      for (const metric of panel.overview) metric.row.hidden = !showUnknown;
-    }
+    if (unspecified) panel.overview.section.hidden = !showUnknown;
   }
   drawCharts();
 }
