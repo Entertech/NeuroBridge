@@ -43,71 +43,81 @@
           <button id="connectButton" class="button button-primary" type="button">连接</button>
           <button id="disconnectButton" class="button button-quiet" type="button" disabled>断开</button>
         </div>
-        <p id="sourceHint" class="hint">独立联调时，请按网关实际配置选择数据来源。此选项只为页面数据标注来源。</p>
+        <p id="sourceHint" class="hint">独立联调时，请按网关实际配置选择数据来源。连接一路后，可切换来源并连接另一台网关。</p>
       </section>
 
       <section class="card algorithm-overview" aria-labelledby="algorithmTitle">
         <div class="chart-heading">
           <h2 id="algorithmTitle">实时算法数据</h2>
-          <span id="algorithmSource" class="source-status">未连接</span>
         </div>
-        <div id="algorithmMetrics" class="metric-grid"></div>
-        <p class="hint">连接网关后，使用<a href="#subscribeButton">连续订阅</a>更新指标，或用 <code>getLatest</code> 查看一次。</p>
+        <div id="algorithmMetrics" class="source-readings"></div>
+        <p class="hint">连接网关后，使用<a href="#subscribeButton">连续订阅</a>更新所选来源，或用 <code>getLatest</code> 查看一次。</p>
         <div class="chart-toolbar">
-          <label class="field" for="chartLayout">图表布局
-            <select id="chartLayout">
-              <option value="side-by-side">并排显示</option>
-              <option value="stacked">上下分开</option>
+          <label class="field" for="chartView">图表窗口
+            <select id="chartView">
+              <option value="both">同时显示两个来源</option>
+              <option value="serial">只看耳机串口</option>
+              <option value="bluetooth">只看头环蓝牙</option>
             </select>
           </label>
         </div>
-        <div id="algorithmCharts" class="visuals" data-layout="side-by-side">
-          <section class="chart-card" aria-labelledby="waveformTitle">
-            <div class="chart-heading"><h3 id="waveformTitle">脑波波形</h3><span id="waveformMeta" class="chart-meta">等待连接网关</span></div>
-            <p class="hint">横轴为样本序号，纵轴为算法幅度原值。</p>
-            <canvas id="waveform" role="img" aria-label="脑波波形图"></canvas>
-          </section>
-          <section class="chart-card" aria-labelledby="spectrumTitle">
-            <div class="chart-heading"><h3 id="spectrumTitle">频段能量</h3><span id="spectrumMeta" class="chart-meta">等待连接网关</span></div>
-            <p class="hint">纵轴为各频段的能量原值。</p>
-            <canvas id="spectrum" role="img" aria-label="脑波频段能量图"></canvas>
-          </section>
-        </div>
-        <div id="deviceDetails" hidden>
-          <dl class="status-list">
-            <div><dt>设备连接</dt><dd data-field="connection">—</dd></div>
-            <div><dt>采集模式</dt><dd data-field="mode">—</dd></div>
-            <div><dt>佩戴状态</dt><dd data-field="wear">—</dd></div>
-            <div><dt>电量</dt><dd data-field="battery">—</dd></div>
-            <div><dt>受试者</dt><dd data-field="subject">—</dd></div>
-            <div><dt>数据时间</dt><dd data-field="timestamp">—</dd></div>
-            <div><dt>EEG 原始字节</dt><dd data-field="eegRaw">—</dd></div>
-            <div><dt>HR 原始字节</dt><dd data-field="hrRaw">—</dd></div>
-          </dl>
-          <div class="latest-summary" data-field="summary">尚未收到网关数据。</div>
-          <details class="algorithm-window">
-            <summary>实时窗口详情</summary>
-            <div class="algorithm-groups">
-              <section class="algorithm-group" data-algorithm="eeg">
-                <div class="chart-heading"><h4>脑电算法</h4><span class="chart-meta" data-window-time>—</span></div>
-                <p class="algorithm-validity" data-window-status>等待实时窗口</p>
-                <dl class="algorithm-metrics"></dl>
-              </section>
-              <section class="algorithm-group" data-algorithm="hr">
-                <div class="chart-heading"><h4>心率算法</h4><span class="chart-meta" data-window-time>—</span></div>
-                <p class="algorithm-validity" data-window-status>等待实时窗口</p>
-                <dl class="algorithm-metrics"></dl>
-              </section>
-            </div>
-          </details>
-        </div>
+        <div id="sourceWindows" class="source-windows" data-view="both"></div>
       </section>
+
+      <template id="sourceWindowTemplate">
+        <section class="source-window">
+          <div class="chart-heading">
+            <h3 data-field="title"></h3>
+            <span class="source-status" data-field="state">未连接</span>
+          </div>
+          <div class="visuals">
+            <section class="chart-card" aria-label="脑波波形">
+              <div class="chart-heading"><h4>脑波波形</h4><span data-field="waveformMeta" class="chart-meta">等待连接网关</span></div>
+              <p class="hint">横轴为样本序号，纵轴为算法幅度原值。</p>
+              <canvas data-field="waveform" role="img" aria-label="脑波波形图"></canvas>
+            </section>
+            <section class="chart-card" aria-label="频段能量">
+              <div class="chart-heading"><h4>频段能量</h4><span data-field="spectrumMeta" class="chart-meta">等待连接网关</span></div>
+              <p class="hint">纵轴为各频段的能量原值。</p>
+              <canvas data-field="spectrum" role="img" aria-label="脑波频段能量图"></canvas>
+            </section>
+          </div>
+          <div data-field="details" hidden>
+            <dl class="status-list">
+              <div><dt>设备连接</dt><dd data-field="connection">—</dd></div>
+              <div><dt>采集模式</dt><dd data-field="mode">—</dd></div>
+              <div><dt>佩戴状态</dt><dd data-field="wear">—</dd></div>
+              <div><dt>电量</dt><dd data-field="battery">—</dd></div>
+              <div><dt>受试者</dt><dd data-field="subject">—</dd></div>
+              <div><dt>数据时间</dt><dd data-field="timestamp">—</dd></div>
+              <div><dt>EEG 原始字节</dt><dd data-field="eegRaw">—</dd></div>
+              <div><dt>HR 原始字节</dt><dd data-field="hrRaw">—</dd></div>
+            </dl>
+            <div class="latest-summary" data-field="summary">尚未收到网关数据。</div>
+            <details class="algorithm-window">
+              <summary>实时窗口详情</summary>
+              <div class="algorithm-groups">
+                <section class="algorithm-group" data-algorithm="eeg">
+                  <div class="chart-heading"><h4>脑电算法</h4><span class="chart-meta" data-window-time>—</span></div>
+                  <p class="algorithm-validity" data-window-status>等待实时窗口</p>
+                  <dl class="algorithm-metrics"></dl>
+                </section>
+                <section class="algorithm-group" data-algorithm="hr">
+                  <div class="chart-heading"><h4>心率算法</h4><span class="chart-meta" data-window-time>—</span></div>
+                  <p class="algorithm-validity" data-window-status>等待实时窗口</p>
+                  <dl class="algorithm-metrics"></dl>
+                </section>
+              </div>
+            </details>
+          </div>
+        </section>
+      </template>
 
       <section class="card commands" aria-labelledby="commandTitle">
         <div class="section-heading">
           <div>
             <h2 id="commandTitle">协议请求</h2>
-            <p>所有操作均按协议生成 <code>requestId</code>，可在日志中对应响应。</p>
+            <p id="commandSource"></p>
           </div>
         </div>
 

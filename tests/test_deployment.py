@@ -872,7 +872,7 @@ class DeploymentTests(unittest.TestCase):
                     )[0]
                     self.assertIn('sendRequest("getStatus", {});', status_subscription_handler)
                 else:
-                    self.assertIn('sendRequest("getStatus", {});', open_handler)
+                    self.assertIn('sendRequest("getStatus", {}, panel);', open_handler)
                 self.assertIn(auto_connect, script)
 
     def test_one_command_update_uses_only_the_existing_checkout(self) -> None:

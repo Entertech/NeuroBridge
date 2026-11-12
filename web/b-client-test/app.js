@@ -2,11 +2,7 @@
 
 const PROTOCOL_VERSION = window.NEUROBRIDGE_VERSION.protocolVersion;
 const SUBPROTOCOL = "neurobridge.v1";
-let socket = null;
-let initialStatusRequestId = null;
-let subscriptions = new Map();
 let logEntries = [];
-let activeSource = null;
 const sourceLabels = { serial: "耳机串口", bluetooth: "头环蓝牙", unknown: "来源未指定" };
 const configuredSource = window.NEUROBRIDGE_B_CLIENT_SOURCE;
 const configuredEndpoint = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
@@ -28,15 +24,11 @@ const elements = {
   endpoint: document.querySelector("#endpoint"),
   dataSource: document.querySelector("#dataSource"),
   sourceHint: document.querySelector("#sourceHint"),
-  deviceDetails: document.querySelector("#deviceDetails"),
-  algorithmSource: document.querySelector("#algorithmSource"),
   algorithmMetrics: document.querySelector("#algorithmMetrics"),
-  waveform: document.querySelector("#waveform"),
-  waveformMeta: document.querySelector("#waveformMeta"),
-  spectrum: document.querySelector("#spectrum"),
-  spectrumMeta: document.querySelector("#spectrumMeta"),
-  algorithmCharts: document.querySelector("#algorithmCharts"),
-  chartLayout: document.querySelector("#chartLayout"),
+  sourceWindows: document.querySelector("#sourceWindows"),
+  sourceWindowTemplate: document.querySelector("#sourceWindowTemplate"),
+  chartView: document.querySelector("#chartView"),
+  commandSource: document.querySelector("#commandSource"),
   connectButton: document.querySelector("#connectButton"),
   disconnectButton: document.querySelector("#disconnectButton"),
   connectionDot: document.querySelector("#connectionDot"),
@@ -58,23 +50,48 @@ const overviewMetrics = [
   ["放松度", "eeg", ["relaxation"]], ["压力值", "hr", ["pressure"]],
   ["心率", "hr", ["hr", "value"], " bpm"], ["HRV", "hr", ["hr", "hrv"]],
   ["注意力", "eeg", ["attention"]], ["Flow", "eeg", ["flow", "meditation"]],
-].map(([name, stream, path, unit = ""]) => {
-  const card = document.createElement("article");
-  const title = document.createElement("h3");
-  const output = document.createElement("output");
-  const meta = document.createElement("p");
-  card.className = "metric";
-  title.textContent = name;
-  card.append(title, output, meta);
-  elements.algorithmMetrics.append(card);
-  return { stream, path, unit, output, meta, timestamp: null };
-});
+];
 
-function createDataPanel() {
+function createMetricRow(source) {
+  const row = document.createElement("section");
+  row.className = "source-reading";
+  row.dataset.source = source;
+  const header = document.createElement("div");
+  header.className = "chart-heading";
+  const name = document.createElement("h3");
+  name.textContent = sourceLabels[source];
+  const state = document.createElement("span");
+  state.className = "source-status";
+  header.append(name, state);
+  const grid = document.createElement("div");
+  grid.className = "metric-grid";
+  row.append(header, grid);
+  elements.algorithmMetrics.append(row);
+  const metrics = overviewMetrics.map(([name, stream, path, unit = ""]) => {
+    const card = document.createElement("article");
+    const title = document.createElement("h4");
+    const output = document.createElement("output");
+    const meta = document.createElement("p");
+    card.className = "metric";
+    title.textContent = name;
+    card.append(title, output, meta);
+    grid.append(card);
+    return { stream, path, unit, output, meta, timestamp: null };
+  });
+  return { row, state, metrics };
+}
+
+function createSourcePanel(source) {
+  const section = elements.sourceWindowTemplate.content.firstElementChild.cloneNode(true);
+  section.dataset.source = source;
   const fields = Object.fromEntries(
-    [...elements.deviceDetails.querySelectorAll("[data-field]")].map((field) => [field.dataset.field, field]),
+    [...section.querySelectorAll("[data-field]")].map((field) => [field.dataset.field, field]),
   );
-  const algorithmGroups = [...elements.deviceDetails.querySelectorAll("[data-algorithm]")].map((section) => {
+  fields.title.textContent = sourceLabels[source];
+  fields.waveform.setAttribute("aria-label", `${sourceLabels[source]}脑波波形图`);
+  fields.spectrum.setAttribute("aria-label", `${sourceLabels[source]}频段能量图`);
+  elements.sourceWindows.append(section);
+  const algorithmGroups = [...section.querySelectorAll("[data-algorithm]")].map((section) => {
     const stream = section.dataset.algorithm;
     const list = section.querySelector(".algorithm-metrics");
     const metrics = algorithmMetrics[stream].map(([key, title]) => {
@@ -90,24 +107,27 @@ function createDataPanel() {
     return { section, stream, metrics, time: section.querySelector("[data-window-time]"),
       status: section.querySelector("[data-window-status]") };
   });
-  return { fields, algorithmGroups, channels: {}, bandPower: {}, identity: {}, eegTimestamp: null };
+  return {
+    source, section, fields, algorithmGroups, overview: createMetricRow(source),
+    socket: null, endpoint: elements.endpoint.value, initialStatusRequestId: null,
+    subscriptions: new Map(), channels: {}, bandPower: {}, identity: {}, eegTimestamp: null,
+  };
 }
 
-const dataPanel = createDataPanel();
-if (typeof configuredEndpoint === "string") {
-  elements.endpoint.value = configuredEndpoint;
-}
+const panels = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourcePanel(source)]));
 if (fixedSource) {
   elements.endpoint.readOnly = true;
   elements.dataSource.value = configuredSource;
   elements.dataSource.disabled = true;
   document.querySelector('input[name="subscribeStream"][value="status"]').checked = false;
-  elements.sourceHint.textContent = "数据来源由本机网关配置提供。";
+  elements.sourceHint.textContent = "本机页面使用网关配置的来源。两路联调可在独立页面分别连接两个网关地址。";
 }
 
-function isConnected() {
-  return socket && socket.readyState === WebSocket.OPEN;
+function selectedPanel() {
+  return panels[elements.dataSource.value];
 }
+
+if (typeof configuredEndpoint === "string") selectedPanel().endpoint = configuredEndpoint;
 
 function createRequestId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -116,22 +136,32 @@ function createRequestId() {
   return `btest-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function setConnectionState(state, label) {
-  elements.connectionLabel.textContent = label;
-  elements.connectionDot.className = `dot dot-${state}`;
-  elements.connectButton.disabled = state === "on" || state === "wait";
-  elements.disconnectButton.disabled = state === "off";
-  elements.endpoint.disabled = state !== "off";
-  elements.dataSource.disabled = fixedSource || state !== "off";
+function refreshConnectionControls() {
+  const panel = selectedPanel();
+  const state = panel.socket?.readyState;
+  const connected = state === WebSocket.OPEN;
+  const pending = state === WebSocket.CONNECTING || state === WebSocket.CLOSING;
+  elements.connectionLabel.textContent = `${sourceLabels[panel.source]} · ${connected ? "已连接" : pending ? "连接处理中" : "未连接"}`;
+  elements.connectionDot.className = `dot dot-${connected ? "on" : pending ? "wait" : "off"}`;
+  elements.connectButton.disabled = connected || pending;
+  elements.disconnectButton.disabled = state !== WebSocket.OPEN && state !== WebSocket.CONNECTING;
+  elements.endpoint.disabled = connected || pending;
+  elements.commandSource.textContent = `当前请求目标：${sourceLabels[panel.source]}`;
+  refreshSubscriptionSelect();
+}
+
+function setSourceStatus(panel, label) {
+  panel.fields.state.textContent = label;
+  panel.overview.state.textContent = label;
 }
 
 function timeLabel(date = new Date()) {
   return date.toLocaleTimeString("zh-CN", { hour12: false });
 }
 
-function appendLog(kind, label, body) {
+function appendLog(kind, label, body, panel = selectedPanel()) {
   const entry = {
-    time: timeLabel(), kind, label,
+    time: timeLabel(), kind, label, source: sourceLabels[panel.source],
     body: typeof body === "string" ? body : JSON.stringify(body, (key, value) =>
       key === "bytesBase64" ? undefined : value, 2),
   };
@@ -140,7 +170,7 @@ function appendLog(kind, label, body) {
   node.className = `log-entry ${kind}`;
   const time = document.createElement("span");
   time.className = "log-time";
-  time.textContent = entry.time;
+  time.textContent = `${entry.time} ${entry.source}`;
   const tag = document.createElement("span");
   tag.className = "log-tag";
   tag.textContent = label;
@@ -166,8 +196,8 @@ const algorithmTimeFormat = new Intl.DateTimeFormat("zh-CN", {
   hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3, hour12: false,
 });
 
-function resetOverview(reason) {
-  for (const metric of overviewMetrics) {
+function resetOverview(panel, reason) {
+  for (const metric of panel.overview.metrics) {
     metric.output.textContent = "—";
     metric.meta.textContent = reason;
     metric.timestamp = null;
@@ -175,14 +205,14 @@ function resetOverview(reason) {
 }
 
 function resetAlgorithmReadings(panel, reason) {
-  resetOverview(reason);
+  resetOverview(panel, reason);
   for (const group of panel.algorithmGroups) showAlgorithmWindow(group, "waiting", null, reason);
   panel.channels = {};
   panel.bandPower = {};
   panel.eegTimestamp = null;
-  elements.waveformMeta.textContent = reason;
-  elements.spectrumMeta.textContent = reason;
-  drawCharts();
+  panel.fields.waveformMeta.textContent = reason;
+  panel.fields.spectrumMeta.textContent = reason;
+  drawSourceCharts(panel);
 }
 
 function updateAlgorithmOverview(data, panel) {
@@ -195,8 +225,7 @@ function updateAlgorithmOverview(data, panel) {
   }
   Object.assign(panel.identity, identity);
   const mode = panel.identity.mode;
-  const source = sourceLabels[activeSource];
-  elements.algorithmSource.textContent = `${source}${mode === "live" ? " · 实时" : mode === "replay" ? " · 录播" : ""}`;
+  if (mode === "live" || mode === "replay") setSourceStatus(panel, mode === "live" ? "实时" : "录播");
   const connection = result.payload?.status?.connectionState ?? result.connectionState;
   if (data.event === "replayEnded" || (mode === "live" && connection && connection !== "connected")) {
     resetAlgorithmReadings(panel, data.event === "replayEnded" ? "等待下一轮录播" : "等待设备接入");
@@ -206,8 +235,8 @@ function updateAlgorithmOverview(data, panel) {
   const query = data.action === "getLatest";
   if ((data.event !== "data" && !query) || !algorithm || !Number.isFinite(result.timestampMs)) return;
 
-  const streams = subscriptions.get(data.subscriptionId) || [];
-  for (const metric of overviewMetrics) {
+  const streams = panel.subscriptions.get(data.subscriptionId) || [];
+  for (const metric of panel.overview.metrics) {
     const value = metric.path.reduce((node, key) => node?.[key], algorithm);
     if (value === undefined && (result.valid !== false || !streams.includes(metric.stream))) continue;
     if (metric.timestamp !== null && result.timestampMs < metric.timestamp) continue;
@@ -250,7 +279,7 @@ function updateLiveAlgorithm(data, panel) {
   const algorithm = payload?.algorithm;
   if (data?.event !== "data" || result.mode !== "live" || !algorithm || typeof algorithm !== "object") return;
 
-  const requestedStreams = subscriptions.get(data.subscriptionId) || [];
+  const requestedStreams = panel.subscriptions.get(data.subscriptionId) || [];
   const valid = result.valid === true;
   const reasons = Array.isArray(payload.invalidReasons) ? payload.invalidReasons.join("、") : "";
   for (const group of panel.algorithmGroups) {
@@ -267,6 +296,7 @@ function getCheckedValues(name) {
 }
 
 function refreshSubscriptionSelect() {
+  const { subscriptions } = selectedPanel();
   const oldValue = elements.subscriptionSelect.value;
   elements.subscriptionSelect.replaceChildren();
   if (subscriptions.size === 0) {
@@ -284,14 +314,13 @@ function refreshSubscriptionSelect() {
   elements.subscriptionSelect.value = subscriptions.has(oldValue) ? oldValue : subscriptions.keys().next().value;
 }
 
-function setPanelSource(source) {
-  activeSource = source;
-  elements.algorithmSource.textContent = source === null ? "未连接" : sourceLabels[source];
-  elements.deviceDetails.hidden = source === null;
-  for (const value of elements.deviceDetails.querySelectorAll(".status-list dd")) value.textContent = "—";
-  dataPanel.fields.summary.textContent = "尚未收到网关数据。";
-  dataPanel.identity = {};
-  resetAlgorithmReadings(dataPanel, source === null ? "等待连接网关" : "等待算法数据");
+function resetSource(panel, status, waiting) {
+  panel.fields.details.hidden = panel.socket === null;
+  for (const value of panel.fields.details.querySelectorAll(".status-list dd")) value.textContent = "—";
+  panel.fields.summary.textContent = "尚未收到网关数据。";
+  panel.identity = {};
+  setSourceStatus(panel, status);
+  resetAlgorithmReadings(panel, waiting);
 }
 
 function updateSnapshot(data, panel) {
@@ -319,22 +348,32 @@ function updateSnapshot(data, panel) {
   else if (data.event) fields.summary.textContent = `事件：${data.event}`;
 }
 
+function drawSourceCharts(panel) {
+  if (panel.section.hidden) return;
+  drawWaveform(panel.fields.waveform, panel.channels);
+  drawSpectrum(panel.fields.spectrum, panel.bandPower);
+}
+
 function drawCharts() {
-  drawWaveform(elements.waveform, dataPanel.channels);
-  drawSpectrum(elements.spectrum, dataPanel.bandPower);
+  for (const panel of Object.values(panels)) drawSourceCharts(panel);
 }
 
-const chartLayoutKey = "neurobridge-chart-layout";
-function setChartLayout(layout) {
-  elements.chartLayout.value = layout;
-  elements.algorithmCharts.dataset.layout = layout;
-}
-
-elements.chartLayout.addEventListener("change", () => {
-  const layout = elements.chartLayout.value;
-  setChartLayout(layout);
+const chartViewKey = "neurobridge-chart-view";
+function applyChartView() {
+  const view = elements.chartView.value;
+  elements.sourceWindows.dataset.view = view;
+  for (const panel of Object.values(panels)) {
+    const unspecified = panel.source === "unknown";
+    const showUnknown = unspecified && Boolean(panel.socket);
+    panel.section.hidden = unspecified ? !showUnknown || view !== "both" : view !== "both" && panel.source !== view;
+    panel.overview.row.hidden = unspecified && !showUnknown;
+  }
   drawCharts();
-  try { window.localStorage.setItem(chartLayoutKey, layout); } catch { /* The current page still applies the choice. */ }
+}
+
+elements.chartView.addEventListener("change", () => {
+  applyChartView();
+  try { window.localStorage.setItem(chartViewKey, elements.chartView.value); } catch { /* The current page still applies the choice. */ }
 });
 
 function fitCanvas(canvas) {
@@ -431,7 +470,7 @@ function updateVisuals(data, panel) {
   const result = data?.result || data;
   const eeg = result?.payload?.algorithm?.eeg;
   const invalid = result?.valid === false;
-  const eegSubscribed = subscriptions.get(data?.subscriptionId)?.includes("eeg");
+  const eegSubscribed = panel.subscriptions.get(data?.subscriptionId)?.includes("eeg");
   if (!eeg && !(invalid && eegSubscribed && result.payload?.algorithm)) return;
   if (panel.eegTimestamp !== null && result.timestampMs < panel.eegTimestamp) return;
   panel.eegTimestamp = result.timestampMs ?? null;
@@ -446,60 +485,55 @@ function updateVisuals(data, panel) {
       if (values.some(Number.isFinite)) panel.channels[channel] = values;
     }
   }
-  elements.waveformMeta.replaceChildren(...Object.entries(panel.channels).map(([channel, values]) => {
+  panel.fields.waveformMeta.replaceChildren(...Object.entries(panel.channels).map(([channel, values]) => {
     const label = document.createElement("span");
     label.className = `channel-${channel}`;
     label.textContent = `${channelStyles[channel].label} · ${values.length} 点`;
     return label;
   }));
-  if (!elements.waveformMeta.childElementCount) elements.waveformMeta.textContent = invalid ? "无效窗口" : "未提供波形";
-  elements.spectrumMeta.textContent = invalid ? "无效窗口" : Object.values(panel.bandPower).some(Number.isFinite)
+  if (!panel.fields.waveformMeta.childElementCount) panel.fields.waveformMeta.textContent = invalid ? "无效窗口" : "未提供波形";
+  panel.fields.spectrumMeta.textContent = invalid ? "无效窗口" : Object.values(panel.bandPower).some(Number.isFinite)
     ? readableTimestamp(result.timestampMs) : "未提供频段能量";
-  drawCharts();
+  drawSourceCharts(panel);
 }
 
-function handleGatewayMessage(message) {
+function handleGatewayMessage(message, panel) {
   if (!message || typeof message !== "object") return;
   const data = message.data;
-  const panel = activeSource === null ? null : dataPanel;
   if (message.code !== 200) {
-    if (panel && message.message) panel.fields.summary.textContent = message.message;
-    appendLog("error", `← ${message.code ?? "ERR"}`, message);
+    if (message.message) panel.fields.summary.textContent = message.message;
+    appendLog("error", `← ${message.code ?? "ERR"}`, message, panel);
     return;
   }
-  if (panel) {
-    updateAlgorithmOverview(data, panel);
-    updateSnapshot(data, panel);
-    updateLiveAlgorithm(data, panel);
-    updateVisuals(data, panel);
-  }
+  updateAlgorithmOverview(data, panel);
+  updateSnapshot(data, panel);
+  updateLiveAlgorithm(data, panel);
+  updateVisuals(data, panel);
 
-  if (data?.action === "subscribe" && data.result?.subscriptionId) {
-    subscriptions.set(data.result.subscriptionId, data.result.streams || []);
-    refreshSubscriptionSelect();
+  const subscriptionId = data?.result?.subscriptionId;
+  if (data?.action === "subscribe" && subscriptionId) {
+    panel.subscriptions.set(subscriptionId, data.result.streams || []);
   }
-  if (data?.action === "unsubscribe" && data.result?.subscriptionId) {
-    subscriptions.delete(data.result.subscriptionId);
-    refreshSubscriptionSelect();
-  }
-  appendLog("in", "← IN", message);
-  if (initialStatusRequestId && data?.requestId === initialStatusRequestId) {
-    initialStatusRequestId = null;
-    sendRequest("subscribe", { streams: ["status"] });
+  if (data?.action === "unsubscribe" && subscriptionId) panel.subscriptions.delete(subscriptionId);
+  if (subscriptionId && panel === selectedPanel()) refreshSubscriptionSelect();
+  appendLog("in", "← IN", message, panel);
+  if (panel.initialStatusRequestId && data?.requestId === panel.initialStatusRequestId) {
+    panel.initialStatusRequestId = null;
+    sendRequest("subscribe", { streams: ["status"] }, panel);
   }
 }
 
-function sendPayload(payload) {
-  if (!isConnected()) {
-    appendLog("error", "ERROR", "尚未建立 WebSocket 连接，无法发送请求。");
+function sendPayload(payload, panel = selectedPanel()) {
+  if (panel.socket?.readyState !== WebSocket.OPEN) {
+    appendLog("error", "ERROR", "请先连接该来源的网关。", panel);
     return false;
   }
-  socket.send(JSON.stringify(payload));
-  appendLog("out", "OUT →", payload);
+  panel.socket.send(JSON.stringify(payload));
+  appendLog("out", "OUT →", payload, panel);
   return true;
 }
 
-function sendRequest(action, params) {
+function sendRequest(action, params, panel = selectedPanel()) {
   const request = {
     protocolVersion: PROTOCOL_VERSION,
     messageType: "request",
@@ -507,58 +541,72 @@ function sendRequest(action, params) {
     action,
     params,
   };
-  return sendPayload(request) ? request.requestId : null;
+  return sendPayload(request, panel) ? request.requestId : null;
 }
 
 function connect() {
-  if (socket) return;
-  const endpoint = elements.endpoint.value.trim();
-  const source = elements.dataSource.value;
-  if (!endpoint.startsWith("ws://") && !endpoint.startsWith("wss://")) {
-    appendLog("error", "ERROR", "地址必须以 ws:// 或 wss:// 开头。");
-    return;
-  }
+  const panel = selectedPanel();
+  if (panel.socket) return;
+  let endpoint;
+  let socket;
   try {
-    setConnectionState("wait", "正在连接");
-    appendLog("system", "SYSTEM", `连接 ${endpoint}（子协议 ${SUBPROTOCOL}）`);
-    socket = new WebSocket(endpoint, SUBPROTOCOL);
-    setPanelSource(source);
+    endpoint = new URL(panel.endpoint.trim());
+    if (!["ws:", "wss:"].includes(endpoint.protocol)) throw new Error("地址必须以 ws:// 或 wss:// 开头。");
+    if (Object.values(panels).some((other) => other.socket?.url === endpoint.href)) {
+      throw new Error("此网关已关联其他来源，请为当前来源填写独立的 WebSocket 地址。");
+    }
+    socket = new WebSocket(endpoint.href, SUBPROTOCOL);
   } catch (error) {
-    setConnectionState("off", "未连接");
-    appendLog("error", "ERROR", error.message);
+    appendLog("error", "ERROR", error.message, panel);
     return;
   }
+  panel.socket = socket;
+  resetSource(panel, "正在连接", "等待算法数据");
+  if (panel.source === "unknown") elements.chartView.value = "both";
+  applyChartView();
+  refreshConnectionControls();
+  appendLog("system", "SYSTEM", `连接 ${endpoint.href}（子协议 ${SUBPROTOCOL}）`, panel);
+
   socket.addEventListener("open", () => {
-    setConnectionState("on", "已连接");
-    appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。" );
-    const requestId = sendRequest("getStatus", {});
-    if (fixedSource) initialStatusRequestId = requestId;
+    setSourceStatus(panel, "网关已连接");
+    refreshConnectionControls();
+    appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。", panel);
+    const requestId = sendRequest("getStatus", {}, panel);
+    if (fixedSource) panel.initialStatusRequestId = requestId;
   });
   socket.addEventListener("message", (event) => {
     try {
-      handleGatewayMessage(JSON.parse(event.data));
+      handleGatewayMessage(JSON.parse(event.data), panel);
     } catch {
-      appendLog("error", "ERROR", `收到非 JSON 文本帧：${event.data}`);
+      appendLog("error", "ERROR", `无法读取网关消息（${event.data.length} 字符）。`, panel);
     }
   });
-  socket.addEventListener("error", () => appendLog("error", "ERROR", "WebSocket 发生网络错误或网关拒绝了子协议。"));
+  socket.addEventListener("error", () => appendLog("error", "ERROR", "WebSocket 发生网络错误或网关拒绝了子协议。", panel));
   socket.addEventListener("close", (event) => {
-    setConnectionState("off", "已断开");
-    setPanelSource(null);
-    initialStatusRequestId = null;
-    subscriptions.clear();
-    refreshSubscriptionSelect();
-    appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`);
-    socket = null;
+    panel.socket = null;
+    panel.initialStatusRequestId = null;
+    panel.subscriptions.clear();
+    resetSource(panel, "已断开", "等待连接网关");
+    applyChartView();
+    refreshConnectionControls();
+    appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`, panel);
   });
 }
 
+elements.dataSource.addEventListener("change", () => {
+  elements.endpoint.value = selectedPanel().endpoint;
+  refreshConnectionControls();
+});
+elements.endpoint.addEventListener("input", () => {
+  selectedPanel().endpoint = elements.endpoint.value;
+});
 elements.connectButton.addEventListener("click", () => {
   if (fixedSource) window.location.reload();
   else connect();
 });
 elements.disconnectButton.addEventListener("click", () => {
-  if (socket) socket.close(1000, "B-side test console disconnect");
+  selectedPanel().socket?.close(1000, "B-side test console disconnect");
+  refreshConnectionControls();
 });
 elements.getStatusButton.addEventListener("click", () => sendRequest("getStatus", {}));
 elements.getLatestButton.addEventListener("click", () => {
@@ -590,7 +638,7 @@ elements.clearLogButton.addEventListener("click", () => {
   elements.log.replaceChildren();
 });
 elements.copyLogButton.addEventListener("click", async () => {
-  const text = logEntries.map((entry) => `[${entry.time}] ${entry.label}\n${entry.body}`).join("\n\n");
+  const text = logEntries.map((entry) => `[${entry.time}] ${entry.source} ${entry.label}\n${entry.body}`).join("\n\n");
   try {
     await navigator.clipboard.writeText(text);
     appendLog("system", "SYSTEM", "协议日志已复制到剪贴板。");
@@ -599,12 +647,16 @@ elements.copyLogButton.addEventListener("click", async () => {
   }
 });
 
-let savedChartLayout;
-try { savedChartLayout = window.localStorage.getItem(chartLayoutKey); } catch { /* Storage may be disabled. */ }
-const defaultChartLayout = window.matchMedia("(max-width: 700px)").matches ? "stacked" : "side-by-side";
-setChartLayout(savedChartLayout === "stacked" || savedChartLayout === "side-by-side" ? savedChartLayout : defaultChartLayout);
-setPanelSource(null);
-refreshSubscriptionSelect();
+let savedChartView;
+try { savedChartView = window.localStorage.getItem(chartViewKey); } catch { /* Storage may be disabled. */ }
+const defaultView = fixedSource ? configuredSource : "both";
+elements.chartView.value = ["both", "serial", "bluetooth"].includes(savedChartView) ? savedChartView : defaultView;
+for (const panel of Object.values(panels)) {
+  resetSource(panel, "未连接", fixedSource && panel.source !== configuredSource ? "等待其他网关接入" : "等待连接网关");
+}
+elements.endpoint.value = selectedPanel().endpoint;
+applyChartView();
+refreshConnectionControls();
 appendLog("system", "SYSTEM", configuredEndpoint
   ? `网关联调台已就绪；已使用本机服务地址 ${elements.endpoint.value}，不会发送任何保活帧。`
   : "网关联调台已就绪；不会发送任何保活帧。");
