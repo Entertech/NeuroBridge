@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import replace
 import json
 from pathlib import Path
+import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, patch
+
+import websockets
 
 from neurobridge.adapters.northbound.publisher import CollectingNorthboundSink, GatewayNorthboundSink
 from neurobridge.adapters.parsers import HeadbandBleParser, HeadsetRev181Parser
@@ -14,12 +20,15 @@ from neurobridge.adapters.storage import SegmentedRecordingRepository
 from neurobridge.application.service import ApplicationService
 from neurobridge.application.snapshots import InMemoryLatestSnapshotStore
 from neurobridge.business.gateway import ClientSession, Gateway
-from neurobridge.bootstrap.container import _ApplicationPipelineAdapter
+from neurobridge.ble.flowtime import FF21, FF31, FF51
+from neurobridge.bootstrap.container import _ApplicationPipelineAdapter, build_container
 from neurobridge.config import load
 from neurobridge.domain.algorithm import AlgorithmResult, AlgorithmState
 from neurobridge.domain.raw import RawChunk
 from neurobridge.domain.status import ConnectionState, DataState, DeviceConnectionEvent
+from neurobridge.northbound.websocket import SUBPROTOCOL, create_server
 from neurobridge.ports.raw_source import SourceStatus
+from neurobridge.profiles import RuntimePlatform
 
 
 def headset_frame(sequence: int = 1) -> bytes:
@@ -41,6 +50,13 @@ class FakeAlgorithm:
 
     async def close(self) -> None:
         self.closed = True
+
+    @property
+    def available(self) -> bool:
+        return hasattr(self, "session") and not self.closed
+
+    async def stop(self) -> None:
+        await self.close()
 
 
 class FakeUnavailableAlgorithm:
@@ -74,6 +90,102 @@ class SlowAlgorithm(FakeAlgorithm):
 
 
 class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_windows_ble_headband_to_live_websocket_and_recording(self) -> None:
+        started = asyncio.Event()
+        notifications = {}
+        commands = []
+        candidate = SimpleNamespace(
+            name="Flowtime Headband", rssi=-40,
+            metadata={"uuids": ["0000ff10-1212-abcd-1523-785feabcd123"]},
+        )
+
+        class FakeClient:
+            def __init__(self, device, *, disconnected_callback):
+                self.services = SimpleNamespace(get_characteristic=lambda _: None)
+                self.is_connected = False
+                self.device = device
+
+            async def connect(self):
+                self.is_connected = True
+
+            async def start_notify(self, characteristic, callback):
+                notifications[characteristic] = callback
+
+            async def write_gatt_char(self, characteristic, command, *, response):
+                commands.append((characteristic, command, response))
+                if command == b"\x05":
+                    started.set()
+
+            async def disconnect(self):
+                self.is_connected = False
+
+        scanner = SimpleNamespace(discover=AsyncMock(return_value=[candidate]))
+        bleak = SimpleNamespace(BleakScanner=scanner, BleakClient=FakeClient)
+        root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "gateway.toml"
+            template = (root / "windows/gateway.toml.example").read_text(encoding="utf-8")
+            config_path.write_text(template.replace('profile = "windows_headset_local"', 'profile = "windows_headband_local"')
+                                   .replace('type = "serial"', 'type = "bluetooth"'), encoding="utf-8")
+            config = load(config_path)
+            config = replace(config, server=replace(config.server, port=0),
+                             recording=replace(config.recording, directory=Path(directory) / "recordings"))
+
+            with patch.dict(sys.modules, {"bleak": bleak}), patch(
+                "neurobridge.bootstrap.container.AffectiveSdkAlgorithmEngine", return_value=FakeAlgorithm(),
+            ):
+                container = build_container(config, RuntimePlatform("windows", "x86_64"))
+                gateway = container.gateway
+                adapter = container.device_adapter
+                await gateway.start()
+                server = await create_server(gateway, container.northbound_controller)
+                port = server.sockets[0].getsockname()[1]
+                adapter_task = None
+                try:
+                    async with websockets.connect(
+                        f"ws://127.0.0.1:{port}{config.server.path}", subprotocols=[SUBPROTOCOL],
+                        origin=f"http://127.0.0.1:{config.local_ui.port}", ping_interval=None,
+                    ) as ws:
+                        async def request(action, params):
+                            await ws.send(json.dumps({"protocolVersion": "1.0", "messageType": "request",
+                                                      "requestId": action, "action": action, "params": params}))
+                            return json.loads(await asyncio.wait_for(ws.recv(), 2))
+
+                        offline = await request("getLatest", {})
+                        self.assertEqual(offline["code"], 409)
+                        self.assertIn("Bluetooth headband", offline["message"])
+                        self.assertIsNone(gateway.store.recording_id)
+                        adapter_task = asyncio.create_task(adapter.run())
+                        await asyncio.wait_for(started.wait(), 2)
+                        status = (await request("getStatus", {}))["data"]["result"]
+                        self.assertEqual((status["connectionState"], status["mode"]), ("connected", "live"))
+                        subscribed = await request("subscribe", {"streams": ["eeg", "eeg.raw", "hr.raw"]})
+                        self.assertEqual(subscribed["code"], 200)
+                        eeg, hr = bytes(range(20)), b"\x48"
+                        timestamp_ms = (int(time.time() * 1000) // 600 + 1) * 600
+                        with patch("neurobridge.device.packet.wall_clock_ms", return_value=timestamp_ms):
+                            for characteristic, value in ((FF31, eeg), (FF51, hr)):
+                                notifications[characteristic](0, bytearray(value))
+                            event = json.loads(await asyncio.wait_for(ws.recv(), 3))["data"]
+                        self.assertEqual(event["mode"], "live")
+                        self.assertEqual(event["payload"]["algorithm"]["attention"], 42)
+                        self.assertEqual(base64.b64decode(event["payload"]["eegRaw"]["bytesBase64"]), eeg)
+                        self.assertEqual(base64.b64decode(event["payload"]["hrRaw"]["bytesBase64"]), hr)
+                finally:
+                    server.close()
+                    await server.wait_closed()
+                    if adapter_task is not None:
+                        adapter_task.cancel()
+                        await asyncio.gather(adapter_task, return_exceptions=True)
+                        await adapter.stop()
+                    await gateway.stop()
+
+            self.assertEqual(commands, [(FF21, b"\x05", True), (FF21, b"\x06", True)])
+            records = [json.loads(line) for path in config.recording.directory.glob("sessions/*/*/*.jsonl")
+                       for line in path.read_text(encoding="utf-8").splitlines()]
+            self.assertIn("raw.device_frame", {row["recordType"] for row in records})
+            self.assertIn("algorithm.result", {row["recordType"] for row in records})
+
     async def test_existing_serial_stream_opens_raw_pipeline_when_algorithm_is_unavailable(self) -> None:
         class Source:
             existing_stream = True

@@ -132,6 +132,18 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertEqual(helper.create_config(self.root).read_text(encoding='utf-8'), original)
         self.assertEqual(helper.validate_config(path).serial.device, 'COM12')
 
+    def test_bluetooth_config_opens_the_source_aware_console_without_com_discovery(self):
+        path = helper.create_config(self.root)
+        self.assertTrue(helper.page_url(helper.validate_config(path)).endswith('/capture/'))
+        bluetooth = path.read_text(encoding='utf-8').replace('profile = "windows_headset_local"',
+                                                            'profile = "windows_headband_local"')
+        path.write_text(bluetooth.replace('type = "serial"', 'type = "bluetooth"'), encoding='utf-8')
+        config = helper.validate_config(path)
+        self.assertEqual(helper.page_url(config), 'http://127.0.0.1:8080/')
+        with patch.object(helper, 'serial_summary') as serial_summary:
+            helper.show_source(config)
+        serial_summary.assert_not_called()
+
     def test_logging_info_uses_effective_custom_path_without_exporting_config(self):
         import json
         path = helper.create_config(self.root)

@@ -18,9 +18,18 @@ port = 8080
 mode = "static"
 
 [data_source]
+# For a BLE headband set profile = "windows_headband_local" at the top
+# and type = "bluetooth" here, then restart the gateway.
 type = "serial"
 window_interval_ms = 600
 stale_after_ms = 1800
+
+[ble]
+enabled = true
+device_name = "Flowtime Headband"
+model_nbr_uuid = "0000ff10-1212-abcd-1523-785feabcd123"
+scan_timeout_seconds = 5
+reconnect_delay_seconds = 3
 
 [serial]
 device = "auto"

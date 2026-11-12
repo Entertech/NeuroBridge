@@ -32,8 +32,11 @@
 | `ubuntu_headband_wired` | Ubuntu x86_64 | 蓝牙头环 | BLE | 旧 B 端隔离专网 | 支持 | 支持 | M2 兼容回归 |
 | `kylin_headset_local` | 银河麒麟桌面操作系统 V10 x86_64 | USB 串口耳机 | POSIX TTY | `127.0.0.1` 本机页面 | 支持 | **不支持** | M1 当前交付 |
 | `windows_headset_local` | Windows 7 x86_64 及以上 | USB 串口耳机 | Windows COM | `127.0.0.1` 本机页面 | 支持 | **不支持** | M3 后续扩展 |
+| `windows_headband_local` | Windows 10/11 x86_64 | 蓝牙头环 | BLE | `127.0.0.1` 本机页面 | 支持 | **不支持** | 源码候选，待目标机验收 |
 
 系统与数据源的关系由安装包和 Deployment Profile 固定。设备扫描结果只用于寻找当前 Profile 允许的设备，不能触发 Profile、传输或接入方式切换。
+
+Windows 通过修改部署配置后重启来选择设备 Profile，一次运行只采集一路。头环模式复用共享 Bleak 设备适配器、头环解析器、算法与分段持久化。现有 WebSocket 消息继续使用 `mode` 表示实时或录播。联调页从本机 HTTP 运行配置获取设备来源，独立 B 端页面由操作员按网关配置选择来源，两种来源各自显示设备状态和数据。
 
 ### 2.2 本文不解决的事项
 

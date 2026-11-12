@@ -411,7 +411,7 @@ try {
             Write-Host ''
             Write-Host '1. 一键准备并启动（默认开机自启）'
             Write-Host '2. 直接启动网关'
-            Write-Host '4. 检查当前 USB / COM 串口'
+            Write-Host '4. 检查当前采集来源（耳机串口 / 头环蓝牙）'
             Write-Host '5. 创建或校验项目配置（保留已有设置）'
             Write-Host '6. 准备 / 修复 Windows 算法程序'
             Write-Host '7. 导出诊断摘要（不含原始数据和日志正文）'

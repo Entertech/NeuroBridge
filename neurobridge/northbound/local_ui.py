@@ -64,7 +64,7 @@ def resolve_ui_directory(config: GatewayConfig) -> Path:
     raise FileNotFoundError("Local browser UI assets were not found; configure local_ui.directory")
 
 
-def _response(config: GatewayConfig, status: int, reason: str, content_type: str, body: bytes) -> bytes:
+def _response(config: GatewayConfig, status: int, reason: str, content_type: str, body: bytes, *, location: str | None = None) -> bytes:
     websocket_origin = f"ws://{config.server.host}:{config.server.port}"
     headers = (
         f"HTTP/1.1 {status} {reason}",
@@ -75,6 +75,7 @@ def _response(config: GatewayConfig, status: int, reason: str, content_type: str
         "X-Content-Type-Options: nosniff",
         "X-Frame-Options: DENY",
         "Referrer-Policy: no-referrer",
+        *((f"Location: {location}",) if location else ()),
         f"Content-Security-Policy: default-src 'self'; connect-src {websocket_origin}; "
         "script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; "
         "base-uri 'none'; frame-ancestors 'none'",
@@ -87,6 +88,9 @@ def _runtime_config(config: GatewayConfig) -> bytes:
     return (
         "window.NEUROBRIDGE_B_CLIENT_ENDPOINT = "
         + json.dumps(endpoint, ensure_ascii=True)
+        + ";\n"
+        + "window.NEUROBRIDGE_B_CLIENT_SOURCE = "
+        + json.dumps(config.data_source.type, ensure_ascii=True)
         + ";\n"
     ).encode("ascii")
 
@@ -137,6 +141,11 @@ async def _handle_client(
             await writer.drain()
             return
         path = unquote(parsed.path)
+        if config.profile == "windows_headband_local" and path in {"/capture", "/capture/", "/capture/index.html"}:
+            # The capture viewer restores serial frames from paired EEG/HR packets.
+            writer.write(_response(config, 302, "Found", "text/plain; charset=utf-8", b"", location="/"))
+            await writer.drain()
+            return
         if path == "/runtime-config.js":
             body = _runtime_config(config)
             content_type = "text/javascript; charset=utf-8"

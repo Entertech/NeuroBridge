@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 import socket
 import tempfile
@@ -9,6 +10,7 @@ import unittest
 from neurobridge.config import (
     AlgorithmConfig,
     BleConfig,
+    DataSourceConfig,
     GatewayConfig,
     LocalUiConfig,
     RecordingConfig,
@@ -73,6 +75,18 @@ class LocalUiIntegrationTests(unittest.IsolatedAsyncioTestCase):
             f'window.NEUROBRIDGE_B_CLIENT_ENDPOINT = "ws://127.0.0.1:{self.websocket_port}/neurobridge/v1/ws";'.encode("ascii"),
             response,
         )
+        self.assertIn(b'window.NEUROBRIDGE_B_CLIENT_SOURCE = "bluetooth";', response)
+
+    async def test_windows_headband_redirects_the_serial_capture_view(self) -> None:
+        self.server.close()
+        await self.server.wait_closed()
+        config = replace(self.config, profile="windows_headband_local", data_source=DataSourceConfig("bluetooth"))
+        self.server = await create_local_ui_server(config)
+        for path in ("/capture", "/capture/", "/capture/index.html"):
+            with self.subTest(path=path):
+                response = await self.request(path)
+                self.assertIn(b"HTTP/1.1 302 Found", response)
+                self.assertIn(b"\r\nLocation: /\r\n", response)
 
     async def test_serves_capture_viewer_from_the_same_gateway(self) -> None:
         page = await self.request("/capture/")

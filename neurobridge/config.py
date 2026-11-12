@@ -235,6 +235,7 @@ def load(
             "ubuntu_headband_wired",
             "kylin_headset_local",
             "windows_headset_local",
+            "windows_headband_local",
         }
     ):
         raise ValueError("profile is not a supported deployment profile")

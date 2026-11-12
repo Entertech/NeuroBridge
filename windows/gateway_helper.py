@@ -43,8 +43,8 @@ def logging_info(root: Path) -> dict:
 
 def validate_config(path: Path):
     config = load_runtime_config(path)
-    if config.profile != 'windows_headset_local':
-        raise ValueError('Expected profile=windows_headset_local; existing configuration was preserved')
+    if config.profile not in {'windows_headset_local', 'windows_headband_local'}:
+        raise ValueError('Expected an explicit Windows headset or headband profile; existing configuration was preserved')
     resolve_profile(config, RuntimePlatform('windows', 'x86_64'))
     if not config.algorithm.enabled:
         raise ValueError('Windows launcher requires algorithm.enabled=true')
@@ -122,6 +122,18 @@ def serial_summary(config) -> list[str]:
     return ports
 
 
+def show_source(config) -> None:
+    if config.data_source.type == 'bluetooth':
+        print('Data source: BLE headband. The running gateway scans and reconnects automatically.')
+    else:
+        serial_summary(config)
+
+
+def page_url(config) -> str:
+    path = '/' if config.data_source.type == 'bluetooth' else '/capture/'
+    return f'http://127.0.0.1:{config.local_ui.port}{path}'
+
+
 def diagnostics(root: Path) -> Path:
     """Allowlisted metadata only: never archive config, logs or recordings wholesale."""
     from neurobridge.versioning import APPLICATION_VERSION
@@ -137,7 +149,9 @@ def diagnostics(root: Path) -> Path:
         try:
             config = validate_config(path)
             report['configValid'] = True
-            report['comCandidates'] = serial_summary(config)
+            report['dataSource'] = config.data_source.type
+            if config.data_source.type == 'serial':
+                report['comCandidates'] = serial_summary(config)
         except Exception as error:
             # Exception messages may include user configuration: keep only the type.
             report['configOrComErrorType'] = type(error).__name__
@@ -192,7 +206,7 @@ def main() -> int:
             return 0
         config = validate_config(config_path(ROOT))
         if args.action == 'url':
-            print(f'http://127.0.0.1:{config.local_ui.port}/capture/', flush=True)
+            print(page_url(config), flush=True)
         elif args.action == 'logs':
             path = config.logging.directory / config.logging.filename
             # Bounded tail; no second, unrotated console log.
@@ -200,7 +214,7 @@ def main() -> int:
                 source.seek(max(0, path.stat().st_size - 128 * 1024))
                 print('\n'.join(source.read().decode('utf-8', errors='replace').splitlines()[-200:]))
         elif args.action == 'check':
-            serial_summary(config)
+            show_source(config)
         elif args.action == 'algorithm':
             print(json.dumps(check_algorithm(config)))
             print('Empty-input smoke test only; real-data algorithm acceptance is still required.')
@@ -208,8 +222,8 @@ def main() -> int:
             with instance_lock(ROOT):
                 check_ports(config)
                 check_algorithm(config)
-                serial_summary(config)
-                print(f'Open http://127.0.0.1:{config.local_ui.port}/capture/ after the gateway starts.', flush=True)
+                show_source(config)
+                print(f'Open {page_url(config)} after the gateway starts.', flush=True)
                 print('Foreground gateway: keep this window open; Ctrl+C stops capture.', flush=True)
                 from neurobridge.__main__ import run
                 asyncio.run(run(str(config_path(ROOT))))

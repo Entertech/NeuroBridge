@@ -3,13 +3,22 @@
 const PROTOCOL_VERSION = window.NEUROBRIDGE_VERSION.protocolVersion;
 const SUBPROTOCOL = "neurobridge.v1";
 let socket = null;
+let initialStatusRequestId = null;
 let subscriptions = new Map();
 let logEntries = [];
-const waveformState = { values: [], channel: "single" };
+let activeSource = null;
+const sourceLabels = { serial: "耳机串口", bluetooth: "头环蓝牙", unknown: "来源未指定" };
+const configuredSource = window.NEUROBRIDGE_B_CLIENT_SOURCE;
+const configuredEndpoint = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
+const fixedSource = configuredSource === "serial" || configuredSource === "bluetooth";
 const spectrumBands = ["delta", "theta", "alpha", "lowBeta", "highBeta", "beta", "gamma"];
 
 const elements = {
   endpoint: document.querySelector("#endpoint"),
+  dataSource: document.querySelector("#dataSource"),
+  sourceHint: document.querySelector("#sourceHint"),
+  sourcePanels: document.querySelector("#sourcePanels"),
+  sourcePanelTemplate: document.querySelector("#sourcePanelTemplate"),
   connectButton: document.querySelector("#connectButton"),
   disconnectButton: document.querySelector("#disconnectButton"),
   connectionDot: document.querySelector("#connectionDot"),
@@ -25,21 +34,30 @@ const elements = {
   clearLogButton: document.querySelector("#clearLogButton"),
   copyLogButton: document.querySelector("#copyLogButton"),
   log: document.querySelector("#log"),
-  modeValue: document.querySelector("#modeValue"),
-  deviceConnectionValue: document.querySelector("#deviceConnectionValue"),
-  wearValue: document.querySelector("#wearValue"),
-  batteryValue: document.querySelector("#batteryValue"),
-  subjectValue: document.querySelector("#subjectValue"),
-  timestampValue: document.querySelector("#timestampValue"),
-  latestSummary: document.querySelector("#latestSummary"),
-  waveformCanvas: document.querySelector("#waveformCanvas"),
-  spectrumCanvas: document.querySelector("#spectrumCanvas"),
-  waveformMeta: document.querySelector("#waveformMeta"),
-  spectrumMeta: document.querySelector("#spectrumMeta"),
 };
 
-if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
-  elements.endpoint.value = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
+function createSourcePanel(source) {
+  const article = elements.sourcePanelTemplate.content.firstElementChild.cloneNode(true);
+  article.dataset.source = source;
+  article.hidden = source === "unknown";
+  const fields = Object.fromEntries(
+    [...article.querySelectorAll("[data-field]")].map((field) => [field.dataset.field, field]),
+  );
+  fields.title.textContent = sourceLabels[source];
+  elements.sourcePanels.append(article);
+  return { article, fields, channels: {}, bandPower: {} };
+}
+
+const panels = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourcePanel(source)]));
+if (typeof configuredEndpoint === "string") {
+  elements.endpoint.value = configuredEndpoint;
+}
+if (fixedSource) {
+  elements.endpoint.readOnly = true;
+  elements.dataSource.value = configuredSource;
+  elements.dataSource.disabled = true;
+  document.querySelector('input[name="subscribeStream"][value="status"]').checked = false;
+  elements.sourceHint.textContent = "数据来源由本机网关配置提供。";
 }
 
 function isConnected() {
@@ -58,6 +76,8 @@ function setConnectionState(state, label) {
   elements.connectionDot.className = `dot dot-${state}`;
   elements.connectButton.disabled = state === "on" || state === "wait";
   elements.disconnectButton.disabled = state === "off";
+  elements.endpoint.disabled = state !== "off";
+  elements.dataSource.disabled = fixedSource || state !== "off";
 }
 
 function timeLabel(date = new Date()) {
@@ -65,7 +85,11 @@ function timeLabel(date = new Date()) {
 }
 
 function appendLog(kind, label, body) {
-  const entry = { time: timeLabel(), kind, label, body: typeof body === "string" ? body : JSON.stringify(body, null, 2) };
+  const entry = {
+    time: timeLabel(), kind, label,
+    body: typeof body === "string" ? body : JSON.stringify(body, (key, value) =>
+      key === "bytesBase64" ? undefined : value, 2),
+  };
   logEntries.push(entry);
   const node = document.createElement("div");
   node.className = `log-entry ${kind}`;
@@ -80,6 +104,10 @@ function appendLog(kind, label, body) {
   content.textContent = entry.body;
   node.append(time, tag, content);
   elements.log.append(node);
+  if (logEntries.length > 200) {
+    logEntries.shift();
+    elements.log.firstElementChild.remove();
+  }
   elements.log.scrollTop = elements.log.scrollHeight;
 }
 
@@ -111,48 +139,97 @@ function refreshSubscriptionSelect() {
   elements.subscriptionSelect.value = subscriptions.has(oldValue) ? oldValue : subscriptions.keys().next().value;
 }
 
-function updateSnapshot(data) {
-  if (!data || typeof data !== "object") return;
-  const result = data.result && typeof data.result === "object" ? data.result : data;
-  const payload = result.payload || data.payload || {};
-  const status = result.status || payload.status || {};
-  const mode = result.mode ?? data.mode;
-  const subjectId = result.subjectId ?? data.subjectId;
-  const timestampMs = result.timestampMs ?? data.timestampMs;
+function setPanelSource(source, label) {
+  activeSource = source;
+  for (const [key, panel] of Object.entries(panels)) {
+    const active = key === source;
+    panel.article.hidden = key === "unknown" && !active;
+    panel.article.classList.toggle("source-active", active);
+    panel.fields.details.hidden = !active;
+    panel.fields.state.textContent = active ? label : "未连接";
+    if (active) {
+      for (const value of panel.article.querySelectorAll("dd")) value.textContent = "—";
+      panel.fields.summary.textContent = "尚未收到网关数据。";
+      panel.fields.waveformMeta.textContent = "等待数据";
+      panel.fields.spectrumMeta.textContent = "等待数据";
+      panel.channels = {};
+      panel.bandPower = {};
+    }
+  }
+  drawCharts();
+}
 
-  if (mode !== undefined) elements.modeValue.textContent = mode;
-  if (subjectId !== undefined) elements.subjectValue.textContent = subjectId ?? "未配置";
-  if (timestampMs !== undefined) elements.timestampValue.textContent = readableTimestamp(timestampMs);
-  if (status.connectionState !== undefined) elements.deviceConnectionValue.textContent = status.connectionState;
-  if (status.wearState !== undefined) elements.wearValue.textContent = status.wearState;
-  if (status.batteryPercent !== undefined) {
-    elements.batteryValue.textContent = status.batteryPercent === null ? "—" : `${status.batteryPercent}%`;
+function updateSnapshot(data, panel) {
+  if (!data || typeof data !== "object") return;
+  const { fields } = panel;
+  const result = data.result || data;
+  const payload = result.payload || {};
+  const status = payload.status || result.status || result;
+  const hr = payload.algorithm?.hr || {};
+
+  if (result.mode !== undefined) fields.mode.textContent = { live: "实时", replay: "录播" }[result.mode] || result.mode;
+  if (result.subjectId !== undefined) fields.subject.textContent = result.subjectId ?? "未配置";
+  if (result.timestampMs !== undefined) fields.timestamp.textContent = readableTimestamp(result.timestampMs);
+  if (status.connectionState !== undefined) {
+    fields.connection.textContent = { connected: "已连接", connecting: "连接中", disconnected: "未连接" }[status.connectionState] || status.connectionState;
+  }
+  if (status.wearState !== undefined) fields.wear.textContent = status.wearState;
+  if (status.batteryPercent !== undefined) fields.battery.textContent = status.batteryPercent === null ? "—" : `${status.batteryPercent}%`;
+  if (hr.value !== undefined) fields.heartRate.textContent = hr.value === null ? "—" : `${hr.value} bpm`;
+  if (hr.hrv !== undefined) fields.hrv.textContent = hr.hrv ?? "—";
+  for (const stream of ["eegRaw", "hrRaw"]) {
+    const raw = payload[stream];
+    if (raw) fields[stream].textContent = `${raw.byteLength ?? "?"} B · ${raw.packetCount ?? "?"} 包`;
   }
 
-  const messages = [];
-  if (data.event) messages.push(`事件：${data.event}`);
-  if (data.valid === false || result.valid === false) messages.push("该数据窗口无效");
-  if (payload.algorithm) messages.push("已收到算法数据");
-  if (payload.eegRaw) messages.push(`EEG 原始字节：${payload.eegRaw.byteLength ?? "?"} B`);
-  if (payload.hrRaw) messages.push(`HR 原始字节：${payload.hrRaw.byteLength ?? "?"} B`);
-  if (messages.length) elements.latestSummary.textContent = messages.join(" · ");
+  if (result.valid === false) fields.summary.textContent = "该数据窗口无效。";
+  else if (payload.algorithm || payload.eegRaw || payload.hrRaw) fields.summary.textContent = "已收到数据窗口。";
+  else if (data.event) fields.summary.textContent = `事件：${data.event}`;
 }
 
 function drawCharts() {
-  drawWaveform(elements.waveformCanvas, waveformState.values);
-  drawSpectrum(elements.spectrumCanvas, waveformState.bandPower || {});
+  if (!activeSource) return;
+  const { fields, channels, bandPower } = panels[activeSource];
+  drawWaveform(fields.waveform, channels);
+  drawSpectrum(fields.spectrum, bandPower);
 }
+
 function fitCanvas(canvas) {
   const ratio = window.devicePixelRatio || 1, rect = canvas.getBoundingClientRect();
   canvas.width = Math.max(1, rect.width * ratio); canvas.height = Math.max(1, rect.height * ratio);
   const ctx = canvas.getContext("2d"); ctx.setTransform(ratio, 0, 0, ratio, 0, 0); return [ctx, rect.width, rect.height];
 }
-function drawWaveform(canvas, values) {
-  if (!canvas) return; const [ctx,w,h] = fitCanvas(canvas); ctx.clearRect(0,0,w,h);
-  ctx.strokeStyle = "rgba(91,127,162,.3)"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,h/2); ctx.lineTo(w,h/2); ctx.stroke();
-  if (!values.length) return; const min=Math.min(...values), max=Math.max(...values), span=max-min||1;
-  ctx.strokeStyle="#5fd1e8"; ctx.lineWidth=1.6; ctx.beginPath(); values.forEach((v,i)=>{const x=i/(values.length-1||1)*w,y=h-((v-min)/span)*h*.82-h*.09;i?ctx.lineTo(x,y):ctx.moveTo(x,y)}); ctx.stroke();
+
+const channelStyles = {
+  single: { label: "单通道", color: "#5fd1e8" },
+  left: { label: "左", color: "#5fd1e8" },
+  right: { label: "右", color: "#bd9af5" },
+};
+
+function drawWaveform(canvas, channels) {
+  const [ctx, width, height] = fitCanvas(canvas);
+  ctx.strokeStyle = "rgba(91,127,162,.3)";
+  ctx.beginPath();
+  ctx.moveTo(0, height / 2);
+  ctx.lineTo(width, height / 2);
+  ctx.stroke();
+  const values = Object.values(channels).flat();
+  if (!values.length) return;
+  const min = Math.min(...values), span = Math.max(...values) - min || 1;
+  for (const [channel, samples] of Object.entries(channels)) {
+    ctx.strokeStyle = channelStyles[channel].color;
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    samples.forEach((value, index) => {
+      const x = index / (samples.length - 1 || 1) * width;
+      const y = height - ((value - min) / span) * height * .82 - height * .09;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
 }
+
 function drawSpectrum(canvas, bands) {
   if (!canvas) return; const [ctx,w,h] = fitCanvas(canvas); ctx.clearRect(0,0,w,h); const vals=spectrumBands.map(k=>Number(bands[k])||0), max=Math.max(...vals,1), gap=8, bw=(w-gap*(vals.length+1))/vals.length;
   vals.forEach((v,i)=>{const bh=v/max*(h-42), x=gap+i*(bw+gap); ctx.fillStyle="#8f7bea"; ctx.fillRect(x,h-22-bh,bw,bh); ctx.fillStyle="#aebbd0"; ctx.font="11px system-ui"; ctx.textAlign="center"; ctx.fillText(spectrumBands[i],x+bw/2,h-7)});
@@ -161,27 +238,49 @@ function isAllFf(values) {
   if (!Array.isArray(values) || values.length === 0) return false;
   return values.every((value) => value === 255 || value === -1 || (typeof value === "string" && /^f+$/i.test(value.replace(/[\s:]/g, ""))));
 }
-function updateVisuals(data) {
-  const payload=(data?.result?.payload || data?.payload || {}), eeg=payload.algorithm?.eeg || {}, wave=eeg.wave || {};
-  const channel = Array.isArray(wave.single) ? "single" : Array.isArray(wave.left) ? "left" : Array.isArray(wave.right) ? "right" : null;
-  const unworn = isAllFf(wave.single) || isAllFf(wave.left) || isAllFf(wave.right);
-  if (unworn) {
-    elements.wearValue.textContent = "未佩戴";
-    elements.latestSummary.textContent = "脑波窗口数据全为 FF，判定为未佩戴状态。";
+function updateVisuals(data, panel) {
+  const eeg = (data?.result?.payload || data?.payload)?.algorithm?.eeg;
+  if (!eeg) return;
+  const { fields } = panel;
+  const wave = eeg.wave || {};
+  if (Object.keys(channelStyles).some((channel) => isAllFf(wave[channel]))) {
+    fields.wear.textContent = "未佩戴";
+    fields.summary.textContent = "脑波窗口数据全为 FF，判定为未佩戴状态。";
   }
-  if (channel) { waveformState.values=wave[channel].slice(-1200); waveformState.channel=channel; elements.waveformMeta.textContent=`${channel} · ${waveformState.values.length} 点`; }
-  if (eeg.bandPower) { waveformState.bandPower=eeg.bandPower; elements.spectrumMeta.textContent="已更新"; }
-  if (channel || eeg.bandPower) drawCharts();
+  if (eeg.wave) {
+    panel.channels = {};
+    for (const channel of Object.keys(channelStyles)) {
+      if (!Array.isArray(wave[channel])) continue;
+      const values = wave[channel].slice(-1200);
+      if (values.length && values.every(Number.isFinite)) panel.channels[channel] = values;
+    }
+    fields.waveformMeta.replaceChildren(...Object.entries(panel.channels).map(([channel, values]) => {
+      const label = document.createElement("span");
+      label.className = `channel-${channel}`;
+      label.textContent = `${channelStyles[channel].label} · ${values.length} 点`;
+      return label;
+    }));
+    if (!fields.waveformMeta.childElementCount) fields.waveformMeta.textContent = "等待数据";
+  }
+  if (eeg.bandPower) {
+    panel.bandPower = eeg.bandPower;
+    fields.spectrumMeta.textContent = "已更新";
+  }
+  if (eeg.wave || eeg.bandPower) drawCharts();
 }
+
 function handleGatewayMessage(message) {
   if (!message || typeof message !== "object") return;
   const data = message.data;
-  updateSnapshot(data);
-  updateVisuals(data);
-
+  const panel = panels[activeSource];
   if (message.code !== 200) {
+    if (panel && message.message) panel.fields.summary.textContent = message.message;
     appendLog("error", `← ${message.code ?? "ERR"}`, message);
     return;
+  }
+  if (panel) {
+    updateSnapshot(data, panel);
+    updateVisuals(data, panel);
   }
 
   if (data?.action === "subscribe" && data.result?.subscriptionId) {
@@ -193,6 +292,10 @@ function handleGatewayMessage(message) {
     refreshSubscriptionSelect();
   }
   appendLog("in", "← IN", message);
+  if (initialStatusRequestId && data?.requestId === initialStatusRequestId) {
+    initialStatusRequestId = null;
+    sendRequest("subscribe", { streams: ["status"] });
+  }
 }
 
 function sendPayload(payload) {
@@ -213,11 +316,13 @@ function sendRequest(action, params) {
     action,
     params,
   };
-  return sendPayload(request);
+  return sendPayload(request) ? request.requestId : null;
 }
 
 function connect() {
+  if (socket) return;
   const endpoint = elements.endpoint.value.trim();
+  const source = elements.dataSource.value;
   if (!endpoint.startsWith("ws://") && !endpoint.startsWith("wss://")) {
     appendLog("error", "ERROR", "地址必须以 ws:// 或 wss:// 开头。");
     return;
@@ -226,6 +331,7 @@ function connect() {
     setConnectionState("wait", "正在连接");
     appendLog("system", "SYSTEM", `连接 ${endpoint}（子协议 ${SUBPROTOCOL}）`);
     socket = new WebSocket(endpoint, SUBPROTOCOL);
+    setPanelSource(source, "网关连接中");
   } catch (error) {
     setConnectionState("off", "未连接");
     appendLog("error", "ERROR", error.message);
@@ -233,8 +339,10 @@ function connect() {
   }
   socket.addEventListener("open", () => {
     setConnectionState("on", "已连接");
+    panels[source].fields.state.textContent = "网关已连接";
     appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。" );
-    sendRequest("getStatus", {});
+    const requestId = sendRequest("getStatus", {});
+    if (fixedSource) initialStatusRequestId = requestId;
   });
   socket.addEventListener("message", (event) => {
     try {
@@ -246,6 +354,8 @@ function connect() {
   socket.addEventListener("error", () => appendLog("error", "ERROR", "WebSocket 发生网络错误或网关拒绝了子协议。"));
   socket.addEventListener("close", (event) => {
     setConnectionState("off", "已断开");
+    setPanelSource(null);
+    initialStatusRequestId = null;
     subscriptions.clear();
     refreshSubscriptionSelect();
     appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`);
@@ -253,7 +363,10 @@ function connect() {
   });
 }
 
-elements.connectButton.addEventListener("click", connect);
+elements.connectButton.addEventListener("click", () => {
+  if (fixedSource) window.location.reload();
+  else connect();
+});
 elements.disconnectButton.addEventListener("click", () => {
   if (socket) socket.close(1000, "B-side test console disconnect");
 });
@@ -297,7 +410,7 @@ elements.copyLogButton.addEventListener("click", async () => {
 });
 
 refreshSubscriptionSelect();
-appendLog("system", "SYSTEM", window.NEUROBRIDGE_B_CLIENT_ENDPOINT
+appendLog("system", "SYSTEM", configuredEndpoint
   ? `网关联调台已就绪；已使用本机服务地址 ${elements.endpoint.value}，不会发送任何保活帧。`
   : "网关联调台已就绪；不会发送任何保活帧。");
 if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
@@ -305,4 +418,3 @@ if (typeof window.NEUROBRIDGE_B_CLIENT_ENDPOINT === "string") {
 }
 
 window.addEventListener("resize", drawCharts);
-drawCharts();

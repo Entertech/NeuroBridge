@@ -315,7 +315,7 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
             activate_algorithm=activate_algorithm if profile.transport == "serial" else None,
         )
 
-    if profile.os_family in {"kylin", "windows"}:
+    if profile.transport == "serial":
         source_type = PosixSerialSource if profile.os_family == "kylin" else WindowsSerialSource
         source: RawDataSource = source_type(
             config.serial,

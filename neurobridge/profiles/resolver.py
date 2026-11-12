@@ -15,6 +15,7 @@ from ..domain.capabilities import ProfileCapabilities
 from .kylin_headset_local import CAPABILITIES as KYLIN_CAPABILITIES
 from .macos_headband_wired import CAPABILITIES as MACOS_CAPABILITIES
 from .ubuntu_headband_wired import CAPABILITIES as UBUNTU_CAPABILITIES
+from .windows_headband_local import CAPABILITIES as WINDOWS_HEADBAND_CAPABILITIES
 from .windows_headset_local import CAPABILITIES as WINDOWS_CAPABILITIES
 
 
@@ -45,6 +46,7 @@ _PROFILES = {
     "ubuntu_headband_wired": DeploymentProfile("ubuntu_headband_wired", "ubuntu", "x86_64", "bluetooth", "headband_ble", "wired_b_side", UBUNTU_CAPABILITIES, "M2"),
     "kylin_headset_local": DeploymentProfile("kylin_headset_local", "kylin", "x86_64", "serial", "headset_rev181", "local_browser", KYLIN_CAPABILITIES, "M1"),
     "windows_headset_local": DeploymentProfile("windows_headset_local", "windows", "x86_64", "serial", "headset_rev181", "local_browser", WINDOWS_CAPABILITIES, "M3"),
+    "windows_headband_local": DeploymentProfile("windows_headband_local", "windows", "x86_64", "bluetooth", "headband_ble", "local_browser", WINDOWS_HEADBAND_CAPABILITIES, "candidate"),
 }
 
 
@@ -94,6 +96,10 @@ def resolve_profile(config: GatewayConfig, runtime: RuntimePlatform | None = Non
         mismatches.append(f"access expected={profile.access_mode} actual={config.access.mode}")
     if profile.capabilities.supports_local_ui != config.local_ui.enabled:
         mismatches.append(f"local_ui expected={profile.capabilities.supports_local_ui} actual={config.local_ui.enabled}")
+    if profile_id == "windows_headband_local" and (
+        not config.ble.enabled or min(config.ble.scan_timeout_seconds, config.ble.reconnect_delay_seconds) <= 0
+    ):
+        mismatches.append("headband BLE requires ble.enabled=true and positive scan and reconnect intervals")
     if not profile.capabilities.supports_replay and config.recording.replay_recording_id:
         mismatches.append("replay is not supported")
     if mismatches:
