@@ -128,11 +128,63 @@ class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         adapter = FlowtimeAdapter(config(Path("/tmp")).ble, packet, ignored_status, ignored_ready)
         client = Client()
         adapter._client = client
-        await adapter._subscribe()
+        await adapter._subscribe({})
         self.assertEqual(set(client.handlers), set(REQUIRED_NOTIFICATION_CHARACTERISTICS))
         client.handlers[FF51](0, bytearray(b"r" * HR_PACKET_BYTES))  # type: ignore[operator]
         await asyncio.sleep(0)
         self.assertEqual([(item.transport, item.channel, item.value) for item in received], [("bluetooth", "ff51", b"r" * HR_PACKET_BYTES)])
+
+    async def test_logs_notification_gap_and_capture_restart_after_link_loss(self) -> None:
+        settings = replace(config(Path("/tmp")).ble, enabled=True, reconnect_delay_seconds=0)
+        device = SimpleNamespace(name="Flowtime Headband")
+        advertisement = SimpleNamespace(local_name=device.name, service_uuids=[settings.model_nbr_uuid], rssi=-45)
+        clients = []
+
+        class Client:
+            services = SimpleNamespace(get_characteristic=lambda _: None)
+
+            def __init__(self, _device, *, disconnected_callback):
+                self.callback = disconnected_callback
+                self.handlers = {}
+                self.is_connected = False
+                clients.append(self)
+
+            async def connect(self):
+                self.is_connected = True
+
+            async def start_notify(self, characteristic, handler):
+                self.handlers[characteristic] = handler
+
+            async def disconnect(self):
+                self.is_connected = False
+
+        async def discover(**_):
+            return {"test": (device, advertisement)}
+
+        async def status(name, value):
+            if name == "connectionState" and value == "connected":
+                client = clients[-1]
+                if len(clients) == 1:
+                    asyncio.get_running_loop().call_soon(drop_link, client)
+                else:
+                    await adapter.stop()
+
+        def drop_link(client):
+            client.handlers[FF51](0, bytearray(b"\x48"))
+            client.is_connected = False
+            client.callback(client)
+
+        async def ignored_packet(_): pass
+        async def ignored_ready(): pass
+
+        adapter = FlowtimeAdapter(settings, ignored_packet, status, ignored_ready, external_control=True)
+        bleak = SimpleNamespace(BleakScanner=SimpleNamespace(discover=discover), BleakClient=Client)
+        with patch.dict(sys.modules, {"bleak": bleak}), self.assertLogs("neurobridge.ble.flowtime") as logs:
+            await asyncio.wait_for(adapter.run(), 3)
+        output = "\n".join(logs.output)
+        self.assertIn("attempt=1 phase=streaming stopping=False", output)
+        self.assertRegex(output, r"lastEegNotificationAgeMs=None lastHrNotificationAgeMs=\d+ scanRssi=-45")
+        self.assertRegex(output, r"Flowtime capture restarted: attempt=2 outageMs=\d+")
 
 
 class AlgorithmRunnerTests(unittest.IsolatedAsyncioTestCase):
