@@ -151,13 +151,15 @@ neurobridge ssh status
 neurobridge ssh disable
 ```
 
-`enable` 按需安装和启动 Windows OpenSSH Server，并将标准 SSH 防火墙规则限制在本地子网。`status` 显示状态和可用的 SSH 连接地址。`disable` 停止 Windows OpenSSH Server，将服务设为手动启动，并禁用标准 SSH 防火墙规则。按提示同意 Windows 管理员授权。NeuroBridge 服务可以处于停止状态，但必须已安装。
+Windows MSI / EXE 安装和覆盖升级时默认安装并启动 Windows OpenSSH Server，将 `sshd` 设为开机自动启动，并将标准 TCP 22 入站规则限制在本地子网。安装后运行 `neurobridge ssh status`，应显示 `OpenSSH Server: Running (startup: Auto)`。
+
+`enable` 可重新启用 SSH 并恢复开机自启。`status` 显示状态和可用的 SSH 连接地址。`disable` 停止 Windows OpenSSH Server，将服务设为手动启动，并禁用标准 SSH 防火墙规则。按提示同意 Windows 管理员授权。NeuroBridge 服务可以处于停止状态，但必须已安装。
 
 也可以双击 `windows\remote-support.cmd` 使用交互菜单，选 `1` 启用、`3` 查询、`2` 关闭。源码部署从项目目录打开，安装包部署从安装目录打开。
 
-首次安装 OpenSSH Server 可能需要 Windows Update。启用后，用平时登录的 Windows 账号从同一子网的电脑连接。关闭的是整台电脑的 Windows OpenSSH 服务，会影响同一服务上的其他连接。
+首次安装 OpenSSH Server 可能需要 Windows Update。如果系统组件安装失败，网关仍可安装。查看 Windows 应用程序事件日志中的 `NeuroBridge SSH Setup`，解决组件安装问题后运行 `neurobridge ssh enable`。从同一子网连接时使用自己的 Windows 账号。
 
-安装 NeuroBridge 不会自动启用 SSH。卸载 NeuroBridge 前可先用菜单关闭 SSH。网关的本机网页和 WebSocket 继续使用回环地址。
+OpenSSH 是 Windows 系统服务。需要关闭远程访问时，运行 `neurobridge ssh disable`，这也会停止其他 SSH 连接。后续覆盖安装会重新启用 SSH。网关的本机网页和 WebSocket 使用回环地址。
 
 ## MSI / EXE 安装包部署
 

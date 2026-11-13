@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 import uuid
+import xml.etree.ElementTree as ET
 from unittest import mock
 
 
@@ -285,6 +286,19 @@ class NativePackageBuilderTests(unittest.TestCase):
             self.assertIn('Schedule="afterInstallInitialize"', wxs)
             self.assertIn('Scope="perMachine"', wxs)
             self.assertNotIn("ProductCode=", wxs)
+            namespace = {"wix": "http://wixtoolset.org/schemas/v4/wxs"}
+            document = ET.fromstring(wxs)
+            action = document.find(".//wix:CustomAction[@Id='ConfigureOpenSsh']", namespace)
+            self.assertIsNotNone(action)
+            self.assertEqual(action.get("Execute"), "commit")
+            self.assertEqual(action.get("Impersonate"), "no")
+            self.assertIn(r"WindowsPowerShell\v1.0\powershell.exe", action.get("ExeCommand"))
+            self.assertIn("[#SSH_SETUP_SCRIPT]", action.get("ExeCommand"))
+            self.assertIn("-Action Enable -FromInstaller", action.get("ExeCommand"))
+            sequence = document.find(".//wix:Custom[@Action='ConfigureOpenSsh']", namespace)
+            self.assertIsNotNone(sequence)
+            self.assertIn("NOT Installed", sequence.get("Condition"))
+            self.assertIn("REMOVE", sequence.get("Condition"))
 
         # Windows EXE (Burn).  The bundle detects its predecessor by its own
         # upgrade code; MajorUpgrade only covers the MSI inside it.

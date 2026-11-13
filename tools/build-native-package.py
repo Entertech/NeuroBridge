@@ -197,6 +197,8 @@ def wix_directory_tree(root: Path, source_root: Path, install_id: str) -> tuple[
                 file_id = wix_id("F_", relative)
                 if relative == "windows/service.py":
                     file_id = "SERVICE_SCRIPT"
+                elif relative == "windows/remote-support.ps1":
+                    file_id = "SSH_SETUP_SCRIPT"
                 registration = ""
                 if relative.replace("/", "\\") == r"runtime\python.exe":
                     registration = (
@@ -226,6 +228,7 @@ def write_wix_msi(stage: Path, target: dict[str, str], output: Path, log: Path) 
     install_id = "INSTALLFOLDER"
     directories, components = wix_directory_tree(source_root, source_root, install_id)
     standard = "ProgramFiles64Folder" if target["architecture"] == "x86_64" else "ProgramFilesFolder"
+    system_folder = "System64Folder" if target["architecture"] == "x86_64" else "SystemFolder"
     upgrade_code = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge"))
     wix = textwrap.dedent(
         f'''\
@@ -235,11 +238,18 @@ def write_wix_msi(stage: Path, target: dict[str, str], output: Path, log: Path) 
             <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
                           DowngradeErrorMessage="A newer NeuroBridge version is already installed." />
             <MediaTemplate EmbedCab="yes" />
+            <CustomAction Id="ConfigureOpenSsh" Directory="{system_folder}"
+                          ExeCommand="&quot;[{system_folder}]WindowsPowerShell\\v1.0\\powershell.exe&quot; -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;[#SSH_SETUP_SCRIPT]&quot; -Action Enable -FromInstaller"
+                          Execute="commit" Impersonate="no" Return="ignore" />
+            <InstallExecuteSequence>
+              <Custom Action="ConfigureOpenSsh" After="StartServices" Condition="NOT Installed AND NOT (REMOVE~=&quot;ALL&quot;)" />
+            </InstallExecuteSequence>
             <Feature Id="MainFeature" Title="NeuroBridge" Level="1">
               <ComponentGroupRef Id="ApplicationFiles" />
             </Feature>
           </Package>
           <Fragment>
+            <StandardDirectory Id="{system_folder}" />
             <StandardDirectory Id="{standard}">
               <Directory Id="{install_id}" Name="NeuroBridge">
                 {''.join(directories)}

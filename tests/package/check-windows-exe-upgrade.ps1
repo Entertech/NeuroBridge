@@ -28,9 +28,20 @@ Invoke-Installer $PreviousInstaller 'install' (Join-Path $LogDirectory 'previous
 $config = Join-Path $dataRoot 'gateway.toml'
 Add-Content -LiteralPath $config -Value '# Preserve this configuration during the installer test' -Encoding UTF8
 $configHash = (Get-FileHash -LiteralPath $config).Hash
+# Model an existing OpenSSH service which was previously enabled manually.
+if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
+    Stop-Service -Name sshd
+    Set-Service -Name sshd -StartupType Manual
+}
 Invoke-Installer $Installer 'install' (Join-Path $LogDirectory 'upgrade-install.log')
 if ((Get-FileHash -LiteralPath $config).Hash -ne $configHash) {
     throw 'EXE upgrade changed the existing configuration.'
+}
+$sshService = Get-CimInstance Win32_Service -Filter "Name='sshd'"
+$sshListener = Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue |
+    Where-Object { $_.OwningProcess -eq $sshService.ProcessId }
+if (-not $sshListener) {
+    throw 'OpenSSH did not listen on TCP port 22 after the EXE upgrade.'
 }
 $buildInfo = Get-Content -LiteralPath (Join-Path $installRoot 'build-info.txt')
 if ($buildInfo -notcontains "source_commit=$SourceCommit") {
@@ -74,8 +85,9 @@ try {
     $output = $stdout.GetAwaiter().GetResult()
     Set-Content -LiteralPath (Join-Path $LogDirectory 'ssh-status.log') -Value $output -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $LogDirectory 'ssh-status-errors.log') -Value ($stderr.GetAwaiter().GetResult()) -Encoding UTF8
-    if ($shell.ExitCode -ne 0 -or $output -notmatch 'OpenSSH Server') {
-        throw 'neurobridge ssh status failed. See the status logs.'
+    if ($shell.ExitCode -ne 0 -or $output -notmatch 'OpenSSH Server: Running \(startup: Auto\)' -or
+        $output -notmatch '(?m)^Windows SSH firewall rule: enabled=True, remote=LocalSubnet\s*$') {
+        throw 'The installer did not enable automatic, local-subnet SSH. See the status logs.'
     }
 } finally {
     $shell.Dispose()

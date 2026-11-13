@@ -2,7 +2,8 @@ param(
     [ValidateSet('Menu', 'Enable', 'Disable', 'Status')]
     [string]$Action = 'Menu',
     [switch]$PauseOnExit,
-    [switch]$RequireGateway
+    [switch]$RequireGateway,
+    [switch]$FromInstaller
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,7 +52,7 @@ try {
     if ($Action -eq 'Menu') {
         Write-Host 'NeuroBridge Windows remote support'
         Write-Host "Signed-in user running this tool: $([Environment]::UserName)"
-        Write-Host '1. Enable SSH for the local subnet'
+        Write-Host '1. Enable SSH for the local subnet and start it at boot'
         Write-Host '2. Stop Windows SSH and disable its firewall rule'
         Write-Host '3. Check SSH status'
         Write-Host '0. Exit'
@@ -67,6 +68,9 @@ try {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        if ($FromInstaller) {
+            throw 'The installer must configure OpenSSH with administrator privileges.'
+        }
         $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "{0}" -Action {1} -PauseOnExit' -f $PSCommandPath, $Action
         if ($RequireGateway) {
             $arguments += ' -RequireGateway'
@@ -88,13 +92,19 @@ try {
             New-NetFirewallRule -Name $ruleName -DisplayName 'OpenSSH Server (sshd)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 -RemoteAddress LocalSubnet | Out-Null
         }
 
+        $service = Get-Service -Name sshd -ErrorAction SilentlyContinue
+        if (-not $service) {
+            if ($restartNeeded) {
+                throw 'Windows needs a restart before the SSH service can be configured. Restart and run neurobridge ssh enable.'
+            }
+            throw 'OpenSSH Server installation did not register the sshd service.'
+        }
+        Set-Service -Name sshd -StartupType Automatic
         if ($restartNeeded) {
-            throw 'Windows needs a restart. Restart and then choose Enable again.'
+            Write-Warning 'Windows needs a restart to finish installing OpenSSH Server. SSH is configured to start at boot.'
+        } else {
+            Start-Service -Name sshd
         }
-        if ((Get-CimInstance Win32_Service -Filter "Name='sshd'").StartMode -eq 'Disabled') {
-            Set-Service -Name sshd -StartupType Manual
-        }
-        Start-Service -Name sshd
     } elseif ($Action -eq 'Disable') {
         if (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue) {
             Disable-NetFirewallRule -Name $ruleName
@@ -105,9 +115,15 @@ try {
         }
     }
 
-    Show-SshStatus
+    if (-not $FromInstaller) {
+        Show-SshStatus
+    }
 } catch {
-    Write-Host ("Remote support setup failed: " + $_.Exception.Message) -ForegroundColor Red
+    $failure = "Remote support setup failed: " + $_.Exception.Message
+    Write-Host $failure -ForegroundColor Red
+    if ($FromInstaller) {
+        & "$env:SystemRoot\System32\eventcreate.exe" /T WARNING /ID 100 /L APPLICATION /SO 'NeuroBridge SSH Setup' /D $failure | Out-Null
+    }
     $exitCode = 1
 } finally {
     if ($PauseOnExit) {
