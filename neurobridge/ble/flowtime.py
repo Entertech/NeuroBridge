@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import time
 from typing import TYPE_CHECKING, Awaitable, Callable, Iterable
 
@@ -23,6 +24,42 @@ OPTIONAL_NOTIFICATION_CHARACTERISTICS = (BATTERY,)
 def wear_state_from_packet(_value: bytes) -> str:
     """FF32 state values require device-POC confirmation before interpretation."""
     return "unknown"
+
+
+def _observe_winrt_session(client: object, attempt: int) -> Callable[[], None] | None:
+    if sys.platform != "win32":
+        return None
+
+    # Bleak 0.19.5 drops the WinRT event args from its public disconnect callback.
+    session = getattr(getattr(client, "_backend", None), "_session", None)
+
+    def status_changed(_sender, args) -> None:
+        try:
+            status, error = args.status, args.error
+            LOG.log(
+                logging.WARNING if error else logging.INFO,
+                "Flowtime WinRT GATT session status changed: attempt=%s status=%s(%d) bluetoothError=%s(%d)",
+                attempt, status.name, int(status), error.name, int(error),
+            )
+        except Exception as exc:
+            LOG.warning("Flowtime WinRT GATT session event could not be read: attempt=%s errorType=%s", attempt, type(exc).__name__)
+
+    try:
+        token = session.add_session_status_changed(status_changed)
+    except Exception as exc:
+        LOG.warning("Flowtime WinRT GATT session diagnostics unavailable: attempt=%s errorType=%s", attempt, type(exc).__name__)
+        return None
+
+    def remove_observer() -> None:
+        try:
+            session.remove_session_status_changed(token)
+        except OSError:
+            # Bleak can close the session before the streaming loop detects the drop.
+            LOG.debug("Flowtime WinRT GATT observer already closed: attempt=%s", attempt)
+        except Exception as exc:
+            LOG.debug("Flowtime WinRT GATT observer cleanup failed: attempt=%s errorType=%s", attempt, type(exc).__name__)
+
+    return remove_observer
 
 
 class FlowtimeAdapter:
@@ -65,6 +102,7 @@ class FlowtimeAdapter:
         while not self._stopping:
             attempt += 1
             phase = "scan"
+            remove_winrt_observer = None
             try:
                 await self.status("connectionState", "connecting")
                 scan_started = time.monotonic()
@@ -118,6 +156,7 @@ class FlowtimeAdapter:
                 self._client = BleakClient(candidate, disconnected_callback=disconnected)
                 await self._client.connect()
                 connected_at = time.monotonic()
+                remove_winrt_observer = _observe_winrt_session(self._client, attempt)
                 LOG.info(
                     "Flowtime BLE link connected: attempt=%s durationMs=%s",
                     attempt,
@@ -191,6 +230,9 @@ class FlowtimeAdapter:
                     attempt + 1,
                     self.config.reconnect_delay_seconds,
                 )
+            finally:
+                if remove_winrt_observer is not None:
+                    remove_winrt_observer()
             await asyncio.sleep(self.config.reconnect_delay_seconds)
 
     async def _disconnect_after_failure(self) -> None:

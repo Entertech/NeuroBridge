@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import replace
+from enum import IntEnum
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -140,6 +141,18 @@ class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         advertisement = SimpleNamespace(local_name=device.name, service_uuids=[settings.model_nbr_uuid], rssi=-45)
         clients = []
 
+        class GattSession:
+            handler = None
+
+            def add_session_status_changed(self, handler):
+                self.handler = handler
+                return 0
+
+            def remove_session_status_changed(self, token):
+                if token != 0:
+                    raise AssertionError("Wrong event token")
+                self.handler = None
+
         class Client:
             services = SimpleNamespace(get_characteristic=lambda _: None)
 
@@ -148,6 +161,7 @@ class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
                 self.handlers = {}
                 self.is_connected = False
                 clients.append(self)
+                self._backend = SimpleNamespace(_session=GattSession() if len(clients) == 1 else None)
 
             async def connect(self):
                 self.is_connected = True
@@ -173,18 +187,33 @@ class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
             client.handlers[FF51](0, bytearray(b"\x48"))
             client.is_connected = False
             client.callback(client)
+            session = client._backend._session
+            session.handler(None, SimpleNamespace(status=GattStatus.CLOSED, error=GattError.SUCCESS))
+
+        class GattStatus(IntEnum):
+            CLOSED = 0
+
+        class GattError(IntEnum):
+            SUCCESS = 0
 
         async def ignored_packet(_): pass
         async def ignored_ready(): pass
 
         adapter = FlowtimeAdapter(settings, ignored_packet, status, ignored_ready, external_control=True)
         bleak = SimpleNamespace(BleakScanner=SimpleNamespace(discover=discover), BleakClient=Client)
-        with patch.dict(sys.modules, {"bleak": bleak}), self.assertLogs("neurobridge.ble.flowtime") as logs:
+        with (
+            patch.dict(sys.modules, {"bleak": bleak}),
+            patch("neurobridge.ble.flowtime.sys", SimpleNamespace(platform="win32")),
+            self.assertLogs("neurobridge.ble.flowtime") as logs,
+        ):
             await asyncio.wait_for(adapter.run(), 3)
         output = "\n".join(logs.output)
         self.assertIn("attempt=1 phase=streaming stopping=False", output)
         self.assertRegex(output, r"lastEegNotificationAgeMs=None lastHrNotificationAgeMs=\d+ scanRssi=-45")
         self.assertRegex(output, r"Flowtime capture restarted: attempt=2 outageMs=\d+")
+        self.assertIn("attempt=1 status=CLOSED(0) bluetoothError=SUCCESS(0)", output)
+        self.assertIn("Flowtime WinRT GATT session diagnostics unavailable: attempt=2", output)
+        self.assertIsNone(clients[0]._backend._session.handler)
 
 
 class AlgorithmRunnerTests(unittest.IsolatedAsyncioTestCase):
