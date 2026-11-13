@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.4.0"
+version = "0.4.1"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -38,6 +38,13 @@ to_version = "0.4.0"
 impact = "minor"
 compatibility = "Existing Windows serial profiles continue to work. Windows Bluetooth headband is opt-in and uses the existing loopback WebSocket contract."
 evidence = "Reuse the BLE acquisition pipeline on Windows and display serial and Bluetooth data in separate B-side test console panels."
+
+[[application_release_changes]]
+from_version = "0.4.0"
+to_version = "0.4.1"
+impact = "patch"
+compatibility = "The Windows EXE and embedded MSI advance together for a major installer upgrade. Existing ProgramData and the northbound protocol remain compatible."
+evidence = "Install the NeuroBridge command and its machine PATH entry during EXE upgrades, with a Windows runner check that invokes neurobridge ssh status in a new shell."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.

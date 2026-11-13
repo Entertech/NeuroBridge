@@ -230,9 +230,10 @@ def write_wix_msi(stage: Path, target: dict[str, str], output: Path, log: Path) 
     wix = textwrap.dedent(
         f'''\
         <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-          <Package Name="NeuroBridge" Manufacturer="Entertech" Version="{APPLICATION_VERSION}" UpgradeCode="{upgrade_code}">
+          <Package Name="NeuroBridge" Manufacturer="Entertech" Version="{APPLICATION_VERSION}" UpgradeCode="{upgrade_code}" Scope="perMachine">
             <SummaryInformation Description="NeuroBridge gateway" />
-            <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer NeuroBridge version is already installed." />
+            <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                          DowngradeErrorMessage="A newer NeuroBridge version is already installed." />
             <MediaTemplate EmbedCab="yes" />
             <Feature Id="MainFeature" Title="NeuroBridge" Level="1">
               <ComponentGroupRef Id="ApplicationFiles" />

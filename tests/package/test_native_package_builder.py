@@ -282,6 +282,8 @@ class NativePackageBuilderTests(unittest.TestCase):
             self.assertIn(f'Version="{BUILDER.APPLICATION_VERSION}"', wxs)
             self.assertIn(f'UpgradeCode="{upgrade_code}"', wxs)
             self.assertIn('AllowSameVersionUpgrades="yes"', wxs)
+            self.assertIn('Schedule="afterInstallInitialize"', wxs)
+            self.assertIn('Scope="perMachine"', wxs)
             self.assertNotIn("ProductCode=", wxs)
 
         # Windows EXE (Burn).  The bundle detects its predecessor by its own

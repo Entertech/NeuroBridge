@@ -143,7 +143,7 @@ powershell -ExecutionPolicy Bypass -File 'C:\Program Files\NeuroBridge\windows\e
 
 ## 局域网 SSH 排障
 
-在 Windows 10/11 安装带此命令的 NeuroBridge MSI / EXE 后，重新打开终端，从任意目录运行以下命令。
+在 Windows 10/11 完成安装后，从开始菜单新开 PowerShell，即可在任意目录运行以下命令。安装器会注册系统 PATH；如果一直开着 Windows Terminal，请关闭整个应用再打开，旧窗口会保留启动时的环境。
 
 ```powershell
 neurobridge ssh enable
@@ -160,6 +160,8 @@ neurobridge ssh disable
 安装 NeuroBridge 不会自动启用 SSH。卸载 NeuroBridge 前可先用菜单关闭 SSH。网关的本机网页和 WebSocket 继续使用回环地址。
 
 ## MSI / EXE 安装包部署
+
+覆盖安装会更新 EXE 和其中的 MSI，重新安装命令入口并注册系统 PATH。已安装的网关配置和录制数据保存在 ProgramData。升级完成后可在新开的 PowerShell 中运行 `neurobridge ssh status`。
 
 源码部署与安装包部署是两套独立形态，服务名和数据位置都不同，不要混用：
 
