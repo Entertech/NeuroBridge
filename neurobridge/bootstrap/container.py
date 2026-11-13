@@ -363,6 +363,9 @@ def build_runtime(
         return status.connection_session_id if status.state == ConnectionState.CONNECTED else None
 
     alignment = None
+    LOG.info("Windows EEG alignment configuration: enabled=%s maxAdjustmentPercent=%s waitMs=%s cacheWindows=%s",
+             bool(config.data_source.eeg_alignment_percent), config.data_source.eeg_alignment_percent,
+             config.data_source.eeg_alignment_wait_ms, config.pipeline.algorithm_queue_size)
     if config.data_source.eeg_alignment_percent:
         alignment = EegAlignmentCache(
             percent=config.data_source.eeg_alignment_percent,

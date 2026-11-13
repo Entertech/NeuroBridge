@@ -62,6 +62,8 @@ Windows 头环建立连接后，`Flowtime WinRT GATT session status changed` 会
 
 双设备原始 EEG 校准默认关闭。完成同一人同时佩戴的对照录制验证后，可在 `[data_source]` 设置 `eeg_alignment_percent = 5`，并重启网关。它把耳机左右通道各自的幅度向同窗口的头环参考幅度微调，增益最多偏离 1 的 5%，保留耳机各通道的中心值、采样顺序、包序号和包数。它不做逐点配对或重采样。`eeg_alignment_wait_ms` 默认 100，超时、任一侧出现 ADC 饱和或脱落码、窗口无效或头环断开时，耳机算法使用原输入。原始录制、北向原始字节和两路心率继续使用设备原始数据。
 
+在 `neurobridge.log` 搜索 `Windows EEG alignment configuration` 核对开关。启用后，`Headset EEG alignment decision` 按窗口记录匹配结果、回退原因、两路包数、等待时长和校准增益。默认 `INFO` 每约 10 秒记录各原因的窗口数，并为每种原因保留一条窗口详情。联调时可将 `[logging].level` 设为 `DEBUG`，用 `batchId` 将每个校准窗口与 `Headset EEG algorithm response` 的成功状态、错误原因和算法耗时对应起来。这些日志只记录诊断元数据。
+
 耳机串口与头环蓝牙各用独立的算法会话，结果随设备来源分别录制和显示。升级后请重新构建或替换算法桥。源码部署可先停止网关，再用启动器菜单 `6` 重建。耳机模式启动前会检查算法桥是否支持 SDK 耳道 EEG 模式。
 
 此功能为源码候选。Windows 蓝牙适配器、前台／服务账户下的真实扫描、采集、重连和重启仍待目标机验证。

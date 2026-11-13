@@ -489,14 +489,22 @@ class ApplicationService:
             if self.prepare_algorithm_input is not None:
                 algorithm_input = await self.prepare_algorithm_input(batch, algorithm_input)
                 if batch.connection_session_id != self._connection_session_id:
+                    LOG.debug("EEG alignment input discarded: batchId=%s reason=CONNECTION_SESSION_ENDED", batch.batch_id)
                     return WindowResult(batch, self.aggregator._invalid(batch.batch_id, "CONNECTION_SESSION_ENDED"),
                                         "live", self.clock_ms(), False)
+            algorithm_started = time.monotonic()
             result = await self.aggregator.evaluate(
                 batch,
                 algorithm_input,
                 persistence_guaranteed=persistence_guaranteed,
                 on_late_result=lambda value: self._persist_late(batch, value),
             )
+            if self.prepare_algorithm_input is not None:
+                LOG.debug("Headset EEG algorithm response: batchId=%s windowEndMs=%s mappingVersion=%s "
+                          "valid=%s invalidReasons=%s evaluationMs=%s",
+                          batch.batch_id, batch.window_end_ms, algorithm_input.mapping_version,
+                          result.algorithm_result.valid, result.algorithm_result.invalid_reasons,
+                          round((time.monotonic() - algorithm_started) * 1000))
             duration_ms = int((time.monotonic() - evaluation_started) * 1000)
             self.diagnostics["algorithm_duration_ms"] += duration_ms
             self.diagnostics["algorithm_evaluations"] += 1

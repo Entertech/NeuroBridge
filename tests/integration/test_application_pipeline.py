@@ -122,7 +122,10 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         original = eeg_bytes([900, 1800, 1000, 2000, 1100, 2200])
         reference = eeg_bytes([400, 400, 1000, 1000, 1600, 1600])
         now = int(time.time() * 1000)
-        with patch.object(headband.source, "status", return_value=SourceStatus(ConnectionState.CONNECTED, "ble")):
+        with (
+            patch.object(headband.source, "status", return_value=SourceStatus(ConnectionState.CONNECTED, "ble")),
+            self.assertLogs("neurobridge.application", level="DEBUG") as logs,
+        ):
             await headband.application.process(RawChunk("bluetooth", "ff31", reference, now, 0, "ble", "ble-trace"))
             await headband.application.flush()
             frame = b"\xaa\xaa\xaa\x1c" + original + b"\x48\xbb\xbb\xbb"
@@ -139,6 +142,11 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headset_window.result.batch.signals[0].samples, original[2:])
         self.assertEqual(headset.application.diagnostics["window_processing_errors"], 0)
         self.assertEqual(headband.application.diagnostics["window_processing_errors"], 0)
+        self.assertTrue(any(f"alignment decision: batchId={headset_value.batch_id}" in line
+                            and "reason=applied" in line and "gains=(1.05, 1.05)" in line for line in logs.output))
+        self.assertTrue(any(f"algorithm response: batchId={headset_value.batch_id}" in line
+                            and "mappingVersion=2 valid=True" in line for line in logs.output))
+        self.assertFalse(any(headset_value.payload["eegRawBase64"] in line for line in logs.output))
 
     async def test_windows_two_sources_share_one_websocket_and_independent_subscriptions(self) -> None:
         root = Path(__file__).resolve().parents[2]

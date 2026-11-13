@@ -48,7 +48,9 @@ class EegAlignmentTests(unittest.IsolatedAsyncioTestCase):
         raw = packet([900, 1800, 1000, 2000, 1100, 2200])
         original = headset_input(raw)
         batch = window("headset_rev181", "serial", raw[2:])
-        self.assertIs(await cache.prepare_headset(batch, original), original)
+        with self.assertLogs("neurobridge.application.eeg_alignment", level="INFO") as logs:
+            self.assertIs(await cache.prepare_headset(batch, original), original)
+        self.assertIn("reason=reference_timeout", logs.output[0])
         reference = packet([400, 400, 1000, 1000, 1600, 1600])
         cache.observe_headband(window("headband_ble", session, reference))
         for unusable in (b"", packet([0xFFFFFF, 1800, 0xFFFFFF, 2000, 0xFFFFFF, 2200])):
@@ -60,6 +62,8 @@ class EegAlignmentTests(unittest.IsolatedAsyncioTestCase):
         session = "ble-2"
         self.assertIs(await cache.prepare_headset(batch, original), original)
         cache.observe_headband(window("headband_ble", session, packet([0xFFFFFF] * 6)))
-        self.assertIs(await cache.prepare_headset(batch, original), original)
+        with self.assertLogs("neurobridge.application.eeg_alignment", level="INFO") as logs:
+            self.assertIs(await cache.prepare_headset(batch, original), original)
+        self.assertIn("reason=headband_near_adc_rail", logs.output[0])
         session = None
         self.assertIs(await cache.prepare_headset(batch, original), original)
