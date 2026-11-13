@@ -64,6 +64,16 @@ $expected = Join-Path $env:ProgramFiles 'NeuroBridge\windows\cli\neurobridge.cmd
 if ((Get-Command neurobridge -CommandType Application).Source -ne $expected) {
     throw 'A fresh PowerShell did not resolve the installed command.'
 }
+$url = neurobridge web --url
+if ($LASTEXITCODE -ne 0 -or $url -notmatch '^http://127\.0\.0\.1:[0-9]+/$') {
+    throw 'The installed web command did not return a local gateway URL.'
+}
+$ProgressPreference = 'SilentlyContinue'
+$page = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 5
+if ($page.StatusCode -ne 200) {
+    throw 'The installed web command returned an unavailable URL.'
+}
+Write-Output "NeuroBridge web URL verified: $url"
 neurobridge ssh status
 exit $LASTEXITCODE
 '@
