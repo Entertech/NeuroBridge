@@ -36,8 +36,10 @@ stale_after_ms = 1800
 [ble]
 # 双设备模式或仅头环模式下，enabled 必须为 true，下方两个时间值必须大于 0。
 enabled = true
-# 用于匹配设备的蓝牙广播名称。现场名称不同时修改此项。
+# 可选的广播名称过滤。可改成实际名称，或填空字符串，仅按下方型号匹配。
 device_name = "Flowtime Headband"
+# 多个同型号头环在附近时，可取消下一行注释并填写目标头环的蓝牙 MAC 地址。
+# device_identifier = ""
 # 设备型号特征 UUID。使用标准头环时保持默认值。
 model_nbr_uuid = "0000ff10-1212-abcd-1523-785feabcd123"
 # 每轮扫描的最长等待时间，单位为秒。

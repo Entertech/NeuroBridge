@@ -61,7 +61,7 @@ function Find-Python {
 
 function Test-Dependencies {
     try {
-        & $projectPython -c "import serial, websockets, bleak, win32service; from importlib.metadata import version; assert version('pyserial') == '3.5' and version('websockets') == '12.0' and version('bleak') == '0.19.0' and version('pywin32') == '306'" *> $null
+        & $projectPython -c "import serial, websockets, bleak, win32service; from importlib.metadata import version; assert version('pyserial') == '3.5' and version('websockets') == '12.0' and version('bleak') == '0.19.5' and version('pywin32') == '306'" *> $null
         return ($LASTEXITCODE -eq 0)
     } catch { return $false }
 }

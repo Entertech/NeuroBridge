@@ -26,6 +26,7 @@ class BleConfig:
     model_nbr_uuid: str
     scan_timeout_seconds: int
     reconnect_delay_seconds: int
+    device_identifier: str | None = None
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,7 @@ def load(
     raw = migrate(raw)
     section_fields = {
         "server": {"host", "port", "path"},
-        "ble": {"enabled", "device_name", "model_nbr_uuid", "scan_timeout_seconds", "reconnect_delay_seconds"},
+        "ble": {"enabled", "device_name", "model_nbr_uuid", "scan_timeout_seconds", "reconnect_delay_seconds", "device_identifier"},
         "recording": {"directory", "subject_id", "replay_recording_id", "replay_speed", "transport_trace_enabled", "transport_trace_max_bytes"},
         "algorithm": {"enabled", "command", "request_timeout_ms"},
         "download": {"enabled", "host", "port", "path"},
@@ -356,6 +357,7 @@ def load(
             str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(),
             int(ble.get("scan_timeout_seconds", 5)),
             int(ble.get("reconnect_delay_seconds", 3)),
+            ble.get("device_identifier", "").strip() or None,
         )
     serial_config = SerialConfig()
     if data_source_type == "serial":

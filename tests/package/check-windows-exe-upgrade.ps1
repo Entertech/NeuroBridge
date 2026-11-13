@@ -47,6 +47,11 @@ $buildInfo = Get-Content -LiteralPath (Join-Path $installRoot 'build-info.txt')
 if ($buildInfo -notcontains "source_commit=$SourceCommit") {
     throw 'EXE upgrade did not install the expected source commit.'
 }
+$python = Join-Path $installRoot 'runtime\python.exe'
+& $python -c "import bleak; from importlib.metadata import version; assert version('bleak') == '0.19.5'; print('Installed Bleak', version('bleak'))"
+if ($LASTEXITCODE -ne 0) {
+    throw 'EXE upgrade did not install Bleak 0.19.5.'
+}
 $pathEntries = @([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';' |
     Where-Object { $_.TrimEnd('\') -eq $cliDirectory })
 if ($pathEntries.Count -ne 1) {

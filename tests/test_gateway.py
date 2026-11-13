@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import replace
 from hashlib import sha256
 import json
 from pathlib import Path
+import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from neurobridge.config import AlgorithmConfig, BleConfig, DataSourceConfig, GatewayConfig, RecordingConfig, ServerConfig
@@ -47,21 +51,48 @@ class PacketTests(unittest.TestCase):
         self.assertEqual(window.hr[0].value, b"r" * HR_PACKET_BYTES)
 
 
-class FlowtimeSelectionTests(unittest.TestCase):
-    def test_selects_matching_candidate_with_highest_rssi(self) -> None:
-        class Device:
-            def __init__(self, name: str, uuids: list[str], rssi: int) -> None:
-                self.name, self.metadata, self.rssi = name, {"uuids": uuids}, rssi
+class FlowtimeSelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_connects_to_strongest_match_using_advertisement_data(self) -> None:
+        settings = config(Path("/tmp")).ble
+        model = settings.model_nbr_uuid
+
+        def advertisement(address, name, rssi, uuid=model):
+            return (
+                SimpleNamespace(address=address, name=None),
+                SimpleNamespace(local_name=name, service_uuids=[uuid], rssi=rssi),
+            )
+
+        other_model = advertisement("A1", "Flowtime Headband", -5, "other")
+        other_name = advertisement("A2", "Other", -10)
+        weak = advertisement("A3", "Flowtime Headband", -80)
+        strong = advertisement("A4", "Flowtime Headband", -42)
+        devices = {device.address: (device, adv) for device, adv in (other_model, other_name, weak, strong)}
+        connected = []
+
+        async def discover(*, timeout, return_adv):
+            self.assertEqual(timeout, settings.scan_timeout_seconds)
+            self.assertTrue(return_adv)
+            return devices
+
+        def client(device, *, disconnected_callback):
+            connected.append(device)
+            raise asyncio.CancelledError
+
         async def ignored_packet(_: DevicePacket) -> None: pass
         async def ignored_status(_: str, __: object) -> None: pass
         async def ignored_ready() -> None: pass
-        adapter = FlowtimeAdapter(config(Path("/tmp")).ble, ignored_packet, ignored_status, ignored_ready)
-        selected = adapter.select_strongest([
-            Device("Other", ["0000ff10-1212-abcd-1523-785feabcd123"], -20),
-            Device("Flowtime Headband", ["0000ff10-1212-abcd-1523-785feabcd123"], -80),
-            Device("Flowtime Headband", ["0000ff10-1212-abcd-1523-785feabcd123"], -42),
-        ])
-        self.assertEqual(selected.rssi, -42)
+        with patch.dict(sys.modules, {"bleak": SimpleNamespace(BleakScanner=SimpleNamespace(discover=discover), BleakClient=client)}):
+            adapter = FlowtimeAdapter(replace(settings, enabled=True), ignored_packet, ignored_status, ignored_ready)
+            with self.assertLogs("neurobridge.ble.flowtime", level="INFO") as logs, self.assertRaises(asyncio.CancelledError):
+                await adapter.run()
+        self.assertEqual(connected, [strong[0]])
+        self.assertIn("discovered=4 modelMatches=3 matched=2", "\n".join(logs.output))
+
+        pinned = replace(settings, device_name=None, device_identifier="a2")
+        adapter = FlowtimeAdapter(pinned, ignored_packet, ignored_status, ignored_ready)
+        model_matches, candidates = adapter.matching_candidates(devices.values())
+        self.assertEqual(model_matches, 3)
+        self.assertEqual(candidates, [other_name])
 
     def test_ff32_remains_unknown_until_its_values_are_poc_verified(self) -> None:
         self.assertEqual(wear_state_from_packet(b"\x00\x00"), "unknown")

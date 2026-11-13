@@ -3,10 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable, Iterable
 
 from ..config import BleConfig
 from ..device.packet import DevicePacket
+
+if TYPE_CHECKING:
+    from bleak.backends.device import BLEDevice
+    from bleak.backends.scanner import AdvertisementData
 
 LOG = logging.getLogger(__name__)
 BASE = "-1212-abcd-1523-785feabcd123"
@@ -31,20 +35,25 @@ class FlowtimeAdapter:
         self._client = None
         self._stopping = False
 
-    def matching_candidates(self, devices: list[Any]) -> list[Any]:
-        """Return profile matches without logging device addresses or advertisement bytes."""
-        def matches(device: Any) -> bool:
-            name_matches = self.config.device_name is None or getattr(device, "name", None) == self.config.device_name
-            metadata = getattr(device, "metadata", {}) or {}
-            advertised_uuids = {str(item).lower() for item in metadata.get("uuids", [])}
-            return name_matches and self.config.model_nbr_uuid in advertised_uuids
-
-        return [device for device in devices if matches(device)]
-
-    def select_strongest(self, devices: list[Any]) -> Any | None:
-        """Select the strongest advertisement matching the configured Flowtime profile."""
-        candidates = self.matching_candidates(devices)
-        return max(candidates, key=lambda device: getattr(device, "rssi", None) if isinstance(getattr(device, "rssi", None), int | float) else float("-inf"), default=None)
+    def matching_candidates(
+        self, devices: Iterable[tuple[BLEDevice, AdvertisementData]]
+    ) -> tuple[int, list[tuple[BLEDevice, AdvertisementData]]]:
+        """Count advertised model matches and return candidates satisfying the optional filters."""
+        model_uuid = self.config.model_nbr_uuid.lower()
+        identifier = self.config.device_identifier
+        model_matches = 0
+        candidates = []
+        for device, advertisement in devices:
+            if not any(uuid.lower() == model_uuid for uuid in advertisement.service_uuids):
+                continue
+            model_matches += 1
+            name = advertisement.local_name or device.name
+            if self.config.device_name is not None and name != self.config.device_name:
+                continue
+            if identifier is not None and device.address.casefold() != identifier.casefold():
+                continue
+            candidates.append((device, advertisement))
+        return model_matches, candidates
 
     async def run(self) -> None:
         if not self.config.enabled:
@@ -64,20 +73,29 @@ class FlowtimeAdapter:
                     self.config.scan_timeout_seconds,
                     self.config.reconnect_delay_seconds,
                 )
-                devices = await BleakScanner.discover(timeout=self.config.scan_timeout_seconds)
-                candidates = self.matching_candidates(devices)
-                candidate = self.select_strongest(candidates)
+                devices = await BleakScanner.discover(timeout=self.config.scan_timeout_seconds, return_adv=True)
+                if self._stopping:
+                    return
+                model_matches, candidates = self.matching_candidates(devices.values())
                 LOG.info(
-                    "Flowtime scan completed: attempt=%s discovered=%s matched=%s durationMs=%s",
+                    "Flowtime scan completed: attempt=%s discovered=%s modelMatches=%s matched=%s durationMs=%s",
                     attempt,
                     len(devices),
+                    model_matches,
                     len(candidates),
                     int((time.monotonic() - scan_started) * 1000),
                 )
-                if candidate is None:
+                if not candidates:
+                    if not devices:
+                        LOG.warning("No BLE advertisements received; check the Bluetooth adapter and nearby devices")
+                    elif not model_matches:
+                        LOG.warning("BLE advertisements received, but none advertised the configured Flowtime model UUID")
+                    else:
+                        LOG.warning("Flowtime model UUID found, but no device matched the configured name or identifier")
                     raise RuntimeError("No Flowtime headband matching the configured profile was found")
+                candidate, advertisement = max(candidates, key=lambda item: item[1].rssi)
                 phase = "connect"
-                LOG.info("Connecting to Flowtime candidate: attempt=%s rssi=%s", attempt, getattr(candidate, "rssi", None))
+                LOG.info("Connecting to Flowtime candidate: attempt=%s rssi=%s", attempt, advertisement.rssi)
 
                 def disconnected(_: object) -> None:
                     LOG.warning("Flowtime disconnected callback received: attempt=%s", attempt)

@@ -178,9 +178,10 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         started = asyncio.Event()
         notifications = {}
         commands = []
-        candidate = SimpleNamespace(
-            name="Flowtime Headband", rssi=-40,
-            metadata={"uuids": ["0000ff10-1212-abcd-1523-785feabcd123"]},
+        candidate = SimpleNamespace(address="headband", name="Flowtime Headband")
+        advertisement = SimpleNamespace(
+            local_name="Flowtime Headband", rssi=-40,
+            service_uuids=["0000ff10-1212-abcd-1523-785feabcd123"],
         )
 
         class FakeClient:
@@ -203,7 +204,7 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             async def disconnect(self):
                 self.is_connected = False
 
-        scanner = SimpleNamespace(discover=AsyncMock(return_value=[candidate]))
+        scanner = SimpleNamespace(discover=AsyncMock(return_value={candidate.address: (candidate, advertisement)}))
         bleak = SimpleNamespace(BleakScanner=scanner, BleakClient=FakeClient)
         root = Path(__file__).resolve().parents[2]
         with tempfile.TemporaryDirectory() as directory:

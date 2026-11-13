@@ -38,13 +38,17 @@ PowerShell 环境准备、COM 检查、配置、前台启动、日志排障与�
 
 Windows 10/11 x64 首次生成的配置默认同时启用 USB 串口耳机和 Flowtime BLE 头环。打开 Windows 蓝牙与头环电源后，网关自动扫描和重连。可以只接其中一种设备，联调页按实际连接情况显示。
 
+Windows 安装包内置 Bleak 0.19.5，用于修复 Python 3.11 下头环连接时的 WinRT 服务发现异常。
+
 从 v0.3.2 覆盖安装时，网关首次启动会识别原厂默认配置，将其备份至 `%ProgramData%\NeuroBridge\config-backups`，再换成带中文注释的双设备配置。修改过的配置和已明确设置头环开关的配置继续沿用。可在 Windows 事件查看器的应用程序日志中确认迁移结果。
 
 已有配置需要开启头环或补注释时，参照带中文注释的 [Windows 配置模板](gateway.toml.example)。源码部署的配置是 `.runtime\config\windows-gateway.toml`，安装包部署是 `%ProgramData%\NeuroBridge\gateway.toml`。修改前停止网关。源码部署使用菜单 `11` 停止项目服务，前台运行时按 `Ctrl+C`。安装包部署在管理员 PowerShell 中执行 `Stop-Service NeuroBridge`。
 
 - 同时采集时，使用 `profile = "windows_headset_local"`，在 `[data_source]` 设置 `type = "serial"` 与 `include_headband = true`。
 - 只采集头环时，使用 `profile = "windows_headband_local"`，在 `[data_source]` 设置 `type = "bluetooth"` 与 `include_headband = false`。
-- 双设备或仅头环模式须将 `[ble].enabled` 设为 `true`，扫描超时和重连间隔都要大于 0 秒。默认分别为 5 秒和 3 秒。旧配置没有 `[ble]` 时，从模板复制该段。已有此段时直接修改对应字段，并按实际广播名称设置 `device_name`。
+- 双设备或仅头环模式须将 `[ble].enabled` 设为 `true`，扫描超时和重连间隔都要大于 0 秒。默认分别为 5 秒和 3 秒。旧配置没有 `[ble]` 时，从模板复制该段。网关按广播型号 UUID 匹配头环。可将 `device_name` 设为实际广播名称或留空。附近有多个同型号头环时，可在 `[ble].device_identifier` 填入目标头环的蓝牙 MAC 地址，未填写时选择信号最强的匹配设备。
+
+排查头环连接时，在 `neurobridge.log` 搜索 `Flowtime scan completed`。若 `discovered=0`，优先检查蓝牙适配器、驱动和附近设备是否在广播。若 `discovered>0` 且 `modelMatches=0`，检查头环是否在广播及型号 UUID 是否正确。若 `modelMatches>0` 且 `matched=0`，检查名称和设备标识配置。
 
 源码部署双击启动器重新启动，安装包部署执行 `Start-Service NeuroBridge`。打开 `http://127.0.0.1:8080/`（自定义端口以配置为准），等待「头环蓝牙」区显示设备已连接。点击 `getLatest` 查看最新算法结果，或点击 `subscribe` 接收连续窗口。需要确认原始数据时，先勾选 EEG 和 HR 原始字节流再订阅。旧的 `/capture/` 入口在头环模式下跳转至联调页。
 
