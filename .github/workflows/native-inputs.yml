@@ -80,8 +80,9 @@ jobs:
         shell: powershell
         env:
           TARGET_ID: ${{ matrix.id }}
-          # Cover both the package before the CLI and the first package with it.
-          PREVIOUS_SOURCE: ${{ matrix.id == 'windows-10-x86_64-exe' && 'd23b6db64a2a55b6a6dc42274fadef5fff032dd2' || 'e457c9611b7cacbf68cfb7e8e19b9eaf1463d4d8' }}
+          # Test replacement of the last published EXE, including builds that
+          # retain the release version on a requirement branch.
+          PREVIOUS_SOURCE: ce30b2ca1575fe512d4ca461b3097204505968f6
         run: |
           $ErrorActionPreference = 'Stop'
           $previous = Join-Path $env:RUNNER_TEMP 'neurobridge-previous-source'
