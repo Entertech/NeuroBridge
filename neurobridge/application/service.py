@@ -6,9 +6,9 @@ import asyncio
 import logging
 import time
 from dataclasses import replace
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
-from ..domain.algorithm import AlgorithmResult, AlgorithmSession, AlgorithmState
+from ..domain.algorithm import AlgorithmInput, AlgorithmResult, AlgorithmSession, AlgorithmState
 from ..domain.raw import DeviceFrame, ParseOutcome, RawChunk
 from ..domain.result import WindowResult
 from ..domain.signal import ParsedSignal, ParsedSignalBatch
@@ -54,6 +54,8 @@ class ApplicationService:
         algorithm_queue_size: int = 8,
         persistence_timeout_ms: int = 1000,
         shutdown_timeout_ms: int = 5000,
+        observe_batch: Callable[[ParsedSignalBatch], None] | None = None,
+        prepare_algorithm_input: Callable[[ParsedSignalBatch, AlgorithmInput], Awaitable[AlgorithmInput]] | None = None,
     ) -> None:
         self.device_protocol = device_protocol
         self.requires_algorithm_to_start = requires_algorithm_to_start
@@ -66,6 +68,8 @@ class ApplicationService:
         self.northbound = northbound
         self.recording = recording
         self.control = control
+        self.observe_batch = observe_batch
+        self.prepare_algorithm_input = prepare_algorithm_input
         if min(algorithm_queue_size, persistence_timeout_ms, shutdown_timeout_ms) <= 0:
             raise ValueError("Pipeline limits must be positive")
         self.persistence_timeout_ms = persistence_timeout_ms
@@ -383,6 +387,8 @@ class ApplicationService:
         self._batch_sequence += 1
         self._batch_order[batch.batch_id] = self._batch_sequence
         receipt = self._persist_parsed(batch)
+        if self.observe_batch is not None:
+            self.observe_batch(batch)
         try:
             self._batches.put_nowait((batch, receipt))
         except asyncio.QueueFull:
@@ -480,6 +486,11 @@ class ApplicationService:
         elif self._algorithm_state in {AlgorithmState.READY, AlgorithmState.ERROR}:
             evaluation_started = time.monotonic()
             algorithm_input = self.mapper.map(batch, (self._frames[ref] for ref in batch.frame_refs if ref in self._frames))
+            if self.prepare_algorithm_input is not None:
+                algorithm_input = await self.prepare_algorithm_input(batch, algorithm_input)
+                if batch.connection_session_id != self._connection_session_id:
+                    return WindowResult(batch, self.aggregator._invalid(batch.batch_id, "CONNECTION_SESSION_ENDED"),
+                                        "live", self.clock_ms(), False)
             result = await self.aggregator.evaluate(
                 batch,
                 algorithm_input,

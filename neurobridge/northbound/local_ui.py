@@ -93,6 +93,8 @@ def _runtime_config(config: GatewayConfig) -> bytes:
         + json.dumps("dual" if config.data_source.include_headband else config.data_source.type, ensure_ascii=True)
         + ";\nwindow.NEUROBRIDGE_B_CLIENT_WINDOWS = "
         + json.dumps(config.profile in {"windows_headset_local", "windows_headband_local"})
+        + ";\nwindow.NEUROBRIDGE_B_CLIENT_STALE_AFTER_MS = "
+        + str(config.data_source.stale_after_ms)
         + ";\n"
     ).encode("ascii")
 

@@ -94,6 +94,52 @@ class SlowAlgorithm(FakeAlgorithm):
 
 
 class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_windows_calibration_reaches_only_the_headset_algorithm(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        template = (root / "windows/gateway.toml.example").read_text(encoding="utf-8")
+        config_path = Path(self.enterContext(tempfile.TemporaryDirectory())) / "gateway.toml"
+        config_path.write_text(template.replace("eeg_alignment_percent = 0", "eeg_alignment_percent = 5"), encoding="utf-8")
+        config = load(config_path)
+        config = replace(config, recording=replace(config.recording, directory=config_path.parent / "recordings"))
+        (headset, headband), _ = build_runtime(config, RuntimePlatform("windows", "x86_64"))
+
+        for container, session in ((headset, "serial"), (headband, "ble")):
+            app = container.application
+            app.algorithm = FakeAlgorithm()
+            app.control = None
+            app.northbound = CollectingNorthboundSink()
+            self.addAsyncCleanup(container.gateway.stop)
+            await container.gateway.start()
+            await container.gateway.update_status("connectionState", "validated" if session == "serial" else "connected")
+            app.bind_recording(container.gateway.recording_repository)
+            self.addAsyncCleanup(app.close)
+            await app.on_connection(DeviceConnectionEvent(ConnectionState.CONNECTED, 600, session))
+            await app.prepare_session(session, container.gateway.store.recording_id)
+
+        def eeg_bytes(samples):
+            return b"\x00\x01" + b"".join(sample.to_bytes(3, "big") for sample in samples)
+
+        original = eeg_bytes([900, 1800, 1000, 2000, 1100, 2200])
+        reference = eeg_bytes([400, 400, 1000, 1000, 1600, 1600])
+        now = int(time.time() * 1000)
+        with patch.object(headband.source, "status", return_value=SourceStatus(ConnectionState.CONNECTED, "ble")):
+            await headband.application.process(RawChunk("bluetooth", "ff31", reference, now, 0, "ble", "ble-trace"))
+            await headband.application.flush()
+            frame = b"\xaa\xaa\xaa\x1c" + original + b"\x48\xbb\xbb\xbb"
+            await headset.application.process(RawChunk("serial", "serial", frame, now, 0, "serial", "serial-trace"))
+            await headset.application.flush()
+
+        headband_value, = headband.application.algorithm.inputs
+        headset_value, = headset.application.algorithm.inputs
+        self.assertEqual(base64.b64decode(headband_value.payload["eegRawBase64"]), reference)
+        self.assertEqual(base64.b64decode(headset_value.payload["eegRawBase64"]),
+                         eeg_bytes([895, 1790, 1000, 2000, 1105, 2210]))
+        self.assertEqual(base64.b64decode(headset_value.payload["hrRawBase64"]), b"\x48")
+        headset_window, = headset.application.northbound.events
+        self.assertEqual(headset_window.result.batch.signals[0].samples, original[2:])
+        self.assertEqual(headset.application.diagnostics["window_processing_errors"], 0)
+        self.assertEqual(headband.application.diagnostics["window_processing_errors"], 0)
+
     async def test_windows_two_sources_share_one_websocket_and_independent_subscriptions(self) -> None:
         root = Path(__file__).resolve().parents[2]
         template = (root / "windows/gateway.toml.example").read_text(encoding="utf-8")

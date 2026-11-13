@@ -32,6 +32,10 @@ include_headband = true
 # 数据窗口与过期阈值，单位为毫秒。
 window_interval_ms = 600
 stale_after_ms = 1800
+# 双设备原始 EEG 校准。0 为关闭。完成同人同步录制验证后，可从 5 开始试验，最大 10。
+eeg_alignment_percent = 0
+# 耳机算法等待同一窗口头环 EEG 的最长毫秒数，须小于 600。0 仅使用已经到达的窗口。
+eeg_alignment_wait_ms = 100
 
 [ble]
 # 双设备模式或仅头环模式下，enabled 必须为 true，下方两个时间值必须大于 0。

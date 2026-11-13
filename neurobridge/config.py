@@ -37,6 +37,8 @@ class DataSourceConfig:
     window_interval_ms: int = 600
     stale_after_ms: int = 1800
     include_headband: bool = False
+    eeg_alignment_percent: int = 0
+    eeg_alignment_wait_ms: int = 100
 
 
 @dataclass(frozen=True)
@@ -191,7 +193,7 @@ def load(
         "network": {"mode", "interface", "subnet_cidr", "dhcp_range_start", "dhcp_range_end", "dhcp_lease_time"},
         "access": {"mode"},
         "local_ui": {"enabled", "host", "port", "directory"},
-        "data_source": {"type", "window_interval_ms", "stale_after_ms", "include_headband"},
+        "data_source": set(DataSourceConfig.__dataclass_fields__),
         "serial": {"device", "candidate_types", "baud_rate", "handshake_timeout_ms", "command_response_timeout_ms", "data_timeout_seconds", "reconnect_delay_seconds", "stats_interval_seconds", "max_buffer_bytes", "dtr", "rts"},
         "storage": {"warning_threshold_bytes", "critical_threshold_bytes", "segment_duration_seconds", "segment_max_bytes", "writer_queue_size", "recovery_margin_bytes", "recovery_checks", "fsync_interval_records", "session_retention_days", "auto_cleanup_enabled"},
         "pipeline": set(PipelineConfig.__dataclass_fields__),
@@ -341,6 +343,12 @@ def load(
         raise ValueError("data_source.window_interval_ms must be 600 for the current northbound contract")
     if not isinstance(stale_after_ms, int) or isinstance(stale_after_ms, bool) or stale_after_ms <= window_interval_ms:
         raise ValueError("data_source.stale_after_ms must be an integer greater than window_interval_ms")
+    eeg_alignment_percent = data_source.get("eeg_alignment_percent", 0)
+    eeg_alignment_wait_ms = data_source.get("eeg_alignment_wait_ms", 100)
+    if not 0 <= eeg_alignment_percent <= 10:
+        raise ValueError("data_source.eeg_alignment_percent must be between 0 and 10")
+    if not 0 <= eeg_alignment_wait_ms < window_interval_ms:
+        raise ValueError("data_source.eeg_alignment_wait_ms must be smaller than the data window and non-negative")
     replay_recording_id = recording.get("replay_recording_id") or None
     if data_source_type == "serial" and replay_recording_id:
         raise ValueError("recording.replay_recording_id is not supported when data_source.type is serial")
@@ -460,7 +468,8 @@ def load(
             local_ui_port,
             local_ui_directory,
         ),
-        data_source=DataSourceConfig(data_source_type, window_interval_ms, stale_after_ms, include_headband),
+        data_source=DataSourceConfig(data_source_type, window_interval_ms, stale_after_ms, include_headband,
+                                     eeg_alignment_percent, eeg_alignment_wait_ms),
         serial=serial_config,
         storage=StorageConfig(**storage_values, auto_cleanup_enabled=auto_cleanup_enabled),
         pipeline=PipelineConfig(**pipeline_values),
@@ -496,6 +505,7 @@ def _validate_types(raw: dict) -> None:
                "ble.reconnect_delay_seconds", "serial.baud_rate", "serial.handshake_timeout_ms",
                "serial.command_response_timeout_ms", "serial.max_buffer_bytes",
                "algorithm.request_timeout_ms", "data_source.window_interval_ms", "data_source.stale_after_ms",
+               "data_source.eeg_alignment_percent", "data_source.eeg_alignment_wait_ms",
                "logging.max_bytes", "logging.backup_count", "recording.transport_trace_max_bytes"}
     number = {"serial.data_timeout_seconds", "serial.reconnect_delay_seconds", "serial.stats_interval_seconds",
               "recording.replay_speed"}
