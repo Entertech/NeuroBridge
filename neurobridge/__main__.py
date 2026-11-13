@@ -40,10 +40,10 @@ def _file_sha256(path: str) -> str:
 async def run(config_path: str, *, override_path: str | None = None, development: bool = False) -> None:
     started_at = time.monotonic()
     config = load_runtime_config(config_path, override_path=override_path, development=development)
+    configure_logging(config.logging)
     containers, router = build_runtime(config)
     container = containers[0]
     strategy = access_strategy(config.access.mode)
-    configure_logging(config.logging)
     LOG.info(
         "Process starting: appVersion=%s pid=%s python=%s platform=%s arch=%s kernel=%s config=%s configSha256=%s",
         APPLICATION_VERSION,
