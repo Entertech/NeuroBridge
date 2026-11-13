@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.4.6"
+version = "0.4.7"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -80,6 +80,13 @@ to_version = "0.4.6"
 impact = "patch"
 compatibility = "The Windows test installer upgrades the 0.4.5 candidate with existing settings."
 evidence = "Initialize file logging before creating the gateway so the EEG alignment configuration is recorded at startup."
+
+[[application_release_changes]]
+from_version = "0.4.6"
+to_version = "0.4.7"
+impact = "patch"
+compatibility = "Windows dual-source configurations without an explicit EEG alignment percentage now default to 5%. An explicit zero continues to disable alignment."
+evidence = "Verify the default with a legacy dual-source configuration and exercise installation over Windows candidate 0.4.6."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
@@ -2242,3 +2249,14 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "仅记录网关内部诊断元数据，便于真机双设备验证。"
+
+[[change_records]]
+id = "2026-11-13-windows-headset-eeg-alignment-default"
+date = "2026-11-13"
+scope = "headset_eeg_algorithm_input"
+summary = "Windows 双设备模式默认启用 5% 原始 EEG 幅度校准，显式配置 0 时关闭。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "只调整 Windows 双设备网关的算法输入默认值，原始数据和协议结构保持不变。"
