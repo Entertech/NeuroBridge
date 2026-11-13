@@ -80,8 +80,8 @@ jobs:
         shell: powershell
         env:
           TARGET_ID: ${{ matrix.id }}
-          # Test replacement of the 0.4.4 EXE installed on the Windows test machine.
-          PREVIOUS_SOURCE: 5281d81e19e1ddb800adb9fac76f9ada4919b2df
+          # Test replacement of the 0.4.5 EXE installed on the Windows test machine.
+          PREVIOUS_SOURCE: 38884d777999ecd1beaf0b6b6e72804b7a307665
         run: |
           $ErrorActionPreference = 'Stop'
           $previous = Join-Path $env:RUNNER_TEMP 'neurobridge-previous-source'

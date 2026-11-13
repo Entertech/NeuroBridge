@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.4.5"
+version = "0.4.6"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -73,6 +73,13 @@ to_version = "0.4.5"
 impact = "patch"
 compatibility = "Windows test installer upgrades the 0.4.4 EXE and preserves ProgramData. EEG alignment is opt-in."
 evidence = "Add bounded dual-device EEG alignment and diagnostic logs. Verify the installed package, retained configuration and local gateway command from the previous candidate."
+
+[[application_release_changes]]
+from_version = "0.4.5"
+to_version = "0.4.6"
+impact = "patch"
+compatibility = "The Windows test installer upgrades the 0.4.5 candidate with existing settings."
+evidence = "Initialize file logging before creating the gateway so the EEG alignment configuration is recorded at startup."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
