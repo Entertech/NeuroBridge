@@ -52,20 +52,33 @@ neurobridge ssh status
 exit $LASTEXITCODE
 '@
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($check))
-$stdout = Join-Path $LogDirectory 'ssh-status.log'
-$stderr = Join-Path $LogDirectory 'ssh-status-errors.log'
-$shellOptions = @{
-    FilePath = Join-Path $PSHOME 'powershell.exe'
-    UseNewEnvironment = $true
-    Wait = $true
-    PassThru = $true
-    ArgumentList = "-NoProfile -NonInteractive -EncodedCommand $encoded"
-    RedirectStandardOutput = $stdout
-    RedirectStandardError = $stderr
-}
-$shell = Start-Process @shellOptions
-if ($shell.ExitCode -ne 0 -or -not (Select-String -LiteralPath $stdout -Pattern 'OpenSSH Server' -Quiet)) {
-    throw "neurobridge ssh status failed. See $stdout and $stderr."
+$shellInfo = New-Object System.Diagnostics.ProcessStartInfo
+$shellInfo.FileName = Join-Path $PSHOME 'powershell.exe'
+$shellInfo.Arguments = "-NoProfile -NonInteractive -EncodedCommand $encoded"
+$shellInfo.UseShellExecute = $false
+$shellInfo.RedirectStandardOutput = $true
+$shellInfo.RedirectStandardError = $true
+# Keep the runner's normal process environment. Reload the PATH exactly from
+# its persistent scopes so the test sees what a newly opened terminal sees.
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$shellInfo.EnvironmentVariables['Path'] = (@($machinePath, $userPath) | Where-Object { $_ }) -join ';'
+$shell = [Diagnostics.Process]::Start($shellInfo)
+try {
+    $stdout = $shell.StandardOutput.ReadToEndAsync()
+    $stderr = $shell.StandardError.ReadToEndAsync()
+    if (-not $shell.WaitForExit(30000)) {
+        $shell.Kill()
+        throw 'The SSH status command timed out.'
+    }
+    $output = $stdout.GetAwaiter().GetResult()
+    Set-Content -LiteralPath (Join-Path $LogDirectory 'ssh-status.log') -Value $output -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $LogDirectory 'ssh-status-errors.log') -Value ($stderr.GetAwaiter().GetResult()) -Encoding UTF8
+    if ($shell.ExitCode -ne 0 -or $output -notmatch 'OpenSSH Server') {
+        throw 'neurobridge ssh status failed. See the status logs.'
+    }
+} finally {
+    $shell.Dispose()
 }
 
 Invoke-Installer $Installer 'uninstall' (Join-Path $LogDirectory 'uninstall.log')
