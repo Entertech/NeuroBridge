@@ -149,6 +149,10 @@ powershell -ExecutionPolicy Bypass -File 'C:\Program Files\NeuroBridge\windows\e
 
 ## 局域网 SSH 排障
 
+安装后，在 Windows 桌面运行 `neurobridge web`，即可用默认浏览器打开 B 端联调页。命令每次查询正在运行的网关所监听的端口。`neurobridge web --url` 只输出网页地址，方便脚本使用。
+
+在 SSH 会话里运行 `neurobridge web`，再把输出的 SSH 转发命令粘贴到看网页的电脑上的新终端。保持转发连接打开，并用浏览器访问命令显示的地址。转发同时覆盖网页和 WebSocket。
+
 在 Windows 10/11 完成安装后，从开始菜单新开 PowerShell，即可在任意目录运行以下命令。安装器会注册系统 PATH；如果一直开着 Windows Terminal，请关闭整个应用再打开，旧窗口会保留启动时的环境。
 
 ```powershell

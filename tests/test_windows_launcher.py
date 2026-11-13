@@ -17,6 +17,27 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(sys.platform == 'win32', 'Windows cmd and PowerShell command dispatch')
 class WindowsSshCommandTests(unittest.TestCase):
+    def test_cli_dispatches_web_and_url_only(self):
+        with tempfile.TemporaryDirectory(prefix='neurobridge cli ') as directory:
+            root = Path(directory)
+            (root / 'cli').mkdir()
+            shutil.copy2(ROOT / 'windows/cli/neurobridge.cmd', root / 'cli/neurobridge.cmd')
+            (root / 'open-web.ps1').write_text(
+                'param([switch]$UrlOnly)\nWrite-Output $UrlOnly.IsPresent\nexit 7\n',
+                encoding='ascii',
+            )
+            for arguments, expected in ((['web'], 'False'), (['web', '--url'], 'True'), (['web', '--unknown'], None)):
+                with self.subTest(arguments=arguments):
+                    result = subprocess.run(
+                        ['cmd.exe', '/d', '/c', 'cli\\neurobridge.cmd', *arguments],
+                        cwd=root, capture_output=True, text=True, timeout=10,
+                    )
+                    if expected is None:
+                        self.assertEqual(result.returncode, 2)
+                    else:
+                        self.assertEqual(result.returncode, 7, result.stderr)
+                        self.assertEqual(result.stdout.strip(), expected)
+
     def test_cli_forwards_ssh_actions_and_exit_status(self):
         with tempfile.TemporaryDirectory(prefix='neurobridge cli ') as directory:
             root = Path(directory)
