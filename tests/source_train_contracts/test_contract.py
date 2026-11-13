@@ -314,11 +314,17 @@ class GitSourceTests(unittest.TestCase):
             self.assertFalse(result['shouldRelease'])
             fetch.assert_called_once_with('refs/heads/master')
 
-    def test_fast_forward_push_keeps_before_without_remote_lookup(self):
-        (self.root/'docs.txt').write_text('ordinary push'); self.commit('docs')
-        with mock.patch.object(train, 'api') as api, mock.patch.object(train.Train, 'fetch') as fetch:
-            self.assertFalse(train.source_check('codex/ordinary', self.baseline, event='push')['shouldRelease'])
-            api.assert_not_called(); fetch.assert_not_called()
+    def test_requirement_push_can_restore_fork_version_after_invalid_bump(self):
+        self.registry('0.3.3'); self.commit('illegal requirement bump')
+        before = self.git('rev-parse', 'HEAD')
+        with mock.patch.object(train, 'api', return_value={'default_branch': 'master'}), \
+             mock.patch.object(train.Train, 'fetch', return_value=self.baseline) as fetch:
+            (self.root/'docs.txt').write_text('ordinary push'); self.commit('docs')
+            with self.assertRaisesRegex(ValueError, 'must not initialize'):
+                train.source_check('codex/ordinary', before, event='push')
+            self.registry('0.3.2'); self.commit('restore fork version')
+            self.assertFalse(train.source_check('codex/ordinary', before, event='push')['shouldRelease'])
+            fetch.assert_called_with('refs/heads/master')
 
     def test_rebased_requirement_cannot_hide_illegal_version_initialization(self):
         self.registry('0.3.3'); self.commit('illegal requirement bump')

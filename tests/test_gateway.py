@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import replace
+from enum import IntEnum
 from hashlib import sha256
 import json
 from pathlib import Path
+import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from neurobridge.config import AlgorithmConfig, BleConfig, DataSourceConfig, GatewayConfig, RecordingConfig, ServerConfig
@@ -16,6 +21,7 @@ from neurobridge.ble.flowtime import FF51, REQUIRED_NOTIFICATION_CHARACTERISTICS
 from neurobridge.business.gateway import ClientSession, Gateway, ProtocolError, REPLAY_NOT_AVAILABLE_REASON, STREAM_NOT_AVAILABLE_REASON, Subscription
 from neurobridge.ble.packets import DataWindow, EEG_PACKET_BYTES, HR_PACKET_BYTES, RawPacket, WindowAssembler
 from neurobridge.business.recording import RecordingStore
+from neurobridge.versioning import NORTHBOUND_PROTOCOL_VERSION
 
 
 def config(root: Path, replay_id: str | None = None, replay_speed: float = 1000, data_source_type: str = "bluetooth") -> GatewayConfig:
@@ -46,21 +52,48 @@ class PacketTests(unittest.TestCase):
         self.assertEqual(window.hr[0].value, b"r" * HR_PACKET_BYTES)
 
 
-class FlowtimeSelectionTests(unittest.TestCase):
-    def test_selects_matching_candidate_with_highest_rssi(self) -> None:
-        class Device:
-            def __init__(self, name: str, uuids: list[str], rssi: int) -> None:
-                self.name, self.metadata, self.rssi = name, {"uuids": uuids}, rssi
+class FlowtimeSelectionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_connects_to_strongest_match_using_advertisement_data(self) -> None:
+        settings = config(Path("/tmp")).ble
+        model = settings.model_nbr_uuid
+
+        def advertisement(address, name, rssi, uuid=model):
+            return (
+                SimpleNamespace(address=address, name=None),
+                SimpleNamespace(local_name=name, service_uuids=[uuid], rssi=rssi),
+            )
+
+        other_model = advertisement("A1", "Flowtime Headband", -5, "other")
+        other_name = advertisement("A2", "Other", -10)
+        weak = advertisement("A3", "Flowtime Headband", -80)
+        strong = advertisement("A4", "Flowtime Headband", -42)
+        devices = {device.address: (device, adv) for device, adv in (other_model, other_name, weak, strong)}
+        connected = []
+
+        async def discover(*, timeout, return_adv):
+            self.assertEqual(timeout, settings.scan_timeout_seconds)
+            self.assertTrue(return_adv)
+            return devices
+
+        def client(device, *, disconnected_callback):
+            connected.append(device)
+            raise asyncio.CancelledError
+
         async def ignored_packet(_: DevicePacket) -> None: pass
         async def ignored_status(_: str, __: object) -> None: pass
         async def ignored_ready() -> None: pass
-        adapter = FlowtimeAdapter(config(Path("/tmp")).ble, ignored_packet, ignored_status, ignored_ready)
-        selected = adapter.select_strongest([
-            Device("Other", ["0000ff10-1212-abcd-1523-785feabcd123"], -20),
-            Device("Flowtime Headband", ["0000ff10-1212-abcd-1523-785feabcd123"], -80),
-            Device("Flowtime Headband", ["0000ff10-1212-abcd-1523-785feabcd123"], -42),
-        ])
-        self.assertEqual(selected.rssi, -42)
+        with patch.dict(sys.modules, {"bleak": SimpleNamespace(BleakScanner=SimpleNamespace(discover=discover), BleakClient=client)}):
+            adapter = FlowtimeAdapter(replace(settings, enabled=True), ignored_packet, ignored_status, ignored_ready)
+            with self.assertLogs("neurobridge.ble.flowtime", level="INFO") as logs, self.assertRaises(asyncio.CancelledError):
+                await adapter.run()
+        self.assertEqual(connected, [strong[0]])
+        self.assertIn("discovered=4 modelMatches=3 matched=2", "\n".join(logs.output))
+
+        pinned = replace(settings, device_name=None, device_identifier="a2")
+        adapter = FlowtimeAdapter(pinned, ignored_packet, ignored_status, ignored_ready)
+        model_matches, candidates = adapter.matching_candidates(devices.values())
+        self.assertEqual(model_matches, 3)
+        self.assertEqual(candidates, [other_name])
 
     def test_ff32_remains_unknown_until_its_values_are_poc_verified(self) -> None:
         self.assertEqual(wear_state_from_packet(b"\x00\x00"), "unknown")
@@ -96,11 +129,91 @@ class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
         adapter = FlowtimeAdapter(config(Path("/tmp")).ble, packet, ignored_status, ignored_ready)
         client = Client()
         adapter._client = client
-        await adapter._subscribe()
+        await adapter._subscribe({})
         self.assertEqual(set(client.handlers), set(REQUIRED_NOTIFICATION_CHARACTERISTICS))
         client.handlers[FF51](0, bytearray(b"r" * HR_PACKET_BYTES))  # type: ignore[operator]
         await asyncio.sleep(0)
         self.assertEqual([(item.transport, item.channel, item.value) for item in received], [("bluetooth", "ff51", b"r" * HR_PACKET_BYTES)])
+
+    async def test_logs_notification_gap_and_capture_restart_after_link_loss(self) -> None:
+        settings = replace(config(Path("/tmp")).ble, enabled=True, reconnect_delay_seconds=0)
+        device = SimpleNamespace(name="Flowtime Headband")
+        advertisement = SimpleNamespace(local_name=device.name, service_uuids=[settings.model_nbr_uuid], rssi=-45)
+        clients = []
+
+        class GattSession:
+            handler = None
+
+            def add_session_status_changed(self, handler):
+                self.handler = handler
+                return 0
+
+            def remove_session_status_changed(self, token):
+                if token != 0:
+                    raise AssertionError("Wrong event token")
+                self.handler = None
+
+        class Client:
+            services = SimpleNamespace(get_characteristic=lambda _: None)
+
+            def __init__(self, _device, *, disconnected_callback):
+                self.callback = disconnected_callback
+                self.handlers = {}
+                self.is_connected = False
+                clients.append(self)
+                self._backend = SimpleNamespace(_session=GattSession() if len(clients) == 1 else None)
+
+            async def connect(self):
+                self.is_connected = True
+
+            async def start_notify(self, characteristic, handler):
+                self.handlers[characteristic] = handler
+
+            async def disconnect(self):
+                self.is_connected = False
+
+        async def discover(**_):
+            return {"test": (device, advertisement)}
+
+        async def status(name, value):
+            if name == "connectionState" and value == "connected":
+                client = clients[-1]
+                if len(clients) == 1:
+                    asyncio.get_running_loop().call_soon(drop_link, client)
+                else:
+                    await adapter.stop()
+
+        def drop_link(client):
+            client.handlers[FF51](0, bytearray(b"\x48"))
+            client.is_connected = False
+            client.callback(client)
+            session = client._backend._session
+            session.handler(None, SimpleNamespace(status=GattStatus.CLOSED, error=GattError.SUCCESS))
+
+        class GattStatus(IntEnum):
+            CLOSED = 0
+
+        class GattError(IntEnum):
+            SUCCESS = 0
+
+        async def ignored_packet(_): pass
+        async def ignored_ready(): pass
+
+        adapter = FlowtimeAdapter(settings, ignored_packet, status, ignored_ready, external_control=True)
+        bleak = SimpleNamespace(BleakScanner=SimpleNamespace(discover=discover), BleakClient=Client)
+        with (
+            patch.dict(sys.modules, {"bleak": bleak}),
+            patch("neurobridge.ble.flowtime.sys", SimpleNamespace(platform="win32")),
+            self.assertLogs("neurobridge.ble.flowtime") as logs,
+        ):
+            await asyncio.wait_for(adapter.run(), 3)
+        output = "\n".join(logs.output)
+        self.assertIn("attempt=1 phase=streaming stopping=False", output)
+        self.assertRegex(output, r"lastEegNotificationAgeMs=None lastHrNotificationAgeMs=\d+ scanRssi=-45")
+        self.assertRegex(output, r"Flowtime capture restarted: attempt=2 outageMs=\d+")
+        self.assertIn("attempt=1 status=CLOSED(0) bluetoothError=SUCCESS(0)", output)
+        self.assertIn("Flowtime WinRT GATT session diagnostics unavailable: attempt=2", output)
+        self.assertIsNone(clients[0]._backend._session.handler)
 
 
 class AlgorithmRunnerTests(unittest.IsolatedAsyncioTestCase):
@@ -770,10 +883,18 @@ class ReplayLatestTests(unittest.IsolatedAsyncioTestCase):
                     replay_ended.set()
 
             session = ClientSession()
-            await gateway.subscribe(session, {"streams": ["eeg"]}, send)
+            await gateway.handle(session, json.dumps({
+                "protocolVersion": NORTHBOUND_PROTOCOL_VERSION, "messageType": "request",
+                "requestId": "replay-sub", "action": "subscribe", "params": {"streams": ["eeg"]},
+            }), send)
             await asyncio.wait_for(replay_ended.wait(), timeout=1)
             ended = next(item["data"] for item in received if item["data"].get("event") == "replayEnded")
             self.assertEqual(ended["recordingId"], recording_id)
+            self.assertTrue(all(item["protocolVersion"] == NORTHBOUND_PROTOCOL_VERSION for item in received))
+            self.assertTrue(all(item["data"]["source"] == "headband" for item in received))
+            replay_data = next(item["data"] for item in received if item["data"].get("event") == "data")
+            self.assertEqual(replay_data["mode"], "replay")
+            self.assertEqual(replay_data["payload"]["algorithm"]["attention"], 1)
             await gateway.close_session(session)
             await gateway.stop()
 

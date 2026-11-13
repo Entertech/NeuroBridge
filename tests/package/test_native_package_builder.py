@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 import uuid
+import xml.etree.ElementTree as ET
 from unittest import mock
 
 
@@ -169,6 +170,24 @@ class NativePackageBuilderTests(unittest.TestCase):
             self.assertNotIn("Win64=", rendered)
             self.assertNotIn("-m windows.service", service)
 
+    def test_windows_msi_registers_only_the_cli_directory_on_path(self) -> None:
+        target = BUILDER.target_for("windows-10-x86_64-msi")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = self.runtime(root, target["id"])
+            stage = root / "stage"
+            BUILDER.copy_source(stage, target, runtime)
+            source_root = stage / "opt/neurobridge"
+            self.assertTrue((source_root / "windows/cli/neurobridge.cmd").is_file())
+            self.assertTrue((source_root / "windows/remote-support.ps1").is_file())
+            _, components = BUILDER.wix_directory_tree(source_root, source_root, "INSTALLFOLDER")
+            entries = [component for component in components if "<Environment " in component]
+            self.assertEqual(len(entries), 1)
+            self.assertIn("neurobridge.cmd", entries[0])
+            self.assertIn('Name="PATH" Action="set" Part="last" System="yes" Permanent="no"', entries[0])
+            cli_id = BUILDER.wix_id("D_", "windows/cli")
+            self.assertIn(f'Value="[{cli_id}]"', entries[0])
+
     def test_missing_runtime_is_rejected(self) -> None:
         target = BUILDER.target_for("windows-10-x86_64-msi")
         with tempfile.TemporaryDirectory() as directory:
@@ -264,7 +283,22 @@ class NativePackageBuilderTests(unittest.TestCase):
             self.assertIn(f'Version="{BUILDER.APPLICATION_VERSION}"', wxs)
             self.assertIn(f'UpgradeCode="{upgrade_code}"', wxs)
             self.assertIn('AllowSameVersionUpgrades="yes"', wxs)
+            self.assertIn('Schedule="afterInstallInitialize"', wxs)
+            self.assertIn('Scope="perMachine"', wxs)
             self.assertNotIn("ProductCode=", wxs)
+            namespace = {"wix": "http://wixtoolset.org/schemas/v4/wxs"}
+            document = ET.fromstring(wxs)
+            action = document.find(".//wix:CustomAction[@Id='ConfigureOpenSsh']", namespace)
+            self.assertIsNotNone(action)
+            self.assertEqual(action.get("Execute"), "commit")
+            self.assertEqual(action.get("Impersonate"), "no")
+            self.assertIn(r"WindowsPowerShell\v1.0\powershell.exe", action.get("ExeCommand"))
+            self.assertIn("[#SSH_SETUP_SCRIPT]", action.get("ExeCommand"))
+            self.assertIn("-Action Enable -FromInstaller", action.get("ExeCommand"))
+            sequence = document.find(".//wix:Custom[@Action='ConfigureOpenSsh']", namespace)
+            self.assertIsNotNone(sequence)
+            self.assertIn("NOT Installed", sequence.get("Condition"))
+            self.assertIn("REMOVE", sequence.get("Condition"))
 
         # Windows EXE (Burn).  The bundle detects its predecessor by its own
         # upgrade code; MajorUpgrade only covers the MSI inside it.
@@ -321,6 +355,8 @@ class NativePackageBuilderTests(unittest.TestCase):
                     self.assertIn(expected, template)
                     if target_id.startswith("windows"):
                         self.assertIn('candidate_types = ["COM"]', template)
+                        self.assertIn('include_headband = true', template)
+                        self.assertIn('每轮扫描的最长等待时间', template)
                         self.assertIn(r'directory = "C:\\ProgramData\\NeuroBridge\\logs"', template)
                         self.assertNotIn("ttyACM", template)
                         self.assertNotIn("/opt/neurobridge", template)

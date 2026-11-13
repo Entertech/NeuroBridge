@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -45,6 +46,34 @@ class BridgeIsolationTests(unittest.IsolatedAsyncioTestCase):
 
     async def evaluate(self, runner: AlgorithmRunner):
         return await runner.evaluate_raw(b"synthetic", b"", start_ms=0, end_ms=600)
+
+    async def test_old_bridge_is_rejected_before_receiving_headset_bytes(self) -> None:
+        process = BridgeProcess()
+        process.stdout.feed_data(b'{"algorithm":{}}\n')
+        runner = AlgorithmRunner(AlgorithmConfig(True, ("bridge",)))
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)):
+            await runner.initialize("headset_rev181")
+        self.assertFalse(runner.available)
+        self.assertEqual(await runner.evaluate_raw(b"ear", b"", start_ms=0, end_ms=600,
+                                                   device_protocol="headset_rev181"),
+                         (None, ["ALGORITHM_NOT_READY"]))
+        self.assertEqual([json.loads(item) for item in process.writes], [
+            {"deviceProtocol": "headset_rev181", "eegRawBase64": "", "hrRawBase64": ""},
+        ])
+
+    async def test_headset_bridge_result_with_other_provenance_is_discarded(self) -> None:
+        process = BridgeProcess()
+        process.stdout.feed_data(b'{"algorithm":{},"deviceProtocol":"headset_rev181"}\n'
+                                 b'{"algorithm":{"attention":99},"deviceProtocol":"headband_ble"}\n')
+        runner = AlgorithmRunner(AlgorithmConfig(True, ("bridge",)))
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=process)):
+            await runner.initialize("headset_rev181")
+        self.assertTrue(runner.available)
+        self.assertEqual(await runner.evaluate_raw(b"ear", b"", start_ms=0, end_ms=600,
+                                                   device_protocol="headset_rev181"),
+                         (None, ["ALGORITHM_ERROR"]))
+        self.assertEqual(json.loads(process.writes[-1])["deviceProtocol"], "headset_rev181")
+        self.assertTrue(process.terminated)
 
     async def test_timeout_discards_late_response_and_recovers_only_with_new_session(self) -> None:
         old = BridgeProcess()

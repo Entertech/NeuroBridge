@@ -871,9 +871,10 @@ class DeploymentTests(unittest.TestCase):
                         "} else {", 1
                     )[0]
                     self.assertIn('sendRequest("getStatus", {});', status_subscription_handler)
+                    self.assertIn(auto_connect, script)
                 else:
-                    self.assertIn('sendRequest("getStatus", {});', open_handler)
-                self.assertIn(auto_connect, script)
+                    self.assertIn('sendRequest("getStatus", {}, item);', open_handler)
+                    self.assertIn('if (typeof configuredEndpoint === "string") {\n  connect(localPanel);\n}', script)
 
     def test_one_command_update_uses_only_the_existing_checkout(self) -> None:
         script = (ROOT / "linux" / "update-ubuntu.sh").read_text(encoding="utf-8")

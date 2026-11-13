@@ -11,7 +11,7 @@ from unittest.mock import patch
 from neurobridge.adapters.sources.serial_windows import discover_windows_com_candidates, open_windows_com
 from neurobridge.bootstrap import build_container
 from neurobridge.config import load
-from neurobridge.profiles.resolver import RuntimePlatform
+from neurobridge.profiles.resolver import RuntimePlatform, resolve_profile
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,6 +29,20 @@ class Port:
 
 
 class PlatformProfileTests(unittest.TestCase):
+    def test_windows_headband_requires_an_explicit_enabled_ble_profile(self) -> None:
+        serial = load(ROOT / "windows/gateway.toml.example")
+        runtime = RuntimePlatform("windows", "x86_64")
+        bluetooth = replace(serial, data_source=replace(serial.data_source, type="bluetooth", include_headband=False))
+        with self.assertRaisesRegex(ValueError, "transport expected=serial"):
+            resolve_profile(bluetooth, runtime)
+        headband = replace(bluetooth, profile="windows_headband_local", ble=replace(bluetooth.ble, enabled=False))
+        with self.assertRaisesRegex(ValueError, "ble.enabled=true"):
+            resolve_profile(headband, runtime)
+        headband = replace(headband, ble=replace(headband.ble, enabled=True))
+        self.assertFalse(resolve_profile(headband, runtime).capabilities.supports_replay)
+        with self.assertRaisesRegex(ValueError, "os expected=windows"):
+            resolve_profile(headband, RuntimePlatform("ubuntu", "x86_64"))
+
     def test_all_platform_templates_bind_the_expected_source_and_parser(self) -> None:
         cases = (
             ("mac/gateway.capture.toml.example", RuntimePlatform("macos", "arm64"), "BluetoothBleakSource", "HeadbandBleParser"),

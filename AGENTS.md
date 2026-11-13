@@ -17,7 +17,7 @@
 - 本机可视化前端（兼容模式下为 B 端）按需拉取数据：小数据使用 `getLatest`；连续波形/节律必须经 `subscribe` 启动、每 600 ms 一组或一批发送，并可由 `unsubscribe` 停止。
 - 录播由网关部署配置管理，浏览器不选择录播或切换数据源；只有明确声明 `supports_replay=true` 的蓝牙头环兼容 Profile 才允许在 `subscribe` 或 `getLatest` 后使用录播。耳机串口 Profile 固定 `supports_replay=false`，配置不得填写 `replay_recording_id`，实时路径未验证或断开时不得读取任何历史录制，不得创建录播任务或输出 `mode="replay"`；银河麒麟当前实现返回 `409 STREAM_NOT_AVAILABLE_REASON`，恢复串口后才继续实时采集。
 - 采集时必须分别持久化原始设备数据和算法结果；每条记录保留录制会话标识及对应采集窗口时间戳。录播直接读取两类已保存数据，按原始时间间隔发送，不重新计算算法。单文件或按周期分段的存储粒度须在实施前确认。
-- 网关所有输出的根对象固定为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 为 `1.0`，`code=200` 成功，非 `200` 时 `message` 必须写明错误原因。连续事件的 `data` 携带 `gatewayBootId`、`mode`、`subjectId`、`timestampMs`、`valid` 与 `payload`；实时与录播的 `mode` 分别为 `live` 与 `replay`。当前为单耳机、单网关实例，不传 `deviceId` 或 `gatewayId`。
+- 网关所有输出的根对象固定为 `{protocolVersion, code, data, message}`。报文版本以版本台账为准，当前版本在每条响应和事件的 `data.source` 中标注 `headset` 或 `headband`，旧版请求保留对应的报文结构。`code=200` 成功，非 `200` 时 `message` 必须写明错误原因。连续事件的 `data` 携带 `gatewayBootId`、`mode`、`subjectId`、`timestampMs`、`valid` 与 `payload`；实时与录播的 `mode` 分别为 `live` 与 `replay`。Windows 双设备模式在一个 WebSocket 入口提供两路数据，按 `params.source` 路由请求并独立管理采集、算法、录制和订阅。
 - 数据通道固定为网关服务端、浏览器/客户端的 WS/WebSocket + UTF-8 JSON。当前 `local_browser` 只监听 `127.0.0.1`、提供本机 HTTP 页面并校验固定 Origin，禁止暴露到公网或不受控网络。
 - 不使用应用层保活：网关与 B 端均不得发送 WebSocket Ping/Pong 或 JSON 心跳。实际断线后网关继续监听新连接；B 端重新建连后先调用 `getStatus`，再重新订阅，旧 `subscriptionId` 不可复用。
 - 原始波形和节律使用批量 JSON 或二进制帧；不得按单采样点发送单条 JSON。

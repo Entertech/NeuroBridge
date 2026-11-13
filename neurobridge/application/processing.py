@@ -31,7 +31,7 @@ class AlgorithmInputMapper:
                 chunks = [signal.samples for signal in batch.signals if signal.signal_type == signal_type and isinstance(signal.samples, bytes)]
                 payload[f"{signal_type}RawBase64"] = base64.b64encode(b"".join(chunks)).decode("ascii")
                 payload[f"{signal_type}PacketCount"] = len(chunks)
-        return AlgorithmInput(batch.batch_id, payload, self.MAPPING_VERSION)
+        return AlgorithmInput(batch.batch_id, payload, self.MAPPING_VERSION, batch.device_protocol)
 
 
 class WindowResultAggregator:

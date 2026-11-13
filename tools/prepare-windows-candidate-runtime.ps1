@@ -50,7 +50,7 @@ if ($getPipHash -ne $GetPipSha256) {
 if ($LASTEXITCODE -ne 0) { throw "pip bootstrap failed: $LASTEXITCODE" }
 & $python -m pip install --no-warn-script-location -r (Join-Path $Root "requirements.lock")
 if ($LASTEXITCODE -ne 0) { throw "dependency installation failed: $LASTEXITCODE" }
-& $python -c "import serial, websockets, win32serviceutil"
+& $python -c "import bleak, serial, websockets, win32serviceutil; from importlib.metadata import version; assert version('bleak') == '0.19.5'; print('Bundled Bleak', version('bleak'))"
 if ($LASTEXITCODE -ne 0) { throw "embedded runtime cannot import required modules" }
 Remove-Item -Force $getPip
 

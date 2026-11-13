@@ -58,6 +58,8 @@ git pull --ff-only
 
 脚本会自动申请 `sudo` 权限，将当前工作树同步到 `/opt/neurobridge`、从本地源码更新 Python 包、重建算法 bridge、重新加载 systemd 单元并重启网关。网关重启会使现有 B 端连接断开，B 端需重新建连并订阅。
 
+Windows 网关安装包默认安装并启动局域网 SSH，重启后自动启动。可用 `neurobridge ssh status` 查询状态，或用 `neurobridge ssh disable` 关闭。参见 [Windows 局域网 SSH 排障](windows/README.md#局域网-ssh-排障)。
+
 需要远程运维时，Ubuntu 环境准备会安装但不启用 OpenSSH；部署后执行 `sudo ./linux/setup-ssh-operations.sh` 即可交互式完成运维账号密码、私有监听地址和来源网段配置。一键配置会把当前源码同步为运维账号自己的固定项目目录 `~/NeuroBridge`。SSH 场景中的源码更新只能使用 `neurobridge-ops update`：该命令固定切换至 `master`、快进拉取批准的上游版本并部署重启，运维人员不应直接运行 Git。还可使用 `status`、`logs --follow`、`audit` 和 `restart`。`audit` 不记录密码或业务原始数据。由于该账号维护的代码随后会以 root 安装，必须把它作为网关管理员凭据管理。完整命令和回滚步骤见 [Ubuntu 网关部署与运行教程](linux/README.md#41-启用-ssh-运维入口可选) 与 [SSH 运维和录播联调指南](doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md)。
 
 部署脚本会创建 `neurobridge` 服务账户、运行目录和 systemd 服务。先在联网阶段运行 `linux/prepare-ubuntu24.04-environment.sh`，它会安装 Ubuntu 系统依赖并创建含 `bleak`、`websockets` 的 Python 运行环境；随后可断网。算法 SDK 与 NumCpp 源码已经随仓库保存在 `third_party/`，不再要求填 bridge 路径或另行下载 SDK。`update-ubuntu.sh` 在断网阶段只使用本地源码。首次安装会自动给唯一且未在使用的物理以太网口设置默认的封闭直连地址 `192.168.88.10/24`；无网口、多网口、已有 IPv4/IPv6 地址或默认路由、或 Netplan 冲突时会安全停止，需指定 `[network].interface` 或断开原网络后重试。专用链路地址仅接受 RFC1918 IPv4 网段。该默认值不替代双方现场确认：静态 IP、网段、端口、Flowtime 扫描匹配条件、录播目录和回放倍率均可在 `/etc/neurobridge/gateway.toml` 覆盖；`replay_recording_id` 仅适用于明确支持录播的兼容数据源，当前银河麒麟耳机 `data_source.type="serial"` 必须留空且不会自动回放。示例配置在 [config/gateway.toml.example](config/gateway.toml.example)。开发机可使用：
@@ -122,6 +124,8 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 本机可视化前端（兼容模式下为第三方 B 端）按需请求数据，而不是网关无条件推送：
 
+Windows 10/11 x64 新配置默认启用串口耳机和 BLE 头环，使用同一个本机 WebSocket 地址提供两路数据。耳机使用 SDK 耳道 EEG 模式，头环使用普通 EEG 模式，各自运行算法进程和录制。联调页按设备展示数据与协议请求。配置模板带中文注释，可按需改为仅采集一种设备，也可按蓝牙地址指定头环。Windows 双设备真实采集、重连及服务重启待目标机验收。参见 [Windows 蓝牙头环操作说明](windows/README.md#使用蓝牙头环)。
+
 数据传输继续采用 **WS/WebSocket + UTF-8 JSON**。默认本机策略仅监听 `127.0.0.1`，由本机 HTTP 页面发起连接并校验固定 Origin；无需物理网线，也不改变消息字段、请求动作或 600 ms 批量节奏。兼容有线策略继续遵守已发布的专用网络约束。当前对外契约见版本台账登记的北向协议；本次拓扑调整未改写已锁定对外文档。
 
 | 请求 | 用途 | 返回行为 |
@@ -131,7 +135,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 | `unsubscribe` | 停止连续数据 | 确认响应 |
 | `getStatus` | 查询连接、信号、电量和当前模式 | 状态响应 |
 
-网关所有输出统一为 `{protocolVersion, code, data, message}`：当前 `protocolVersion` 固定为 `1.0`，`code=200` 成功，非 `200` 时 `message` 为错误原因。连续数据事件的 `data` 中包含 `gatewayBootId`、`mode`（`live`/`replay`）、`subjectId`、`timestampMs`、`valid` 与 `payload`。当前为单耳机、单网关实例，不传 `deviceId` 或 `gatewayId`。原始波形和节律数据使用批量 JSON 或二进制帧，避免单采样点逐条 JSON 发送。
+网关所有输出统一为 `{protocolVersion, code, data, message}`。`code=200` 表示成功，非 `200` 时 `message` 为错误原因。当前源码在报文的 `data.source` 中标注 `headband`（头环）或 `headset`（耳机），同时兼容已发布协议的旧版报文。连续数据事件还携带 `gatewayBootId`、`mode`（`live`/`replay`）、`subjectId`、`timestampMs`、`valid` 与 `payload`。原始波形和节律数据按窗口批量发送。字段和迁移说明见[北向协议预发布](doc/tech/头环数据网关北向网络协议_预发布.md)。
 
 北向消息名称、字段和 WebSocket 传输以版本台账登记的当前对外协议为准；设备采样率、每 600 ms 实际样本数等未确认值继续配置化或由运行日志实测，不在 README 中假定。
 
@@ -176,7 +180,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 ### 其他文档
 
-- [B 端联调网页](web/b-client-test/README.md)：零依赖的浏览器测试工具，可连接网关并测试 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。
+- [B 端联调网页](web/b-client-test/README.md)：零依赖的浏览器测试工具，可连接网关并测试 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。Windows 安装后可用 `neurobridge web` 打开，SSH 会话中可用同一命令获取转发指令。
 
 对外文档的 Markdown 独立保存在仓库，PDF 不提交仓库。包含未发布对外文档的 PR 必须先在该 PR 分支运行 `python3 tools/mark-external-documents-published.py --date <YYYY-MM-DD>`，将文档状态、发布日期、摘要、发布记录和锁定区间一并提交；CI 会拒绝仍含未发布文档的 PR，因而无法合入 `master`。PR 的 CI 生成候选包；状态已发布且已锁定的 PR 合入 `master` 后，CI 将四份外部 Markdown 转为 PDF，连同可直接双击打开的 `b-client-test/index.html` 联调网页打包为 `neurobridge-external-documents.zip` 并上传正式 Artifact。`candidate` 仅生成候选包；`publish` 仅允许所有打包源文档已发布且锁定时执行。如需额外生成某个历史正式版本或内部预发布版的北向协议 PDF，可填写 `protocol_version` 和 `protocol_stage`。版本清单见 [版本台账](neurobridge/version_registry.toml)。
 

@@ -74,6 +74,48 @@ jobs:
             --runtime-dir artifacts\windows-runtime `
             --output-dir artifacts\input
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test EXE upgrade and SSH command discovery
+        if: matrix.blocked_reason == '' && endsWith(matrix.id, '-exe') && hashFiles('tests/package/check-windows-exe-upgrade.ps1') != ''
+        id: upgrade-test
+        shell: powershell
+        env:
+          TARGET_ID: ${{ matrix.id }}
+          # Test replacement of the last published EXE, including builds that
+          # retain the release version on a requirement branch.
+          PREVIOUS_SOURCE: ce30b2ca1575fe512d4ca461b3097204505968f6
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $previous = Join-Path $env:RUNNER_TEMP 'neurobridge-previous-source'
+          $previousOutput = Join-Path $env:RUNNER_TEMP 'neurobridge-previous-package'
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'artifacts\windows-runtime'
+          $logs = New-Item -ItemType Directory -Force -Path artifacts\upgrade-logs
+          git fetch --no-tags origin $env:PREVIOUS_SOURCE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git worktree add --detach $previous $env:PREVIOUS_SOURCE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Push-Location $previous
+          try {
+            python tools\build-native-package.py --target $env:TARGET_ID --runtime-dir $runtime --output-dir $previousOutput
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+          $oldPackage = Get-ChildItem -LiteralPath $previousOutput -Filter '*.exe'
+          $newPackage = Get-ChildItem -LiteralPath artifacts\input -Filter '*.exe'
+          $checkOptions = @{
+            PreviousInstaller = $oldPackage.FullName
+            Installer = $newPackage.FullName
+            SourceCommit = (git rev-parse HEAD)
+            LogDirectory = $logs.FullName
+          }
+          & tests\package\check-windows-exe-upgrade.ps1 @checkOptions
+      - uses: actions/upload-artifact@v4
+        if: always() && endsWith(matrix.id, '-exe')
+        with:
+          name: neurobridge-upgrade-logs-${{ matrix.id }}
+          path: artifacts/upgrade-logs/
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Record blocked target
         if: matrix.blocked_reason != ''
         shell: powershell
@@ -93,6 +135,7 @@ jobs:
           TARGET_ID: ${{ matrix.id }}
           DECLARED_BLOCKER: ${{ matrix.blocked_reason }}
           BUILD_OUTCOME: ${{ steps.build.outcome }}
+          UPGRADE_OUTCOME: ${{ steps.upgrade-test.outcome }}
         run: |
           $outcome = 'built'
           $reason = 'native package produced and validated'
@@ -102,6 +145,9 @@ jobs:
           } elseif ($env:BUILD_OUTCOME -eq 'failure') {
             $outcome = 'failed'
             $reason = 'native package build failed'
+          } elseif ($env:UPGRADE_OUTCOME -eq 'failure') {
+            $outcome = 'failed'
+            $reason = 'EXE upgrade or SSH command discovery failed'
           } elseif (-not (Test-Path artifacts\input\verification.json)) {
             $outcome = 'failed'
             $reason = 'build did not produce a package'
@@ -122,7 +168,7 @@ jobs:
         if: always()
         with:
           name: neurobridge-input-${{ matrix.id }}
-          path: artifacts/input/
+          path: ${{ steps.upgrade-test.outcome == 'failure' && 'artifacts/input/status.txt' || 'artifacts/input/' }}
           if-no-files-found: error
           retention-days: 30
       - uses: actions/upload-artifact@v4

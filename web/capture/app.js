@@ -630,7 +630,30 @@ function exportDiagnosticLog() {
   elements.gatewayMessage.textContent = `诊断日志已导出：${filename}；完整 EEG/心率原始数据未写入文件。`;
 }
 
-elements.connect.addEventListener("click", connect);
+elements.connect.addEventListener("click", () => {
+  if (window.NEUROBRIDGE_B_CLIENT_SOURCE !== "serial") {
+    connect();
+    return;
+  }
+  // A gateway restart may have selected the BLE profile while this page was open.
+  elements.connect.disabled = true;
+  const config = document.createElement("script");
+  config.src = "/runtime-config.js";
+  config.onload = () => {
+    config.remove();
+    if (window.NEUROBRIDGE_B_CLIENT_SOURCE === "bluetooth") window.location.assign("/");
+    else {
+      refreshControls();
+      connect();
+    }
+  };
+  config.onerror = () => {
+    config.remove();
+    setState("error", "连接失败", "无法读取网关配置，请确认网关已启动。");
+    refreshControls();
+  };
+  document.head.append(config);
+});
 elements.disconnect.addEventListener("click", () => socket?.close(1000, "capture page disconnect"));
 elements.status.addEventListener("click", () => sendRequest("getStatus", {}));
 elements.start.addEventListener("click", () => sendRequest("subscribe", { streams: ["eeg.raw", "hr.raw"], includeInvalid: true }));

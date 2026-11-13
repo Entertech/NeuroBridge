@@ -142,6 +142,13 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
             names = bundle.namelist()
             self.assertIn(f"{recording_id}/raw/eeg.jsonl", names)
             self.assertFalse(any("/parsed/" in n or "000001" in n or n.endswith(".partial") for n in names))
+        path = next((archive._session_dir(recording_id) / "algorithm").glob("[0-9]*.jsonl"))
+        row = json.loads(path.read_text(encoding="utf-8"))
+        row["payload"]["deviceProtocol"] = "headband_ble"
+        path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        invalid = next(archive.results(recording_id)).algorithm_result
+        self.assertEqual(invalid.metrics, {})
+        self.assertFalse(invalid.valid)
         await self.service.close()
         await self.source._stop_stream()
         self.assertEqual(self.writes, [b"\xe1", b"\xe0"])
@@ -159,6 +166,8 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
     async def check_algorithm_failure_status(self, program):
         # The shutdown barrier must outlast the deliberately timed-out request.
         self.service.shutdown_timeout_ms = 1000
+        program = ('import sys; sys.stdin.readline(); '
+                   'print(\'{"algorithm":{},"deviceProtocol":"headset_rev181"}\', flush=True); ' + program)
         engine = AffectiveSdkAlgorithmEngine(replace(self.gateway.config.algorithm,
             enabled=True, command=(sys.executable, "-u", "-c", program), request_timeout_ms=100))
         self.gateway.algorithm = self.service.algorithm = engine

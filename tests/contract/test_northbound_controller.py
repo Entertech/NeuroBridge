@@ -8,6 +8,7 @@ import unittest
 from neurobridge.adapters.northbound.controller import NorthboundController
 from neurobridge.business.gateway import ClientSession, Gateway, STREAM_NOT_AVAILABLE_REASON
 from neurobridge.config import load
+from neurobridge.versioning import NORTHBOUND_PROTOCOL_VERSION
 
 
 class NorthboundControllerContractTests(unittest.IsolatedAsyncioTestCase):
@@ -27,7 +28,7 @@ class NorthboundControllerContractTests(unittest.IsolatedAsyncioTestCase):
             async def send(value):
                 sent.append(value)
             request = {
-                "protocolVersion": "1.0",
+                "protocolVersion": NORTHBOUND_PROTOCOL_VERSION,
                 "messageType": "request",
                 "requestId": "status-1",
                 "action": "getStatus",
@@ -36,6 +37,7 @@ class NorthboundControllerContractTests(unittest.IsolatedAsyncioTestCase):
             await controller.handle(ClientSession(), json.dumps(request), send)
             self.assertEqual(sent[0]["code"], 200)
             self.assertEqual(sent[0]["data"]["action"], "getStatus")
+            self.assertEqual(sent[0]["data"]["source"], "headset")
 
     async def test_serial_offline_data_request_stays_live_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -44,7 +46,7 @@ class NorthboundControllerContractTests(unittest.IsolatedAsyncioTestCase):
             async def send(value):
                 sent.append(value)
             request = {
-                "protocolVersion": "1.0",
+                "protocolVersion": NORTHBOUND_PROTOCOL_VERSION,
                 "messageType": "request",
                 "requestId": "latest-1",
                 "action": "getLatest",
@@ -53,4 +55,5 @@ class NorthboundControllerContractTests(unittest.IsolatedAsyncioTestCase):
             await controller.handle(ClientSession(), json.dumps(request), send)
             self.assertEqual(sent[0]["code"], 409)
             self.assertEqual(sent[0]["data"]["reason"], STREAM_NOT_AVAILABLE_REASON)
+            self.assertEqual(sent[0]["data"]["source"], "headset")
             self.assertNotEqual(sent[0]["data"].get("mode"), "replay")

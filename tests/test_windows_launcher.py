@@ -15,6 +15,57 @@ from windows import gateway_helper as helper
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@unittest.skipUnless(sys.platform == 'win32', 'Windows cmd and PowerShell command dispatch')
+class WindowsSshCommandTests(unittest.TestCase):
+    def test_cli_dispatches_web_and_url_only(self):
+        with tempfile.TemporaryDirectory(prefix='neurobridge cli ') as directory:
+            root = Path(directory)
+            (root / 'cli').mkdir()
+            shutil.copy2(ROOT / 'windows/cli/neurobridge.cmd', root / 'cli/neurobridge.cmd')
+            (root / 'open-web.ps1').write_text(
+                'param([switch]$UrlOnly)\nWrite-Output $UrlOnly.IsPresent\nexit 7\n',
+                encoding='ascii',
+            )
+            for arguments, expected in ((['web'], 'False'), (['web', '--url'], 'True'), (['web', '--unknown'], None)):
+                with self.subTest(arguments=arguments):
+                    result = subprocess.run(
+                        ['cmd.exe', '/d', '/c', 'cli\\neurobridge.cmd', *arguments],
+                        cwd=root, capture_output=True, text=True, timeout=10,
+                    )
+                    if expected is None:
+                        self.assertEqual(result.returncode, 2)
+                    else:
+                        self.assertEqual(result.returncode, 7, result.stderr)
+                        self.assertEqual(result.stdout.strip(), expected)
+
+    def test_cli_forwards_ssh_actions_and_exit_status(self):
+        with tempfile.TemporaryDirectory(prefix='neurobridge cli ') as directory:
+            root = Path(directory)
+            (root / 'cli').mkdir()
+            launcher = root / 'cli/neurobridge.cmd'
+            shutil.copy2(ROOT / 'windows/cli/neurobridge.cmd', launcher)
+            (root / 'remote-support.ps1').write_text(
+                'param([string]$Action, [switch]$RequireGateway)\n'
+                'if (!$RequireGateway) { exit 3 }\n'
+                'Write-Output $Action\n'
+                'exit 7\n',
+                encoding='ascii',
+            )
+            for action in ('enable', 'status', 'disable'):
+                with self.subTest(action=action):
+                    result = subprocess.run(
+                        ['cmd.exe', '/d', '/c', 'cli\\neurobridge.cmd', 'ssh', action],
+                        cwd=root, capture_output=True, text=True, timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 7, result.stderr)
+                    self.assertEqual(result.stdout.strip(), action.title())
+            result = subprocess.run(
+                ['cmd.exe', '/d', '/c', 'cli\\neurobridge.cmd', 'ssh', 'unknown'],
+                cwd=root, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+
+
 @unittest.skipUnless(sys.platform == 'win32', 'Windows PowerShell 5.1 diagnostic workflow')
 class ServiceDiagnosisTests(unittest.TestCase):
     def test_service_diagnosis_handles_states_and_preserves_processes(self):
@@ -127,10 +178,24 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertEqual(config.recording.directory, self.root / '.runtime/recordings')
         self.assertEqual(config.algorithm.command, (str(self.root / '.runtime/algorithm/neurobridge_affective_bridge.exe'),))
         self.assertFalse(config.recording.replay_recording_id)
-        original = path.read_text().replace('device = "auto"', 'device = "COM12"') + '\n# operator setting\n'
+        original = path.read_text(encoding='utf-8').replace('device = "auto"', 'device = "COM12"') + '\n# operator setting\n'
         path.write_text(original, encoding='utf-8')
         self.assertEqual(helper.create_config(self.root).read_text(encoding='utf-8'), original)
         self.assertEqual(helper.validate_config(path).serial.device, 'COM12')
+
+    def test_bluetooth_config_opens_the_source_aware_console_without_com_discovery(self):
+        path = helper.create_config(self.root)
+        self.assertEqual(helper.page_url(helper.validate_config(path)), 'http://127.0.0.1:8080/')
+        serial_only = path.read_text(encoding='utf-8').replace('include_headband = true', 'include_headband = false')
+        path.write_text(serial_only, encoding='utf-8')
+        self.assertTrue(helper.page_url(helper.validate_config(path)).endswith('/capture/'))
+        bluetooth = serial_only.replace('profile = "windows_headset_local"', 'profile = "windows_headband_local"')
+        path.write_text(bluetooth.replace('\ntype = "serial"', '\ntype = "bluetooth"'), encoding='utf-8')
+        config = helper.validate_config(path)
+        self.assertEqual(helper.page_url(config), 'http://127.0.0.1:8080/')
+        with patch.object(helper, 'serial_summary') as serial_summary:
+            helper.show_source(config)
+        serial_summary.assert_not_called()
 
     def test_logging_info_uses_effective_custom_path_without_exporting_config(self):
         import json
@@ -149,7 +214,7 @@ class WindowsLauncherTests(unittest.TestCase):
 
     def test_reject_invalid_existing_policy_without_rewriting(self):
         path = helper.create_config(self.root)
-        original = path.read_text()
+        original = path.read_text(encoding='utf-8')
         for changed in (
             original.replace('replay_recording_id = ""', 'replay_recording_id = "old-session"'),
             original.replace('profile = "windows_headset_local"', 'profile = "kylin_headset_local"'),
@@ -186,7 +251,7 @@ class WindowsLauncherTests(unittest.TestCase):
 
     def test_diagnostics_exclude_logs_config_and_recordings(self):
         path = helper.create_config(self.root)
-        path.write_text(path.read_text() + '\n# credential=DO_NOT_EXPORT\n', encoding='utf-8')
+        path.write_text(path.read_text(encoding='utf-8') + '\n# credential=DO_NOT_EXPORT\n', encoding='utf-8')
         (self.root / '.runtime/logs/neurobridge.log').write_text('DO_NOT_EXPORT')
         (self.root / '.runtime/recordings/private.json').write_text('DO_NOT_EXPORT')
         with patch.object(helper, 'serial_summary', return_value=['COM3']):

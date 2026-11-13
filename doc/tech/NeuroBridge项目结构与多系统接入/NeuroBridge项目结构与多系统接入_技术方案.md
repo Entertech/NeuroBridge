@@ -32,8 +32,11 @@
 | `ubuntu_headband_wired` | Ubuntu x86_64 | 蓝牙头环 | BLE | 旧 B 端隔离专网 | 支持 | 支持 | M2 兼容回归 |
 | `kylin_headset_local` | 银河麒麟桌面操作系统 V10 x86_64 | USB 串口耳机 | POSIX TTY | `127.0.0.1` 本机页面 | 支持 | **不支持** | M1 当前交付 |
 | `windows_headset_local` | Windows 7 x86_64 及以上 | USB 串口耳机 | Windows COM | `127.0.0.1` 本机页面 | 支持 | **不支持** | M3 后续扩展 |
+| `windows_headband_local` | Windows 10/11 x86_64 | 蓝牙头环 | BLE | `127.0.0.1` 本机页面 | 支持 | **不支持** | 源码候选，待目标机验收 |
 
 系统与数据源的关系由安装包和 Deployment Profile 固定。设备扫描结果只用于寻找当前 Profile 允许的设备，不能触发 Profile、传输或接入方式切换。
+
+Windows 通过部署配置选择单设备或双设备模式，头环复用 Bleak 设备适配器、头环解析器、算法与分段持久化。参照 [Enter BLE PC SDK](https://github.com/Entertech/Enter-Biomodule-BLE-PC-SDK/tree/6870a6187d8cadd0759f8f5d1c5f81a90e2bacbd)，先匹配广播型号 UUID，再应用可选的广播名称和设备标识，多个候选按信号强度选择。日志分别记录发现设备数、型号匹配数和最终候选数，不记录设备地址或广播原文。连接时复用当前扫描返回的设备对象，完成通知订阅并准备算法后再发送采集命令。
 
 ### 2.2 本文不解决的事项
 

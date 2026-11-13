@@ -1,36 +1,66 @@
+# NeuroBridge Windows 配置（UTF-8）。修改后重启网关服务。
+# 默认同时启用 USB 串口耳机和 BLE 头环。连接其中任一设备即可采集。
 config_schema_version = 1
 profile = "windows_headset_local"
 
+# 北向 WebSocket，仅供本机访问；两类设备共用同一个地址。
 [server]
 host = "127.0.0.1"
 port = 8765
 path = "/neurobridge/v1/ws"
 
 [access]
+# 本机浏览器模式。
 mode = "local_browser"
 
+# 本机联调网页。默认访问 http://127.0.0.1:8080/。
 [local_ui]
 enabled = true
 host = "127.0.0.1"
 port = 8080
 
+# Windows 本机模式不配置专用网络，保留默认值。
 [network]
 mode = "static"
 
 [data_source]
+# 仅用耳机：保留 type = "serial"，将 include_headband 改为 false。
+# 仅用头环：将顶部 profile 改为 "windows_headband_local"，
+# 这里改为 type = "bluetooth" 和 include_headband = false，并保持 [ble].enabled = true。
 type = "serial"
+include_headband = true
+# 数据窗口与过期阈值，单位为毫秒。
 window_interval_ms = 600
 stale_after_ms = 1800
+# 双设备原始 EEG 校准默认 5%，设置为 0 关闭，最大 10%。
+eeg_alignment_percent = 5
+# 耳机算法等待同一窗口头环 EEG 的最长毫秒数，须小于 600。0 仅使用已经到达的窗口。
+eeg_alignment_wait_ms = 100
+
+[ble]
+# 双设备模式或仅头环模式下，enabled 必须为 true，下方两个时间值必须大于 0。
+enabled = true
+# 可选的广播名称过滤。可改成实际名称，或填空字符串，仅按下方型号匹配。
+device_name = "Flowtime Headband"
+# 多个同型号头环在附近时，可取消下一行注释并填写目标头环的蓝牙 MAC 地址。
+# device_identifier = ""
+# 设备型号特征 UUID。使用标准头环时保持默认值。
+model_nbr_uuid = "0000ff10-1212-abcd-1523-785feabcd123"
+# 每轮扫描的最长等待时间，单位为秒。
+scan_timeout_seconds = 5
+# 未找到设备或连接断开后，再试前等待的时间，单位为秒。
+reconnect_delay_seconds = 3
 
 [serial]
+# auto 自动发现 USB 串口；需要固定端口时填写实际端口，例如 "COM3"。
 device = "auto"
 candidate_types = ["COM"]
 baud_rate = 115200
-# Legacy key: observation of an already-running stream, not an ACK handshake.
+# 观察设备是否已在出数的时长，单位为毫秒。
 handshake_timeout_ms = 1000
-# Legacy key: write timeout only; E1/E0 have no response.
+# 串口写入超时，单位为毫秒。E1/E0 不等待应答。
 command_response_timeout_ms = 1000
-# E1 first-frame wait and ongoing valid-frame timeout.
+# 发送 E1 后等待首帧或采集中等待有效帧的超时，单位为秒。
 data_timeout_seconds = 5
 reconnect_delay_seconds = 3
 stats_interval_seconds = 10
@@ -39,21 +69,24 @@ dtr = false
 rts = false
 
 [recording]
-# Optional protected transport trace; stop retaining whole chunks at the session budget.
+# 可选底层传输诊断，默认关闭；达到每次会话的字节上限后停止记录。
 transport_trace_enabled = false
 transport_trace_max_bytes = 1048576
+# 录制目录。双设备模式下头环录制位于 headband 子目录。
 directory = "C:\\ProgramData\\NeuroBridge\\recordings"
 subject_id = ""
+# Windows 实时采集请留空。
 replay_recording_id = ""
 replay_speed = 1.0
 
+# 本机录制和日志下载接口。
 [download]
 enabled = true
 host = "127.0.0.1"
 port = 8766
 path = "/downloads"
 
-# Size archives use UTC timestamps and unique suffixes; active filename stays fixed.
+# 日志按大小轮转；活动文件名固定，归档以 UTC 时间命名。
 [logging]
 rotation_mode = "size"
 max_bytes = 10485760
@@ -64,9 +97,11 @@ level = "INFO"
 
 [algorithm]
 enabled = true
+# 安装包附带的算法程序。源码启动器会写入本地构建路径。
 command = ["C:\\Program Files\\NeuroBridge\\runtime\\neurobridge_affective_bridge.exe"]
 request_timeout_ms = 2000
 
+# 录制分段、磁盘空间阈值和保留策略。大小及空间字段单位为字节。
 [storage]
 warning_threshold_bytes = 5368709120
 critical_threshold_bytes = 1073741824
@@ -79,7 +114,7 @@ fsync_interval_records = 64
 session_retention_days = 30
 auto_cleanup_enabled = false
 
-# Initial bounds; tune after target-machine observation, not delivery guarantees.
+# 采集、算法与存储队列上限及超时，通常保留默认值。
 [pipeline]
 source_queue_size = 64
 source_enqueue_timeout_ms = 50

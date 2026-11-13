@@ -14,11 +14,14 @@ from ...domain.algorithm import AlgorithmInput, AlgorithmResult, AlgorithmSessio
 class AffectiveSdkAlgorithmEngine:
     def __init__(self, config: AlgorithmConfig, algorithm_version: str | None = None) -> None:
         self._runner = AlgorithmRunner(config)
+        self._device_protocol: str | None = None
         self.algorithm_version = algorithm_version
         self._evaluation_lock = asyncio.Lock()
 
     async def initialize(self, session: AlgorithmSession) -> AlgorithmState:
-        await self._runner.initialize()
+        async with self._evaluation_lock:
+            self._device_protocol = session.device_protocol
+            await self._runner.initialize(session.device_protocol)
         if self._runner.available:
             return AlgorithmState.READY
         return AlgorithmState.ERROR if self._runner.error else AlgorithmState.UNAVAILABLE
@@ -32,6 +35,7 @@ class AffectiveSdkAlgorithmEngine:
         async with self._evaluation_lock:
             await self.close()
             self._runner, prepared._runner = prepared._runner, self._runner
+            self._device_protocol, prepared._device_protocol = prepared._device_protocol, None
 
     async def evaluate(self, value: AlgorithmInput) -> AlgorithmResult:
         # A timed-out aggregation slot may still be collecting a late result.
@@ -41,6 +45,8 @@ class AffectiveSdkAlgorithmEngine:
 
     async def _evaluate(self, value: AlgorithmInput) -> AlgorithmResult:
         started = int(time.time() * 1000)
+        if self._device_protocol is None or value.device_protocol != self._device_protocol:
+            return AlgorithmResult(value.batch_id, self.algorithm_version, started, started, {}, False, ("ALGORITHM_INPUT_INVALID",))
         try:
             eeg = base64.b64decode(str(value.payload.get("eegRawBase64", "")), validate=True)
             hr = base64.b64decode(str(value.payload.get("hrRawBase64", "")), validate=True)
@@ -55,6 +61,7 @@ class AffectiveSdkAlgorithmEngine:
             end_ms=end_ms,
             eeg_packet_count=int(value.payload.get("eegPacketCount", 0)),
             hr_packet_count=int(value.payload.get("hrPacketCount", 0)),
+            device_protocol=value.device_protocol,
         )
         return AlgorithmResult(
             value.batch_id,
@@ -67,6 +74,7 @@ class AffectiveSdkAlgorithmEngine:
         )
 
     async def close(self) -> None:
+        self._device_protocol = None
         await self._runner.stop()
 
     @property
