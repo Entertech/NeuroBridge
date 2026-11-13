@@ -109,7 +109,9 @@ dd { margin: 0; max-width: 170px; color: #f2f7fc; font-size: .82rem; text-align:
 @media (max-width: 650px) { .algorithm-groups { grid-template-columns: 1fr; } }
 
 .log-card { margin-top: 18px; }
-.log { height: 400px; overflow: auto; margin-top: 17px; border: 1px solid rgba(83, 120, 159, .45); border-radius: 11px; background: #05101d; font: .76rem/1.52 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+[data-log-follow-state] { color: #aebbd0; margin-left: 4px; }
+[data-log-follow][aria-pressed="true"] [data-log-follow-state] { color: #78d7ee; }
+.log { height: 400px; overflow: auto; overflow-anchor: none; margin-top: 17px; border: 1px solid rgba(83, 120, 159, .45); border-radius: 11px; background: #05101d; font: .76rem/1.52 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .log-entry { display: grid; grid-template-columns: 76px 62px minmax(0, 1fr); gap: 10px; padding: 10px 12px; border-bottom: 1px solid rgba(65, 92, 122, .32); }
 .log-entry:last-child { border-bottom: 0; }
 .log-time { color: #6f849e; }

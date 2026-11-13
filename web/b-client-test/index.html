@@ -59,7 +59,7 @@
           <div class="visuals">
             <section class="chart-card" aria-label="脑波波形">
               <div class="chart-heading"><h4>脑波波形</h4><span data-field="waveformMeta" class="chart-meta">等待连接网关</span></div>
-              <p class="hint">横轴为样本序号，纵轴为算法幅度原值。</p>
+              <p class="hint">每通道滚动显示最近 500 个样本，纵轴为算法幅度原值。</p>
               <canvas data-field="waveform" role="img" aria-label="脑波波形图"></canvas>
             </section>
             <section class="chart-card" aria-label="频段能量">
@@ -170,11 +170,12 @@
           <div class="chart-heading">
             <h3></h3>
             <div class="button-row">
+              <button class="button button-quiet" type="button" data-log-follow aria-pressed="true">跟随最新 <span data-log-follow-state aria-hidden="true">开启</span></button>
               <button class="button button-quiet" type="button" data-log-copy>复制日志</button>
               <button class="button button-quiet" type="button" data-log-clear>清空</button>
             </div>
           </div>
-          <div class="log" role="log"></div>
+          <div class="log" role="log" tabindex="0"></div>
         </section>
       </template>
     </main>

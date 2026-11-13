@@ -11,6 +11,7 @@ const fixedSource = configuredSource === "serial" || configuredSource === "bluet
 const sharedConnection = configuredSource === "dual";
 const localConnection = fixedSource || sharedConnection;
 const showConnectedDevicesOnly = sharedConnection || window.NEUROBRIDGE_B_CLIENT_WINDOWS === true;
+const waveformCapacity = 500;
 const spectrumBands = ["delta", "theta", "alpha", "lowBeta", "highBeta", "beta", "gamma"];
 const algorithmMetrics = {
   eeg: [
@@ -178,11 +179,30 @@ function createSourceLog(source) {
   const title = section.querySelector("h3");
   const list = section.querySelector(".log");
   const entries = [];
+  const followButton = section.querySelector("[data-log-follow]");
+  const followState = followButton.querySelector("[data-log-follow-state]");
+  const sourceLog = { section, list, entries, followLatest: true };
   section.dataset.source = source;
   title.id = `log-${source}`;
   title.textContent = sourceLabels[source];
   section.setAttribute("aria-labelledby", title.id);
+  list.id = `log-entries-${source}`;
   list.setAttribute("aria-label", `${sourceLabels[source]}协议日志`);
+  followButton.setAttribute("aria-controls", list.id);
+
+  function setFollowLatest(enabled) {
+    sourceLog.followLatest = enabled;
+    followButton.setAttribute("aria-pressed", String(enabled));
+    followState.textContent = enabled ? "开启" : "暂停";
+    if (enabled) list.scrollTop = list.scrollHeight;
+  }
+
+  followButton.addEventListener("click", () => setFollowLatest(!sourceLog.followLatest));
+  list.addEventListener("scroll", () => {
+    if (sourceLog.followLatest && list.scrollHeight - list.clientHeight - list.scrollTop > 2) {
+      setFollowLatest(false);
+    }
+  });
   section.querySelector("[data-log-clear]").addEventListener("click", () => {
     entries.length = 0;
     list.replaceChildren();
@@ -197,13 +217,13 @@ function createSourceLog(source) {
     }
   });
   elements.sourceLogs.append(section);
-  return { section, list, entries };
+  return sourceLog;
 }
 
 const sourceLogs = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourceLog(source)]));
 
 function appendLog(kind, label, body, panel) {
-  const { list, entries } = sourceLogs[panel.source];
+  const { list, entries, followLatest } = sourceLogs[panel.source];
   const entry = {
     time: timeLabel(), label,
     body: typeof body === "string" ? body : JSON.stringify(body, (key, value) =>
@@ -225,9 +245,14 @@ function appendLog(kind, label, body, panel) {
   list.append(node);
   if (entries.length > 200) {
     entries.shift();
+    const previousTop = followLatest ? 0 : list.scrollTop;
+    const previousHeight = followLatest ? 0 : list.scrollHeight;
     list.firstElementChild.remove();
+    if (previousTop > 0) {
+      list.scrollTop = Math.max(0, previousTop - (previousHeight - list.scrollHeight));
+    }
   }
-  list.scrollTop = list.scrollHeight;
+  if (followLatest) list.scrollTop = list.scrollHeight;
 }
 
 function readableTimestamp(timestampMs) {
@@ -363,7 +388,8 @@ function showDevice(panel, visible) {
   if (!showConnectedDevicesOnly || panel.section.hidden === !visible) return;
   panel.overview.section.hidden = !visible;
   panel.section.hidden = !visible;
-  sourceLogs[panel.source].section.hidden = !visible;
+  const sourceLog = sourceLogs[panel.source];
+  sourceLog.section.hidden = !visible;
   if (panel.requests) panel.requests.section.hidden = !visible;
 
   const hasDevice = Object.values(panels).some((item) => !item.section.hidden);
@@ -371,6 +397,7 @@ function showDevice(panel, visible) {
   elements.waitingForDevice.hidden = hasDevice;
   elements.protocolRequests.hidden = !hasDevice;
   elements.protocolLogs.hidden = !hasDevice;
+  if (visible && sourceLog.followLatest) sourceLog.list.scrollTop = sourceLog.list.scrollHeight;
   drawCharts();
 }
 
@@ -478,9 +505,10 @@ function drawWaveform(canvas, channels) {
     high += 1;
   }
   const { ctx, left, right, bottom, scale } = chartAxes(canvas, low, high);
-  const lastIndex = Math.max(...Object.values(channels).map((samples) => samples.length)) - 1;
+  const step = (right - left) / (waveformCapacity - 1);
   for (const [channel, samples] of Object.entries(channels)) {
     ctx.strokeStyle = channelStyles[channel].color;
+    ctx.fillStyle = ctx.strokeStyle;
     ctx.lineWidth = 1.6;
     ctx.beginPath();
     let previousValid = false;
@@ -489,17 +517,22 @@ function drawWaveform(canvas, channels) {
         previousValid = false;
         return;
       }
-      const x = left + index / Math.max(1, lastIndex) * (right - left);
-      if (previousValid) ctx.lineTo(x, scale(value));
-      else ctx.moveTo(x, scale(value));
+      const x = right - (samples.length - 1 - index) * step;
+      const y = scale(value);
+      if (previousValid) ctx.lineTo(x, y);
+      else {
+        ctx.moveTo(x, y);
+        ctx.fillRect(x - 0.8, y - 0.8, 1.6, 1.6);
+      }
       previousValid = true;
     });
     ctx.stroke();
   }
+  ctx.fillStyle = "#aebbd0";
   ctx.textAlign = "left";
   ctx.fillText("0", left, bottom + 18);
   ctx.textAlign = "right";
-  ctx.fillText(`${lastIndex} 样本`, right, bottom + 18);
+  ctx.fillText(`${waveformCapacity - 1} 样本`, right, bottom + 18);
 }
 
 function drawSpectrum(canvas, bands) {
@@ -526,27 +559,38 @@ function drawSpectrum(canvas, bands) {
 
 function updateVisuals(data, panel) {
   const result = data?.result || data;
+  if (!Number.isFinite(result?.timestampMs) || (data.event !== "data" && data.action !== "getLatest")) return;
+  const connection = result.payload?.status?.connectionState ?? result.connectionState;
+  if (connection && connection !== "connected") return;
   const eeg = result?.payload?.algorithm?.eeg;
   const invalid = result?.valid === false;
   const eegSubscribed = panel.subscriptions.get(data?.subscriptionId)?.includes("eeg");
   if (!eeg && !(invalid && eegSubscribed && result.payload?.algorithm)) return;
   if (panel.eegTimestamp !== null && result.timestampMs < panel.eegTimestamp) return;
-  panel.eegTimestamp = result.timestampMs ?? null;
+  const newWindow = result.timestampMs !== panel.eegTimestamp;
+  if (!invalid && Object.values(eeg?.wave || {}).some((wave) => Array.isArray(wave) && wave.some(Number.isFinite))) {
+    panel.eegTimestamp = result.timestampMs;
+  }
 
-  panel.channels = {};
   panel.bandPower = invalid ? {} : eeg?.bandPower || {};
-  if (!invalid) {
+  if (newWindow) {
     for (const channel of Object.keys(channelStyles)) {
+      const previous = panel.channels[channel] || [];
       const wave = eeg?.wave?.[channel];
-      if (!Array.isArray(wave)) continue;
-      const values = wave.slice(-1200);
-      if (values.some(Number.isFinite)) panel.channels[channel] = values;
+      if (invalid || !Array.isArray(wave) || !wave.length) {
+        if (Number.isFinite(previous.at(-1))) panel.channels[channel] = [...previous.slice(1 - waveformCapacity), null];
+        continue;
+      }
+      const incoming = wave.slice(-waveformCapacity);
+      if (previous.length || incoming.some(Number.isFinite)) {
+        panel.channels[channel] = previous.concat(incoming).slice(-waveformCapacity);
+      }
     }
   }
   panel.fields.waveformMeta.replaceChildren(...Object.entries(panel.channels).map(([channel, values]) => {
     const label = document.createElement("span");
     label.className = `channel-${channel}`;
-    label.textContent = `${channelStyles[channel].label} · ${values.length} 点`;
+    label.textContent = `${channelStyles[channel].label} · ${values.filter(Number.isFinite).length} 点`;
     return label;
   }));
   if (!panel.fields.waveformMeta.childElementCount) panel.fields.waveformMeta.textContent = invalid ? "无效窗口" : "未提供波形";
