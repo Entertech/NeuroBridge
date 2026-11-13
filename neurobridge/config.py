@@ -10,6 +10,7 @@ import tomllib
 from .configuration.migration import migrate
 
 DEFAULT_ALGORITHM_COMMAND = ("/usr/local/lib/neurobridge/neurobridge_affective_bridge",)
+DEFAULT_EEG_ALIGNMENT_PERCENT = 5
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,7 @@ class DataSourceConfig:
     window_interval_ms: int = 600
     stale_after_ms: int = 1800
     include_headband: bool = False
-    eeg_alignment_percent: int = 0
+    eeg_alignment_percent: int = DEFAULT_EEG_ALIGNMENT_PERCENT
     eeg_alignment_wait_ms: int = 100
 
 
@@ -343,7 +344,9 @@ def load(
         raise ValueError("data_source.window_interval_ms must be 600 for the current northbound contract")
     if not isinstance(stale_after_ms, int) or isinstance(stale_after_ms, bool) or stale_after_ms <= window_interval_ms:
         raise ValueError("data_source.stale_after_ms must be an integer greater than window_interval_ms")
-    eeg_alignment_percent = data_source.get("eeg_alignment_percent", 0)
+    eeg_alignment_percent = data_source.get(
+        "eeg_alignment_percent", DEFAULT_EEG_ALIGNMENT_PERCENT if include_headband else 0,
+    )
     eeg_alignment_wait_ms = data_source.get("eeg_alignment_wait_ms", 100)
     if not 0 <= eeg_alignment_percent <= 10:
         raise ValueError("data_source.eeg_alignment_percent must be between 0 and 10")

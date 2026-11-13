@@ -98,8 +98,12 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         root = Path(__file__).resolve().parents[2]
         template = (root / "windows/gateway.toml.example").read_text(encoding="utf-8")
         config_path = Path(self.enterContext(tempfile.TemporaryDirectory())) / "gateway.toml"
-        config_path.write_text(template.replace("eeg_alignment_percent = 0", "eeg_alignment_percent = 5"), encoding="utf-8")
+        previous_config = template.replace("eeg_alignment_percent = 5\n", "")
+        config_path.write_text(previous_config, encoding="utf-8")
         config = load(config_path)
+        self.assertEqual(config.data_source.eeg_alignment_percent, 5)
+        config_path.write_text(template.replace("eeg_alignment_percent = 5", "eeg_alignment_percent = 0"), encoding="utf-8")
+        self.assertEqual(load(config_path).data_source.eeg_alignment_percent, 0)
         config = replace(config, recording=replace(config.recording, directory=config_path.parent / "recordings"))
         (headset, headband), _ = build_runtime(config, RuntimePlatform("windows", "x86_64"))
 
