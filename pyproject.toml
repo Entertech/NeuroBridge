@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neurobridge"
-version = "0.3.2"
+version = "0.4.4"
 description = "Headband serial/BLE to WebSocket gateway"
 requires-python = ">=3.11"
 dependencies = [
