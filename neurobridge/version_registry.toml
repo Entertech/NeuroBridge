@@ -160,19 +160,19 @@ reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已�
 
 
 [documents.external_windows_operations]
-version = "1.1"
+version = "1.2"
 status = "published"
 audience = "b_side"
 delivery = "platform_bound"
 platforms = ["windows"]
 title = "数据网关 Windows 部署与使用指南"
-markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数据网关 Windows 部署与使用指南_v1.1.md"
-pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.1.pdf"
-created_date = "2026-10-10"
-published_date = "2026-10-10"
-markdown_sha256 = "fcfe3eb6bd86e01debb6fc242b9cc8e2a0ab1e31189a30452e0c715345abf464"
-publication_record = "2026-10-10-public-windows-operations-v1.1"
-reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已锁定 v1.0。PR 合入后由 CI 生成正式 PDF。"
+markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数据网关 Windows 部署与使用指南_v1.2.md"
+pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.2.pdf"
+created_date = "2026-11-16"
+published_date = "2026-11-16"
+markdown_sha256 = "292254599e72f639053588c11734bd8bd1e3f9537ade024edd1e5d8af9d92544"
+publication_record = "2026-11-16-public-windows-operations-v1.2"
+reason = "用户明确要求将 Windows 录制数据保存位置补充到对外文档；本次只补充现场查找录制目录的方法。"
 
 [[documents.external_windows_operations.versions]]
 version = "1.0"
@@ -203,6 +203,21 @@ published_date = "2026-10-10"
 markdown_sha256 = "fcfe3eb6bd86e01debb6fc242b9cc8e2a0ab1e31189a30452e0c715345abf464"
 publication_record = "2026-10-10-public-windows-operations-v1.1"
 reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已锁定 v1.0。PR 合入后由 CI 生成正式 PDF。"
+
+[[documents.external_windows_operations.versions]]
+version = "1.2"
+status = "published"
+audience = "b_side"
+delivery = "platform_bound"
+platforms = ["windows"]
+title = "数据网关 Windows 部署与使用指南"
+markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数据网关 Windows 部署与使用指南_v1.2.md"
+pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.2.pdf"
+created_date = "2026-11-16"
+published_date = "2026-11-16"
+markdown_sha256 = "292254599e72f639053588c11734bd8bd1e3f9537ade024edd1e5d8af9d92544"
+publication_record = "2026-11-16-public-windows-operations-v1.2"
+reason = "用户明确要求将 Windows 录制数据保存位置补充到对外文档；本次只补充现场查找录制目录的方法。"
 
 
 [[documents.external_northbound.versions]]
@@ -285,6 +300,15 @@ to_version = "1.1"
 status = "locked"
 locked_by = "2026-10-10-public-windows-operations-v1.1"
 locked_at = "2026-10-10"
+
+[[release_locks]]
+id = "windows-operations-v1.1-to-v1.2"
+scope = "external_windows_operations_document"
+from_version = "1.1"
+to_version = "1.2"
+status = "locked"
+locked_by = "2026-11-16-public-windows-operations-v1.2"
+locked_at = "2026-11-16"
 
 [change_policy]
 external_documents_require_explicit_user_request = true
@@ -2325,3 +2349,14 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "复用已有连接状态和数据契约。Windows 真机停更恢复待验证。"
+
+[[change_records]]
+id = "2026-11-16-public-windows-operations-v1.2"
+date = "2026-11-16"
+scope = "external_windows_operations_document"
+summary = "Windows 部署指南补充资源管理器打开方式、双设备模式的录制子目录、源码运行时的默认目录和实际配置核对方式。"
+external_document_action = "explicit_user_authorized"
+external_document_version = "1.2"
+change_state = "locked"
+release_lock = "windows-operations-v1.1-to-v1.2"
+reason = "用户明确要求将 Windows 录制数据保存位置补充到对外文档；本次只补充现场查找录制目录的方法。"
