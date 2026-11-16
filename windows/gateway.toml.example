@@ -53,6 +53,8 @@ model_nbr_uuid = "0000ff10-1212-abcd-1523-785feabcd123"
 scan_timeout_seconds = 5
 # 未找到设备或连接断开后，再试前等待的时间，单位为秒。
 reconnect_delay_seconds = 3
+# 启动采集后，EEG 和心率通知都停止达到此时长，网关重新连接头环。单位为秒。
+notification_timeout_seconds = 10
 
 [serial]
 # auto 自动发现 USB 串口；需要固定端口时填写实际端口，例如 "COM3"。

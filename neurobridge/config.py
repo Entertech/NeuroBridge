@@ -12,6 +12,7 @@ from .configuration.migration import migrate
 DEFAULT_ALGORITHM_COMMAND = ("/usr/local/lib/neurobridge/neurobridge_affective_bridge",)
 DEFAULT_EEG_ALIGNMENT_PERCENT = 5
 DEFAULT_EEG_ALIGNMENT_OUTPUT_WAIT_MS = 800
+DEFAULT_BLE_NOTIFICATION_TIMEOUT_SECONDS = 10
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class BleConfig:
     scan_timeout_seconds: int
     reconnect_delay_seconds: int
     device_identifier: str | None = None
+    notification_timeout_seconds: int = DEFAULT_BLE_NOTIFICATION_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -189,7 +191,7 @@ def load(
     raw = migrate(raw)
     section_fields = {
         "server": {"host", "port", "path"},
-        "ble": {"enabled", "device_name", "model_nbr_uuid", "scan_timeout_seconds", "reconnect_delay_seconds", "device_identifier"},
+        "ble": set(BleConfig.__dataclass_fields__),
         "recording": {"directory", "subject_id", "replay_recording_id", "replay_speed", "transport_trace_enabled", "transport_trace_max_bytes"},
         "algorithm": {"enabled", "command", "request_timeout_ms"},
         "download": {"enabled", "host", "port", "path"},
@@ -372,6 +374,9 @@ def load(
     recording_directory = Path(recording.get("directory", "./recordings"))
     ble_config = BleConfig(False, None, "0000ff10-1212-abcd-1523-785feabcd123", 5, 3)
     if data_source_type == "bluetooth" or include_headband:
+        notification_timeout = ble.get("notification_timeout_seconds", DEFAULT_BLE_NOTIFICATION_TIMEOUT_SECONDS)
+        if notification_timeout <= 0:
+            raise ValueError("ble.notification_timeout_seconds must be positive")
         ble_config = BleConfig(
             bool(ble.get("enabled", False)),
             ble.get("device_name") or None,
@@ -379,6 +384,7 @@ def load(
             int(ble.get("scan_timeout_seconds", 5)),
             int(ble.get("reconnect_delay_seconds", 3)),
             ble.get("device_identifier", "").strip() or None,
+            notification_timeout_seconds=notification_timeout,
         )
     serial_config = SerialConfig()
     if data_source_type == "serial":
@@ -515,7 +521,7 @@ def _validate_types(raw: dict) -> None:
     """
     boolean = {"ble.enabled", "algorithm.enabled", "download.enabled", "local_ui.enabled", "data_source.include_headband",
                "serial.dtr", "serial.rts", "storage.auto_cleanup_enabled", "recording.transport_trace_enabled"}
-    integer = {"server.port", "download.port", "local_ui.port", "ble.scan_timeout_seconds",
+    integer = {"server.port", "download.port", "local_ui.port", "ble.scan_timeout_seconds", "ble.notification_timeout_seconds",
                "ble.reconnect_delay_seconds", "serial.baud_rate", "serial.handshake_timeout_ms",
                "serial.command_response_timeout_ms", "serial.max_buffer_bytes",
                "algorithm.request_timeout_ms", "data_source.window_interval_ms", "data_source.stale_after_ms",

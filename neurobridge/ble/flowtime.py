@@ -7,7 +7,7 @@ import sys
 import time
 from typing import TYPE_CHECKING, Awaitable, Callable, Iterable
 
-from ..config import BleConfig
+from ..config import BleConfig, PipelineConfig
 from ..device.packet import DevicePacket
 from .packets import EEG_PACKET_BYTES
 
@@ -68,11 +68,23 @@ def _observe_winrt_session(client: object, attempt: int) -> Callable[[], None] |
 
 class FlowtimeAdapter:
     """Bleak adapter for the FF31/FF32/FF51/FF21 profile in the device specification."""
-    def __init__(self, config: BleConfig, packet: Callable[[DevicePacket], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]], error: Callable[[str], Awaitable[None]] | None = None, *, external_control: bool = False, hci_diagnostics: WindowsHciDiagnostics | None = None) -> None:
+    def __init__(
+        self,
+        config: BleConfig,
+        packet: Callable[[DevicePacket], Awaitable[None]],
+        status: Callable[[str, object], Awaitable[None]],
+        device_ready: Callable[[], Awaitable[None]],
+        error: Callable[[str], Awaitable[None]] | None = None,
+        *,
+        external_control: bool = False,
+        hci_diagnostics: WindowsHciDiagnostics | None = None,
+        disconnect_timeout_ms: int = PipelineConfig().shutdown_timeout_ms,
+    ) -> None:
         self.config, self.packet, self.status, self.device_ready = config, packet, status, device_ready
         self.error = error
         self.external_control = external_control
         self._hci_diagnostics = hci_diagnostics
+        self._disconnect_timeout = disconnect_timeout_ms / 1000
         self._io_lock = asyncio.Lock()
         self._client = None
         self._stopping = False
@@ -229,8 +241,8 @@ class FlowtimeAdapter:
                 # A connection is only published after all notifications, the FF21
                 # start command, and the per-session algorithm initialization succeed.
                 phase = "streaming"
+                capture_started_at = time.monotonic()
                 self._last_connected_address = candidate_address
-                failed_candidates.clear()
                 await self.status("connectionState", "connected")
                 if link_lost_at is not None:
                     LOG.info(
@@ -239,9 +251,19 @@ class FlowtimeAdapter:
                         int((time.monotonic() - link_lost_at) * 1000),
                     )
                     link_lost_at = None
+                notification_timed_out = False
                 while not self._stopping and self._client.is_connected and not disconnected_event.is_set():
+                    wait_seconds = 1
+                    if sys.platform == "win32":
+                        # Only EEG and HR notifications update these timestamps.
+                        last_data_at = max(capture_started_at, max(last_notifications.values(), default=capture_started_at))
+                        remaining = self.config.notification_timeout_seconds - (time.monotonic() - last_data_at)
+                        if remaining <= 0:
+                            notification_timed_out = True
+                            break
+                        wait_seconds = min(wait_seconds, remaining)
                     try:
-                        await asyncio.wait_for(disconnected_event.wait(), 1)
+                        await asyncio.wait_for(disconnected_event.wait(), wait_seconds)
                     except TimeoutError:
                         pass
                 if not self._stopping:
@@ -254,19 +276,28 @@ class FlowtimeAdapter:
 
                     LOG.warning(
                         "Flowtime streaming ended: attempt=%s disconnectCallback=%s connectedMs=%s "
-                        "lastEegNotificationAgeMs=%s lastHrNotificationAgeMs=%s scanRssi=%s",
+                        "lastEegNotificationAgeMs=%s lastHrNotificationAgeMs=%s scanRssi=%s "
+                        "notificationTimedOut=%s notificationTimeoutSeconds=%s",
                         attempt,
                         disconnected_at is not None,
                         int((ended_at - connected_at) * 1000),
                         notification_age_ms(FF31),
                         notification_age_ms(FF51),
                         advertisement.rssi,
+                        notification_timed_out,
+                        self.config.notification_timeout_seconds if sys.platform == "win32" else None,
                     )
                     await self._disconnect_client()
                     await self.status("connectionState", "disconnected")
                     if eeg_counts:
                         LOG.info("Flowtime EEG session ended: attempt=%s packetsByPattern=%s", attempt, dict(eeg_counts))
-                    if sys.platform == "win32":
+                    if notification_timed_out and not last_notifications:
+                        # A link that never produced data is a failed candidate.
+                        # Resume a full scan so it cannot starve another headband.
+                        failed_candidates.add(candidate_address)
+                        self._last_connected_address = None
+                    elif sys.platform == "win32":
+                        failed_candidates.clear()
                         # Begin the first scan immediately; later failed attempts retain the configured backoff.
                         retry_delay = 0
                     LOG.info(
@@ -307,8 +338,11 @@ class FlowtimeAdapter:
         client, self._client = self._client, None
         if client and client.is_connected:
             try:
-                async with self._io_lock:
+                timeout = self._disconnect_timeout if sys.platform == "win32" else None
+                async with asyncio.timeout(timeout), self._io_lock:
                     await client.disconnect()
+            except TimeoutError:
+                LOG.warning("Timed out disconnecting Flowtime BLE client")
             except Exception:
                 LOG.exception("Failed to disconnect Flowtime BLE client")
 

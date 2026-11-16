@@ -38,7 +38,8 @@ class BluetoothBleakSource:
         self._shutdown_timeout = shutdown_timeout_ms / 1000
         self._hci_diagnostics = WindowsHciDiagnostics() if sys.platform == "win32" and config.enabled else None
         self._adapter = FlowtimeAdapter(config, self._packet, self._status_changed, self._prepare_device, error,
-                                        external_control=True, hci_diagnostics=self._hci_diagnostics)
+                                        external_control=True, hci_diagnostics=self._hci_diagnostics,
+                                        disconnect_timeout_ms=shutdown_timeout_ms)
         self.control = BluetoothSessionControl(lambda: self._session_id, lambda: False, self._write_control)
 
     async def _write_control(self, command: bytes) -> None:

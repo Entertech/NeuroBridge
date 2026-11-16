@@ -150,6 +150,20 @@ class DeviceStrategyConfigurationTests(unittest.TestCase):
             self.assertEqual(config.ble.scan_timeout_seconds, 5)
             self.assertEqual(config.ble.reconnect_delay_seconds, 3)
 
+    def test_ble_notification_timeout_defaults_and_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            prefix = '[data_source]\ntype = "bluetooth"\n[ble]\n'
+            path.write_text(prefix, encoding="utf-8")
+            self.assertEqual(load(path).ble.notification_timeout_seconds, 10)
+            path.write_text(prefix + "notification_timeout_seconds = 15\n", encoding="utf-8")
+            self.assertEqual(load(path).ble.notification_timeout_seconds, 15)
+            for value in ("0", "-1", "true", '"15"'):
+                with self.subTest(value=value):
+                    path.write_text(prefix + f"notification_timeout_seconds = {value}\n", encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "ble.notification_timeout_seconds"):
+                        load(path)
+
     def test_native_usb_is_a_reserved_strategy_value(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gateway.toml"

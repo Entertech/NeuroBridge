@@ -54,6 +54,8 @@ Windows 安装包内置 Bleak 0.19.5，用于修复 Python 3.11 下头环连接�
 
 `Flowtime EEG notifications` 和 `Flowtime EEG session ended` 记录头环 EEG 包的累计分类计数。全零和全 FF 只检查采样字节，跳过两字节序号。计数与原始数据来自同一通知回调，便于区分采样字节全零和通知停止。
 
+Windows 在启动采集后持续监测 EEG 和心率通知。如果两路都停满 `[ble].notification_timeout_seconds`（默认 10 秒），网关结束旧会话并重新扫描，即使 Windows 仍报告蓝牙已连接。日志 `notificationTimedOut=True` 表示此次重连由通知停更触发。仍有一路在发送通知时继续采集。若本次连接从未收到任一路通知，按 `reconnect_delay_seconds` 等待后完整扫描，优先尝试其他匹配候选。旧配置缺少该字段时使用默认值。
+
 头环断开时，`Flowtime streaming ended` 记录连接持续时间，以及最后一条 EEG 和心率通知距断开的毫秒数。值为 `None` 表示该连接尚未收到对应通知。`scanRssi` 是建立连接前的扫描信号强度。`Flowtime capture restarted` 的 `outageMs` 表示从蓝牙断开到网关重新启动采集的时间。可按日志时间与 `Data stream became stale` 对照。
 
 Windows 头环建立连接后，`Flowtime WinRT GATT session status changed` 会记录 Windows 报告的会话状态及蓝牙错误（名称和数值）。可用 `attempt` 与同一连接的断开回调、`stopping` 标志及采集日志对照。`status=CLOSED(0) bluetoothError=SUCCESS(0)` 表示会话已关闭，Windows 未报告 GATT 错误。判断由哪一端发起断开需要蓝牙控制器层的证据。若 WinRT 会话事件无法订阅，日志会显示 `Flowtime WinRT GATT session diagnostics unavailable`。
