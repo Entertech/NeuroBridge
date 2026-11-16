@@ -50,6 +50,10 @@ Windows 安装包内置 Bleak 0.19.5，用于修复 Python 3.11 下头环连接�
 
 排查头环连接时，在 `neurobridge.log` 搜索 `Flowtime scan completed`。若 `discovered=0`，优先检查蓝牙适配器、驱动和附近设备是否在广播。若 `discovered>0` 且 `modelMatches=0`，检查头环是否在广播及型号 UUID 是否正确。若 `modelMatches>0` 且 `matched=0`，检查名称和设备标识配置。
 
+已连接的头环掉线后，Windows 立即开始第一次扫描。程序会记住本次运行中最后一个完成连接和采集初始化的头环地址，收到该地址的新广播后就尝试重连，并重新验证 GATT 特征和采集初始化。此时日志的 `previousDeviceSeen=True` 可以解释为什么名称或型号字段尚未收到就开始连接。如果在扫描窗口内没有遇到该地址，继续按原有名称、型号和设备标识配置筛选。扫描或连接失败后的重复尝试仍按 `reconnect_delay_seconds` 间隔进行。
+
+`Flowtime EEG notifications` 和 `Flowtime EEG session ended` 记录头环 EEG 包的累计分类计数。全零和全 FF 只检查采样字节，跳过两字节序号。计数与原始数据来自同一通知回调，便于区分采样字节全零和通知停止。
+
 头环断开时，`Flowtime streaming ended` 记录连接持续时间，以及最后一条 EEG 和心率通知距断开的毫秒数。值为 `None` 表示该连接尚未收到对应通知。`scanRssi` 是建立连接前的扫描信号强度。`Flowtime capture restarted` 的 `outageMs` 表示从蓝牙断开到网关重新启动采集的时间。可按日志时间与 `Data stream became stale` 对照。
 
 Windows 头环建立连接后，`Flowtime WinRT GATT session status changed` 会记录 Windows 报告的会话状态及蓝牙错误（名称和数值）。可用 `attempt` 与同一连接的断开回调、`stopping` 标志及采集日志对照。`status=CLOSED(0) bluetoothError=SUCCESS(0)` 表示会话已关闭，Windows 未报告 GATT 错误。判断由哪一端发起断开需要蓝牙控制器层的证据。若 WinRT 会话事件无法订阅，日志会显示 `Flowtime WinRT GATT session diagnostics unavailable`。

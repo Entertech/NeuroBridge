@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import logging
 import sys
 import time
@@ -8,8 +9,10 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Iterable
 
 from ..config import BleConfig
 from ..device.packet import DevicePacket
+from .packets import EEG_PACKET_BYTES
 
 if TYPE_CHECKING:
+    from bleak import BleakScanner
     from bleak.backends.device import BLEDevice
     from bleak.backends.scanner import AdvertisementData
     from .windows_hci import WindowsHciDiagnostics
@@ -73,6 +76,7 @@ class FlowtimeAdapter:
         self._io_lock = asyncio.Lock()
         self._client = None
         self._stopping = False
+        self._last_connected_address: str | None = None
 
     def matching_candidates(
         self, devices: Iterable[tuple[BLEDevice, AdvertisementData]]
@@ -94,6 +98,30 @@ class FlowtimeAdapter:
             candidates.append((device, advertisement))
         return model_matches, candidates
 
+    async def _discover(self, scanner_type: type[BleakScanner]) -> tuple[
+        dict[str, tuple[BLEDevice, AdvertisementData]], tuple[BLEDevice, AdvertisementData] | None,
+    ]:
+        preferred = self._last_connected_address if sys.platform == "win32" else None
+        if preferred is None:
+            return await scanner_type.discover(timeout=self.config.scan_timeout_seconds, return_adv=True), None
+
+        # Reuse the identity only after a successful connection and a fresh advertisement.
+        found = asyncio.Event()
+        devices = {}
+
+        def detected(device: BLEDevice, advertisement: AdvertisementData) -> None:
+            address = device.address.casefold()
+            devices[address] = (device, advertisement)
+            if address == preferred:
+                found.set()
+
+        async with scanner_type(detection_callback=detected):
+            try:
+                await asyncio.wait_for(found.wait(), self.config.scan_timeout_seconds)
+            except TimeoutError:
+                pass
+        return devices, devices.get(preferred)
+
     async def run(self) -> None:
         if not self.config.enabled:
             LOG.info("Flowtime BLE adapter disabled by configuration")
@@ -105,6 +133,7 @@ class FlowtimeAdapter:
             attempt += 1
             phase = "scan"
             remove_winrt_observer = None
+            retry_delay = self.config.reconnect_delay_seconds
             try:
                 await self.status("connectionState", "connecting")
                 scan_started = time.monotonic()
@@ -114,19 +143,24 @@ class FlowtimeAdapter:
                     self.config.scan_timeout_seconds,
                     self.config.reconnect_delay_seconds,
                 )
-                devices = await BleakScanner.discover(timeout=self.config.scan_timeout_seconds, return_adv=True)
+                devices, rediscovered = await self._discover(BleakScanner)
                 if self._stopping:
                     return
                 model_matches, candidates = self.matching_candidates(devices.values())
                 LOG.info(
-                    "Flowtime scan completed: attempt=%s discovered=%s modelMatches=%s matched=%s durationMs=%s",
+                    "Flowtime scan completed: attempt=%s discovered=%s modelMatches=%s matched=%s durationMs=%s previousDeviceSeen=%s",
                     attempt,
                     len(devices),
                     model_matches,
                     len(candidates),
                     int((time.monotonic() - scan_started) * 1000),
+                    rediscovered is not None,
                 )
-                if not candidates:
+                if rediscovered is not None:
+                    candidate, advertisement = rediscovered
+                elif candidates:
+                    candidate, advertisement = max(candidates, key=lambda item: item[1].rssi)
+                else:
                     if not devices:
                         LOG.warning("No BLE advertisements received; check the Bluetooth adapter and nearby devices")
                     elif not model_matches:
@@ -134,18 +168,19 @@ class FlowtimeAdapter:
                     else:
                         LOG.warning("Flowtime model UUID found, but no device matched the configured name or identifier")
                     raise RuntimeError("No Flowtime headband matching the configured profile was found")
-                candidate, advertisement = max(candidates, key=lambda item: item[1].rssi)
                 phase = "connect"
                 connect_started = time.monotonic()
                 disconnected_at: float | None = None
+                disconnected_event = asyncio.Event()
                 last_notifications: dict[str, float] = {}
+                eeg_counts: Counter[str] = Counter()
                 LOG.info("Connecting to Flowtime candidate: attempt=%s rssi=%s", attempt, advertisement.rssi)
                 if self._hci_diagnostics is not None:
                     self._hci_diagnostics.track(candidate.address, attempt)
 
                 def disconnected(_: object, callback_attempt: int = attempt) -> None:
                     nonlocal disconnected_at
-                    if callback_attempt != attempt:
+                    if callback_attempt != attempt or disconnected_event.is_set():
                         return
                     disconnected_at = time.monotonic()
                     LOG.log(
@@ -155,7 +190,7 @@ class FlowtimeAdapter:
                         phase,
                         self._stopping,
                     )
-                    asyncio.create_task(self.status("connectionState", "disconnected"))
+                    disconnected_event.set()
 
                 self._client = BleakClient(candidate, disconnected_callback=disconnected)
                 await self._client.connect()
@@ -167,7 +202,7 @@ class FlowtimeAdapter:
                     int((connected_at - connect_started) * 1000),
                 )
                 phase = "subscribe"
-                await self._subscribe(last_notifications)
+                await self._subscribe(last_notifications, attempt=attempt, eeg_counts=eeg_counts)
                 phase = "algorithm_initialize"
                 LOG.info("Flowtime notifications ready; initializing capture: attempt=%s", attempt)
                 # Do not start device capture until the algorithm has a clean session.
@@ -178,10 +213,15 @@ class FlowtimeAdapter:
                 phase = "start_capture"
                 if not self.external_control:
                     await self.write_control(b"\x05")
+                if self._stopping:
+                    return
+                if disconnected_event.is_set() or not self._client.is_connected:
+                    raise ConnectionError("BLE link dropped before capture was initialized")
                 LOG.info("Flowtime start command acknowledged: attempt=%s command=0x05", attempt)
                 # A connection is only published after all notifications, the FF21
                 # start command, and the per-session algorithm initialization succeed.
                 phase = "streaming"
+                self._last_connected_address = candidate.address.casefold()
                 await self.status("connectionState", "connected")
                 if link_lost_at is not None:
                     LOG.info(
@@ -190,8 +230,11 @@ class FlowtimeAdapter:
                         int((time.monotonic() - link_lost_at) * 1000),
                     )
                     link_lost_at = None
-                while not self._stopping and self._client.is_connected:
-                    await asyncio.sleep(1)
+                while not self._stopping and self._client.is_connected and not disconnected_event.is_set():
+                    try:
+                        await asyncio.wait_for(disconnected_event.wait(), 1)
+                    except TimeoutError:
+                        pass
                 if not self._stopping:
                     ended_at = disconnected_at if disconnected_at is not None else time.monotonic()
                     link_lost_at = ended_at
@@ -210,12 +253,18 @@ class FlowtimeAdapter:
                         notification_age_ms(FF51),
                         advertisement.rssi,
                     )
+                    await self._disconnect_client()
                     await self.status("connectionState", "disconnected")
+                    if eeg_counts:
+                        LOG.info("Flowtime EEG session ended: attempt=%s packetsByPattern=%s", attempt, dict(eeg_counts))
+                    if sys.platform == "win32":
+                        # Begin the first scan immediately; later failed attempts retain the configured backoff.
+                        retry_delay = 0
                     LOG.info(
                         "Flowtime reconnect scheduled: attempt=%s nextAttempt=%s delaySeconds=%s",
                         attempt,
                         attempt + 1,
-                        self.config.reconnect_delay_seconds,
+                        retry_delay,
                     )
             except Exception as exc:
                 LOG.exception(
@@ -226,7 +275,7 @@ class FlowtimeAdapter:
                 )
                 if self.error:
                     await self.error(str(exc))
-                await self._disconnect_after_failure()
+                await self._disconnect_client()
                 await self.status("connectionState", "disconnected")
                 LOG.info(
                     "Flowtime reconnect scheduled: attempt=%s nextAttempt=%s delaySeconds=%s",
@@ -237,21 +286,27 @@ class FlowtimeAdapter:
             finally:
                 if remove_winrt_observer is not None:
                     remove_winrt_observer()
-            await asyncio.sleep(self.config.reconnect_delay_seconds)
+            if not self._stopping and retry_delay:
+                await asyncio.sleep(retry_delay)
 
-    async def _disconnect_after_failure(self) -> None:
-        """Do not leave a device-side BLE link open after incomplete subscription."""
-        if self._client and self._client.is_connected:
+    async def _disconnect_client(self) -> None:
+        client, self._client = self._client, None
+        if client and client.is_connected:
             try:
                 async with self._io_lock:
-                    await self._client.disconnect()
+                    await client.disconnect()
             except Exception:
-                LOG.exception("Failed to disconnect Flowtime after connection setup failure")
-        self._client = None
+                LOG.exception("Failed to disconnect Flowtime BLE client")
 
-    async def _subscribe(self, last_notifications: dict[str, float]) -> None:
-        assert self._client
+    async def _subscribe(self, last_notifications: dict[str, float], *,
+                         attempt: int, eeg_counts: Counter[str]) -> None:
+        client = self._client
+        assert client
+        last_eeg_log_at = time.monotonic()
+
         async def notify(characteristic: str, value: bytearray) -> None:
+            if client is not self._client:
+                return
             raw = bytes(value)
             if characteristic == FF32:
                 await self.packet(DevicePacket.received("bluetooth", "ff32", raw))
@@ -264,20 +319,38 @@ class FlowtimeAdapter:
                 await self.packet(DevicePacket.received("bluetooth", {FF31: "ff31", FF51: "ff51"}[characteristic], raw))
 
         def handle_notification(characteristic: str, value: bytearray) -> None:
+            nonlocal last_eeg_log_at
+            if client is not self._client:
+                return
             if characteristic in (FF31, FF51):
-                last_notifications[characteristic] = time.monotonic()
+                now = time.monotonic()
+                last_notifications[characteristic] = now
+                if characteristic == FF31:
+                    samples = value[2:]
+                    if len(value) != EEG_PACKET_BYTES:
+                        pattern = "invalid_length"
+                    elif samples.count(0) == len(samples):
+                        pattern = "all_zero"
+                    elif samples.count(255) == len(samples):
+                        pattern = "all_ff"
+                    else:
+                        pattern = "nonzero"
+                    eeg_counts[pattern] += 1
+                    if now - last_eeg_log_at >= 10:
+                        LOG.info("Flowtime EEG notifications: attempt=%s packetsByPattern=%s", attempt, dict(eeg_counts))
+                        last_eeg_log_at = now
             asyncio.create_task(notify(characteristic, value))
 
         for characteristic in REQUIRED_NOTIFICATION_CHARACTERISTICS:
             # Bleak notification callbacks are synchronous on all supported backends.
             # Schedule the async state update rather than relying on backend-specific
             # coroutine callback behavior.
-            await self._client.start_notify(characteristic, lambda _sender, value, c=characteristic: handle_notification(c, value))
+            await client.start_notify(characteristic, lambda _sender, value, c=characteristic: handle_notification(c, value))
         for characteristic in OPTIONAL_NOTIFICATION_CHARACTERISTICS:
             if not self._supports(characteristic):
                 LOG.info("Optional Flowtime notification is not exposed by this headband; continuing without it")
                 continue
-            await self._client.start_notify(characteristic, lambda _sender, value, c=characteristic: handle_notification(c, value))
+            await client.start_notify(characteristic, lambda _sender, value, c=characteristic: handle_notification(c, value))
         LOG.info("Subscribed to required Flowtime EEG, wear-state, and heart-rate notifications")
 
     def _supports(self, characteristic: str) -> bool:
@@ -309,4 +382,4 @@ class FlowtimeAdapter:
         except Exception:
             LOG.exception("Failed to stop Flowtime collection")
         finally:
-            await self._disconnect_after_failure()
+            await self._disconnect_client()
