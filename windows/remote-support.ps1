@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet('Menu', 'Enable', 'Disable', 'Status')]
     [string]$Action = 'Menu',
     [switch]$PauseOnExit,
@@ -82,8 +82,14 @@ try {
     if ($Action -eq 'Enable') {
         $restartNeeded = $false
         if ((Get-WindowsCapability -Online -Name $capability).State -ne 'Installed') {
-            Write-Host 'Installing the Windows OpenSSH Server feature...'
+            Write-Host '正在通过 Windows 安装 OpenSSH Server，可能需要下载组件，请等待安装完成。'
+            if ($FromInstaller -or $RequireGateway) {
+                $gatewayCli = Join-Path $PSScriptRoot 'cli\neurobridge.cmd'
+                Write-Host '等待期间，网关服务就绪后，可在本机新开 PowerShell，运行 neurobridge web 打开联调网页。'
+                Write-Host ('如果系统还找不到 neurobridge 命令，可直接运行 & "{0}" web' -f $gatewayCli)
+            }
             $restartNeeded = (Add-WindowsCapability -Online -Name $capability).RestartNeeded
+            Write-Host '正在配置 OpenSSH 服务和防火墙规则。'
         }
 
         if (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue) {

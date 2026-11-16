@@ -286,6 +286,17 @@ markdown_sha256 = "292254599e72f639053588c11734bd8bd1e3f9537ade024edd1e5d8af9d92
 publication_record = "2026-11-16-public-windows-operations-v1.2"
 reason = "用户明确要求将 Windows 录制数据保存位置补充到对外文档；本次只补充现场查找录制目录的方法。"
 
+[[change_records]]
+id = "2026-11-16-windows-openssh-install-hints"
+date = "2026-11-16"
+scope = "windows_installer"
+summary = "Windows OpenSSH 下载和安装阶段显示中文提示，说明网关服务就绪后可运行 neurobridge web，也可用完整路径打开本机联调网页。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "仅调整 Windows 安装脚本提示，北向报文语义未变。"
+
 [[documents.external_windows_operations.versions]]
 version = "1.0"
 status = "published"

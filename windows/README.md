@@ -199,7 +199,7 @@ Windows MSI / EXE 安装和覆盖升级时默认安装并启动 Windows OpenSSH 
 
 也可以双击 `windows\remote-support.cmd` 使用交互菜单，选 `1` 启用、`3` 查询、`2` 关闭。源码部署从项目目录打开，安装包部署从安装目录打开。
 
-首次安装 OpenSSH Server 可能需要 Windows Update。如果系统组件安装失败，网关仍可安装。查看 Windows 应用程序事件日志中的 `NeuroBridge SSH Setup`，解决组件安装问题后运行 `neurobridge ssh enable`。从同一子网连接时使用自己的 Windows 账号。
+首次安装 OpenSSH Server 可能需要 Windows Update。下载或安装期间，PowerShell 窗口会显示中文提示。网关服务就绪后，可以在本机新开 PowerShell 运行 `neurobridge web`，或复制提示中的完整命令打开联调网页。如果系统组件安装失败，网关仍可安装。查看 Windows 应用程序事件日志中的 `NeuroBridge SSH Setup`，解决组件安装问题后运行 `neurobridge ssh enable`。从同一子网连接时使用自己的 Windows 账号。
 
 OpenSSH 是 Windows 系统服务。需要关闭远程访问时，运行 `neurobridge ssh disable`，这也会停止其他 SSH 连接。后续覆盖安装会重新启用 SSH。网关的本机网页和 WebSocket 使用回环地址。
 
