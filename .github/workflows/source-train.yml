@@ -6,7 +6,7 @@ on:
       operation:
         type: choice
         required: true
-        options: [initialize, select, promote, prepare, review, release, merge, verify]
+        options: [plan, initialize, select, promote, prepare, review, release, merge, verify]
       version:
         description: "明确选择 major.minor.patch；不默认创建版本"
         type: string
@@ -20,6 +20,9 @@ on:
       candidate:
         description: "review：人工审核通过的完整候选 SHA"
         type: string
+      plan_source:
+        description: "plan：要预览的完整 SHA 或 origin/分支；留空使用当前工作流提交"
+        type: string
   pull_request:
     types: [closed]
     branches: ['publish_*', master]
@@ -29,13 +32,33 @@ permissions:
   actions: read
 
 concurrency:
-  # Repository-wide serialization also covers automatic prepare/verify events.
-  group: source-train-${{ github.repository }}
+  # Serialize mutations repository-wide. Read-only previews never queue with them.
+  group: source-train-${{ github.repository }}${{ inputs.operation == 'plan' && format('-plan-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 jobs:
+  plan:
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'plan'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Preview version, packages, documents and train gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRAIN_VERSION: ${{ inputs.version }}
+          PLAN_SOURCE: ${{ inputs.plan_source || github.sha }}
+          TRAIN_PLAN_APP_ID_PRESENT: ${{ secrets.RELEASE_BOT_APP_ID != '' }}
+          TRAIN_PLAN_APP_KEY_PRESENT: ${{ secrets.RELEASE_BOT_PRIVATE_KEY != '' }}
+        run: |
+          python -m tools.source_train plan --version "$TRAIN_VERSION" --head "$PLAN_SOURCE" --summary "$GITHUB_STEP_SUMMARY"
+
   source:
-    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged && github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'dev_') || startsWith(github.head_ref, 'finalize_')))
+    if: (github.event_name == 'workflow_dispatch' && inputs.operation != 'plan') || (github.event.pull_request.merged && github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'dev_') || startsWith(github.head_ref, 'finalize_')))
     runs-on: ubuntu-22.04
     outputs:
       complete: ${{ steps.source.outputs.complete }}

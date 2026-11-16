@@ -66,17 +66,18 @@ def save_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def matrix() -> list[dict[str, str]]:
+def matrix(config: dict | None = None) -> list[dict[str, str]]:
+    config = CONFIG if config is None else config
     targets = []
-    for version in CONFIG["windows"]["versions"]:
-        for arch in CONFIG["windows"]["architectures"]:
-            for fmt in CONFIG["windows"]["formats"]:
-                targets.append({"id": f"windows-{version}-{arch}-{fmt}", "platform": "windows", "osVersion": version, "edition": "none", "architecture": arch, "format": fmt, "runner": CONFIG["build"]["windows_coordinator"]})
-    for edition in CONFIG["kylin"]["editions"]:
-        for arch in CONFIG["kylin"]["architectures"]:
-            for fmt in CONFIG["kylin"]["formats"]:
-                targets.append({"id": f"kylin-{edition}-{arch}-{fmt}", "platform": "kylin", "osVersion": "V10", "edition": edition, "architecture": arch, "format": fmt, "runner": CONFIG["build"]["linux_coordinator"]})
-    if len(targets) != CONFIG["aggregate"]["expected_package_count"] or len({item["id"] for item in targets}) != len(targets):
+    for version in config["windows"]["versions"]:
+        for arch in config["windows"]["architectures"]:
+            for fmt in config["windows"]["formats"]:
+                targets.append({"id": f"windows-{version}-{arch}-{fmt}", "platform": "windows", "osVersion": version, "edition": "none", "architecture": arch, "format": fmt, "runner": config["build"]["windows_coordinator"]})
+    for edition in config["kylin"]["editions"]:
+        for arch in config["kylin"]["architectures"]:
+            for fmt in config["kylin"]["formats"]:
+                targets.append({"id": f"kylin-{edition}-{arch}-{fmt}", "platform": "kylin", "osVersion": "V10", "edition": edition, "architecture": arch, "format": fmt, "runner": config["build"]["linux_coordinator"]})
+    if len(targets) != config["aggregate"]["expected_package_count"] or len({item["id"] for item in targets}) != len(targets):
         raise ValueError("release matrix count or IDs differ from the declared contract")
     return targets
 
@@ -158,7 +159,10 @@ def gate(base: str) -> dict[str, object]:
         if next_parts != expected or next_parts > new_parts or not record.get("compatibility") or not record.get("evidence"):
             raise ValueError(f"invalid {impact!r} version step or missing release evidence: {cursor} -> {next_version}")
         cursor = next_version
-    result: dict[str, object] = {"baseVersion": old, "applicationVersion": new, "productChanged": product_changed, "shouldRelease": new_parts > old_parts, "changedFiles": changed, "reason": "version_advanced" if new_parts > old_parts else "same_version_no_business_code_change"}
+    result: dict[str, object] = {"baseCommit": run("git", "rev-parse", "--verify", f"{base}^{{commit}}"),
+                                 "baseVersion": old, "applicationVersion": new, "productChanged": product_changed,
+                                 "shouldRelease": new_parts > old_parts, "changedFiles": changed,
+                                 "reason": "version_advanced" if new_parts > old_parts else "same_version_no_business_code_change"}
     log("version_gate", **result)
     return result
 

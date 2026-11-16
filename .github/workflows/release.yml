@@ -46,6 +46,7 @@ permissions:
 env:
   SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
   SOURCE_BRANCH: ${{ inputs.source_branch || github.ref_name }}
+  EXTERNAL_DOCUMENT_MODE: ${{ !inputs.source_train && inputs.external_document_mode || 'publish' }}
 
 concurrency:
   group: package-source-${{ github.repository }}-${{ inputs.source_sha || github.sha }}
@@ -54,7 +55,7 @@ concurrency:
 jobs:
   external-documents:
     name: Build the external document package
-    # Both automatic and manual builds must pass the public-release gate.
+    # The release plan validates document inputs before any rendering or build.
     needs: [release-plan]
     if: needs.release-plan.outputs.should_release == 'true'
     runs-on: ubuntu-latest
@@ -68,19 +69,6 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.lock
       - run: python -m pip install --no-deps -e .
-      - run: bash tools/check-external-protocol.sh
-      - name: Detect unpublished external documents
-        id: external-document-state
-        run: |
-          state="$(python tools/mark-external-documents-published.py --check)"
-          test "$state" = true || test "$state" = false
-          echo "has_unpublished=$state" >> "$GITHUB_OUTPUT"
-      - name: Require publication state before release
-        if: steps.external-document-state.outputs.has_unpublished == 'true' && (inputs.source_train || inputs.external_document_mode == 'publish')
-        run: |
-          echo "External documents must be promoted and locked before a release package is built." >&2
-          echo "Run: python3 tools/mark-external-documents-published.py --date YYYY-MM-DD" >&2
-          exit 1
       - name: Install protocol PDF renderer
         run: |
           sudo apt-get update
@@ -88,8 +76,6 @@ jobs:
           fc-cache -f
           fc-match "Noto Sans CJK SC" | grep -Eqi "Noto.*CJK"
       - name: Build external document PDF package and page previews
-        env:
-          EXTERNAL_DOCUMENT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.external_document_mode || 'publish' }}
         run: |
           mkdir -p artifacts/document-preview "$RUNNER_TEMP/external-document-pdfs"
           python tools/build-external-document-package.py \
@@ -104,7 +90,8 @@ jobs:
             name=$(basename "$pdf_path" .pdf)
             pdftoppm -png -r 144 "$pdf_path" "artifacts/document-preview/$name"
           done
-          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = 6
+          expected_count="$(python -c 'import json; print(json.load(open("artifacts/release-manifest.json", encoding="utf-8"))["sourceDocumentCount"])')"
+          test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = "$expected_count"
       - uses: actions/upload-artifact@v4
         with:
           name: external-document-package
@@ -157,7 +144,7 @@ jobs:
           retention-days: 30
 
   release-plan:
-    name: Release version gate and 32-target plan
+    name: Release preflight and target plan
     if: github.event_name == 'workflow_dispatch' || inputs.source_train
     runs-on: ubuntu-22.04
     outputs:
@@ -198,6 +185,17 @@ jobs:
           print('version=' + gate['applicationVersion'])
           print('matrix=' + json.dumps(matrix, separators=(',', ':')))
           PY
+      - name: Preview packages and validate external documents
+        run: |
+          python -m tools.release_preflight \
+            --head "$SOURCE_SHA" \
+            --gate "$RUNNER_TEMP/release-gate.json" \
+            --mode "$EXTERNAL_DOCUMENT_MODE" \
+            --output "$RUNNER_TEMP/release-preflight.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
+      - name: Verify document registry and release locks
+        if: steps.plan.outputs.should_release == 'true'
+        run: bash tools/check-external-protocol.sh
       - name: Explain a run that needs no release
         # `success()` matters: a gate failure leaves the output unset, and this
         # step must not claim "no release needed" on top of that failure.
@@ -208,17 +206,19 @@ jobs:
           {
             printf '## No release needed\n\n'
             printf '`[application].version` is still `%s`, so nothing was packaged.\n\n' "$VERSION"
-            printf 'A push only produces a package once the application version advances. A change to\n'
+            printf 'Packaging requires an application version advance. A change to\n'
             printf 'business code without a bump fails the gate instead of being skipped here.\n'
           } >> "$GITHUB_STEP_SUMMARY"
           printf '::notice title=release skipped::application version is still %s; nothing was packaged\n' "$VERSION"
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: release-plan-${{ env.SOURCE_SHA }}
           path: |
             ${{ runner.temp }}/release-gate.json
             ${{ runner.temp }}/release-matrix.json
-          if-no-files-found: error
+            ${{ runner.temp }}/release-preflight.json
+          if-no-files-found: warn
           retention-days: 30
 
   release-targets:
@@ -437,7 +437,7 @@ jobs:
           while IFS=$'\t' read -r artifact_id artifact_name; do
             # Reusable Release shares the Test run; keep its diagnostic artifacts.
             case "$artifact_name" in
-              release-plan-*|release-target-*|external-document-package|neurobridge-*-unsigned-candidate|delivery-directory-guide-preview-*)
+              release-target-*|external-document-package|neurobridge-*-unsigned-candidate|delivery-directory-guide-preview-*)
                 gh api --method DELETE "repos/${{ github.repository }}/actions/artifacts/$artifact_id" ;;
             esac
           done

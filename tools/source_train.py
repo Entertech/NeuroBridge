@@ -250,6 +250,69 @@ class Train:
         if policy.get('required_linear_history', {}).get('enabled'):
             raise ValueError("linear-only protection cannot preserve candidate ancestry")
 
+    def plan_actions_secrets(self) -> dict:
+        required = [self.config['repository'][key] for key in ('app_id_secret', 'private_key_secret')]
+        if os.environ.get('GITHUB_ACTIONS') == 'true':
+            presence = [os.environ.get(key) for key in ('TRAIN_PLAN_APP_ID_PRESENT', 'TRAIN_PLAN_APP_KEY_PRESENT')]
+            if all(value in ('true', 'false') for value in presence):
+                missing = [name for name, present in zip(required, presence) if present == 'false']
+                return {'status': 'missing' if missing else 'configured', 'notConfirmed': missing, 'unreadableScopes': []}
+        secret_names = set()
+        unreadable = []
+        for scope in ('secrets', 'organization-secrets'):
+            try:
+                pages = json.loads(run('gh', 'api', '--paginate', '--slurp',
+                                       f'repos/{self.repository}/actions/{scope}?per_page=100'))
+            except RuntimeError:
+                unreadable.append(scope)
+            else:
+                secret_names.update(secret['name'] for page in pages for secret in page['secrets'])
+        missing = [name for name in required if name not in secret_names]
+        secret_status = 'configured'
+        if missing:
+            secret_status = 'unknown' if unreadable else 'missing'
+        return {'status': secret_status, 'notConfirmed': missing, 'unreadableScopes': unreadable}
+
+    def plan(self, head: str) -> dict:
+        from tools.release_preflight import release_plan
+
+        default, baseline = self.default()
+        result = release_plan(head, baseline)
+        protections = {}
+        for branch in (default, self.names['integration'], self.names['publish']):
+            try:
+                self.protection(branch)
+            except (RuntimeError, ValueError) as error:
+                status = 'unverified' if isinstance(error, RuntimeError) or error.__cause__ else 'blocked'
+                protections[branch] = {'status': status, 'reason': str(error)}
+            else:
+                protections[branch] = {'status': 'passed'}
+        record = self.load()
+        candidate_gates = {'status': 'pending', 'reason': 'No release candidate recorded.'}
+        if record is not None:
+            candidate = require_sha(record['candidate'])
+            candidate_gates = {'sourceCommit': candidate}
+            try:
+                self.checks(candidate)
+            except (RuntimeError, ValueError) as error:
+                candidate_gates['codeChecks'] = {'status': 'blocked', 'reason': str(error)}
+            else:
+                candidate_gates['codeChecks'] = {'status': 'passed'}
+            candidate_gates['humanReview'] = 'recorded' if (record.get('review') or {}).get('sha') == candidate else 'pending'
+
+        return {
+            **result, 'repository': self.repository, 'version': self.version, 'branches': self.names,
+            'default': default, 'publishPolicy': self.config['source_release'], 'writes': False,
+            'gates': {
+                'sourceVersion': 'matches_target' if result['applicationVersion'] == self.version else 'differs_from_target',
+                'branchProtection': protections,
+                'actionsSecrets': self.plan_actions_secrets(),
+                'requiredCodeChecks': self.config['code_gates']['checks'],
+                'candidate': candidate_gates,
+                'packages': 'verified_receipt_required',
+            },
+        }
+
     def load(self) -> dict | None:
         ref = f"refs/heads/{self.names['state']}"
         self.state_sha = self.ref(ref)
@@ -567,6 +630,10 @@ class Train:
         default_tip = self.fetch('refs/heads/'+default)
         if numeric(self.version) <= numeric(version_at(default_tip)):
             raise ValueError('new package version must advance the current default version')
+        from tools.release_preflight import release_plan
+        plan = release_plan(record['candidate'], default_tip)
+        if plan['documentBlockers']:
+            raise ValueError('formal document preflight failed: ' + ' '.join(plan['documentBlockers']))
         record['packageRunId'] = os.environ['GITHUB_RUN_ID']
         record['packageRunAttempt'] = os.environ.get('GITHUB_RUN_ATTEMPT', '1')
         record['phase'] = 'packaging'
@@ -786,6 +853,7 @@ def main():
     p.add_argument('--candidate'); p.add_argument('--branch'); p.add_argument('--base'); p.add_argument('--head', default='HEAD')
     p.add_argument('--event', choices=['push', 'pull_request'])
     p.add_argument('--directory', type=Path); p.add_argument('--artifact-id', type=int)
+    p.add_argument('--summary', type=Path, help='plan: append a Markdown preflight summary')
     args = p.parse_args()
     try:
         if args.operation == 'check':
@@ -800,11 +868,11 @@ def main():
             train.operation = args.operation
             train.requirements = [x.strip() for x in args.requirements.split(',') if x.strip()]
             if args.operation == 'plan':
-                result = {'repository': train.repository, 'version': train.version, 'branches': train.names,
-                          'default': train.default()[0],
-                          'publishPolicy': train.config['source_release'], 'writes': False}
-                from tools.release_pipeline import matrix
-                result['packages'] = matrix()
+                result = train.plan(args.head)
+                if args.summary is not None:
+                    from tools.release_preflight import render_summary
+                    with args.summary.open('a', encoding='utf-8') as summary:
+                        summary.write(render_summary(result, 'publish', result['gates']['sourceVersion']))
             elif args.operation in ('initialize', 'select'):
                 requirements = [x.strip() for x in args.requirements.split(',') if x.strip()]
                 result = getattr(train, args.operation)(requirements)

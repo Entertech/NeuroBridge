@@ -225,6 +225,21 @@ assert suite.countTestCases() > 0
             with self.assertRaisesRegex(ValueError, 'required code check failed'): obj.begin_release()
             save.assert_not_called(); api.assert_not_called()
 
+    def test_unpublished_candidate_documents_prevent_packaging_checkpoint(self):
+        obj = train.Train('1.2.3', True)
+        record = {'candidate': GOOD, 'review': {'sha': GOOD}}
+        with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'default', return_value=('master', OTHER)), \
+             mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'required_record', return_value=record), \
+             mock.patch.object(obj, 'checks'), mock.patch.object(obj, 'tag', return_value=None), \
+             mock.patch.object(obj, 'fetch', return_value=OTHER), mock.patch.object(train, 'version_at', return_value='1.2.2'), \
+             mock.patch('tools.release_preflight.release_plan', return_value={'documentBlockers': ['Windows guide is still unpublished.']}) as plan, \
+             mock.patch.object(obj, 'save') as save, mock.patch.object(obj, 'ensure_candidate') as ensure_candidate:
+            with self.assertRaisesRegex(ValueError, 'Windows guide is still unpublished'):
+                obj.begin_release()
+            plan.assert_called_once_with(GOOD, OTHER)
+            save.assert_not_called()
+            ensure_candidate.assert_not_called()
+
     def test_merge_uses_preserving_method_and_expected_head_without_bypass(self):
         obj = train.Train('1.2.3', True)
         pr = {'number': 10, 'state': 'OPEN', 'isDraft': False, 'headRefName': 'finalize_1.2.3',

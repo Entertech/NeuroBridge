@@ -26,7 +26,24 @@ class ReleaseTriggerTests(unittest.TestCase):
         self.assertIn('actions/create-github-app-token@v2', source)
         self.assertIn('secrets.RELEASE_BOT_APP_ID', source)
         self.assertNotIn('token: ${{ github.token }}', source)
-        self.assertIn('group: source-train-${{ github.repository }}\n', source)
+        self.assertIn("group: source-train-${{ github.repository }}${{ inputs.operation == 'plan' && format('-plan-{0}', github.run_id) || '' }}", source)
+
+    def test_read_only_plan_does_not_use_the_release_app(self):
+        source_path = WORKFLOWS/'source-train.yml'
+        plan = job_block('plan', source_path)
+        self.assertIn("inputs.operation == 'plan'", plan)
+        self.assertIn('tools.source_train plan', plan)
+        self.assertNotIn('create-github-app-token', plan)
+        self.assertNotIn('--execute', plan)
+        self.assertIn("inputs.operation != 'plan'", job_block('source', source_path))
+
+    def test_document_preflight_runs_before_any_release_build(self):
+        release_path = WORKFLOWS/'release.yml'
+        plan = job_block('release-plan', release_path)
+        self.assertIn('tools.release_preflight', plan)
+        self.assertIn('tools/check-external-protocol.sh', plan)
+        for job in ('external-documents', 'product-candidates', 'release-targets'):
+            self.assertRegex(job_block(job, release_path), r'needs: .*release-plan')
 
     def test_packaging_never_creates_tags_or_releases(self):
         text = (WORKFLOWS/'release.yml').read_text()
@@ -58,4 +75,4 @@ class ReleaseTriggerTests(unittest.TestCase):
         }
 '''
         result = subprocess.run(['bash', '-e', '-c', fake_gh+script], capture_output=True, text=True, check=True)
-        self.assertEqual(result.stdout.splitlines(), ['repos/fixture/actions/artifacts/1', 'repos/fixture/actions/artifacts/2'])
+        self.assertEqual(result.stdout.splitlines(), ['repos/fixture/actions/artifacts/2'])

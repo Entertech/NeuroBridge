@@ -9,7 +9,10 @@ from pathlib import Path
 import subprocess
 import zipfile
 
-from external_protocol_registry import ROOT, load_registry, select_external_protocol
+if __package__:
+    from .external_protocol_registry import ROOT, load_registry, select_external_protocol
+else:
+    from external_protocol_registry import ROOT, load_registry, select_external_protocol
 
 
 PACKAGE_FILENAME = "neurobridge-external-documents.zip"
@@ -65,13 +68,15 @@ def _make_document(key: str, policy_source: dict, content_source: dict) -> Exter
     )
 
 
-def collect_external_documents(registry: dict) -> list[ExternalDocument]:
+def collect_external_documents(registry: dict, *, file_exists=None) -> list[ExternalDocument]:
     """Return every registered external document in delivery order.
 
     Documents are discovered from the registry, so adding one only needs a
     ``[documents.external_<key>]`` entry carrying a ``delivery`` policy; the section
     order inside the registry is the delivery order.
     """
+    if file_exists is None:
+        file_exists = lambda path: (ROOT / path).is_file()
     sections = registry["documents"]
     documents = [_make_document("northbound", sections["external_northbound"], select_external_protocol(registry))]
     for name, section in sections.items():
@@ -85,7 +90,7 @@ def collect_external_documents(registry: dict) -> list[ExternalDocument]:
     for document in documents:
         if document.status not in {"published", "unpublished"}:
             raise ValueError(f"External document {document.key} has unsupported status {document.status!r}.")
-        if not (ROOT / document.markdown_path).is_file():
+        if not file_exists(document.markdown_path):
             raise FileNotFoundError(f"External document Markdown is unavailable: {document.markdown_path}")
     return documents
 
