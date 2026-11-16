@@ -25,6 +25,7 @@ class AlgorithmRunner:
         self.config = config
         self.process: asyncio.subprocess.Process | None = None
         self.error: str | None = None
+        self._flow_log_times: dict[str, float] = {}
 
     @property
     def available(self) -> bool:
@@ -58,6 +59,7 @@ class AlgorithmRunner:
         await self.stop()
         self.process = None
         self.error = None
+        self._flow_log_times.clear()
         await self.start()
         process = self.process
         if device_protocol == "headset_rev181" and process is not None and self.available:
@@ -127,6 +129,50 @@ class AlgorithmRunner:
             hr_packet_count=len(hr_packets),
         )
 
+    def _log_headset_flow(self, diagnostic: object, timestamp_ms: int) -> None:
+        if not isinstance(diagnostic, dict):
+            return
+        quality = diagnostic.get("eegQuality")
+        reset = diagnostic.get("historyReset")
+        buffered = diagnostic.get("bufferedSamples")
+        required = diagnostic.get("requiredSamples")
+        evaluated = diagnostic.get("modelsEvaluated")
+        if not all(type(value) is int for value in (quality, buffered, required)):
+            return
+        if type(reset) is not bool or type(evaluated) is not bool:
+            return
+
+        expert = diagnostic.get("expertScore") if evaluated else None
+        ai = diagnostic.get("aiScore") if evaluated else None
+        if not evaluated:
+            reason = "eeg_quality_reset" if reset else "waiting_eeg_history"
+        else:
+            expert_ready = type(expert) in (int, float) and expert > 0
+            ai_ready = type(ai) in (int, float) and ai > 0
+            if expert_ready and ai_ready:
+                reason = "ready"
+            elif expert_ready:
+                reason = "ai_no_value"
+            elif ai_ready:
+                reason = "expert_no_value"
+            else:
+                reason = "both_no_value"
+
+        now = time.monotonic()
+        level = logging.DEBUG
+        last_info = self._flow_log_times.get(reason)
+        if last_info is None or now - last_info >= 10:
+            self._flow_log_times[reason] = now
+            level = logging.INFO
+        LOG.log(
+            level,
+            "Headset Flow diagnostic: timestampMs=%s reason=%s eegQuality=%s historyReset=%s "
+            "bufferedSamples=%s requiredSamples=%s modelsEvaluated=%s expertScore=%s aiScore=%s",
+            timestamp_ms, reason, quality, reset, buffered, required, evaluated,
+            expert if type(expert) in (int, float) else None,
+            ai if type(ai) in (int, float) else None,
+        )
+
     async def evaluate_raw(
         self,
         eeg: bytes,
@@ -172,6 +218,8 @@ class AlgorithmRunner:
                 reported_protocol is not None or expected_protocol == "headset_rev181"
             ):
                 raise ValueError("algorithm bridge response belongs to a different device mode")
+            if expected_protocol == "headset_rev181":
+                self._log_headset_flow(result.get("flowDiagnostic"), end_ms)
             LOG.debug(
                 "Algorithm window evaluated: timestampMs=%s eegPackets=%s hrPackets=%s durationMs=%s outputFields=%s",
                 end_ms,

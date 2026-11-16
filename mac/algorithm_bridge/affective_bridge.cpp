@@ -148,8 +148,10 @@ std::string evaluate(AffectiveAlgorithm& algorithm, std::string& active_protocol
     std::ostringstream result;
     result << "{\"algorithm\":{";
     bool first = true;
+    FlowDiagnostic flow_diagnostic;
     if (!eeg.empty()) {
         const auto values = algorithm.appendEEG(eeg, is_ear);
+        flow_diagnostic = values.flow.diagnostic;
         if (!first) result << ',';
         first = false;
         result << "\"eeg\":{\"wave\":{";
@@ -205,6 +207,20 @@ std::string evaluate(AffectiveAlgorithm& algorithm, std::string& active_protocol
         json_number(result, "arousal", values.arousal, first);
     }
     result << '}';
+    if (is_ear && flow_diagnostic.requiredSamples > 0) {
+        result << ",\"flowDiagnostic\":{";
+        bool first_diagnostic = true;
+        json_integer(result, "eegQuality", flow_diagnostic.eegQuality, first_diagnostic);
+        json_boolean(result, "historyReset", flow_diagnostic.historyReset, first_diagnostic);
+        json_integer(result, "bufferedSamples", flow_diagnostic.bufferedSamples, first_diagnostic);
+        json_integer(result, "requiredSamples", flow_diagnostic.requiredSamples, first_diagnostic);
+        json_boolean(result, "modelsEvaluated", flow_diagnostic.modelsEvaluated, first_diagnostic);
+        if (flow_diagnostic.modelsEvaluated) {
+            json_number(result, "expertScore", flow_diagnostic.expertScore, first_diagnostic);
+            json_number(result, "aiScore", flow_diagnostic.aiScore, first_diagnostic);
+        }
+        result << '}';
+    }
     if (!requested_protocol.empty()) result << ",\"deviceProtocol\":\"" << protocol << '"';
     result << '}';
     return result.str();

@@ -95,7 +95,9 @@ namespace ac
             temp.wearFlagStore[14] = 0;
 
         auto wearFlagSum = accumulate(temp.wearFlagStore.begin(), temp.wearFlagStore.end(), 0.);
-        if (wearFlagSum == 0.)
+        res.diagnostic.eegQuality = static_cast<int>(eegQuality);
+        res.diagnostic.historyReset = wearFlagSum == 0.;
+        if (res.diagnostic.historyReset)
             tempInit(true);
 
         // 执行算法
@@ -104,7 +106,11 @@ namespace ac
         temp.eegrSplitData.insert(temp.eegrSplitData.end(), eegrData.begin(), eegrData.end());
 
         // 冥想度计算
-        if (temp.eeglSplitData.size() < size_t(12 * deviceInfo->eegFs()) || temp.eegrSplitData.size() < size_t(12 * deviceInfo->eegFs()))
+        const auto eegSize = size_t(12 * deviceInfo->eegFs());
+        const auto bufferedSamples = std::min(temp.eeglSplitData.size(), temp.eegrSplitData.size());
+        res.diagnostic.bufferedSamples = static_cast<int>(bufferedSamples);
+        res.diagnostic.requiredSamples = static_cast<int>(eegSize);
+        if (bufferedSamples < eegSize)
         {
             res.meditation = 0;
             res.meditationTips = 0;
@@ -112,7 +118,6 @@ namespace ac
         else
         {
             // 数据裁剪
-            auto eegSize = size_t(12 * deviceInfo->eegFs());
             std::copy(temp.eeglSplitData.end() - eegSize, temp.eeglSplitData.end(), temp.eeglSplitData.begin());
             std::copy(temp.eegrSplitData.end() - eegSize, temp.eegrSplitData.end(), temp.eegrSplitData.begin());
             temp.eeglSplitData.resize(eegSize);
@@ -148,7 +153,10 @@ namespace ac
                 temp.aiMeditationTmp,
                 10);
 
-            
+            res.diagnostic.modelsEvaluated = true;
+            res.diagnostic.expertScore = meditationSp;
+            res.diagnostic.aiScore = meditationAi.meditationDegree;
+
             // ---融合模型
             if (meditationSp > 0 && meditationAi.meditationDegree > 0)
             {

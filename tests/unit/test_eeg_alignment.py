@@ -86,6 +86,47 @@ class EegAlignmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.algorithm_result.metrics["attention"], 39)
         self.assertEqual(result.algorithm_result.metrics["flow"]["meditation"], 10)
 
+    async def test_zero_flow_uses_the_reference_that_paired_with_valid_headset_eeg(self):
+        for reference_start in (2400, 3000):
+            with self.subTest(reference_start=reference_start):
+                cache = self.cache()
+                await self.warm(cache)
+                # Pairing counts even when the wave is already inside tolerance.
+                wave = [-123, -120, 10]
+                headset = window("headset_rev181", wave, [], packets=[(300, 2400, 42)])
+                headset.algorithm_result.metrics["flow"]["meditation"] = 0
+                reference = window("headband_ble", wave, [], start=reference_start,
+                                   packets=[(65735, reference_start, 42)])
+                self.assertIs(await cache.align_result(reference), reference)
+                with self.assertLogs("neurobridge.application.eeg_alignment", level="INFO") as logs:
+                    result = await cache.align_result(headset)
+                self.assertIn("reason=flow_fallback", logs.output[0])
+                self.assertIn(f"flowFallbackReferenceBatchId={reference.batch.batch_id}", logs.output[0])
+                self.assertEqual(result.algorithm_result.metrics["flow"], {"meditation": 28.5, "meditationTips": 1})
+                self.assertEqual(headset.algorithm_result.metrics["flow"]["meditation"], 0)
+                self.assertEqual(reference.algorithm_result.metrics["flow"]["meditation"], 30)
+
+    async def test_zero_flow_stays_zero_without_usable_eeg_pairing_and_reference_score(self):
+        for quality, ear_packets, band_packets, band_flow in (
+            (0, [(300, 2400, 42)], [(65735, 2400, 42)], 30),
+            (1, [(300, 2400, 42)], [(65735, 2400, 255)], 30),
+            (1, [(300, 2400, 255)], [(65735, 2400, 42)], 30),
+            (1, [], [(65735, 2400, 42)], 30),
+            (1, [(300, 2400, 42)], [(65735, 2400, 42)], 0),
+            (1, [(300, 2400, 42)], [(65735, 2400, 42)], float("nan")),
+        ):
+            with self.subTest(quality=quality, ear_packets=ear_packets, band_packets=band_packets, band_flow=band_flow):
+                cache = self.cache()
+                await self.warm(cache)
+                headset = window("headset_rev181", [-100, 0, 100], [], packets=ear_packets)
+                headset.algorithm_result.metrics["eeg"]["quality"] = quality
+                headset.algorithm_result.metrics["flow"]["meditation"] = 0
+                reference = window("headband_ble", [-600, 0, 600], [], packets=band_packets)
+                reference.algorithm_result.metrics["flow"]["meditation"] = band_flow
+                await cache.align_result(reference)
+                result = await cache.align_result(headset)
+                self.assertEqual(result.algorithm_result.metrics["flow"]["meditation"], 0)
+
     async def test_matches_time_across_receive_windows_and_drops_unpaired_extrema(self):
         cache = self.cache(wait_ms=60)
         await self.warm(cache)

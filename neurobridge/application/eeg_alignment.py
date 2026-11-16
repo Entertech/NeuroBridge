@@ -208,6 +208,20 @@ class EegAlignmentCache:
         scores = self._align_values(metrics, reference_metrics, _SCORES)
         flow = _fields(metrics.get("flow"))
         flow_score = self._align_values(flow, _fields(reference_metrics.get("flow")), ("meditation",))
+        flow_fallback_reference = None
+        headset_flow = flow.get("meditation")
+        quality = eeg.get("quality")
+        if (matched_refs and type(headset_flow) in (int, float) and headset_flow == 0
+                and type(quality) in (int, float) and isfinite(quality) and quality > 0):
+            # Prefer the same receive window, but the reference must have contributed paired EEG samples.
+            for candidate in sorted(nearby, key=lambda ref: abs(ref.window_end_ms - batch.window_end_ms)):
+                if candidate.batch_id not in matched_refs:
+                    continue
+                target = _fields(candidate.metrics.get("flow")).get("meditation")
+                if type(target) in (int, float) and isfinite(target) and target > 0:
+                    flow_score["meditation"] = self._clamp_to_reference(headset_flow, target)
+                    flow_fallback_reference = candidate
+                    break
         bands = _fields(eeg.get("bandPower"))
         reference_eeg = _fields(reference_metrics.get("eeg"))
         band_power = self._align_values(bands, _fields(reference_eeg.get("bandPower")), _BANDS)
@@ -229,9 +243,11 @@ class EegAlignmentCache:
                 updated_eeg["bandPower"] = {**bands, **band_power}
             updates["eeg"] = updated_eeg
         self._log_decision(
-            result, "applied", reference, paired_samples=paired_samples, changed_samples=changed_samples,
+            result, "flow_fallback" if flow_fallback_reference else "applied", reference,
+            paired_samples=paired_samples, changed_samples=changed_samples,
             dropped_samples=dropped_samples, waited_ms=waited_ms, waveform_refs=tuple(sorted(matched_refs)),
             fields=(*scores, *("flow." + field for field in flow_score), *("bandPower." + field for field in band_power)),
+            flow_fallback_reference=flow_fallback_reference,
         )
         return replace(result, algorithm_result=replace(result.algorithm_result, metrics={**metrics, **updates}))
 
@@ -268,7 +284,7 @@ class EegAlignmentCache:
                       *, paired_samples: dict[str, int] | None = None,
                       changed_samples: dict[str, int] | None = None, dropped_samples: dict[str, int] | None = None,
                       waited_ms: int = 0, waveform_refs: tuple[str, ...] = (),
-                      fields: tuple[str, ...] = ()) -> None:
+                      fields: tuple[str, ...] = (), flow_fallback_reference: _Reference | None = None) -> None:
         now = time.monotonic()
         if now - self._last_log_at >= _LOG_INTERVAL_SECONDS:
             if self._decisions:
@@ -282,7 +298,8 @@ class EegAlignmentCache:
                 "Headset EEG alignment decision: batchId=%s headsetSession=%s referenceBatchId=%s "
                 "windowStartMs=%s windowEndMs=%s stage=algorithm_output reason=%s "
                 "waveTolerancePercent=%g pairedSamples=%s changedSamples=%s droppedSamples=%s waitedMs=%s "
-                "waveformReferenceBatchIds=%s fields=%s",
+                "waveformReferenceBatchIds=%s fields=%s flowFallbackReferenceBatchId=%s",
                 batch.batch_id, batch.connection_session_id, reference.batch_id if reference else None,
                 batch.window_start_ms, batch.window_end_ms, reason, self._ratio * 100,
-                paired_samples, changed_samples, dropped_samples, waited_ms, waveform_refs, fields)
+                paired_samples, changed_samples, dropped_samples, waited_ms, waveform_refs, fields,
+                flow_fallback_reference.batch_id if flow_fallback_reference else None)

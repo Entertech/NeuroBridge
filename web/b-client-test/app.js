@@ -287,7 +287,7 @@ function resetAlgorithmReadings(panel, reason) {
   drawSourceCharts(panel);
 }
 
-function updateAlgorithmOverview(data, panel) {
+function updateAlgorithmOverview(data, panel, unavailable) {
   const result = data?.result || data;
   if (!result) return;
   const identity = { gatewayBootId: result.gatewayBootId, subjectId: result.subjectId, mode: result.mode };
@@ -314,14 +314,17 @@ function updateAlgorithmOverview(data, panel) {
     if (metric.timestamp !== null && result.timestampMs < metric.timestamp) continue;
     metric.timestamp = result.timestampMs;
     const valid = result.valid !== false && Number.isFinite(value);
-    if (valid && mode === "live" && metric.stream === "eeg" && value === 0) continue;
+    if (mode === "live" && (!valid || value === 0 || unavailable[metric.stream])) {
+      if (metric.output.textContent !== "—") metric.meta.textContent = "沿用上次有效值";
+      continue;
+    }
     metric.output.textContent = valid ? `${Number(value.toPrecision(8))}${metric.unit}` : "—";
     const status = result.valid === false ? "无效窗口" : !valid ? "算法未提供" : query ? "单次查询" : "连续订阅";
     metric.meta.textContent = `${status} · ${algorithmTimeFormat.format(result.timestampMs)}`;
   }
 }
 
-function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {}) {
+function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {}, holdLast = false) {
   group.timestamp = timestampMs;
   group.section.dataset.validity = validity;
   const date = new Date(timestampMs ?? NaN);
@@ -329,10 +332,9 @@ function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {
   group.status.textContent = status;
   for (const { path, output } of group.metrics) {
     const value = path.reduce((node, key) => node?.[key], algorithm);
-    const continuousEeg = ["attention", "relaxation", "pleasure"].includes(path[0])
-      || (path[0] === "flow" && path[1] === "meditation")
-      || (path[0] === "eeg" && path[1] === "bandPower");
-    if (validity === "valid" && group.stream === "eeg" && continuousEeg && value === 0) {
+    const categorical = ["eeg.quality", "flow.meditationTips", "sleep.state", "sleep.stage"].includes(path.join("."));
+    const hasValue = typeof value === "boolean" || (Number.isFinite(value) && (value !== 0 || categorical));
+    if (holdLast && (validity !== "valid" || !hasValue)) {
       if (output.textContent !== "—") output.title = "沿用上次有效值";
       continue;
     }
@@ -342,7 +344,7 @@ function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {
   }
 }
 
-function updateLiveAlgorithm(data, panel) {
+function updateLiveAlgorithm(data, panel, unavailable) {
   const result = data?.result || data;
   const payload = result?.payload;
   const connection = payload?.status?.connectionState ?? result?.connectionState;
@@ -367,8 +369,9 @@ function updateLiveAlgorithm(data, panel) {
     const hasMetrics = group.metrics.some(({ path }) => Object.prototype.hasOwnProperty.call(algorithm, path[0]));
     if (!hasMetrics && (valid || !requestedStreams.includes(group.stream))) continue;
     if (group.timestamp != null && result.timestampMs < group.timestamp) continue;
-    showAlgorithmWindow(group, valid ? "valid" : "invalid", result.timestampMs,
-      valid ? "有效窗口" : `无效窗口${reasons ? ` · ${reasons}` : ""}`, valid ? algorithm : {});
+    const issue = unavailable[group.stream];
+    showAlgorithmWindow(group, issue ? "missing" : valid ? "valid" : "invalid", result.timestampMs,
+      issue || (valid ? "有效窗口" : `无效窗口${reasons ? ` · ${reasons}` : ""}`), algorithm, true);
   }
 }
 
@@ -458,18 +461,17 @@ function clearEegState(panel) {
 function showMissingAlgorithmStream(panel, stream, label, timestamp) {
   for (const metric of panel.overview.metrics.filter((metric) => metric.stream === stream)) {
     if (metric.timestamp !== null && timestamp !== null && timestamp < metric.timestamp) continue;
-    metric.output.textContent = "—";
-    metric.meta.textContent = label;
-    metric.timestamp = timestamp;
+    metric.meta.textContent = metric.output.textContent === "—" ? label : `${label} · 沿用上次有效值`;
+    if (timestamp !== null) metric.timestamp = timestamp;
   }
   const group = panel.algorithmGroups.find((group) => group.stream === stream);
   if (group.timestamp == null || timestamp === null || timestamp >= group.timestamp) {
-    showAlgorithmWindow(group, "missing", timestamp, label);
+    showAlgorithmWindow(group, "missing", timestamp ?? group.timestamp, label, {}, true);
   }
 }
 
-function showMissingEeg(panel, label, timestamp = null) {
-  showMissingAlgorithmStream(panel, "eeg", label, timestamp);
+function showMissingEeg(panel, label, timestamp = null, clearChartOnly = false) {
+  if (!clearChartOnly) showMissingAlgorithmStream(panel, "eeg", label, timestamp);
   panel.channels = {};
   panel.bandPower = {};
   panel.eegTimestamp = null;
@@ -478,7 +480,22 @@ function showMissingEeg(panel, label, timestamp = null) {
   drawSourceCharts(panel);
 }
 
-function updateEegState(message, panel) {
+function eegWindowState(message, wearState) {
+  const data = message.data;
+  const result = data?.result || data;
+  const eeg = result?.payload?.algorithm?.eeg;
+  const channels = Object.values(eeg?.wave || {}).filter((values) => Array.isArray(values) && values.length);
+  const detached = wearState === "notWorn" || message.message === "未佩戴：脑波数据全为 FF"
+    || channels.some((values) => values.every((value) => [255, -1, "FF", "ff"].includes(value)));
+  const zeroPlaceholder = eeg?.quality === 0
+    && !channels.some((values) => values.some((value) => Number.isFinite(value) && value !== 0));
+  return {
+    issue: detached ? "脱落" : zeroPlaceholder ? "无有效脑波" : null,
+    hasWave: result?.valid === true && channels.some((values) => values.some(Number.isFinite)),
+  };
+}
+
+function updateEegState(message, panel, { issue, hasWave }) {
   if (!sharedConnection || panel.section.hidden) return;
   const data = message.data;
   const result = data?.result || data;
@@ -490,7 +507,7 @@ function updateEegState(message, panel) {
       clearTimeout(panel.eegStaleTimer);
       panel.eegStaleTimer = null;
       showMissingEeg(panel, "脱落", panel.eegStateTimestamp);
-    } else if (wasDetached) {
+    } else if (wasDetached && !hasWave) {
       showMissingEeg(panel, "无脑波数据", panel.eegStateTimestamp);
     }
   }
@@ -499,25 +516,19 @@ function updateEegState(message, panel) {
   if (!Number.isFinite(timestamp) || (panel.eegStateTimestamp !== null && timestamp < panel.eegStateTimestamp)) return;
 
   const eeg = result.payload?.algorithm?.eeg;
-  const channels = Object.values(eeg?.wave || {}).filter((values) => Array.isArray(values) && values.length);
-  const detachedWindow = message.message === "未佩戴：脑波数据全为 FF"
-    || channels.some((values) => values.every((value) => [255, -1, "FF", "ff"].includes(value)));
-  const hasWave = result.valid === true && channels.some((values) => values.some(Number.isFinite));
-  const zeroPlaceholder = eeg?.quality === 0
-    && !channels.some((values) => values.some((value) => Number.isFinite(value) && value !== 0));
   const streams = panel.subscriptions.get(data.subscriptionId) || [];
-  const hasEegWindow = detachedWindow || result.payload?.algorithm?.eeg
+  const hasEegWindow = issue === "脱落" || eeg
     || (data.event === "data" && streams.includes("eeg") && result.payload?.algorithm && result.valid === false);
   if (!hasEegWindow) return;
 
-  const detached = detachedWindow || panel.wearState === "notWorn";
   panel.eegStateTimestamp = timestamp;
   clearTimeout(panel.eegStaleTimer);
   panel.eegStaleTimer = null;
-  if (detached || !hasWave || zeroPlaceholder) {
-    showMissingEeg(panel, detached ? "脱落" : zeroPlaceholder ? "无有效脑波" : "无脑波数据", timestamp);
+  if (issue || result.valid !== true || !eeg) {
+    showMissingEeg(panel, issue || "无脑波数据", timestamp);
     return;
   }
+  if (!hasWave) showMissingEeg(panel, "无脑波数据", timestamp, true);
   if (Number.isFinite(staleAfterMs)) {
     const remaining = data.action === "getLatest" ? staleAfterMs - Math.max(0, Date.now() - timestamp) : staleAfterMs;
     panel.eegStaleTimer = setTimeout(() => {
@@ -744,11 +755,18 @@ function handleGatewayMessage(message, panel) {
     return;
   }
   if (!showConnectedDevicesOnly || updateDeviceState(data, panel)) {
-    updateAlgorithmOverview(data, panel);
+    const result = data?.result || data;
+    const wearState = (result?.payload?.status || result)?.wearState ?? panel.wearState;
+    const eeg = eegWindowState(message, wearState);
+    const unavailable = {
+      eeg: eeg.issue,
+      hr: result?.payload?.algorithm?.hr?.value === 0 ? "无心率数据" : null,
+    };
+    updateAlgorithmOverview(data, panel, unavailable);
     updateSnapshot(data, panel);
-    updateLiveAlgorithm(data, panel);
+    updateLiveAlgorithm(data, panel, unavailable);
     updateVisuals(data, panel);
-    updateEegState(message, panel);
+    updateEegState(message, panel, eeg);
     updateMissingHeartRate(data, panel);
   }
 

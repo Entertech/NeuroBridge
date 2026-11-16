@@ -42,6 +42,17 @@ def main(executable):
     assert ear[0] == {"deviceProtocol": HEADSET, "algorithm": {}}
     assert all(row["deviceProtocol"] == HEADSET for row in ear)
     assert all(row["deviceProtocol"] == HEADBAND for row in band)
+    diagnostic = ear[1]["flowDiagnostic"]
+    assert diagnostic["requiredSamples"] > diagnostic["bufferedSamples"] > 0, diagnostic
+    assert diagnostic["modelsEvaluated"] is False, diagnostic
+    assert "expertScore" not in diagnostic and "aiScore" not in diagnostic
+    assert all("flowDiagnostic" not in row["algorithm"] for row in ear)
+    assert all("flowDiagnostic" not in row for row in band)
+    warmed = run_bridge(executable, [request(HEADSET, window) for window in windows * 4])[-1]
+    diagnostic = warmed["flowDiagnostic"]
+    assert diagnostic["modelsEvaluated"] is True, diagnostic
+    assert diagnostic["expertScore"] == 0 and diagnostic["aiScore"] > 0, diagnostic
+    assert warmed["algorithm"]["flow"]["meditation"] == 0
     ear_power = ear[-1]["algorithm"]["eeg"]["bandPower"]
     band_power = band[-1]["algorithm"]["eeg"]["bandPower"]
     assert not math.isclose(ear_power["gamma"], band_power["gamma"], abs_tol=1e-6), (ear_power, band_power)
