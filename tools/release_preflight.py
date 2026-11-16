@@ -93,10 +93,12 @@ def render_summary(plan: dict, mode: str, version_gate: str) -> str:
         gates = plan["gates"]
         secrets = gates["actionsSecrets"]
         candidate = gates["candidate"]
+        merge_policy = gates["mergePolicy"]
         lines.extend([
             "", f"### Source train `{plan['version']}`", "",
             f"- Actions Secrets: {secrets['status']}.",
             *(f"  - Could not confirm `{name}`." for name in secrets["notConfirmed"]),
+            f"- Repository merge policy: {merge_policy['status']}. {merge_policy.get('reason', '')}".rstrip(),
             *(f"- Branch protection `{branch}`: {check['status']}. {check.get('reason', '')}".rstrip()
               for branch, check in gates["branchProtection"].items()),
             "- Required code checks: " + ", ".join(gates["requiredCodeChecks"]) + ".",

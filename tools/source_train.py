@@ -196,17 +196,25 @@ class Train:
         subprocess.run(['git', 'fetch', '--no-tags', '--refmap=', 'origin', ref], cwd=ROOT, env=env, check=True, capture_output=True)
         return require_sha(run('git', 'rev-parse', '--verify', 'FETCH_HEAD^{commit}'))
 
-    def default(self) -> tuple[str, str]:
-        if run('git', 'rev-parse', '--is-shallow-repository') != 'false':
-            raise ValueError('full history is required for source finalization')
+    def default_repository(self) -> tuple[str, dict]:
         meta = api(f'repos/{self.repository}')
         branch = meta['default_branch']
         if branch != self.config['repository']['default_branch']:
             raise ValueError("configured default branch differs from repository metadata")
-        if not meta['allow_merge_commit']:
+        return branch, meta
+
+    @staticmethod
+    def require_merge_policy(meta: dict) -> None:
+        if meta.get('allow_merge_commit') is not True:
             raise ValueError("default branch must permit a merge commit preserving the candidate")
         if meta.get('delete_branch_on_merge'):
             raise ValueError('automatic PR branch deletion would violate deferred train cleanup')
+
+    def default(self) -> tuple[str, str]:
+        if run('git', 'rev-parse', '--is-shallow-repository') != 'false':
+            raise ValueError('full history is required for source finalization')
+        branch, meta = self.default_repository()
+        self.require_merge_policy(meta)
         return branch, self.fetch(f'refs/heads/{branch}')
 
     def mutable(self):
@@ -276,8 +284,17 @@ class Train:
     def plan(self, head: str) -> dict:
         from tools.release_preflight import release_plan
 
-        default, baseline = self.default()
+        default, meta = self.default_repository()
+        baseline = self.fetch(f'refs/heads/{default}')
         result = release_plan(head, baseline)
+        try:
+            if 'allow_merge_commit' not in meta or 'delete_branch_on_merge' not in meta:
+                merge_policy = {'status': 'unverified', 'reason': 'Repository merge settings are not visible to this token.'}
+            else:
+                self.require_merge_policy(meta)
+                merge_policy = {'status': 'passed'}
+        except ValueError as error:
+            merge_policy = {'status': 'blocked', 'reason': str(error)}
         protections = {}
         for branch in (default, self.names['integration'], self.names['publish']):
             try:
@@ -305,6 +322,7 @@ class Train:
             'default': default, 'publishPolicy': self.config['source_release'], 'writes': False,
             'gates': {
                 'sourceVersion': 'matches_target' if result['applicationVersion'] == self.version else 'differs_from_target',
+                'mergePolicy': merge_policy,
                 'branchProtection': protections,
                 'actionsSecrets': self.plan_actions_secrets(),
                 'requiredCodeChecks': self.config['code_gates']['checks'],

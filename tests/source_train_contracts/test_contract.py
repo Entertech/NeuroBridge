@@ -82,6 +82,19 @@ class ContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'deferred train cleanup'):
                 obj.default()
 
+    def test_plan_with_read_only_repository_metadata_still_reports_other_gates(self):
+        obj = train.Train('1.2.3')
+        with mock.patch.object(train, 'api', return_value={'default_branch': 'master'}), \
+             mock.patch.object(obj, 'fetch', return_value=OTHER), mock.patch.object(obj, 'protection'), \
+             mock.patch.object(obj, 'plan_actions_secrets', return_value={'status': 'missing'}), \
+             mock.patch.object(obj, 'load', return_value=None), \
+             mock.patch('tools.release_preflight.release_plan', return_value={'applicationVersion': '1.2.3'}):
+            result = obj.plan(GOOD)
+        self.assertFalse(result['writes'])
+        self.assertEqual(result['gates']['mergePolicy']['status'], 'unverified')
+        self.assertEqual(result['gates']['branchProtection']['master']['status'], 'passed')
+        self.assertEqual(result['gates']['actionsSecrets']['status'], 'missing')
+
     def test_existing_tag_without_record_never_starts_a_candidate(self):
         obj = train.Train('1.2.3', True)
         pr = {'state': 'MERGED', 'headRefName': 'dev_1.2.3', 'baseRefName': 'publish_1.2.3', 'mergeCommit': {'oid': GOOD}, 'reviews': [{'author': {'login': 'alice'}, 'state': 'APPROVED'}]}
