@@ -153,7 +153,7 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headset_window.result.batch.signals[0].samples, original[2:])
         expected = {**headset_metrics, "attention": 24,
                     "eeg": {**headset_metrics["eeg"], "bandPower": {"alpha": 19},
-                            "wave": {"left": [-105, 0, 105], "right": [-190, 0, 190]}}}
+                            "wave": {"left": [-570, 0, 570], "right": [-105, 95, 200]}}}
         self.assertEqual(headset_window.result.algorithm_result.metrics, expected)
         self.assertEqual(headband_window.result.algorithm_result.metrics, headband_metrics)
         self.assertEqual(headset_metrics["eeg"]["wave"]["left"], [-100, 0, 100])
@@ -166,7 +166,8 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headband.application.diagnostics["window_processing_errors"], 0)
         self.assertTrue(any(f"alignment decision: batchId={headset_value.batch_id}" in line
                             and "stage=algorithm_output reason=applied" in line
-                            and "gains={'left': 1.05, 'right': 0.95}" in line for line in logs.output))
+                            and "waveTolerancePercent=5 pairedSamples={'left': 3, 'right': 2}" in line
+                            and "changedSamples={'left': 2, 'right': 2}" in line for line in logs.output))
         self.assertTrue(any(f"algorithm response: source=serial batchId={headset_value.batch_id}" in line
                             and "mappingVersion=1 valid=True" in line for line in logs.output))
         self.assertFalse(any(headset_value.payload["eegRawBase64"] in line for line in logs.output))
