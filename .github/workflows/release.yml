@@ -14,6 +14,9 @@ on:
       source_train:
         type: boolean
         default: false
+      systems:
+        type: string
+        default: ''
       native_input_run_id:
         type: string
         default: ''
@@ -27,6 +30,9 @@ on:
         value: ${{ jobs.release-aggregate.outputs.archive_sha256 }}
   workflow_dispatch:
     inputs:
+      systems:
+        description: "可选，逗号分隔 windows-10、windows-11、kylin-v10；留空构建全量诊断包"
+        type: string
       native_input_run_id:
         description: "可选：复用同源码提交的原生安装包 Run ID；留空则在本次 Release 构建 Windows EXE/MSI"
         required: false
@@ -47,6 +53,7 @@ env:
   SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
   SOURCE_BRANCH: ${{ inputs.source_branch || github.ref_name }}
   EXTERNAL_DOCUMENT_MODE: ${{ !inputs.source_train && inputs.external_document_mode || 'publish' }}
+  RELEASE_SYSTEMS: ${{ inputs.systems }}
 
 concurrency:
   group: package-source-${{ github.repository }}-${{ inputs.source_sha || github.sha }}
@@ -106,12 +113,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: kylin
-            runner: ubuntu-latest
-          - platform: windows
-            runner: windows-latest
+      matrix: ${{ fromJSON(needs.release-plan.outputs.candidate_matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -151,6 +153,7 @@ jobs:
       should_release: ${{ steps.plan.outputs.should_release }}
       version: ${{ steps.plan.outputs.version }}
       matrix: ${{ steps.plan.outputs.matrix }}
+      candidate_matrix: ${{ steps.plan.outputs.candidate_matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -174,7 +177,7 @@ jobs:
             gate_args=(--base "origin/$DEFAULT_BRANCH")
           fi
           python tools/release_pipeline.py gate "${gate_args[@]}" --output "$RUNNER_TEMP/release-gate.json"
-          python tools/release_pipeline.py plan --output "$RUNNER_TEMP/release-matrix.json" > "$RUNNER_TEMP/release-matrix.log"
+          python tools/release_pipeline.py plan --systems "$RELEASE_SYSTEMS" --output "$RUNNER_TEMP/release-matrix.json" > "$RUNNER_TEMP/release-matrix.log"
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
           from pathlib import Path
@@ -184,6 +187,10 @@ jobs:
           print('should_release=' + str(gate['shouldRelease']).lower())
           print('version=' + gate['applicationVersion'])
           print('matrix=' + json.dumps(matrix, separators=(',', ':')))
+          runners = {'kylin': 'ubuntu-latest', 'windows': 'windows-latest'}
+          platforms = dict.fromkeys(target['platform'] for target in matrix['include'])
+          candidate_matrix = {'include': [{'platform': platform, 'runner': runners[platform]} for platform in platforms]}
+          print('candidate_matrix=' + json.dumps(candidate_matrix, separators=(',', ':')))
           PY
       - name: Preview packages and validate external documents
         run: |
@@ -191,6 +198,7 @@ jobs:
             --head "$SOURCE_SHA" \
             --gate "$RUNNER_TEMP/release-gate.json" \
             --mode "$EXTERNAL_DOCUMENT_MODE" \
+            --systems "$RELEASE_SYSTEMS" \
             --output "$RUNNER_TEMP/release-preflight.json" \
             --summary "$GITHUB_STEP_SUMMARY"
       - name: Verify document registry and release locks
@@ -356,7 +364,7 @@ jobs:
           # `push_master` is the only trigger that enforces the minimum-package
           # gate, so a manual branch build is deliberately the relaxed mode.
           RELEASE_TRIGGER: ${{ inputs.source_train && 'push_master' || 'pull_request' }}
-        run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER"
+        run: python tools/release_pipeline.py aggregate --results-root artifacts/targets --output artifacts/release --trigger "$RELEASE_TRIGGER" --systems "$RELEASE_SYSTEMS"
       - name: Install delivery directory PDF renderer
         run: |
           sudo apt-get update
@@ -402,6 +410,7 @@ jobs:
         run: |
           python -m tools.source_train verify-package \
             --version "${{ needs.release-plan.outputs.version }}" --candidate "$SOURCE_SHA" \
+            --systems "$RELEASE_SYSTEMS" \
             --directory artifacts/release > "$RUNNER_TEMP/package-receipt.json"
       - uses: actions/upload-artifact@v4
         if: inputs.source_train

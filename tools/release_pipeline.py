@@ -82,6 +82,40 @@ def matrix(config: dict | None = None) -> list[dict[str, str]]:
     return targets
 
 
+def system_version(target: dict[str, str]) -> str:
+    platform = target["platform"]
+    version = target["osVersion"] if platform == "windows" else target["edition"]
+    return f"{platform}-{version}"
+
+
+def select_targets(targets: list[dict[str, str]], systems: str) -> list[dict[str, str]]:
+    if not systems:
+        return targets
+    available = {system_version(target) for target in targets}
+    requested = [item.strip().lower() for item in systems.split(",")]
+    if len(set(requested)) != len(requested) or set(requested) - available:
+        raise ValueError(f"systems must be distinct comma-separated values from: {', '.join(sorted(available))}")
+    return [target for target in targets if system_version(target) in requested]
+
+
+def validate_target_coverage(coverage: dict, targets: list[dict[str, str]]) -> dict[str, dict]:
+    platforms = {target["platform"] for target in targets}
+    if not platforms or set(coverage) - {"requireAllMatrixTargets"} != platforms:
+        raise ValueError("package evidence must cover every defined target exactly once")
+    results = {}
+    for platform in platforms:
+        selected = {target["id"] for target in targets if target["platform"] == platform}
+        section = coverage[platform]
+        rows = section["targetResults"]
+        if (len(section["expectedTargets"]) != len(selected) or set(section["expectedTargets"]) != selected
+                or section["expectedPackageCount"] != len(selected)
+                or len(rows) != len(selected) or {row["targetId"] for row in rows} != selected
+                or section["builtPackageCount"] != sum(row["status"] == "candidate" for row in rows)):
+            raise ValueError("package evidence must cover every defined target exactly once")
+        results.update((row["targetId"], row) for row in rows)
+    return results
+
+
 def version_tuple(value: str) -> tuple[int, int, int]:
     match = VERSION_RE.fullmatch(value)
     if match is None:
@@ -93,7 +127,7 @@ def is_business_source(path: str) -> bool:
     return path not in BUILD_ONLY_SOURCES and path.startswith(BUSINESS_SOURCE_ROOTS) and Path(path).suffix in BUSINESS_SOURCE_SUFFIXES
 
 
-def release_base(repository: str) -> str:
+def release_base(repository: str, *, report: bool = True) -> str:
     """Use public application Releases, never orphan tags or drafts, as state."""
     pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"))
     published = []
@@ -113,7 +147,8 @@ def release_base(repository: str) -> str:
         registry = tomllib.loads(run("git", "show", f"{base}:neurobridge/version_registry.toml"))
         if registry["application"]["version"] != tag[1:]:
             raise ValueError(f"published Release {tag} differs from its source version")
-        log("release_baseline", source="public_release", tag=tag, commit=base)
+        if report:
+            log("release_baseline", source="public_release", tag=tag, commit=base)
         return base
     # Before the first public Release, walk version history rather than HEAD^.
     # A bump may precede several packaging commits or a failed tagged attempt.
@@ -122,7 +157,8 @@ def release_base(repository: str) -> str:
         registry = tomllib.loads(run("git", "show", f"{commit}:neurobridge/version_registry.toml"))
         previous = registry.get("application", {}).get("version")
         if previous is not None and version_tuple(previous) < version_tuple(current):
-            log("release_baseline", source="initial_version_history", commit=commit, version=previous)
+            if report:
+                log("release_baseline", source="initial_version_history", commit=commit, version=previous)
             return commit
     raise ValueError("no public application Release or earlier application version found; cannot establish the initial release baseline")
 
@@ -326,13 +362,19 @@ def add_zip_entry(bundle: zipfile.ZipFile, path: Path, name: str, timestamp: tup
         shutil.copyfileobj(source, destination, 1024 * 1024)
 
 
-def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, enforce_minimum: bool | None = None) -> dict[str, object]:
+def assemble(results_root: Path, output: Path, trigger: str = "push_master", *,
+             enforce_minimum: bool | None = None, systems: str = "") -> dict[str, object]:
     if trigger not in {"pull_request", "push_master"}:
         raise ValueError(f"invalid release trigger: {trigger}")
     # PR runs must still emit a diagnostic archive when every native installer is
     # blocked. Only a master publication enforces one verified package per platform.
     enforce = trigger == "push_master" if enforce_minimum is None else enforce_minimum
-    targets = matrix()
+    targets = select_targets(matrix(), systems)
+    platforms = tuple(dict.fromkeys(target["platform"] for target in targets))
+    if systems:
+        unexpected = {path.parent.name for path in results_root.glob("*/result.json")} - {target["id"] for target in targets}
+        if unexpected:
+            raise ValueError(f"results include unselected release targets: {', '.join(sorted(unexpected))}")
     commit = run("git", "rev-parse", "HEAD")
     commit_at = datetime.fromtimestamp(int(run("git", "show", "-s", "--format=%ct", "HEAD")), timezone.utc)
     results = []
@@ -344,18 +386,20 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
         if result.get("target") != target or result.get("sourceCommit") != commit or result.get("status") not in {"candidate", "failed", "blocked", "source-only"}:
             raise ValueError(f"invalid result identity/status for {target['id']}")
         results.append(result)
-    winners = {platform: [item for item in results if item["target"]["platform"] == platform and item["status"] == "candidate"] for platform in ("windows", "kylin")}
+    winners = {platform: [item for item in results if item["target"]["platform"] == platform and item["status"] == "candidate"] for platform in platforms}
     counts = {platform: len(items) for platform, items in winners.items()}
     log("coverage_gate", totalTargets=len(results), candidatePackages=counts, enforceMinimum=enforce)
     if enforce and any(count < CONFIG["minimum_packages_per_platform"] for count in counts.values()):
         raise ValueError(f"minimum package gate failed: {counts}; each platform requires {CONFIG['minimum_packages_per_platform']}")
+    if systems and enforce and sum(counts.values()) != len(targets):
+        raise ValueError("every selected installer must pass before assembling a formal release")
     version = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["application"]["version"]
     built_times = sorted(datetime.fromisoformat(item.get("builtAt", commit_at.isoformat()).replace("Z", "+00:00")).astimezone(timezone.utc) for items in winners.values() for item in items) or [commit_at]
     date = built_times[-1].strftime("%Y%m%d")
     zip_stamp = built_times[-1].timetuple()[:6]
     output.mkdir(parents=True, exist_ok=True)
     platform_archives = []
-    for platform in ("windows", "kylin"):
+    for platform in platforms:
         archive = output / f"{platform}-v{version}-{date}.zip"
         package_entries = []
         seen_packages: set[str] = set()
@@ -375,9 +419,9 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *, 
                 package_entries.append({"target": platform, "osVersion": target["osVersion"], "edition": target["edition"], "architecture": target["architecture"], "format": target["format"], "status": "candidate", "fileName": package.name, "sha256": item["sha256"], "validation": "pending", "validationLog": f"validation/{target['id']}/{validation_log.name}"})
         platform_archives.append({"platform": platform, "fileName": archive.name, "sha256": sha256(archive), "status": "candidate", "packageCount": len(package_entries), "packages": package_entries})
     coverage = {"requireAllMatrixTargets": False}
-    for platform in ("windows", "kylin"):
-        config = CONFIG[platform]
-        coverage[platform] = {"expectedTargets": [item["id"] for item in targets if item["platform"] == platform], "expectedFormats": config["formats"], "expectedPackageCount": config["expected_package_count"], "builtPackageCount": counts[platform], "targetResults": [{"targetId": item["target"]["id"], "status": item["status"], "reason": item["reason"], **({"validationLog": item["validationLog"]} if item.get("validationLog") else {})} for item in results if item["target"]["platform"] == platform]}
+    for platform in platforms:
+        platform_targets = [item for item in targets if item["platform"] == platform]
+        coverage[platform] = {"expectedTargets": [item["id"] for item in platform_targets], "expectedFormats": list(dict.fromkeys(item["format"] for item in platform_targets)), "expectedPackageCount": len(platform_targets), "builtPackageCount": counts[platform], "targetResults": [{"targetId": item["target"]["id"], "status": item["status"], "reason": item["reason"], **({"validationLog": item["validationLog"]} if item.get("validationLog") else {})} for item in results if item["target"]["platform"] == platform]}
     internal_manifest = {"applicationVersion": version, "sourceCommit": commit, "coverage": coverage, "platformArchives": [{key: item[key] for key in ("platform", "fileName", "sha256", "packageCount")} for item in platform_archives]}
     internal_path = output / "build-manifest.json"
     save_json(internal_path, internal_manifest)
@@ -406,6 +450,7 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     plan = commands.add_parser("plan")
     plan.add_argument("--output", type=Path)
+    plan.add_argument("--systems", default="")
     check = commands.add_parser("gate")
     baseline = check.add_mutually_exclusive_group(required=True)
     baseline.add_argument("--base")
@@ -423,10 +468,11 @@ def main() -> int:
     aggregate.add_argument("--results-root", type=Path, required=True)
     aggregate.add_argument("--output", type=Path, required=True)
     aggregate.add_argument("--trigger", choices=("pull_request", "push_master"), default="push_master")
+    aggregate.add_argument("--systems", default="")
     args = parser.parse_args()
     try:
         if args.command == "plan":
-            value = {"include": matrix()}
+            value = {"include": select_targets(matrix(), args.systems)}
             if args.output:
                 save_json(args.output, value)
             print(json.dumps(value, separators=(",", ":")))
@@ -439,7 +485,7 @@ def main() -> int:
         elif args.command == "build-windows":
             build_windows_input(args.target, args.input_root, args.output_root)
         else:
-            assemble(args.results_root, args.output, args.trigger)
+            assemble(args.results_root, args.output, args.trigger, systems=args.systems)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         log("release_error", command=args.command, reason=str(error))
         return 1

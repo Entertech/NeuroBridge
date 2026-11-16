@@ -10,7 +10,7 @@ import subprocess
 import tomllib
 
 from .external_document_package import collect_external_documents
-from .release_pipeline import matrix, run, save_json
+from .release_pipeline import matrix, run, save_json, select_targets, system_version
 
 
 REGISTRY_PATH = "neurobridge/version_registry.toml"
@@ -76,10 +76,13 @@ def render_summary(plan: dict, mode: str, version_gate: str) -> str:
         "| Document | Baseline | Planned | Status | Delivery |",
         "|---|---|---|---|---|",
     ]
+    selected_platforms = {target["platform"] for target in plan["packages"]}
     for doc in plan["documents"]:
         title = doc["title"].replace("|", r"\|")
         delivery = {"always": "Shared", "platform_bound": ", ".join(doc["platforms"]),
                     "review_only": "Review artifact only"}[doc["delivery"]]
+        if doc["delivery"] == "platform_bound" and selected_platforms.isdisjoint(doc["platforms"]):
+            delivery += " (not selected)"
         lines.append(f"| {title} | {doc['baseVersion'] or '—'} | {doc['version']} | {doc['status']} | {delivery} |")
     protocol = plan["northbound"]
     lines.extend([
@@ -94,8 +97,12 @@ def render_summary(plan: dict, mode: str, version_gate: str) -> str:
         secrets = gates["actionsSecrets"]
         candidate = gates["candidate"]
         merge_policy = gates["mergePolicy"]
+        scope = plan["packageScope"]
         lines.extend([
             "", f"### Source train `{plan['version']}`", "",
+            f"- System scope: {scope['mode']} · " + (', '.join(scope["systems"]) or "no affected system"),
+            *(f"  - `{system}`: compared against `{base}`."
+              for system, base in scope["baseCommits"].items()),
             f"- Actions Secrets: {secrets['status']}.",
             *(f"  - Could not confirm `{name}`." for name in secrets["notConfirmed"]),
             f"- Repository merge policy: {merge_policy['status']}. {merge_policy.get('reason', '')}".rstrip(),
@@ -117,12 +124,16 @@ def main() -> int:
     parser.add_argument("--head", required=True)
     parser.add_argument("--gate", required=True, type=Path)
     parser.add_argument("--mode", choices=("candidate", "publish"), required=True)
+    parser.add_argument("--systems", default="")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--summary", required=True, type=Path)
     args = parser.parse_args()
 
     gate = json.loads(args.gate.read_text(encoding="utf-8"))
     plan = release_plan(args.head, gate["baseCommit"])
+    if args.systems:
+        plan["packages"] = select_targets(plan["packages"], args.systems)
+        plan["systems"] = list(dict.fromkeys(map(system_version, plan["packages"])))
     if plan["sourceCommit"] != run("git", "rev-parse", "HEAD") or plan["applicationVersion"] != gate["applicationVersion"]:
         parser.error("release plan and version gate must use the same checked-out source")
     save_json(args.output, plan)

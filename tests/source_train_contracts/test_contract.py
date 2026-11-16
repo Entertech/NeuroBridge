@@ -88,7 +88,8 @@ class ContractTests(unittest.TestCase):
              mock.patch.object(obj, 'fetch', return_value=OTHER), mock.patch.object(obj, 'protection'), \
              mock.patch.object(obj, 'plan_actions_secrets', return_value={'status': 'missing'}), \
              mock.patch.object(obj, 'load', return_value=None), \
-             mock.patch('tools.release_preflight.release_plan', return_value={'applicationVersion': '1.2.3'}):
+             mock.patch.object(obj, 'package_scope', return_value={'mode': 'affected', 'systems': []}), \
+             mock.patch('tools.release_preflight.release_plan', return_value={'applicationVersion': '1.2.3', 'sourceCommit': GOOD}):
             result = obj.plan(GOOD)
         self.assertFalse(result['writes'])
         self.assertEqual(result['gates']['mergePolicy']['status'], 'unverified')
@@ -252,6 +253,31 @@ assert suite.countTestCases() > 0
             plan.assert_called_once_with(GOOD, OTHER)
             save.assert_not_called()
             ensure_candidate.assert_not_called()
+
+    def test_release_retry_refuses_a_different_system_selection(self):
+        obj = train.Train('1.2.3', True)
+        record = {'candidate': GOOD, 'review': {'sha': GOOD}, 'packageRunId': '12',
+                  'packageScope': {'systems': ['windows-11']}}
+        with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'default', return_value=('master', OTHER)), \
+             mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'required_record', return_value=record), \
+             mock.patch.object(obj, 'save') as save:
+            with self.assertRaisesRegex(ValueError, 'differ from the recorded package scope'):
+                obj.begin_release('windows-10')
+        save.assert_not_called()
+
+    def test_package_scope_carries_forward_undelivered_system_baselines(self):
+        obj = train.Train('1.2.3')
+        older = '3' * 40
+        previous = {'candidate': GOOD, 'repository': obj.repository,
+                    'packageScope': {'systems': ['windows-10'],
+                                     'baseCommits': {'windows-10': older, 'windows-11': older, 'kylin-v10': older}}}
+        with mock.patch('tools.release_pipeline.release_base', return_value=GOOD), \
+             mock.patch.object(train, 'version_at', return_value='1.2.2'), \
+             mock.patch.object(obj, 'ref', return_value=GOOD), mock.patch.object(obj, 'fetch', return_value=GOOD), \
+             mock.patch.object(train, 'run', return_value=json.dumps(previous)), \
+             mock.patch('tools.release_scope.scope_for') as scope:
+            obj.package_scope(OTHER, 'kylin-v10')
+        scope.assert_called_once_with(OTHER, {'windows-10': GOOD, 'windows-11': older, 'kylin-v10': older}, 'kylin-v10')
 
     def test_merge_uses_preserving_method_and_expected_head_without_bypass(self):
         obj = train.Train('1.2.3', True)
@@ -418,13 +444,14 @@ class GitSourceTests(unittest.TestCase):
 
 
 class ArtifactTests(unittest.TestCase):
-    def bundle(self, root: Path, missing: str | None = None, magic: bool = True):
+    def bundle(self, root: Path, missing: str | None = None, magic: bool = True, systems: str = ''):
         import importlib.util
         import zipfile
         from neurobridge.versioning import APPLICATION_VERSION
         from tools import release_pipeline as pipeline
         commit = pipeline.run('git', 'rev-parse', 'HEAD')
-        for target in pipeline.matrix():
+        targets = pipeline.select_targets(pipeline.matrix(), systems)
+        for target in targets:
             folder = root/'targets'/target['id']; folder.mkdir(parents=True)
             result = {'target': target, 'sourceCommit': commit, 'status': 'blocked', 'reason': 'fixture'}
             if target['id'] != missing:
@@ -433,7 +460,7 @@ class ArtifactTests(unittest.TestCase):
                 (folder/'validation.log').write_text('fixture')
                 result.update(status='candidate', fileName=package.name, sha256=pipeline.sha256(package), validationLog='validation.log', sourceReferences=[])
             pipeline.save_json(folder/'result.json', result)
-        directory = root/'release'; manifest = pipeline.assemble(root/'targets', directory, 'push_master')
+        directory = root/'release'; manifest = pipeline.assemble(root/'targets', directory, 'push_master', systems=systems)
         manifest['git']['dirty'] = False
         pipeline.save_json(directory/'release-manifest.json', manifest)
         documents = root/'documents'; documents.mkdir()
@@ -444,7 +471,34 @@ class ArtifactTests(unittest.TestCase):
         archive = root/'downloaded'/'bundle.zip'
         with mock.patch.object(module, 'render_directory_pdf', return_value=b'%PDF-1.4 fixture'):
             module.build_bundle(directory, documents, archive)
-        return archive, APPLICATION_VERSION, commit, pipeline.matrix()
+        return archive, APPLICATION_VERSION, commit, targets
+
+    def test_windows_11_release_contains_only_its_exe_and_msi(self):
+        from tools.release_pipeline import matrix
+        from tools.publish_release import load_bundle_manifest
+        with tempfile.TemporaryDirectory() as directory:
+            archive, version, commit, targets = self.bundle(Path(directory), systems='windows-11')
+            receipt = train.artifact_receipt(archive, version, commit, targets)
+            self.assertEqual(receipt['targets'], ['windows-11-x86_64-exe', 'windows-11-x86_64-msi'])
+            with self.assertRaisesRegex(ValueError, 'every defined target'):
+                train.artifact_receipt(archive, version, commit, matrix())
+            _, manifest = load_bundle_manifest(archive.parent)
+            systems = manifest['bundleManifest']['systemArchives']
+            self.assertEqual([(system['platform'], [variant['name'] for variant in system['variants']])
+                              for system in systems], [('windows', ['windows-11'])])
+
+    def test_scoped_release_requires_every_selected_installer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, 'every selected installer'):
+                self.bundle(Path(directory), missing='windows-11-x86_64-msi', systems='windows-11')
+
+    def test_kylin_only_scoped_release_has_no_windows_archive(self):
+        from tools.publish_release import load_bundle_manifest
+        with tempfile.TemporaryDirectory() as directory:
+            archive, version, commit, targets = self.bundle(Path(directory), systems='kylin-v10')
+            self.assertEqual(train.artifact_receipt(archive, version, commit, targets)['targets'], ['kylin-v10-all-deb'])
+            _, manifest = load_bundle_manifest(archive.parent)
+            self.assertEqual([system['platform'] for system in manifest['bundleManifest']['systemArchives']], ['kylin'])
 
     def test_every_defined_installer_and_exact_sha_required(self):
         with tempfile.TemporaryDirectory() as directory:

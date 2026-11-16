@@ -23,6 +23,9 @@ on:
       plan_source:
         description: "plan：要预览的完整 SHA 或 origin/分支；留空使用当前工作流提交"
         type: string
+      systems:
+        description: "plan/release：可选，逗号分隔 windows-10、windows-11、kylin-v10；留空读取发布配置并自动判断受影响系统"
+        type: string
   pull_request:
     types: [closed]
     branches: ['publish_*', master]
@@ -52,10 +55,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TRAIN_VERSION: ${{ inputs.version }}
           PLAN_SOURCE: ${{ inputs.plan_source || github.sha }}
+          TRAIN_SYSTEMS: ${{ inputs.systems }}
           TRAIN_PLAN_APP_ID_PRESENT: ${{ secrets.RELEASE_BOT_APP_ID != '' }}
           TRAIN_PLAN_APP_KEY_PRESENT: ${{ secrets.RELEASE_BOT_PRIVATE_KEY != '' }}
         run: |
-          python -m tools.source_train plan --version "$TRAIN_VERSION" --head "$PLAN_SOURCE" --summary "$GITHUB_STEP_SUMMARY"
+          python -m tools.source_train plan --version "$TRAIN_VERSION" --head "$PLAN_SOURCE" --systems "$TRAIN_SYSTEMS" --summary "$GITHUB_STEP_SUMMARY"
 
   source:
     if: (github.event_name == 'workflow_dispatch' && inputs.operation != 'plan') || (github.event.pull_request.merged && github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'dev_') || startsWith(github.head_ref, 'finalize_')))
@@ -69,6 +73,7 @@ jobs:
       should_package: ${{ steps.source.outputs.should_package }}
       artifact_id: ${{ steps.source.outputs.artifact_id }}
       package_run_id: ${{ steps.source.outputs.package_run_id }}
+      systems: ${{ steps.source.outputs.systems }}
     steps:
       - name: Require the automation identity
         env:
@@ -128,13 +133,14 @@ jobs:
           TRAIN_REQUIREMENTS: ${{ inputs.requirements }}
           TRAIN_PROMOTION: ${{ inputs.promotion_pr || github.event.pull_request.number }}
           TRAIN_CANDIDATE: ${{ inputs.candidate }}
+          TRAIN_SYSTEMS: ${{ inputs.systems }}
         run: |
           args=("$TRAIN_OPERATION" --version "$TRAIN_VERSION" --execute)
           case "$TRAIN_OPERATION" in
             initialize|select) args+=(--requirements "$TRAIN_REQUIREMENTS") ;;
             prepare) args+=(--promotion "$TRAIN_PROMOTION") ;;
             review) args+=(--candidate "$TRAIN_CANDIDATE") ;;
-            release) args=(begin-release --version "$TRAIN_VERSION" --execute) ;;
+            release) args=(begin-release --version "$TRAIN_VERSION" --systems "$TRAIN_SYSTEMS" --execute) ;;
           esac
           python -m tools.source_train "${args[@]}"
 
@@ -151,6 +157,7 @@ jobs:
       source_sha: ${{ needs.source.outputs.candidate }}
       source_branch: ${{ needs.source.outputs.candidate_branch }}
       source_train: true
+      systems: ${{ needs.source.outputs.systems }}
     secrets: inherit
 
   finalize:

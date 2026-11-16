@@ -107,11 +107,21 @@ def preserving_updates(candidate: str, head: str, default_tip: str):
         raise ValueError('finalization contains an unpackaged tree change')
 
 
+def package_systems(record: dict) -> str:
+    scope = record.get('packageScope')
+    if scope is None:
+        return ''  # Previous attempts used the full matrix.
+    systems = scope['systems']
+    if not isinstance(systems, list) or not systems or any(not isinstance(system, str) for system in systems):
+        raise ValueError('recorded package scope must contain selected systems')
+    return ','.join(systems)
+
+
 def artifact_receipt(archive: Path, version: str, candidate: str, matrix: list[dict]) -> dict:
     numeric(version)
     require_sha(candidate)
     from tools.publish_release import load_bundle_manifest, verify_nested_archives, bundle_packages
-    from tools.release_pipeline import sha256, MAGIC
+    from tools.release_pipeline import sha256, MAGIC, system_version, validate_target_coverage
     loaded = load_bundle_manifest(archive.parent)
     if loaded is None or loaded[0].resolve() != archive.resolve():
         raise ValueError("one canonical delivery ZIP is required")
@@ -120,13 +130,9 @@ def artifact_receipt(archive: Path, version: str, candidate: str, matrix: list[d
         raise ValueError("package version or exact source commit does not match candidate")
     if manifest['releaseStatus'] != 'candidate' or manifest['trigger'] != 'push_master':
         raise ValueError('train package must carry candidate provenance')
-    platforms = {item['platform'] for item in matrix}
-    results = [item for platform in platforms for item in manifest['coverage'][platform]['targetResults']]
     expected = {item['id']: item for item in matrix}
-    actual = {item['targetId']: item for item in results}
-    if len(actual) != len(results) or set(actual) != set(expected):
-        raise ValueError("package evidence must cover every defined target exactly once")
-    if any(item.get('status') != 'candidate' for item in results):
+    actual = validate_target_coverage(manifest['coverage'], matrix)
+    if any(item.get('status') != 'candidate' for item in actual.values()):
         raise ValueError("every defined package must exist; failed, blocked or skipped targets forbid publication")
     verify_nested_archives(archive, manifest)
     # Verify real installer headers inside the delivery ZIP, not a green job or source ZIP.
@@ -134,15 +140,18 @@ def artifact_receipt(archive: Path, version: str, candidate: str, matrix: list[d
         bundle = json.loads(outer.read('metadata/bundle-manifest.json'))
         build = json.loads(outer.read('metadata/build-manifest.json'))
         logs = [json.loads(line) for line in outer.read('metadata/release-logs.jsonl').decode().splitlines()]
-        if build['sourceCommit'] != candidate or build['applicationVersion'] != version:
+        if (build['sourceCommit'] != candidate or build['applicationVersion'] != version
+                or build['coverage'] != manifest['coverage']):
             raise ValueError('build provenance does not match candidate')
         if len(logs) != len(expected) or {item['target']['id'] for item in logs} != set(expected):
             raise ValueError('complete per-package source evidence required')
         for item in logs:
-            if item['sourceCommit'] != candidate or item['status'] != 'candidate':
+            if (item['sourceCommit'] != candidate or item['status'] != 'candidate'
+                    or item['target'] != expected[item['target']['id']]):
                 raise ValueError('installer source evidence differs from candidate')
         package_records = [{'targetId': item['target']['id'], 'fileName': item['fileName'], 'sha256': item['sha256']} for item in logs]
-        if sorted((item['fileName'], item['sha256']) for item in package_records) != sorted((item[3], item[5]) for item in bundle_packages(bundle)):
+        if sorted((item['target']['platform'], system_version(item['target']), item['target']['architecture'],
+                   item['fileName'], item['target']['format'], item['sha256']) for item in logs) != bundle_packages(bundle):
             raise ValueError('installer receipts differ from bundled package identities')
         def installers(blob: bytes) -> list[bytes]:
             import io
@@ -281,12 +290,41 @@ class Train:
             secret_status = 'unknown' if unreadable else 'missing'
         return {'status': secret_status, 'notConfirmed': missing, 'unreadableScopes': unreadable}
 
-    def plan(self, head: str) -> dict:
+    def package_scope(self, candidate: str, requested: str = "") -> dict:
+        from tools.release_pipeline import matrix, release_base, system_version
+        from tools.release_scope import scope_for
+
+        base = release_base(self.repository, report=False)
+        baselines = {system_version(target): base for target in matrix()}
+        state = names(self.config, version_at(base))['state']
+        ref = f'refs/heads/{state}'
+        if self.ref(ref):
+            commit = self.fetch(ref)
+            record = json.loads(run('git', 'show', f'{commit}:attempt.json'))
+            if record['candidate'] != base or record['repository'] != self.repository:
+                raise ValueError('prior release scope does not match the published source')
+            previous = record.get('packageScope')
+            if previous is not None:
+                for system in baselines.keys() - set(previous['systems']):
+                    baselines[system] = require_sha(previous['baseCommits'][system])
+        return scope_for(candidate, baselines, requested)
+
+    def plan(self, head: str, systems: str = "") -> dict:
         from tools.release_preflight import release_plan
+        from tools.release_pipeline import select_targets
 
         default, meta = self.default_repository()
         baseline = self.fetch(f'refs/heads/{default}')
         result = release_plan(head, baseline)
+        record = self.load()
+        same_source = record and record['candidate'] == result['sourceCommit']
+        scope = record.get('packageScope') if same_source else None
+        if scope is None:
+            scope = self.package_scope(result['sourceCommit'], systems)
+        elif systems and select_targets(result['packages'], systems) != select_targets(result['packages'], package_systems(record)):
+            raise ValueError('requested systems differ from the recorded package scope')
+        result['packageScope'] = scope
+        result['packages'] = select_targets(result['packages'], ','.join(scope['systems'])) if scope['systems'] else []
         try:
             if 'allow_merge_commit' not in meta or 'delete_branch_on_merge' not in meta:
                 merge_policy = {'status': 'unverified', 'reason': 'Repository merge settings are not visible to this token.'}
@@ -304,7 +342,6 @@ class Train:
                 protections[branch] = {'status': status, 'reason': str(error)}
             else:
                 protections[branch] = {'status': 'passed'}
-        record = self.load()
         candidate_gates = {'status': 'pending', 'reason': 'No release candidate recorded.'}
         if record is not None:
             candidate = require_sha(record['candidate'])
@@ -612,10 +649,16 @@ class Train:
         self.save(record)
         return record
 
-    def begin_release(self) -> dict:
+    def begin_release(self, systems: str = "") -> dict:
         self.mutable()
         default, _ = self.default(); self.protection(default)
         record = self.required_record()
+        from tools.release_pipeline import matrix, select_targets
+        recorded_scope = record.get('packageScope')
+        recorded_systems = package_systems(record)
+        if systems and (recorded_scope or record.get('packageRunId') or record.get('artifact')):
+            if select_targets(matrix(), systems) != select_targets(matrix(), recorded_systems):
+                raise ValueError('requested systems differ from the recorded package scope')
         if record.get('finalizationPR') and self.tag() and self.pr(record['finalizationPR'])['state'] == 'MERGED':
             return self.verify()
         if not record.get('review') or record['review']['sha'] != record['candidate']:
@@ -652,6 +695,11 @@ class Train:
         plan = release_plan(record['candidate'], default_tip)
         if plan['documentBlockers']:
             raise ValueError('formal document preflight failed: ' + ' '.join(plan['documentBlockers']))
+        if recorded_scope is None and not previous_run:
+            scope = self.package_scope(record['candidate'], systems)
+            if not scope['systems']:
+                raise ValueError('no affected systems since the last delivery; specify systems to package explicitly')
+            record['packageScope'] = {key: scope[key] for key in ('mode', 'systems', 'baseCommits')}
         record['packageRunId'] = os.environ['GITHUB_RUN_ID']
         record['packageRunAttempt'] = os.environ.get('GITHUB_RUN_ATTEMPT', '1')
         record['phase'] = 'packaging'
@@ -663,11 +711,12 @@ class Train:
     def record_artifact(self, directory: Path, artifact_id: int):
         self.mutable()
         record = self.required_record()
-        from tools.release_pipeline import matrix
+        from tools.release_pipeline import matrix, select_targets
         archives = list(directory.glob('*.zip'))
         if len(archives) != 1:
             raise ValueError("one downloaded verified release ZIP is required")
-        receipt = artifact_receipt(archives[0], self.version, record['candidate'], matrix())
+        systems = package_systems(record)
+        receipt = artifact_receipt(archives[0], self.version, record['candidate'], select_targets(matrix(), systems))
         remote = api(f'repos/{self.repository}/actions/artifacts/{artifact_id}')
         if remote['expired'] or remote['name'] != 'verified-release-'+record['candidate']:
             raise ValueError("uploaded Artifact identity or retention is invalid")
@@ -719,8 +768,9 @@ class Train:
                 work = Path(temporary)/'source'
                 run('git', 'worktree', 'add', '--detach', str(work), record['candidate'])
                 try:
+                    systems = package_systems(record)
                     run(sys.executable, '-m', 'tools.publish_release', '--dir', str(directory.resolve()),
-                        '--expected-sha256', artifact['sha256'], cwd=work)
+                        '--expected-sha256', artifact['sha256'], '--systems', systems, cwd=work)
                 finally:
                     run('git', 'worktree', 'remove', '--force', str(work))
             record['download'] = {'status': 'success'}; self.save(record)
@@ -872,21 +922,22 @@ def main():
     p.add_argument('--event', choices=['push', 'pull_request'])
     p.add_argument('--directory', type=Path); p.add_argument('--artifact-id', type=int)
     p.add_argument('--summary', type=Path, help='plan: append a Markdown preflight summary')
+    p.add_argument('--systems', default='', help='plan/begin-release/verify-package: comma-separated system versions')
     args = p.parse_args()
     try:
         if args.operation == 'check':
             result = source_check(args.branch, args.base, args.head, args.event)
         elif args.operation == 'verify-package':
-            from tools.release_pipeline import matrix
+            from tools.release_pipeline import matrix, select_targets
             archives = list(args.directory.glob('*.zip'))
             if len(archives) != 1: raise ValueError('one delivery ZIP required')
-            result = artifact_receipt(archives[0], args.version, args.candidate, matrix())
+            result = artifact_receipt(archives[0], args.version, args.candidate, select_targets(matrix(), args.systems))
         else:
             train = Train(args.version, args.execute)
             train.operation = args.operation
             train.requirements = [x.strip() for x in args.requirements.split(',') if x.strip()]
             if args.operation == 'plan':
-                result = train.plan(args.head)
+                result = train.plan(args.head, args.systems)
                 if args.summary is not None:
                     from tools.release_preflight import render_summary
                     with args.summary.open('a', encoding='utf-8') as summary:
@@ -896,7 +947,7 @@ def main():
                 result = getattr(train, args.operation)(requirements)
             elif args.operation == 'prepare': result = train.prepare(args.promotion)
             elif args.operation == 'review': result = train.review(args.candidate)
-            elif args.operation == 'begin-release': result = train.begin_release()
+            elif args.operation == 'begin-release': result = train.begin_release(args.systems)
             elif args.operation == 'record-artifact': result = train.record_artifact(args.directory, args.artifact_id)
             elif args.operation == 'finalize': result = train.finalize(args.directory)
             elif args.operation == 'fail': result = train.fail()
@@ -910,6 +961,7 @@ def main():
                 target.write('should_package='+str(not bool(result.get('artifact'))).lower()+'\n')
                 target.write('artifact_id='+str((result.get('artifact') or {}).get('id', ''))+'\n')
                 target.write('package_run_id='+str(result.get('packageRunId', ''))+'\n')
+                target.write('systems='+package_systems(result)+'\n')
                 target.write('complete='+str(result.get('phase') == 'complete').lower()+'\n')
     except (ValueError, RuntimeError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         print(f'source train blocked: {error}', file=sys.stderr)

@@ -22,6 +22,7 @@ class ReleaseTriggerTests(unittest.TestCase):
         self.assertIn("needs.source.outputs.should_package == 'true'", block)
         self.assertIn('source_sha: ${{ needs.source.outputs.candidate }}', block)
         self.assertIn('source_train: true', block)
+        self.assertIn('systems: ${{ needs.source.outputs.systems }}', block)
         source = (WORKFLOWS/'source-train.yml').read_text()
         self.assertIn('actions/create-github-app-token@v2', source)
         self.assertIn('secrets.RELEASE_BOT_APP_ID', source)
@@ -42,6 +43,7 @@ class ReleaseTriggerTests(unittest.TestCase):
         plan = job_block('release-plan', release_path)
         self.assertIn('tools.release_preflight', plan)
         self.assertIn('tools/check-external-protocol.sh', plan)
+        self.assertIn('--systems "$RELEASE_SYSTEMS"', plan)
         for job in ('external-documents', 'product-candidates', 'release-targets'):
             self.assertRegex(job_block(job, release_path), r'needs: .*release-plan')
 
