@@ -347,7 +347,8 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     else:
         source = BluetoothBleakSource(config.ble, device_ready, gateway.update_connection_error,
                                       queue_size=config.pipeline.source_queue_size,
-                                      enqueue_timeout_ms=config.pipeline.source_enqueue_timeout_ms)
+                                      enqueue_timeout_ms=config.pipeline.source_enqueue_timeout_ms,
+                                      shutdown_timeout_ms=config.pipeline.shutdown_timeout_ms)
     adapter = _ApplicationPipelineAdapter(source, application, gateway, profile)
     application.control = getattr(source, "control", None)
     bridge_ref["bridge"] = adapter

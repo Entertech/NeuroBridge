@@ -215,7 +215,7 @@ OpenSSH 是 Windows 系统服务。需要关闭远程访问时，运行 `neurobr
 | 日志 | `<checkout>\.runtime\logs` | `C:\ProgramData\NeuroBridge\logs` |
 | 卸载 | 本文件「一键退出」章节 | 「应用和功能」或 `msiexec /x` |
 
-卸载时服务正在运行不会冲突：WiX 的 `ServiceControl Stop="both" Wait="yes" Remove="uninstall"` 会先停止 `NeuroBridge`、等待其进入 Stopped，再删除文件，最后删除服务注册。服务进程持有 `C:\Program Files\NeuroBridge` 下的文件也不会阻断删除。
+安装器升级或卸载时会请求停止 `NeuroBridge`，等服务退出后再处理程序文件。若旧服务未能退出，安装器可能报错 1921 并回滚。已使用 EXE 部署时，直接用新版 EXE 覆盖安装。使用 `install-with-logs.ps1 -Installer <安装包>` 可以保存日志。脚本发现网关已处于 `STOP_PENDING` 时最多等待 15 秒，仍未停止就结束本次尝试并提示检查服务。
 
 服务首次启动时会自建数据目录：创建 `C:\ProgramData\NeuroBridge` 下的 `logs` 和 `recordings`，并在 `gateway.toml` 不存在时从随包模板复制一份。配置升级规则见上面的「使用蓝牙头环」。`C:\ProgramData\NeuroBridge` 不归 MSI 所有，卸载后保留。
 
@@ -223,11 +223,14 @@ OpenSSH 是 Windows 系统服务。需要关闭远程访问时，运行 `neurobr
 
 `packaging\windows\` 下的 `install.ps1` / `uninstall.ps1` 供候选包（`tools/build-product-candidate.py`）使用，**不随 MSI 分发**：MSI 的载荷根目录只有 `windows\`。
 
-### 安装失败 `0x80070652` 或出现同名条目
+### 安装失败 1921、1618 或出现同名条目
 
-`0x80070652`（Windows Installer 错误 1618）表示另一项安装或卸载仍在进行。关闭失败窗口，等已有安装、卸载或 Windows 更新完成。如果仍然报错，先在事件查看器的「Windows 日志 → 应用程序」筛选 `MsiInstaller`，查看失败前后的事件。确认没有安装、卸载或更新正在执行后，可以用管理员 PowerShell 运行 `Restart-Service -Name msiserver -ErrorAction Stop`，再启动一次 NeuroBridge EXE。如果服务拒绝停止或错误持续，保留失败窗口中 `log file` 指向的日志和对应的 `MsiInstaller` 事件，再考虑从开始菜单重启电脑。不要强制结束 `msiexec.exe`。
+1. 如果报 `0x80070652`（1618），关闭失败窗口，等正在进行的安装、卸载或回滚结束。用事件查看器的「Windows 日志 → 应用程序」筛选 `MsiInstaller`。事件 1040、1042 分别记录事务开始和结束，可用客户端 PID 和包名配对。先看失败时段是否有事件 11921（MSI 错误 1921）。外层可能只报告 1603。
+2. 如果 1921 指向 `NeuroBridge Gateway`，在管理员 PowerShell 运行 `sc.exe queryex NeuroBridge`。如果是 `RUNNING`，运行 `sc.exe stop NeuroBridge`，然后复查。确认安装事务已结束、服务为 `STOPPED` 后，只运行一次新版 EXE。
+3. 如果等了 30 秒仍是 `STOP_PENDING`，且检查点一直不变，在允许中断采集时可只结束卡住的网关进程。重新运行 `sc.exe queryex NeuroBridge`，核对 `WIN32_OWN_PROCESS` 和当前非零 PID，再用 `Stop-Process -Id <当前网关PID> -Force -ErrorAction Stop`。它可能丢失尚未写盘的数据。确认 `STOPPED` 后再安装。事件里的安装事务客户端 PID 属于安装方，请使用服务查询返回的 PID。
+4. 如果仍失败，保留安装窗口的 `log file`、同一时间段的 `MsiInstaller` 事件和 `sc.exe queryex NeuroBridge` 输出。避免强制结束 `msiexec.exe` 或手动删除安装缓存、注册表条目和 `%ProgramData%\NeuroBridge`。
 
-已使用 EXE 部署时，后续保持用 EXE 覆盖升级，避免再运行单独的 MSI。正常完成后，「应用和功能」应只显示一个 NeuroBridge 条目。如果同名条目仍然存在，保留安装日志和条目截图，以便区分 EXE 的临时注册、残留条目和独立安装的 MSI。不要手动删除安装缓存、注册表条目或 `%ProgramData%\NeuroBridge`。
+新版 EXE 的临时条目显示为 `NeuroBridge Setup (in progress)`。安装结束后，「应用和功能」应只显示一个 NeuroBridge 条目。如果仍有同名条目，保留安装日志和条目截图。
 
 本目录包含：
 

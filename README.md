@@ -192,6 +192,8 @@ Windows 耳机的心率算法输入按 5 Hz 节奏从实收串口数据中取样
 
 安装排错：麒麟安装日志保存在 `/var/log/neurobridge-bootstrap`，服务尚未创建时也可运行 `sudo /usr/lib/neurobridge-bootstrap/export-install-logs.sh --output-dir "$HOME/下载"`。Windows 10/11 64 位包随附 `install-with-logs.ps1`，通过 `-Installer` 安装、`-Export` 导出失败日志；Windows 7 和 32 位目标不参与构建与交付。交付 ZIP 的 PDF 副本使用英文文件名，原名称对照保存在 `metadata/document-filenames.json`。上述源码与模拟验证不替代银河麒麟现场验收。
 
+Windows 上遇到安装占用、网关服务一直在停止中或应用列表出现同名条目，参见 [安装失败 1921、1618 或出现同名条目](windows/README.md#安装失败-19211618-或出现同名条目)。
+
 交付总 ZIP 根目录生成 `bundle-directory-guide.pdf`（《NeuroBridge 交付包目录说明》），面向部署人员介绍各层压缩包、解压顺序、安装包与部署指南、日志工具及校验资料的位置；按本次实际清单生成，不再交付根目录 `PRD.md`。PDF 使用英文文件名、中文标题和正文。需求见[发布工作流 PRD](doc/product/发布工作流%20PRD.md#26-总包根目录-pdf-目录说明)。
 
 详细支持表及扩展架构影响见[发布工作流 PRD §2.7–2.9](doc/product/发布工作流%20PRD.md#27-系统与-cpu-架构支持表)：Windows 保持 10/11 x86_64；麒麟新增六个源码构建候选 Profile，与既有 x86_64 共用引导入口。运行时依然须匹配 CPU/ABI，各架构分别完成算法与 USB 真机验收；既有 N100/N150 结果不能替代其他架构。

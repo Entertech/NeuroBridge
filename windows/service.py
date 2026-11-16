@@ -102,7 +102,6 @@ def upgrade_legacy_default(config_path: Path, template: Path) -> Path | None:
 def _service_main() -> None:
     try:
         import servicemanager
-        import win32event
         import win32service
         import win32serviceutil
     except ImportError as error:
@@ -115,18 +114,29 @@ def _service_main() -> None:
 
         def __init__(self, args) -> None:
             super().__init__(args)
-            self.stop_event = win32event.CreateEvent(None, 0, 0, None)
+            self.stop_requested = threading.Event()
             self.loop: asyncio.AbstractEventLoop | None = None
             self.task: asyncio.Task[None] | None = None
 
         def SvcStop(self) -> None:
-            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-            win32event.SetEvent(self.stop_event)
-            if self.loop is not None:
-                self.loop.call_soon_threadsafe(self._cancel)
+            if self.stop_requested.is_set():
+                return
+            self.stop_requested.set()
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING, waitHint=30000)
+            servicemanager.LogInfoMsg("NeuroBridge service stop requested")
+            loop = self.loop
+            if loop is not None:
+                try:
+                    loop.call_soon_threadsafe(self._cancel)
+                except RuntimeError:
+                    if not loop.is_closed():
+                        raise
+
+        def SvcShutdown(self) -> None:
+            self.SvcStop()
 
         def _cancel(self) -> None:
-            if self.task is not None:
+            if self.task is not None and not self.task.done() and not self.task.cancelling():
                 self.task.cancel()
 
         def SvcDoRun(self) -> None:
@@ -149,11 +159,14 @@ def _service_main() -> None:
                     if backup is not None:
                         servicemanager.LogInfoMsg(f"Upgraded the old Windows defaults to dual-source capture; backup: {backup}")
                 except OSError as error:
-                        servicemanager.LogErrorMsg(f"Windows default configuration upgrade failed: {error}")
+                    servicemanager.LogErrorMsg(f"Windows default configuration upgrade failed: {error}")
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
             self.task = self.loop.create_task(run(str(DEFAULT_CONFIG)))
             try:
+                # A stop can arrive before provisioning finishes or before the task exists.
+                if self.stop_requested.is_set():
+                    self._cancel()
                 self.loop.run_until_complete(self.task)
             except asyncio.CancelledError:
                 pass

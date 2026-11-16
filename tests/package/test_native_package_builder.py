@@ -320,6 +320,10 @@ class NativePackageBuilderTests(unittest.TestCase):
         self.assertIn(f'Version="{BUILDER.APPLICATION_VERSION}"', bundle)
         self.assertIn(f'UpgradeCode="{bundle_upgrade}"', bundle)
         self.assertIn(f'<RelatedBundle Action="Upgrade" Id="{bundle_upgrade}" />', bundle)
+        self.assertIn('InProgressName="NeuroBridge Setup (in progress)"', bundle)
+        package = ET.fromstring(bundle).find(".//wix:MsiPackage", namespace)
+        self.assertIsNotNone(package)
+        self.assertEqual(package.get("Visible"), "no")
 
         # Kylin.  The package name is what apt/dnf match on, and prerm must let
         # an upgrade through without stopping the service the new package keeps.

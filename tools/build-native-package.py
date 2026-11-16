@@ -272,13 +272,14 @@ def write_wix_bundle(msi: Path, output: Path, log: Path) -> None:
     upgrade_code = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge/bundle"))
     bundle.write_text(textwrap.dedent(f'''\
       <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
-        <Bundle Name="NeuroBridge" Version="{APPLICATION_VERSION}" Manufacturer="Entertech" UpgradeCode="{upgrade_code}">
+        <Bundle Name="NeuroBridge" InProgressName="NeuroBridge Setup (in progress)"
+                Version="{APPLICATION_VERSION}" Manufacturer="Entertech" UpgradeCode="{upgrade_code}">
           <RelatedBundle Action="Upgrade" Id="{upgrade_code}" />
           <BootstrapperApplication>
             <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl="https://github.com/Entertech/NeuroBridge" />
           </BootstrapperApplication>
           <Chain>
-            <MsiPackage SourceFile="{xml_escape(str(msi))}" />
+            <MsiPackage SourceFile="{xml_escape(str(msi))}" Visible="no" />
           </Chain>
         </Bundle>
       </Wix>

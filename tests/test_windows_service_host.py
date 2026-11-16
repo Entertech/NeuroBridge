@@ -11,7 +11,7 @@ import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from windows import service as host
 
@@ -146,6 +146,37 @@ class ServiceEntryTests(unittest.TestCase):
         sys.argv = [r"C:\Program Files\NeuroBridge\windows\service.py", "--startup", "auto", "install"]
         host._service_main()
         self.assertEqual(self.calls, ["HandleCommandLine"])
+
+    def test_stop_during_provisioning_prevents_the_gateway_from_starting(self) -> None:
+        sys.argv = ["service.py"]
+        servicemanager = sys.modules["servicemanager"]
+        servicemanager.PrepareToHostSingle = Mock()
+        win32service = sys.modules["win32service"]
+        win32service.SERVICE_STOP_PENDING = 3
+        serviceutil = sys.modules["win32serviceutil"]
+
+        class ServiceFramework:
+            def __init__(self, _args):
+                self.ReportServiceStatus = Mock()
+
+        serviceutil.ServiceFramework = ServiceFramework
+        host._service_main()
+        service_class = servicemanager.PrepareToHostSingle.call_args.args[0]
+        service = service_class([])
+
+        def provision():
+            service.SvcStop()
+            service.SvcShutdown()
+            return True
+
+        with (
+            patch.object(host, "provision_data_layout", side_effect=provision),
+            patch.object(host, "run", new_callable=AsyncMock) as run,
+        ):
+            service.SvcDoRun()
+            run.assert_not_awaited()
+        self.assertTrue(service.task.cancelled())
+        service.ReportServiceStatus.assert_called_once_with(3, waitHint=30000)
 
 
 if __name__ == "__main__":

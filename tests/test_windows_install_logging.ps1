@@ -28,6 +28,36 @@ try {
     if ($context.diagnosticScope -ne 'installation' -or $context.packageApplicationVersion -eq 'unknown' -or
         $context.osBuild -eq 'unknown' -or -not $context.nativeArchitecture) { throw 'Installation context incomplete.' }
 
+    # Simulate a gateway that will not stop without touching a real service or MSI.
+    $stuckScript = Join-Path $work 'stuck-service.ps1'
+    @'
+param([string]$InstallScript, [string]$Installer)
+Add-Type -AssemblyName System.ServiceProcess
+function Get-Service {
+    param([string]$Name, [object]$ErrorAction)
+    $gateway = [pscustomobject]@{ Status = 'StopPending' }
+    $gateway | Add-Member -MemberType ScriptMethod -Name WaitForStatus -Value {
+        throw [System.ServiceProcess.TimeoutException]::new('Simulated service timeout')
+    }
+    return $gateway
+}
+function Start-Process { throw 'Native installer must not start while the gateway is still stopping.' }
+& $InstallScript -Installer $Installer
+exit $LASTEXITCODE
+'@ | Set-Content -LiteralPath $stuckScript -Encoding UTF8
+    $fakeMsi = Join-Path $work 'test.msi'
+    New-Item -ItemType File -Path $fakeMsi | Out-Null
+    $stuckArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -InstallScript "{1}" -Installer "{2}"' -f $stuckScript, $script, $fakeMsi
+    $stuck = Start-Process $hostExe -ArgumentList $stuckArgs -Wait -PassThru `
+        -RedirectStandardOutput (Join-Path $work 'stuck-stdout.txt') -RedirectStandardError (Join-Path $work 'stuck-stderr.txt')
+    $stuckLog = Get-ChildItem (Join-Path $work 'NeuroBridge\installer-logs') -Filter 'install-*.log' |
+        Where-Object { $_.FullName -ne $logs[0].FullName }
+    $stuckText = Get-Content -LiteralPath $stuckLog.FullName -Raw
+    if ($stuck.ExitCode -eq 0 -or $stuckText -notmatch 'gateway_service_before=StopPending' -or
+        $stuckText -notmatch 'gateway_service_after=StopPending' -or $stuckText -notmatch 'sc\.exe queryex NeuroBridge') {
+        throw 'A stuck service did not block installation with the expected diagnostic.'
+    }
+
     # An upgrade failure must retain distinct package and installed identities.
     . (Join-Path $root 'windows\diagnostic-context.ps1')
     $installed = Join-Path $work 'installed'

@@ -29,7 +29,7 @@ function Assert-VisibleInstallEntries {
     $entries = @(foreach ($key in $uninstallKeys) {
         if (Test-Path -LiteralPath $key) {
             Get-ChildItem -LiteralPath $key | Get-ItemProperty | Where-Object {
-                $_.DisplayName -eq 'NeuroBridge' -and $_.SystemComponent -ne 1
+                $_.DisplayName -in 'NeuroBridge', 'NeuroBridge Setup (in progress)' -and $_.SystemComponent -ne 1
             }
         }
     })
@@ -42,7 +42,7 @@ function Assert-VisibleInstallEntries {
     if ($ExpectedCount -eq 1) {
         $versionLine = Get-Content -LiteralPath (Join-Path $installRoot 'build-info.txt') |
             Where-Object { $_ -like 'application_version=*' }
-        if ($entries[0].WindowsInstaller -eq 1 -or
+        if ($entries[0].DisplayName -ne 'NeuroBridge' -or $entries[0].WindowsInstaller -eq 1 -or
             $versionLine -ne "application_version=$($entries[0].BundleVersion)") {
             throw "Expected the installed NeuroBridge version to be listed as an EXE bundle at $Phase. See $log."
         }
