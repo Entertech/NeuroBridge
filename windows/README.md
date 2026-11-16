@@ -223,6 +223,12 @@ OpenSSH 是 Windows 系统服务。需要关闭远程访问时，运行 `neurobr
 
 `packaging\windows\` 下的 `install.ps1` / `uninstall.ps1` 供候选包（`tools/build-product-candidate.py`）使用，**不随 MSI 分发**：MSI 的载荷根目录只有 `windows\`。
 
+### 安装失败 `0x80070652` 或出现同名条目
+
+`0x80070652`（Windows Installer 错误 1618）表示另一项安装或卸载仍在进行。关闭失败窗口，等已有安装、卸载或 Windows 更新完成。如果仍然报错，先在事件查看器的「Windows 日志 → 应用程序」筛选 `MsiInstaller`，查看失败前后的事件。确认没有安装、卸载或更新正在执行后，可以用管理员 PowerShell 运行 `Restart-Service -Name msiserver -ErrorAction Stop`，再启动一次 NeuroBridge EXE。如果服务拒绝停止或错误持续，保留失败窗口中 `log file` 指向的日志和对应的 `MsiInstaller` 事件，再考虑从开始菜单重启电脑。不要强制结束 `msiexec.exe`。
+
+已使用 EXE 部署时，后续保持用 EXE 覆盖升级，避免再运行单独的 MSI。正常完成后，「应用和功能」应只显示一个 NeuroBridge 条目。如果同名条目仍然存在，保留安装日志和条目截图，以便区分 EXE 的临时注册、残留条目和独立安装的 MSI。不要手动删除安装缓存、注册表条目或 `%ProgramData%\NeuroBridge`。
+
 本目录包含：
 
 - `gateway.toml.example`：带中文注释的 Windows 双设备配置模板；安装包用它首次生成 `C:\ProgramData\NeuroBridge\gateway.toml`；

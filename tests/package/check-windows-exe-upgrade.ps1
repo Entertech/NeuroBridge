@@ -19,12 +19,44 @@ function Invoke-Installer {
     }
 }
 
+function Assert-VisibleInstallEntries {
+    param([string]$Phase, [int]$ExpectedCount)
+    $uninstallKeys = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+    )
+    $entries = @(foreach ($key in $uninstallKeys) {
+        if (Test-Path -LiteralPath $key) {
+            Get-ChildItem -LiteralPath $key | Get-ItemProperty | Where-Object {
+                $_.DisplayName -eq 'NeuroBridge' -and $_.SystemComponent -ne 1
+            }
+        }
+    })
+    $details = @($entries | Select-Object PSPath, DisplayName, DisplayVersion, WindowsInstaller, BundleVersion)
+    $log = Join-Path $LogDirectory "$Phase-entries.json"
+    ConvertTo-Json -InputObject $details | Set-Content -LiteralPath $log -Encoding UTF8
+    if ($entries.Count -ne $ExpectedCount) {
+        throw "Expected $ExpectedCount visible NeuroBridge entries at $Phase; found $($entries.Count). See $log."
+    }
+    if ($ExpectedCount -eq 1) {
+        $versionLine = Get-Content -LiteralPath (Join-Path $installRoot 'build-info.txt') |
+            Where-Object { $_ -like 'application_version=*' }
+        if ($entries[0].WindowsInstaller -eq 1 -or
+            $versionLine -ne "application_version=$($entries[0].BundleVersion)") {
+            throw "Expected the installed NeuroBridge version to be listed as an EXE bundle at $Phase. See $log."
+        }
+    }
+}
+
 if ((Test-Path -LiteralPath $installRoot) -or (Test-Path -LiteralPath $dataRoot) -or
     (Get-Service -Name NeuroBridge -ErrorAction SilentlyContinue)) {
     throw 'Run the EXE upgrade test on a clean, disposable Windows runner.'
 }
+Assert-VisibleInstallEntries 'before-install' 0
 
 Invoke-Installer $PreviousInstaller 'install' (Join-Path $LogDirectory 'previous-install.log')
+Assert-VisibleInstallEntries 'previous-install' 1
 $config = Join-Path $dataRoot 'gateway.toml'
 Add-Content -LiteralPath $config -Value '# Preserve this configuration during the installer test' -Encoding UTF8
 $configHash = (Get-FileHash -LiteralPath $config).Hash
@@ -34,6 +66,7 @@ if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
     Set-Service -Name sshd -StartupType Manual
 }
 Invoke-Installer $Installer 'install' (Join-Path $LogDirectory 'upgrade-install.log')
+Assert-VisibleInstallEntries 'upgrade-install' 1
 if ((Get-FileHash -LiteralPath $config).Hash -ne $configHash) {
     throw 'EXE upgrade changed the existing configuration.'
 }
@@ -109,6 +142,7 @@ try {
 }
 
 Invoke-Installer $Installer 'uninstall' (Join-Path $LogDirectory 'uninstall.log')
+Assert-VisibleInstallEntries 'uninstall' 0
 if (Test-Path -LiteralPath (Join-Path $cliDirectory 'neurobridge.cmd')) {
     throw 'The CLI remained installed after uninstall.'
 }
@@ -119,3 +153,11 @@ if ([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';' |
 if ((Get-FileHash -LiteralPath $config).Hash -ne $configHash) {
     throw 'Uninstall changed the existing configuration.'
 }
+
+Invoke-Installer $Installer 'install' (Join-Path $LogDirectory 'reinstall.log')
+Assert-VisibleInstallEntries 'reinstall' 1
+if ((Get-FileHash -LiteralPath $config).Hash -ne $configHash) {
+    throw 'Reinstall changed the existing configuration.'
+}
+Invoke-Installer $Installer 'uninstall' (Join-Path $LogDirectory 'reinstall-uninstall.log')
+Assert-VisibleInstallEntries 'reinstall-uninstall' 0
