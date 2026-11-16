@@ -13,6 +13,7 @@ const localConnection = fixedSource || sharedConnection;
 const showConnectedDevicesOnly = sharedConnection || window.NEUROBRIDGE_B_CLIENT_WINDOWS === true;
 const staleAfterMs = window.NEUROBRIDGE_B_CLIENT_STALE_AFTER_MS;
 const waveformCapacity = 500;
+const sdkDualWaveLimit = 2000;
 const spectrumBands = ["delta", "theta", "alpha", "lowBeta", "highBeta", "beta", "gamma"];
 const algorithmMetrics = {
   eeg: [
@@ -673,7 +674,11 @@ function updateVisuals(data, panel) {
     panel.eegTimestamp = result.timestampMs;
   }
 
-  panel.bandPower = invalid ? {} : eeg?.bandPower || {};
+  const bandPower = eeg?.bandPower || {};
+  const reportedBands = spectrumBands.map((band) => bandPower[band]).filter(Number.isFinite);
+  const spectrumUnavailable = showConnectedDevicesOnly && eeg?.quality === 0
+    && reportedBands.length > 0 && reportedBands.every((value) => value === 0);
+  panel.bandPower = invalid || spectrumUnavailable ? {} : bandPower;
   if (newWindow) {
     for (const channel of Object.keys(channelStyles)) {
       const previous = panel.channels[channel] || [];
@@ -682,8 +687,15 @@ function updateVisuals(data, panel) {
         if (Number.isFinite(previous.at(-1))) panel.channels[channel] = [...previous.slice(1 - waveformCapacity), null];
         continue;
       }
-      const incoming = wave.slice(-waveformCapacity);
-      if (previous.length || incoming.some(Number.isFinite)) {
+      const noSignal = showConnectedDevicesOnly && eeg?.quality === 0 && wave.every((value) => value === 0);
+      const markSaturation = showConnectedDevicesOnly && channel !== "single";
+      // NaN marks a clipped sample in the display history. Both it and null break the drawn line.
+      const incoming = wave.slice(-waveformCapacity).map((value) => {
+        if (noSignal) return null;
+        if (markSaturation && Number.isFinite(value) && Math.abs(value) === sdkDualWaveLimit) return NaN;
+        return value;
+      });
+      if (previous.length || noSignal || incoming.some((value) => Number.isFinite(value) || Number.isNaN(value))) {
         panel.channels[channel] = previous.concat(incoming).slice(-waveformCapacity);
       }
     }
@@ -691,12 +703,16 @@ function updateVisuals(data, panel) {
   panel.fields.waveformMeta.replaceChildren(...Object.entries(panel.channels).map(([channel, values]) => {
     const label = document.createElement("span");
     label.className = `channel-${channel}`;
-    label.textContent = `${channelStyles[channel].label} · ${values.filter(Number.isFinite).length} 点`;
+    const count = values.filter(Number.isFinite).length;
+    const clipped = values.filter(Number.isNaN).length;
+    label.textContent = `${channelStyles[channel].label} · ${count ? `${count} 点` : "无有效样本"}`
+      + (clipped ? ` · ${clipped} 点饱和` : "");
     return label;
   }));
   if (!panel.fields.waveformMeta.childElementCount) panel.fields.waveformMeta.textContent = invalid ? "无效窗口" : "未提供波形";
-  panel.fields.spectrumMeta.textContent = invalid ? "无效窗口" : Object.values(panel.bandPower).some(Number.isFinite)
-    ? readableTimestamp(result.timestampMs) : "未提供频段能量";
+  panel.fields.spectrumMeta.textContent = invalid ? "无效窗口"
+    : spectrumUnavailable ? "暂无有效频段能量"
+    : reportedBands.length ? readableTimestamp(result.timestampMs) : "未提供频段能量";
   drawSourceCharts(panel);
 }
 

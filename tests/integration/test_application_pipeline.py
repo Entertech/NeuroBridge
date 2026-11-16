@@ -112,7 +112,7 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         headset_metrics = {"eeg": {"wave": {"left": [-100, 0, 100], "right": [-200, 0, 200]},
                                    "quality": 1, "bandPower": {"alpha": 18}},
                            "hr": {"value": 72}, "pressure": 40, "attention": 21}
-        headband_metrics = {"eeg": {"wave": {"left": [-600, 0, 600], "right": [-100, 100]},
+        headband_metrics = {"eeg": {"wave": {"left": [-600, 0, 600], "right": [-100, 0, 100]},
                                     "quality": 1, "bandPower": {"alpha": 38}},
                             "attention": 81, "pressure": 65}
         for container, session, metrics in ((headset, "serial", headset_metrics), (headband, "ble", headband_metrics)):
@@ -128,12 +128,25 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await app.on_connection(DeviceConnectionEvent(ConnectionState.CONNECTED, 600, session))
             await app.prepare_session(session, container.gateway.store.recording_id)
 
-        def eeg_bytes(samples):
-            return b"\x00\x01" + b"".join(sample.to_bytes(3, "big") for sample in samples)
+        def eeg_bytes(samples, sequence=1):
+            return sequence.to_bytes(2, "big") + b"".join(sample.to_bytes(3, "big") for sample in samples)
 
         original = eeg_bytes([900, 1800, 1000, 2000, 1100, 2200])
         reference = eeg_bytes([400, 400, 1000, 1000, 1600, 1600])
         now = int(time.time() * 1000)
+        for offset in (2400, 1800, 1200, 600):
+            previous_sequence = (1 - offset // 12) % 65536
+            previous_headband = previous_sequence.to_bytes(2, "big") + reference[2:]
+            previous_headset = b"\xaa\xaa\xaa\x1c" + previous_sequence.to_bytes(2, "big") + original[2:] + b"\x48\xbb\xbb\xbb"
+            for application, source, channel, session, packet in (
+                (headband.application, "bluetooth", "ff31", "ble", previous_headband),
+                (headset.application, "serial", "serial", "serial", previous_headset),
+            ):
+                await application.process(RawChunk(source, channel, packet, now - offset, time.monotonic_ns(),
+                                                   session, f"warm-{source}-{offset}"))
+                await application.flush()
+                application.algorithm.inputs.clear()
+                application.northbound.events.clear()
         with self.assertLogs("neurobridge.application", level="DEBUG") as logs:
             await headband.application.process(RawChunk("bluetooth", "ff31", reference, now, time.monotonic_ns(), "ble", "ble-trace"))
             await headband.application.flush()
@@ -153,20 +166,21 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headset_window.result.batch.signals[0].samples, original[2:])
         expected = {**headset_metrics, "attention": 24,
                     "eeg": {**headset_metrics["eeg"], "bandPower": {"alpha": 19},
-                            "wave": {"left": [-570, 0, 570], "right": [-105, 95, 200]}}}
+                            "wave": {"left": [-570, 0, 570], "right": [-105, 0, 105]}}}
         self.assertEqual(headset_window.result.algorithm_result.metrics, expected)
         self.assertEqual(headband_window.result.algorithm_result.metrics, headband_metrics)
         self.assertEqual(headset_metrics["eeg"]["wave"]["left"], [-100, 0, 100])
         recording_id = headset.gateway.store.recording_id
         await headset.gateway.recording_repository.close_session(recording_id)
-        recorded, = headset.gateway.store.results(recording_id)
+        recorded, = (result for result in headset.gateway.store.results(recording_id)
+                     if result.batch.batch_id == headset_value.batch_id)
         self.assertEqual(recorded.algorithm_result.metrics, expected)
         self.assertEqual(recorded.batch.signals[0].samples, original[2:])
         self.assertEqual(headset.application.diagnostics["window_processing_errors"], 0)
         self.assertEqual(headband.application.diagnostics["window_processing_errors"], 0)
         self.assertTrue(any(f"alignment decision: batchId={headset_value.batch_id}" in line
                             and "stage=algorithm_output reason=applied" in line
-                            and "waveTolerancePercent=5 pairedSamples={'left': 3, 'right': 2}" in line
+                            and "waveTolerancePercent=5 pairedSamples={'left': 3, 'right': 3}" in line
                             and "changedSamples={'left': 2, 'right': 2}" in line for line in logs.output))
         self.assertTrue(any(f"algorithm response: source=serial batchId={headset_value.batch_id}" in line
                             and "mappingVersion=1 valid=True" in line for line in logs.output))

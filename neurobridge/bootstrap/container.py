@@ -284,7 +284,7 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
         persistence_timeout_ms=config.pipeline.persistence_timeout_ms,
         shutdown_timeout_ms=config.pipeline.shutdown_timeout_ms,
         observe_batch=observe_batch,
-        align_eeg_result=eeg_alignment.align_result if eeg_alignment else None,
+        eeg_alignment=eeg_alignment,
     )
     bridge_ref: dict[str, _ApplicationPipelineAdapter] = {}
 
@@ -365,10 +365,17 @@ def build_runtime(
     )
 
     alignment = None
-    LOG.info("Windows EEG alignment configuration: enabled=%s adjustmentPercent=%s stage=algorithm_output",
-             bool(config.data_source.eeg_alignment_percent), config.data_source.eeg_alignment_percent)
+    LOG.info("Windows EEG alignment configuration: enabled=%s adjustmentPercent=%s stage=algorithm_output "
+             "pairing=estimated_sample_time waitMs=%s referenceBatches=%s clockPacketsPerSource=%s",
+             bool(config.data_source.eeg_alignment_percent), config.data_source.eeg_alignment_percent,
+             config.data_source.eeg_alignment_output_wait_ms, config.data_source.eeg_alignment_reference_batches,
+             config.data_source.eeg_alignment_clock_packets)
     if config.data_source.eeg_alignment_percent:
-        alignment = EegAlignmentCache(percent=config.data_source.eeg_alignment_percent)
+        alignment = EegAlignmentCache(percent=config.data_source.eeg_alignment_percent,
+                                      window_ms=config.data_source.window_interval_ms,
+                                      wait_ms=config.data_source.eeg_alignment_output_wait_ms,
+                                      reference_batches=config.data_source.eeg_alignment_reference_batches,
+                                      clock_packets=config.data_source.eeg_alignment_clock_packets)
     primary = build_container(config, runtime, eeg_alignment=alignment)
     headband = build_container(headband_config, runtime, eeg_alignment=alignment)
     return (primary, headband), SourceRouter(primary.northbound_controller, headband.northbound_controller)

@@ -39,6 +39,9 @@ class DataSourceConfig:
     stale_after_ms: int = 1800
     include_headband: bool = False
     eeg_alignment_percent: int = DEFAULT_EEG_ALIGNMENT_PERCENT
+    eeg_alignment_output_wait_ms: int = 300
+    eeg_alignment_reference_batches: int = 16
+    eeg_alignment_clock_packets: int = 4096
 
 
 @dataclass(frozen=True)
@@ -349,6 +352,15 @@ def load(
     )
     if not 0 <= eeg_alignment_percent <= 10:
         raise ValueError("data_source.eeg_alignment_percent must be between 0 and 10")
+    eeg_alignment_output_wait_ms = data_source.get("eeg_alignment_output_wait_ms", 300)
+    if not 0 <= eeg_alignment_output_wait_ms <= window_interval_ms:
+        raise ValueError("data_source.eeg_alignment_output_wait_ms must be between 0 and window_interval_ms")
+    eeg_alignment_reference_batches = data_source.get("eeg_alignment_reference_batches", 16)
+    if not 1 <= eeg_alignment_reference_batches <= 16:
+        raise ValueError("data_source.eeg_alignment_reference_batches must be between 1 and 16")
+    eeg_alignment_clock_packets = data_source.get("eeg_alignment_clock_packets", 4096)
+    if not 4 <= eeg_alignment_clock_packets <= 4096:
+        raise ValueError("data_source.eeg_alignment_clock_packets must be between 4 and 4096")
     replay_recording_id = recording.get("replay_recording_id") or None
     if data_source_type == "serial" and replay_recording_id:
         raise ValueError("recording.replay_recording_id is not supported when data_source.type is serial")
@@ -469,7 +481,8 @@ def load(
             local_ui_directory,
         ),
         data_source=DataSourceConfig(data_source_type, window_interval_ms, stale_after_ms, include_headband,
-                                     eeg_alignment_percent),
+                                     eeg_alignment_percent, eeg_alignment_output_wait_ms,
+                                     eeg_alignment_reference_batches, eeg_alignment_clock_packets),
         serial=serial_config,
         storage=StorageConfig(**storage_values, auto_cleanup_enabled=auto_cleanup_enabled),
         pipeline=PipelineConfig(**pipeline_values),
@@ -505,7 +518,8 @@ def _validate_types(raw: dict) -> None:
                "ble.reconnect_delay_seconds", "serial.baud_rate", "serial.handshake_timeout_ms",
                "serial.command_response_timeout_ms", "serial.max_buffer_bytes",
                "algorithm.request_timeout_ms", "data_source.window_interval_ms", "data_source.stale_after_ms",
-               "data_source.eeg_alignment_percent",
+               "data_source.eeg_alignment_percent", "data_source.eeg_alignment_output_wait_ms",
+               "data_source.eeg_alignment_reference_batches", "data_source.eeg_alignment_clock_packets",
                # Accept legacy timeout keys when keeping an existing gateway.toml.
                "data_source.eeg_alignment_wait_ms",
                "data_source.eeg_alignment_raw_timeout_ms",

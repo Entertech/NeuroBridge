@@ -18,6 +18,7 @@ from ..ports.device_control import DeviceControl
 from ..ports.northbound import ApplicationEvent, LatestSnapshotStore, NorthboundSink
 from ..ports.raw_parser import FlushReason, RawDataParser
 from ..ports.recording import PersistenceReceipt, PersistenceRecord, RecordingRepository
+from .eeg_alignment import EegAlignmentCache
 from .processing import AlgorithmInputMapper, WindowResultAggregator
 from .status import ConnectionStateMachine, DataStateMachine
 from .windowing import SignalWindowAssembler
@@ -55,7 +56,7 @@ class ApplicationService:
         persistence_timeout_ms: int = 1000,
         shutdown_timeout_ms: int = 5000,
         observe_batch: Callable[[ParsedSignalBatch], None] | None = None,
-        align_eeg_result: Callable[[WindowResult], WindowResult] | None = None,
+        eeg_alignment: EegAlignmentCache | None = None,
     ) -> None:
         self.device_protocol = device_protocol
         self.requires_algorithm_to_start = requires_algorithm_to_start
@@ -69,7 +70,7 @@ class ApplicationService:
         self.recording = recording
         self.control = control
         self.observe_batch = observe_batch
-        self.align_eeg_result = align_eeg_result
+        self.eeg_alignment = eeg_alignment
         if min(algorithm_queue_size, persistence_timeout_ms, shutdown_timeout_ms) <= 0:
             raise ValueError("Pipeline limits must be positive")
         self.persistence_timeout_ms = persistence_timeout_ms
@@ -188,6 +189,8 @@ class ApplicationService:
             # device session must never publish into the disconnected/new one.
             async with self._lifecycle_lock:
                 self._connection_session_id = None
+                if self.eeg_alignment is not None:
+                    self.eeg_alignment.set_session(self.device_protocol, None)
                 if self.data.snapshot.data_state != DataState.UNAVAILABLE:
                     self.data.on_connection(applied)
             await self._cancel_stale()
@@ -207,6 +210,8 @@ class ApplicationService:
 
         async with self._lifecycle_lock:
             self._connection_session_id = connection_session_id
+            if self.eeg_alignment is not None:
+                self.eeg_alignment.set_session(self.device_protocol, connection_session_id)
             self._recording_session_id = recording_session_id
             if self.data.snapshot.data_state == DataState.UNAVAILABLE:
                 self.data.transition(DataState.PREPARING)
@@ -420,6 +425,8 @@ class ApplicationService:
             except (Exception, TimeoutError):
                 LOG.exception("Device stop failed during application shutdown")
         await self.flush(FlushReason.STOPPED)
+        if self.eeg_alignment is not None:
+            self.eeg_alignment.set_session(self.device_protocol, None)
         await self._stop_worker()
         await self.aggregator.close()
         await self._cancel_stale()
@@ -493,7 +500,7 @@ class ApplicationService:
                 persistence_guaranteed=persistence_guaranteed,
                 on_late_result=lambda value: self._persist_late(batch, value),
             )
-            if self.align_eeg_result is not None:
+            if self.eeg_alignment is not None:
                 LOG.debug("EEG algorithm response: source=%s batchId=%s windowEndMs=%s mappingVersion=%s "
                           "valid=%s invalidReasons=%s evaluationMs=%s",
                           batch.source_type, batch.batch_id, batch.window_end_ms, algorithm_input.mapping_version,
@@ -503,8 +510,8 @@ class ApplicationService:
             self.diagnostics["algorithm_duration_ms"] += duration_ms
             self.diagnostics["algorithm_evaluations"] += 1
             self.diagnostics["algorithm_max_duration_ms"] = max(self.diagnostics["algorithm_max_duration_ms"], duration_ms)
-            if self.align_eeg_result is not None and batch.connection_session_id == self._connection_session_id:
-                result = self.align_eeg_result(result)
+            if self.eeg_alignment is not None and batch.connection_session_id == self._connection_session_id:
+                result = await self.eeg_alignment.align_result(result)
         else:
             timestamp = self.clock_ms()
             unavailable = AlgorithmResult(

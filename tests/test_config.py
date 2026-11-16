@@ -59,6 +59,22 @@ class AlgorithmConfigurationTests(unittest.TestCase):
 
 
 class DeviceStrategyConfigurationTests(unittest.TestCase):
+    def test_eeg_alignment_cache_limits_are_configurable_and_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            path.write_text(BLUETOOTH_DATA_SOURCE, encoding="utf-8")
+            defaults = load(path).data_source
+            self.assertEqual((defaults.eeg_alignment_reference_batches, defaults.eeg_alignment_clock_packets), (16, 4096))
+            path.write_text(BLUETOOTH_DATA_SOURCE + "eeg_alignment_reference_batches = 8\neeg_alignment_clock_packets = 512\n",
+                            encoding="utf-8")
+            configured = load(path).data_source
+            self.assertEqual((configured.eeg_alignment_reference_batches, configured.eeg_alignment_clock_packets), (8, 512))
+            for key, value in (("eeg_alignment_reference_batches", 0), ("eeg_alignment_clock_packets", 4097)):
+                with self.subTest(key=key):
+                    path.write_text(BLUETOOTH_DATA_SOURCE + f"{key} = {value}\n", encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, key):
+                        load(path)
+
     def test_unknown_configuration_fields_are_rejected_before_io(self) -> None:
         for contents, message in (
             ('future = true\n[data_source]\ntype = "serial"\n', "Unknown top-level"),
