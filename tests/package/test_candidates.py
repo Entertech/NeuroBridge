@@ -140,6 +140,8 @@ class CandidatePackageTests(unittest.TestCase):
             self.assertTrue(manifest["runtimeBundled"])
             self.assertTrue(any(name.endswith("payload/runtime/python.exe") for name in names))
             self.assertIn('runtime\\python.exe', install)
+            self.assertNotIn('remote-support.ps1', install)
+            self.assertTrue(any(name.endswith("payload/windows/remote-support.ps1") for name in names))
             self.assertTrue(config["algorithm"]["command"][0].endswith(r"runtime\neurobridge_affective_bridge.exe"))
 
     def test_kylin_rollback_restores_all_state_and_retains_replaced_files(self):

@@ -25,7 +25,3 @@ $gatewayConfig = Join-Path $data "gateway.toml"
 & $python (Join-Path $install "windows\service.py") --startup auto install
 & $python (Join-Path $install "windows\service.py") start
 if ($LASTEXITCODE -ne 0) { throw "Starting NeuroBridge failed with exit code $LASTEXITCODE." }
-& (Join-Path $PSHOME 'powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $install 'windows\remote-support.ps1') -Action Enable -FromInstaller
-if ($LASTEXITCODE -ne 0) {
-  Write-Warning 'NeuroBridge was installed, but SSH setup failed. See NeuroBridge SSH Setup in the Windows Application event log.'
-}

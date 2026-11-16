@@ -1,22 +1,31 @@
 ﻿param(
-    [ValidateSet('Menu', 'Enable', 'Disable', 'Status')]
+    [ValidateSet('Menu', 'Install', 'Enable', 'Disable', 'Status')]
     [string]$Action = 'Menu',
+    [string]$SshdPath,
     [switch]$PauseOnExit,
-    [switch]$RequireGateway,
-    [switch]$FromInstaller
+    [switch]$RequireGateway
 )
 
 $ErrorActionPreference = 'Stop'
 $capability = 'OpenSSH.Server~~~~0.0.1.0'
 $ruleName = 'OpenSSH-Server-In-TCP'
 
-function Show-SshStatus {
-    $service = Get-CimInstance Win32_Service -Filter "Name='sshd'"
-    if ($service) {
-        Write-Host "OpenSSH Server: $($service.State) (startup: $($service.StartMode))"
-    } else {
-        Write-Host 'OpenSSH Server is not installed.'
+function Get-RegisteredSshdPath($Service) {
+    if ($Service.PathName -notmatch '^\s*(?:"(?<path>[^"]+)"|(?<path>[^"]+?\.exe))(?:\s|$)') {
+        throw 'Cannot determine the executable path of the registered sshd service.'
     }
+    $path = [Environment]::ExpandEnvironmentVariables($Matches['path'])
+    $executable = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
+    if ($executable -isnot [IO.FileInfo] -or $executable.Name -ne 'sshd.exe') {
+        throw "Cannot find sshd.exe at the registered service path: $path"
+    }
+    return $executable.FullName
+}
+
+function Show-SshStatus($ServerPath) {
+    $service = Get-CimInstance Win32_Service -Filter "Name='sshd'"
+    Write-Host "OpenSSH Server: $($service.State) (startup: $($service.StartMode))"
+    Write-Host "SSHD executable: $ServerPath"
 
     $rule = Get-NetFirewallRule -Name $ruleName -PolicyStore ActiveStore -ErrorAction SilentlyContinue
     if ($rule) {
@@ -55,23 +64,41 @@ try {
         Write-Host '1. Enable SSH for the local subnet and start it at boot'
         Write-Host '2. Stop Windows SSH and disable its firewall rule'
         Write-Host '3. Check SSH status'
+        Write-Host '4. Install and enable Windows OpenSSH Server'
         Write-Host '0. Exit'
         switch (Read-Host 'Choose an action') {
             '1' { $Action = 'Enable' }
             '2' { $Action = 'Disable' }
             '3' { $Action = 'Status' }
+            '4' { $Action = 'Install' }
             '0' { exit 0 }
-            default { throw 'Choose 1, 2, 3 or 0.' }
+            default { throw 'Choose 1, 2, 3, 4 or 0.' }
         }
+    }
+
+    if ($SshdPath) {
+        if ($Action -ne 'Enable') {
+            throw 'Specify an sshd.exe path only with neurobridge ssh enable.'
+        }
+        $executable = Get-Item -LiteralPath $SshdPath -ErrorAction SilentlyContinue
+        if ($executable -isnot [IO.FileInfo]) {
+            throw "SSH executable was not found: $SshdPath"
+        }
+        $SshdPath = $executable.FullName
+    }
+
+    $service = Get-CimInstance Win32_Service -Filter "Name='sshd'"
+    if (-not $service -and $Action -ne 'Install') {
+        throw 'OpenSSH Server service (sshd) was not found. Run neurobridge ssh install to install it.'
     }
 
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        if ($FromInstaller) {
-            throw 'The installer must configure OpenSSH with administrator privileges.'
-        }
         $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "{0}" -Action {1} -PauseOnExit' -f $PSCommandPath, $Action
+        if ($SshdPath) {
+            $arguments += ' -SshdPath "{0}"' -f $SshdPath
+        }
         if ($RequireGateway) {
             $arguments += ' -RequireGateway'
         }
@@ -79,57 +106,45 @@ try {
         exit $process.ExitCode
     }
 
-    if ($Action -eq 'Enable') {
-        $restartNeeded = $false
+    if ($Action -eq 'Install' -and -not $service) {
         if ((Get-WindowsCapability -Online -Name $capability).State -ne 'Installed') {
             Write-Host '正在通过 Windows 安装 OpenSSH Server，可能需要下载组件，请等待安装完成。'
-            if ($FromInstaller -or $RequireGateway) {
-                $gatewayCli = Join-Path $PSScriptRoot 'cli\neurobridge.cmd'
-                Write-Host '等待期间，网关服务就绪后，可在本机新开 PowerShell，运行 neurobridge web 打开联调网页。'
-                Write-Host ('如果系统还找不到 neurobridge 命令，可直接运行 & "{0}" web' -f $gatewayCli)
+            if ((Add-WindowsCapability -Online -Name $capability).RestartNeeded) {
+                Write-Warning 'Windows needs a restart to finish installing OpenSSH Server. After restarting, run neurobridge ssh enable.'
+                exit 0
             }
-            $restartNeeded = (Add-WindowsCapability -Online -Name $capability).RestartNeeded
-            Write-Host '正在配置 OpenSSH 服务和防火墙规则。'
+            $service = Get-CimInstance Win32_Service -Filter "Name='sshd'"
         }
+        if (-not $service) {
+            throw 'Windows OpenSSH Server is installed, but the sshd service is missing. Check the Windows OpenSSH installation.'
+        }
+    }
+    $serverPath = Get-RegisteredSshdPath $service
+    if ($SshdPath -and $SshdPath -ne $serverPath) {
+        throw "The registered sshd service uses '$serverPath'. The specified path '$SshdPath' does not match."
+    }
 
+    if ($Action -in 'Enable', 'Install') {
         if (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue) {
             Set-NetFirewallRule -Name $ruleName -Enabled True -RemoteAddress LocalSubnet
         } else {
             New-NetFirewallRule -Name $ruleName -DisplayName 'OpenSSH Server (sshd)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 -RemoteAddress LocalSubnet | Out-Null
         }
 
-        $service = Get-Service -Name sshd -ErrorAction SilentlyContinue
-        if (-not $service) {
-            if ($restartNeeded) {
-                throw 'Windows needs a restart before the SSH service can be configured. Restart and run neurobridge ssh enable.'
-            }
-            throw 'OpenSSH Server installation did not register the sshd service.'
-        }
         Set-Service -Name sshd -StartupType Automatic
-        if ($restartNeeded) {
-            Write-Warning 'Windows needs a restart to finish installing OpenSSH Server. SSH is configured to start at boot.'
-        } else {
-            Start-Service -Name sshd
-        }
+        Start-Service -Name sshd
     } elseif ($Action -eq 'Disable') {
         if (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue) {
             Disable-NetFirewallRule -Name $ruleName
         }
-        if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
-            Set-Service -Name sshd -StartupType Manual
-            Stop-Service -Name sshd
-        }
+        Set-Service -Name sshd -StartupType Manual
+        Stop-Service -Name sshd
     }
 
-    if (-not $FromInstaller) {
-        Show-SshStatus
-    }
+    Show-SshStatus $serverPath
 } catch {
     $failure = "Remote support setup failed: " + $_.Exception.Message
     Write-Host $failure -ForegroundColor Red
-    if ($FromInstaller) {
-        & "$env:SystemRoot\System32\eventcreate.exe" /T WARNING /ID 100 /L APPLICATION /SO 'NeuroBridge SSH Setup' /D $failure | Out-Null
-    }
     $exitCode = 1
 } finally {
     if ($PauseOnExit) {

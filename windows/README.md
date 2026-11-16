@@ -185,23 +185,25 @@ powershell -ExecutionPolicy Bypass -File 'C:\Program Files\NeuroBridge\windows\e
 
 在 SSH 会话里运行 `neurobridge web`，再把输出的 SSH 转发命令粘贴到看网页的电脑上的新终端。保持转发连接打开，并用浏览器访问命令显示的地址。转发同时覆盖网页和 WebSocket。
 
-在 Windows 10/11 完成安装后，从开始菜单新开 PowerShell，即可在任意目录运行以下命令。安装器会注册系统 PATH；如果一直开着 Windows Terminal，请关闭整个应用再打开，旧窗口会保留启动时的环境。
+在 Windows 10/11 完成 MSI / EXE 安装后，从开始菜单新开 PowerShell，即可在任意目录运行以下命令。如果一直开着 Windows Terminal，请关闭整个应用再打开，以加载安装时注册的系统 PATH。ZIP 候选包可将示例中的 `neurobridge` 换成 `& "$env:ProgramFiles\NeuroBridge\windows\cli\neurobridge.cmd"`。
 
 ```powershell
+neurobridge ssh install
 neurobridge ssh enable
+neurobridge ssh enable "C:\Program Files\OpenSSH\sshd.exe"
 neurobridge ssh status
 neurobridge ssh disable
 ```
 
-Windows MSI / EXE 安装和覆盖升级时默认安装并启动 Windows OpenSSH Server，将 `sshd` 设为开机自动启动，并将标准 TCP 22 入站规则限制在本地子网。安装后运行 `neurobridge ssh status`，应显示 `OpenSSH Server: Running (startup: Auto)`。
+Windows MSI / EXE 和 ZIP 候选包安装时跳过 SSH。升级保留本机现有的 SSH 服务和防火墙规则。安装后可以直接运行 `neurobridge web` 打开本机联调页。
 
-`enable` 可重新启用 SSH 并恢复开机自启。`status` 显示状态和可用的 SSH 连接地址。`disable` 停止 Windows OpenSSH Server，将服务设为手动启动，并禁用标准 SSH 防火墙规则。按提示同意 Windows 管理员授权。NeuroBridge 服务可以处于停止状态，但必须已安装。
+`install` 按需通过 Windows 安装 OpenSSH Server 并启用，可能需要访问 Windows Update。遇到系统重启提示时，重启后运行 `neurobridge ssh enable`。
 
-也可以双击 `windows\remote-support.cmd` 使用交互菜单，选 `1` 启用、`3` 查询、`2` 关闭。源码部署从项目目录打开，安装包部署从安装目录打开。
+`enable` 使用本机已注册的 `sshd` 服务并设为开机自启，将标准 TCP 22 入站规则限制在本地子网。可选路径须指向该服务实际使用的 `sshd.exe`，有空格时请加引号。找不到服务或可执行文件、路径不匹配时，命令报错并以非零状态退出。可用 `neurobridge ssh status` 查询服务状态、可执行文件路径和可用的连接地址。
 
-首次安装 OpenSSH Server 可能需要 Windows Update。下载或安装期间，PowerShell 窗口会显示中文提示。网关服务就绪后，可以在本机新开 PowerShell 运行 `neurobridge web`，或复制提示中的完整命令打开联调网页。如果系统组件安装失败，网关仍可安装。查看 Windows 应用程序事件日志中的 `NeuroBridge SSH Setup`，解决组件安装问题后运行 `neurobridge ssh enable`。从同一子网连接时使用自己的 Windows 账号。
+`disable` 停止系统的 OpenSSH Server，将服务设为手动启动，并禁用标准 SSH 防火墙规则。这会断开现有 SSH 连接。从同一子网连接时使用自己的 Windows 账号。运行命令时按提示同意 Windows 管理员授权。NeuroBridge 服务可以处于停止状态，但必须已安装。
 
-OpenSSH 是 Windows 系统服务。需要关闭远程访问时，运行 `neurobridge ssh disable`，这也会停止其他 SSH 连接。后续覆盖安装会重新启用 SSH。网关的本机网页和 WebSocket 使用回环地址。
+也可以双击 `windows\remote-support.cmd` 使用交互菜单，选 `1` 启用、`2` 关闭、`3` 查询、`4` 安装并启用。源码部署从项目目录打开，安装包部署从安装目录打开。
 
 ## MSI / EXE 安装包部署
 

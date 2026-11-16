@@ -58,7 +58,7 @@ git pull --ff-only
 
 脚本会自动申请 `sudo` 权限，将当前工作树同步到 `/opt/neurobridge`、从本地源码更新 Python 包、重建算法 bridge、重新加载 systemd 单元并重启网关。网关重启会使现有 B 端连接断开，B 端需重新建连并订阅。
 
-Windows 网关安装包默认安装并启动局域网 SSH，重启后自动启动。等待 OpenSSH 下载或安装时，网关服务就绪后即可按中文提示运行 `neurobridge web` 打开本机联调页。可用 `neurobridge ssh status` 查询状态，或用 `neurobridge ssh disable` 关闭。参见 [Windows 局域网 SSH 排障](windows/README.md#局域网-ssh-排障)。
+Windows 网关安装和升级时跳过 SSH 配置。需要远程运维时，运行 `neurobridge ssh enable` 启用本机已有的 OpenSSH Server，或运行 `neurobridge ssh install` 手动安装并启用。可通过 `neurobridge ssh status` 查询状态及服务端路径。参见 [Windows 局域网 SSH 排障](windows/README.md#局域网-ssh-排障)。
 
 需要远程运维时，Ubuntu 环境准备会安装但不启用 OpenSSH；部署后执行 `sudo ./linux/setup-ssh-operations.sh` 即可交互式完成运维账号密码、私有监听地址和来源网段配置。一键配置会把当前源码同步为运维账号自己的固定项目目录 `~/NeuroBridge`。SSH 场景中的源码更新只能使用 `neurobridge-ops update`：该命令固定切换至 `master`、快进拉取批准的上游版本并部署重启，运维人员不应直接运行 Git。还可使用 `status`、`logs --follow`、`audit` 和 `restart`。`audit` 不记录密码或业务原始数据。由于该账号维护的代码随后会以 root 安装，必须把它作为网关管理员凭据管理。完整命令和回滚步骤见 [Ubuntu 网关部署与运行教程](linux/README.md#41-启用-ssh-运维入口可选) 与 [SSH 运维和录播联调指南](doc/tech/网关%20SSH%20运维与%20B%20端录播联调指南.md)。
 

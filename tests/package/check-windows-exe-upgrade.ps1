@@ -49,11 +49,43 @@ function Assert-VisibleInstallEntries {
     }
 }
 
+function Get-SshState {
+    $service = Get-CimInstance Win32_Service -Filter "Name='sshd'"
+    $rule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -PolicyStore ActiveStore -ErrorAction SilentlyContinue
+    [ordered]@{
+        State = $service.State
+        StartMode = $service.StartMode
+        Path = $service.PathName
+        Firewall = $rule.Enabled -join ','
+        RemoteAddress = if ($rule) { ($rule | Get-NetFirewallAddressFilter).RemoteAddress -join ',' }
+    } | ConvertTo-Json -Compress
+}
+
 if ((Test-Path -LiteralPath $installRoot) -or (Test-Path -LiteralPath $dataRoot) -or
     (Get-Service -Name NeuroBridge -ErrorAction SilentlyContinue)) {
     throw 'Run the EXE upgrade test on a clean, disposable Windows runner.'
 }
 Assert-VisibleInstallEntries 'before-install' 0
+
+$sshState = Get-SshState
+Invoke-Installer $Installer 'install' (Join-Path $LogDirectory 'fresh-install.log')
+Assert-VisibleInstallEntries 'fresh-install' 1
+if ((Get-SshState) -ne $sshState) {
+    throw 'Fresh EXE install changed the system SSH service or firewall rule.'
+}
+$cli = Join-Path $cliDirectory 'neurobridge.cmd'
+if (-not (Get-Service -Name sshd -ErrorAction SilentlyContinue)) {
+    $output = & $cli ssh enable
+    if ($LASTEXITCODE -ne 1 -or "$output" -notmatch 'service \(sshd\) was not found') {
+        throw "SSH enable did not report the missing service: $output"
+    }
+    if ((Get-SshState) -ne $sshState) {
+        throw 'SSH enable changed system SSH state when the service was missing.'
+    }
+}
+Invoke-Installer $Installer 'uninstall' (Join-Path $LogDirectory 'fresh-uninstall.log')
+Assert-VisibleInstallEntries 'fresh-uninstall' 0
+Remove-Item -LiteralPath $dataRoot -Recurse -Force
 
 Invoke-Installer $PreviousInstaller 'install' (Join-Path $LogDirectory 'previous-install.log')
 Assert-VisibleInstallEntries 'previous-install' 1
@@ -65,16 +97,14 @@ if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
     Stop-Service -Name sshd
     Set-Service -Name sshd -StartupType Manual
 }
+$sshState = Get-SshState
 Invoke-Installer $Installer 'install' (Join-Path $LogDirectory 'upgrade-install.log')
 Assert-VisibleInstallEntries 'upgrade-install' 1
 if ((Get-FileHash -LiteralPath $config).Hash -ne $configHash) {
     throw 'EXE upgrade changed the existing configuration.'
 }
-$sshService = Get-CimInstance Win32_Service -Filter "Name='sshd'"
-$sshListener = Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue |
-    Where-Object { $_.OwningProcess -eq $sshService.ProcessId }
-if (-not $sshListener) {
-    throw 'OpenSSH did not listen on TCP port 22 after the EXE upgrade.'
+if ((Get-SshState) -ne $sshState) {
+    throw 'EXE upgrade changed the existing system SSH service or firewall rule.'
 }
 $buildInfo = Get-Content -LiteralPath (Join-Path $installRoot 'build-info.txt')
 if ($buildInfo -notcontains "source_commit=$SourceCommit") {
@@ -107,8 +137,15 @@ if ($page.StatusCode -ne 200) {
     throw 'The installed web command returned an unavailable URL.'
 }
 Write-Output "NeuroBridge web URL verified: $url"
-neurobridge ssh status
-exit $LASTEXITCODE
+$status = neurobridge ssh status
+$status
+if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
+    if ($LASTEXITCODE -ne 0 -or -not ($status -match '^SSHD executable: ')) {
+        throw 'The installed CLI did not report the existing SSH server path.'
+    }
+} elseif ($LASTEXITCODE -ne 1 -or "$status" -notmatch 'service \(sshd\) was not found') {
+    throw 'The installed CLI did not report that SSH is missing.'
+}
 '@
 $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($check))
 $shellInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -133,9 +170,8 @@ try {
     $output = $stdout.GetAwaiter().GetResult()
     Set-Content -LiteralPath (Join-Path $LogDirectory 'ssh-status.log') -Value $output -Encoding UTF8
     Set-Content -LiteralPath (Join-Path $LogDirectory 'ssh-status-errors.log') -Value ($stderr.GetAwaiter().GetResult()) -Encoding UTF8
-    if ($shell.ExitCode -ne 0 -or $output -notmatch 'OpenSSH Server: Running \(startup: Auto\)' -or
-        $output -notmatch '(?m)^Windows SSH firewall rule: enabled=True, remote=LocalSubnet\s*$') {
-        throw 'The installer did not enable automatic, local-subnet SSH. See the status logs.'
+    if ($shell.ExitCode -ne 0) {
+        throw 'The installed CLI failed the web or SSH status check. See the status logs.'
     }
 } finally {
     $shell.Dispose()
@@ -158,6 +194,41 @@ Invoke-Installer $Installer 'install' (Join-Path $LogDirectory 'reinstall.log')
 Assert-VisibleInstallEntries 'reinstall' 1
 if ((Get-FileHash -LiteralPath $config).Hash -ne $configHash) {
     throw 'Reinstall changed the existing configuration.'
+}
+if ((Get-SshState) -ne $sshState) {
+    throw 'EXE reinstall changed the existing system SSH service or firewall rule.'
+}
+if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
+    $status = & $cli ssh status
+    $pathLines = @($status -match '^SSHD executable: ')
+    if ($LASTEXITCODE -ne 0 -or $pathLines.Count -ne 1) {
+        throw "Unable to determine the existing SSH server path: $status"
+    }
+    $serverPath = $pathLines[0] -replace '^SSHD executable: '
+    $testPath = Join-Path $LogDirectory 'missing sshd.exe'
+    $output = & $cli ssh enable $testPath
+    if ($LASTEXITCODE -ne 1 -or "$output" -notmatch 'SSH executable was not found' -or (Get-SshState) -ne $sshState) {
+        throw "SSH enable did not reject the missing executable path: $output"
+    }
+    $unregisteredPath = Join-Path $LogDirectory 'sshd.exe'
+    New-Item -ItemType File -Path $unregisteredPath | Out-Null
+    try {
+        $output = & $cli ssh enable $unregisteredPath
+        if ($LASTEXITCODE -ne 1 -or "$output" -notmatch 'does not match' -or (Get-SshState) -ne $sshState) {
+            throw "SSH enable accepted an unregistered executable: $output"
+        }
+    } finally {
+        Remove-Item -LiteralPath $unregisteredPath
+    }
+    $output = & $cli ssh enable $serverPath
+    if ($LASTEXITCODE -ne 0 -or -not ($output -match '^OpenSSH Server: Running \(startup: Auto\)') -or
+        -not ($output -match '^Windows SSH firewall rule: enabled=True, remote=LocalSubnet$')) {
+        throw "SSH enable did not use the existing executable path and local-subnet firewall rule: $output"
+    }
+    & $cli ssh install
+    if ($LASTEXITCODE -ne 0) {
+        throw 'SSH install did not reuse the existing service.'
+    }
 }
 Invoke-Installer $Installer 'uninstall' (Join-Path $LogDirectory 'reinstall-uninstall.log')
 Assert-VisibleInstallEntries 'reinstall-uninstall' 0
