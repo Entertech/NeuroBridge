@@ -28,8 +28,10 @@ def window(protocol, left, right, *, start=2400, valid=True, packets=()):
         "pleasure": 0 if is_headset else 40,
         "flow": {"meditation": 10 if is_headset else 30, "meditationTips": 1 if is_headset else 2},
         "sleep": {"state": 3 if is_headset else 2},
-        "hr": {"value": 69 if is_headset else 72},
+        "hr": {"value": 69 if is_headset else 72, "hrv": 44 if is_headset else 60},
         "pressure": 91.41 if is_headset else 32,
+        "coherence": 9 if is_headset else 30,
+        "arousal": 11 if is_headset else 70,
     }
     result = AlgorithmResult(batch.batch_id, "test", start, start + 600, metrics, valid,
                              () if valid else ("ALGORITHM_ERROR",))
@@ -60,16 +62,29 @@ class EegAlignmentTests(unittest.IsolatedAsyncioTestCase):
         metrics = actual.algorithm_result.metrics
         self.assertEqual(metrics["eeg"]["wave"], {"left": [-570, 0, 570], "right": [-105, 0, 105]})
         self.assertEqual(metrics["eeg"]["quality"], 1)
-        self.assertEqual(metrics["eeg"]["bandPower"], {"alpha": 21, "gamma": None})
-        self.assertEqual(metrics["attention"], 21)
-        self.assertEqual(metrics["relaxation"], 59)
+        self.assertEqual(metrics["eeg"]["bandPower"], {"alpha": 38, "gamma": None})
+        self.assertEqual(metrics["attention"], 38)
+        self.assertEqual(metrics["relaxation"], 42)
         self.assertEqual(metrics["pleasure"], 0)
-        self.assertEqual(metrics["flow"], {"meditation": 11, "meditationTips": 1})
+        self.assertEqual(metrics["flow"], {"meditation": 28.5, "meditationTips": 1})
         self.assertEqual(metrics["sleep"], {"state": 3})
-        self.assertEqual(metrics["hr"], {"value": 69})
+        self.assertEqual(metrics["hr"], {"value": 69, "hrv": 44})
         self.assertEqual(metrics["pressure"], 91.41)
+        self.assertEqual(metrics["coherence"], 9)
+        self.assertEqual(metrics["arousal"], 11)
         self.assertEqual(original.algorithm_result.metrics["eeg"]["wave"]["left"], [-100, 0, 100])
         self.assertIs(actual.batch, original.batch)
+
+    async def test_preserves_eeg_scores_within_tolerance_and_zero_reference(self):
+        cache = self.cache()
+        reference = window("headband_ble", [-123, -120], [])
+        reference.algorithm_result.metrics["flow"]["meditation"] = 0
+        await cache.align_result(reference)
+        headset = window("headset_rev181", [-1000, -800], [])
+        headset.algorithm_result.metrics["attention"] = 39
+        result = await cache.align_result(headset)
+        self.assertEqual(result.algorithm_result.metrics["attention"], 39)
+        self.assertEqual(result.algorithm_result.metrics["flow"]["meditation"], 10)
 
     async def test_matches_time_across_receive_windows_and_leaves_unmatched_points(self):
         cache = self.cache(wait_ms=60)

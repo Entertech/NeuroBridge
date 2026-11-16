@@ -187,11 +187,8 @@ class EegAlignmentCache:
                     cursor = choice + 1
                     self._used_reference[channel] = target_pos
                     matched += 1
-                    tolerance = abs(target) * self._ratio
-                    lower = max(-_WAVE_LIMIT, target - tolerance)
-                    upper = min(_WAVE_LIMIT, target + tolerance)
-                    if not lower <= samples[index] <= upper:
-                        corrected[index] = min(upper, max(lower, samples[index]))
+                    corrected[index] = self._clamp_to_reference(samples[index], target)
+                    if corrected[index] != samples[index]:
                         changed += 1
                 if changed:
                     corrected_wave[channel] = corrected
@@ -244,9 +241,15 @@ class EegAlignmentCache:
             value, target = values.get(field), reference.get(field)
             # Zero is also the SDK placeholder when a metric has not been calculated.
             if (type(value) in (int, float) and type(target) in (int, float)
-                    and value and target and isfinite(value) and isfinite(target) and value != target):
-                updates[field] = value + (target - value) * self._ratio
+                    and value and target and isfinite(value) and isfinite(target)):
+                corrected = self._clamp_to_reference(value, target)
+                if corrected != value:
+                    updates[field] = corrected
         return updates
+
+    def _clamp_to_reference(self, value: float, target: float) -> float:
+        tolerance = abs(target) * self._ratio
+        return min(target + tolerance, max(target - tolerance, value))
 
     def _log_decision(self, result: WindowResult, reason: str, reference: _Reference | None,
                       *, paired_samples: dict[str, int] | None = None,

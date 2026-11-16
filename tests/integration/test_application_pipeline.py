@@ -164,11 +164,17 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         headset_window, = headset.application.northbound.events
         headband_window, = headband.application.northbound.events
         self.assertEqual(headset_window.result.batch.signals[0].samples, original[2:])
-        expected = {**headset_metrics, "attention": 24,
-                    "eeg": {**headset_metrics["eeg"], "bandPower": {"alpha": 19},
+        expected = {**headset_metrics, "attention": 76.95,
+                    "eeg": {**headset_metrics["eeg"], "bandPower": {"alpha": 36.1},
                             "wave": {"left": [-570, 0, 570], "right": [-105, 0, 105]}}}
         self.assertEqual(headset_window.result.algorithm_result.metrics, expected)
         self.assertEqual(headband_window.result.algorithm_result.metrics, headband_metrics)
+        await GatewayNorthboundSink(headset.gateway).publish(headset_window)
+        session = ClientSession()
+        self.assertEqual(headset.gateway.get_latest(session, {"streams": ["eeg"]})["payload"]["algorithm"],
+                         {"attention": expected["attention"], "eeg": expected["eeg"]})
+        self.assertEqual(headset.gateway.get_latest(session, {"streams": ["hr"]})["payload"]["algorithm"],
+                         {"hr": headset_metrics["hr"], "pressure": headset_metrics["pressure"]})
         self.assertEqual(headset_metrics["eeg"]["wave"]["left"], [-100, 0, 100])
         recording_id = headset.gateway.store.recording_id
         await headset.gateway.recording_repository.close_session(recording_id)

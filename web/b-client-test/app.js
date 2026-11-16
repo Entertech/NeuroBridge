@@ -314,6 +314,7 @@ function updateAlgorithmOverview(data, panel) {
     if (metric.timestamp !== null && result.timestampMs < metric.timestamp) continue;
     metric.timestamp = result.timestampMs;
     const valid = result.valid !== false && Number.isFinite(value);
+    if (valid && mode === "live" && metric.stream === "eeg" && value === 0) continue;
     metric.output.textContent = valid ? `${Number(value.toPrecision(8))}${metric.unit}` : "—";
     const status = result.valid === false ? "无效窗口" : !valid ? "算法未提供" : query ? "单次查询" : "连续订阅";
     metric.meta.textContent = `${status} · ${algorithmTimeFormat.format(result.timestampMs)}`;
@@ -328,6 +329,14 @@ function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {
   group.status.textContent = status;
   for (const { path, output } of group.metrics) {
     const value = path.reduce((node, key) => node?.[key], algorithm);
+    const continuousEeg = ["attention", "relaxation", "pleasure"].includes(path[0])
+      || (path[0] === "flow" && path[1] === "meditation")
+      || (path[0] === "eeg" && path[1] === "bandPower");
+    if (validity === "valid" && group.stream === "eeg" && continuousEeg && value === 0) {
+      if (output.textContent !== "—") output.title = "沿用上次有效值";
+      continue;
+    }
+    output.removeAttribute("title");
     if (typeof value === "boolean") output.textContent = value ? "是" : "否";
     else output.textContent = Number.isFinite(value) ? String(value) : "—";
   }
