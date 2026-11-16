@@ -80,8 +80,8 @@ jobs:
         shell: powershell
         env:
           TARGET_ID: ${{ matrix.id }}
-          # Verify upgrade from the Windows 0.4.7 candidate.
-          PREVIOUS_SOURCE: 87dddc7c4a61d6b0e9ac6886df0d68949ba47fd1
+          # Verify upgrade from the Windows 0.4.8 candidate.
+          PREVIOUS_SOURCE: c09d4efa70e22f398ba3b4c69a604a63a38968e7
         run: |
           $ErrorActionPreference = 'Stop'
           $previous = Join-Path $env:RUNNER_TEMP 'neurobridge-previous-source'

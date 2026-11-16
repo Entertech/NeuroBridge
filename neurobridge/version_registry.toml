@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.4.8"
+version = "0.4.9"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -94,6 +94,13 @@ to_version = "0.4.8"
 impact = "patch"
 compatibility = "The Windows test installer upgrades version 0.4.7 and retains ProgramData. The northbound protocol is unchanged."
 evidence = "Use a configurable 300 ms raw EEG timeout for each source before dual-device calibration, and distinguish missing EEG and HR results in the test console."
+
+[[application_release_changes]]
+from_version = "0.4.8"
+to_version = "0.4.9"
+impact = "patch"
+compatibility = "Windows EXE upgrades 0.4.8 with the existing configuration. The two previous calibration timeout keys remain readable and the wire protocol is unchanged."
+evidence = "Adjust the Windows headset EEG waveform and EEG-derived metrics after independent algorithm evaluation. Retain source bytes, log raw EEG saturation, and align available output windows without waiting."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
@@ -2289,3 +2296,14 @@ change_state = "unlocked"
 base_locked_release = "0.2"
 target_external_release = "0.3"
 reason = "实收帧继续作为原始录制和北向原始数据的依据。"
+
+[[change_records]]
+id = "2026-11-16-windows-headset-eeg-output-alignment"
+date = "2026-11-16"
+scope = "headset_eeg_algorithm_output"
+summary = "Windows 双设备在独立计算后，用已完成的同窗口或紧邻上一窗口头环结果微调耳机 EEG 波形和实时 EEG 指标。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "沿用既有波形字段和单位，所录算法结果与实时输出一致，原始字节保持实收内容。"

@@ -55,8 +55,7 @@ class ApplicationService:
         persistence_timeout_ms: int = 1000,
         shutdown_timeout_ms: int = 5000,
         observe_batch: Callable[[ParsedSignalBatch], None] | None = None,
-        observe_raw_eeg: Callable[[RawChunk], None] | None = None,
-        prepare_eeg_frames: Callable[[ParsedSignalBatch, tuple[DeviceFrame, ...]], Awaitable[tuple[DeviceFrame, ...]]] | None = None,
+        align_eeg_result: Callable[[WindowResult], WindowResult] | None = None,
     ) -> None:
         self.device_protocol = device_protocol
         self.requires_algorithm_to_start = requires_algorithm_to_start
@@ -70,8 +69,7 @@ class ApplicationService:
         self.recording = recording
         self.control = control
         self.observe_batch = observe_batch
-        self.observe_raw_eeg = observe_raw_eeg
-        self.prepare_eeg_frames = prepare_eeg_frames
+        self.align_eeg_result = align_eeg_result
         if min(algorithm_queue_size, persistence_timeout_ms, shutdown_timeout_ms) <= 0:
             raise ValueError("Pipeline limits must be positive")
         self.persistence_timeout_ms = persistence_timeout_ms
@@ -305,8 +303,6 @@ class ApplicationService:
         if chunk.dropped_before_bytes:
             outcome = replace(outcome, signals=tuple(replace(signal, valid=False,
                 invalid_reasons=tuple(dict.fromkeys((*signal.invalid_reasons, "SOURCE_QUEUE_GAP")))) for signal in outcome.signals))
-        if self.observe_raw_eeg is not None and any(signal.signal_type == "eeg" and signal.valid for signal in outcome.signals):
-            self.observe_raw_eeg(chunk)
         self.diagnostics["frames"] += len(outcome.frames)
         if outcome.frames:
             self._last_frame_monotonic = time.monotonic()
@@ -490,33 +486,25 @@ class ApplicationService:
         elif self._algorithm_state in {AlgorithmState.READY, AlgorithmState.ERROR}:
             evaluation_started = time.monotonic()
             frames = tuple(self._frames[ref] for ref in batch.frame_refs if ref in self._frames)
-            prepared_frames = frames
-            if self.prepare_eeg_frames is not None:
-                prepared_frames = await self.prepare_eeg_frames(batch, frames)
-                if batch.connection_session_id != self._connection_session_id:
-                    LOG.debug("EEG alignment input discarded: batchId=%s reason=CONNECTION_SESSION_ENDED", batch.batch_id)
-                    return WindowResult(batch, self.aggregator._invalid(batch.batch_id, "CONNECTION_SESSION_ENDED"),
-                                        "live", self.clock_ms(), False)
-            algorithm_input = self.mapper.map(batch, prepared_frames)
-            if prepared_frames is not frames:
-                algorithm_input = replace(algorithm_input, mapping_version="2")
-            algorithm_started = time.monotonic()
+            algorithm_input = self.mapper.map(batch, frames)
             result = await self.aggregator.evaluate(
                 batch,
                 algorithm_input,
                 persistence_guaranteed=persistence_guaranteed,
                 on_late_result=lambda value: self._persist_late(batch, value),
             )
-            if self.prepare_eeg_frames is not None:
-                LOG.debug("Headset EEG algorithm response: batchId=%s windowEndMs=%s mappingVersion=%s "
+            if self.align_eeg_result is not None:
+                LOG.debug("EEG algorithm response: source=%s batchId=%s windowEndMs=%s mappingVersion=%s "
                           "valid=%s invalidReasons=%s evaluationMs=%s",
-                          batch.batch_id, batch.window_end_ms, algorithm_input.mapping_version,
+                          batch.source_type, batch.batch_id, batch.window_end_ms, algorithm_input.mapping_version,
                           result.algorithm_result.valid, result.algorithm_result.invalid_reasons,
-                          round((time.monotonic() - algorithm_started) * 1000))
+                          round((time.monotonic() - evaluation_started) * 1000))
             duration_ms = int((time.monotonic() - evaluation_started) * 1000)
             self.diagnostics["algorithm_duration_ms"] += duration_ms
             self.diagnostics["algorithm_evaluations"] += 1
             self.diagnostics["algorithm_max_duration_ms"] = max(self.diagnostics["algorithm_max_duration_ms"], duration_ms)
+            if self.align_eeg_result is not None and batch.connection_session_id == self._connection_session_id:
+                result = self.align_eeg_result(result)
         else:
             timestamp = self.clock_ms()
             unavailable = AlgorithmResult(
