@@ -65,11 +65,13 @@ class DeviceStrategyConfigurationTests(unittest.TestCase):
             path.write_text(BLUETOOTH_DATA_SOURCE, encoding="utf-8")
             defaults = load(path).data_source
             self.assertEqual((defaults.eeg_alignment_reference_batches, defaults.eeg_alignment_clock_packets), (16, 4096))
+            self.assertEqual(defaults.eeg_alignment_output_wait_ms, 800)
             path.write_text(BLUETOOTH_DATA_SOURCE + "eeg_alignment_reference_batches = 8\neeg_alignment_clock_packets = 512\n",
                             encoding="utf-8")
             configured = load(path).data_source
             self.assertEqual((configured.eeg_alignment_reference_batches, configured.eeg_alignment_clock_packets), (8, 512))
-            for key, value in (("eeg_alignment_reference_batches", 0), ("eeg_alignment_clock_packets", 4097)):
+            for key, value in (("eeg_alignment_reference_batches", 0), ("eeg_alignment_clock_packets", 4097),
+                               ("eeg_alignment_output_wait_ms", 1201)):
                 with self.subTest(key=key):
                     path.write_text(BLUETOOTH_DATA_SOURCE + f"{key} = {value}\n", encoding="utf-8")
                     with self.assertRaisesRegex(ValueError, key):

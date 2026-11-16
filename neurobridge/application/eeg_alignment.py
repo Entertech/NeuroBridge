@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from bisect import bisect_left
 from collections import Counter, deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from math import isfinite
 from statistics import median
@@ -59,11 +59,13 @@ def _has_all_ff_eeg_packet(batch: ParsedSignalBatch) -> bool:
 
 
 class EegAlignmentCache:
-    def __init__(self, *, percent: int, window_ms: int = 600, wait_ms: int = 300,
-                 reference_batches: int = 16, clock_packets: int = 4096) -> None:
+    def __init__(self, *, percent: int, window_ms: int = 600, wait_ms: int = 800,
+                 reference_batches: int = 16, clock_packets: int = 4096,
+                 clock_ms: Callable[[], int] | None = None) -> None:
         self._ratio = percent / 100
         self._window_ms = window_ms
-        self._wait_seconds = wait_ms / 1000
+        self._wait_ms = wait_ms
+        self._clock_ms = clock_ms or (lambda: time.time_ns() // 1_000_000)
         self._clock_packets = clock_packets
         self._clocks: dict[str, tuple[str, EegPacketClock]] = {}
         self._references: deque[_Reference] = deque(maxlen=reference_batches)
@@ -133,15 +135,18 @@ class EegAlignmentCache:
         if band_session is None:
             self._log_decision(result, "no_reference_window", None)
             return result
-        if self._wait_seconds:
+        wait_started = time.monotonic()
+        wait_ms = min(self._wait_ms, batch.window_end_ms + self._wait_ms - self._clock_ms())
+        if wait_ms > 0:
             try:
-                async with asyncio.timeout(self._wait_seconds):
+                async with asyncio.timeout(wait_ms / 1000):
                     while self._clocks.get("headband_ble") is band_session and not self._reference_covers(
                         batch.window_end_ms, positions, headset_time, band_session[1],
                     ):
                         await self._reference_changed.wait()
             except TimeoutError:
                 pass
+        waited_ms = round((time.monotonic() - wait_started) * 1000)
         if self._clocks.get(batch.device_protocol) is not active or self._clocks.get("headband_ble") is not band_session:
             return result
 
@@ -149,7 +154,7 @@ class EegAlignmentCache:
         same_window = tuple(ref for ref in nearby if ref.window_end_ms == batch.window_end_ms)
         reference = next((ref for ref in reversed(same_window) if ref.raw_eeg_all_ff), None)
         if reference is not None:
-            self._log_decision(result, "headband_raw_eeg_all_ff", reference)
+            self._log_decision(result, "headband_raw_eeg_all_ff", reference, waited_ms=waited_ms)
             return result
         reference = next((ref for ref in reversed(same_window) if ref.channels), None)
         reference_metrics = reference.metrics if reference is not None else {}
@@ -158,23 +163,26 @@ class EegAlignmentCache:
         corrected_wave = {}
         paired_samples = {}
         changed_samples = {}
+        dropped_samples = {}
         matched_refs = set()
         if headset_time is not None and band_time is not None and positions:
             allowance = max(headset_time.step_ms, band_time.step_ms) / 2
             for channel, samples in channels.items():
                 if len(samples) != len(positions):
                     continue
-                targets = sorted(
+                references = sorted(
                     (pos, target, ref.batch_id)
                     for ref in nearby if len(ref.channels.get(channel, ())) == len(ref.positions)
                     for pos, target in zip(ref.positions, ref.channels.get(channel, ()))
-                    if pos > self._used_reference.get(channel, -1)
                 )
+                if not references:
+                    continue
+                used_position = self._used_reference.get(channel, -1)
+                targets = [point for point in references if point[0] > used_position]
                 target_positions = [pos for pos, _, _ in targets]
                 cursor = 0
-                corrected = list(samples)
+                corrected = []
                 changed = 0
-                matched = 0
                 for index, pos in enumerate(positions):
                     target_index = (headset_time.at(pos) - band_time.origin_ms) / band_time.step_ms
                     right = bisect_left(target_positions, target_index, lo=cursor)
@@ -186,14 +194,16 @@ class EegAlignmentCache:
                     matched_refs.add(ref_id)
                     cursor = choice + 1
                     self._used_reference[channel] = target_pos
-                    matched += 1
-                    corrected[index] = self._clamp_to_reference(samples[index], target)
-                    if corrected[index] != samples[index]:
+                    value = self._clamp_to_reference(samples[index], target)
+                    corrected.append(value)
+                    if value != samples[index]:
                         changed += 1
-                if changed:
+                dropped = len(samples) - len(corrected)
+                if changed or dropped:
                     corrected_wave[channel] = corrected
-                paired_samples[channel] = matched
+                paired_samples[channel] = len(corrected)
                 changed_samples[channel] = changed
+                dropped_samples[channel] = dropped
 
         scores = self._align_values(metrics, reference_metrics, _SCORES)
         flow = _fields(metrics.get("flow"))
@@ -204,7 +214,8 @@ class EegAlignmentCache:
         if not (corrected_wave or scores or flow_score or band_power):
             reason = "matched_no_change" if matched_refs else "no_time_matched_samples"
             self._log_decision(result, reason, reference, paired_samples=paired_samples,
-                               changed_samples=changed_samples, waveform_refs=tuple(sorted(matched_refs)))
+                               changed_samples=changed_samples, dropped_samples=dropped_samples,
+                               waited_ms=waited_ms, waveform_refs=tuple(sorted(matched_refs)))
             return result
 
         updates = dict(scores)
@@ -219,20 +230,22 @@ class EegAlignmentCache:
             updates["eeg"] = updated_eeg
         self._log_decision(
             result, "applied", reference, paired_samples=paired_samples, changed_samples=changed_samples,
-            waveform_refs=tuple(sorted(matched_refs)),
+            dropped_samples=dropped_samples, waited_ms=waited_ms, waveform_refs=tuple(sorted(matched_refs)),
             fields=(*scores, *("flow." + field for field in flow_score), *("bandPower." + field for field in band_power)),
         )
         return replace(result, algorithm_result=replace(result.algorithm_result, metrics={**metrics, **updates}))
 
     def _reference_covers(self, window_end_ms: int, positions: tuple[int, ...],
                           headset_time: EegSampleTime | None, band_clock: EegPacketClock) -> bool:
-        latest = self._references[-1] if self._references else None
-        if latest is None or latest.window_end_ms < window_end_ms:
-            return False
+        next_end = window_end_ms + self._window_ms
+        latest = next((ref for ref in reversed(self._references)
+                       if window_end_ms <= ref.window_end_ms <= next_end and (ref.channels or ref.raw_eeg_all_ff)), None)
+        if latest is None:
+            return bool(self._references and self._references[-1].window_end_ms > next_end)
         band_time = band_clock.estimate()
-        if latest.raw_eeg_all_ff or not positions or not latest.positions or headset_time is None or band_time is None:
+        if latest.raw_eeg_all_ff or not positions or headset_time is None or band_time is None:
             return True
-        return band_time.at(latest.positions[-1]) + band_time.step_ms / 2 >= headset_time.at(positions[-1])
+        return bool(latest.positions and band_time.at(latest.positions[-1]) + band_time.step_ms / 2 >= headset_time.at(positions[-1]))
 
     def _align_values(self, values: Mapping[str, object], reference: Mapping[str, object],
                       fields: tuple[str, ...]) -> dict[str, float]:
@@ -253,7 +266,8 @@ class EegAlignmentCache:
 
     def _log_decision(self, result: WindowResult, reason: str, reference: _Reference | None,
                       *, paired_samples: dict[str, int] | None = None,
-                      changed_samples: dict[str, int] | None = None, waveform_refs: tuple[str, ...] = (),
+                      changed_samples: dict[str, int] | None = None, dropped_samples: dict[str, int] | None = None,
+                      waited_ms: int = 0, waveform_refs: tuple[str, ...] = (),
                       fields: tuple[str, ...] = ()) -> None:
         now = time.monotonic()
         if now - self._last_log_at >= _LOG_INTERVAL_SECONDS:
@@ -267,7 +281,8 @@ class EegAlignmentCache:
         LOG.log(level,
                 "Headset EEG alignment decision: batchId=%s headsetSession=%s referenceBatchId=%s "
                 "windowStartMs=%s windowEndMs=%s stage=algorithm_output reason=%s "
-                "waveTolerancePercent=%g pairedSamples=%s changedSamples=%s waveformReferenceBatchIds=%s fields=%s",
+                "waveTolerancePercent=%g pairedSamples=%s changedSamples=%s droppedSamples=%s waitedMs=%s "
+                "waveformReferenceBatchIds=%s fields=%s",
                 batch.batch_id, batch.connection_session_id, reference.batch_id if reference else None,
                 batch.window_start_ms, batch.window_end_ms, reason, self._ratio * 100,
-                paired_samples, changed_samples, waveform_refs, fields)
+                paired_samples, changed_samples, dropped_samples, waited_ms, waveform_refs, fields)

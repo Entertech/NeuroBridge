@@ -34,8 +34,8 @@ window_interval_ms = 600
 stale_after_ms = 1800
 # 双设备 EEG 输出校准默认 5%，设置为 0 关闭，最大 10%。
 eeg_alignment_percent = 5
-# 耳机算法输出最多等待头环结果的时间，单位为毫秒。设为 0 即刻使用已完成结果。
-eeg_alignment_output_wait_ms = 300
+# 从耳机窗口结束算起，最多等待头环结果 800 毫秒。设为 0 即刻使用已完成结果。
+eeg_alignment_output_wait_ms = 800
 # 校准头环参考批次上限与每路时间模型的包观测记录上限。写满后从最旧记录开始淘汰。
 eeg_alignment_reference_batches = 16
 eeg_alignment_clock_packets = 4096

@@ -11,6 +11,7 @@ from .configuration.migration import migrate
 
 DEFAULT_ALGORITHM_COMMAND = ("/usr/local/lib/neurobridge/neurobridge_affective_bridge",)
 DEFAULT_EEG_ALIGNMENT_PERCENT = 5
+DEFAULT_EEG_ALIGNMENT_OUTPUT_WAIT_MS = 800
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,7 @@ class DataSourceConfig:
     stale_after_ms: int = 1800
     include_headband: bool = False
     eeg_alignment_percent: int = DEFAULT_EEG_ALIGNMENT_PERCENT
-    eeg_alignment_output_wait_ms: int = 300
+    eeg_alignment_output_wait_ms: int = DEFAULT_EEG_ALIGNMENT_OUTPUT_WAIT_MS
     eeg_alignment_reference_batches: int = 16
     eeg_alignment_clock_packets: int = 4096
 
@@ -352,9 +353,9 @@ def load(
     )
     if not 0 <= eeg_alignment_percent <= 10:
         raise ValueError("data_source.eeg_alignment_percent must be between 0 and 10")
-    eeg_alignment_output_wait_ms = data_source.get("eeg_alignment_output_wait_ms", 300)
-    if not 0 <= eeg_alignment_output_wait_ms <= window_interval_ms:
-        raise ValueError("data_source.eeg_alignment_output_wait_ms must be between 0 and window_interval_ms")
+    eeg_alignment_output_wait_ms = data_source.get("eeg_alignment_output_wait_ms", DEFAULT_EEG_ALIGNMENT_OUTPUT_WAIT_MS)
+    if not 0 <= eeg_alignment_output_wait_ms <= 2 * window_interval_ms:
+        raise ValueError("data_source.eeg_alignment_output_wait_ms must be between 0 and twice window_interval_ms")
     eeg_alignment_reference_batches = data_source.get("eeg_alignment_reference_batches", 16)
     if not 1 <= eeg_alignment_reference_batches <= 16:
         raise ValueError("data_source.eeg_alignment_reference_batches must be between 1 and 16")

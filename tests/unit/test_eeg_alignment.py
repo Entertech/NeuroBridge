@@ -39,8 +39,8 @@ def window(protocol, left, right, *, start=2400, valid=True, packets=()):
 
 
 class EegAlignmentTests(unittest.IsolatedAsyncioTestCase):
-    def cache(self, wait_ms=0):
-        cache = EegAlignmentCache(percent=5, wait_ms=wait_ms)
+    def cache(self, wait_ms=0, clock_ms=lambda: 3000):
+        cache = EegAlignmentCache(percent=5, wait_ms=wait_ms, clock_ms=clock_ms)
         cache.set_session("headset_rev181", "session")
         cache.set_session("headband_ble", "session")
         return cache
@@ -86,21 +86,34 @@ class EegAlignmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.algorithm_result.metrics["attention"], 39)
         self.assertEqual(result.algorithm_result.metrics["flow"]["meditation"], 10)
 
-    async def test_matches_time_across_receive_windows_and_leaves_unmatched_points(self):
+    async def test_matches_time_across_receive_windows_and_drops_unpaired_extrema(self):
         cache = self.cache(wait_ms=60)
         await self.warm(cache)
-        original = window("headset_rev181", [-1000, -800, 10, 11, 12, 13], [],
+        original = window("headset_rev181", [-1000, -800, 10, -1950, 1900, 13], [],
                           packets=[(300, 2400, 42), (301, 2412, 42)])
         # Simulate a BLE batch that arrived together late enough to end up in the next receive window.
         reference = window("headband_ble", [-123, -120, 10], [], start=3000, packets=[(65735, 3000, 42)])
         pending = asyncio.create_task(cache.align_result(original))
         await asyncio.sleep(0)
         self.assertFalse(pending.done())
+        # A BLE window with only HR or no usable waveform must not release the wait.
+        await cache.align_result(window("headband_ble", [], [], start=2400))
+        await asyncio.sleep(0)
+        self.assertFalse(pending.done())
         await cache.align_result(reference)
         actual = await pending
-        self.assertEqual(actual.algorithm_result.metrics["eeg"]["wave"]["left"], [-129.15, -126.0, 10, 11, 12, 13])
+        self.assertEqual(actual.algorithm_result.metrics["eeg"]["wave"]["left"], [-129.15, -126.0, 10])
+        self.assertEqual(original.algorithm_result.metrics["eeg"]["wave"]["left"][3:5], [-1950, 1900])
+        self.assertIs(actual.batch, original.batch)
         # Adjacent waveform data does not supply a reference for window-level scores.
         self.assertEqual(actual.algorithm_result.metrics["attention"], 20)
+
+    async def test_old_windows_do_not_accumulate_wait_and_no_reference_retains_waveform(self):
+        cache = self.cache(wait_ms=800, clock_ms=lambda: 3850)
+        await self.warm(cache)
+        headset = window("headset_rev181", [-1000, -800, 102], [], packets=[(300, 2400, 42)])
+        result = await asyncio.wait_for(cache.align_result(headset), 0.1)
+        self.assertIs(result, headset)
 
     async def test_leaves_flat_channels_and_invalid_output_untouched(self):
         cache = self.cache()
