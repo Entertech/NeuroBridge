@@ -52,7 +52,8 @@ pdf_artifact_name = "windows.pdf"
             self.assertEqual(args[-1], f"{baseline}:{release_preflight.REGISTRY_PATH}")
             return registry.replace('version = "1.2"', 'version = "1.1"')
 
-        with patch.object(release_preflight, "run", side_effect=git):
+        with patch.object(release_preflight, "run", side_effect=git), \
+             patch("tools.release_pipeline.run", side_effect=git):
             plan = release_preflight.release_plan(source, baseline)
 
         self.assertEqual(plan["sourceCommit"], source)

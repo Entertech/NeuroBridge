@@ -291,11 +291,12 @@ class Train:
         return {'status': secret_status, 'notConfirmed': missing, 'unreadableScopes': unreadable}
 
     def package_scope(self, candidate: str, requested: str = "") -> dict:
-        from tools.release_pipeline import matrix, release_base, system_version
+        from tools.release_pipeline import matrix, release_base, release_config_at, system_version
         from tools.release_scope import scope_for
 
         base = release_base(self.repository, report=False)
-        baselines = {system_version(target): base for target in matrix()}
+        config = release_config_at(candidate)
+        baselines = {system_version(target): base for target in matrix(config)}
         state = names(self.config, version_at(base))['state']
         ref = f'refs/heads/{state}'
         if self.ref(ref):
@@ -306,8 +307,8 @@ class Train:
             previous = record.get('packageScope')
             if previous is not None:
                 for system in baselines.keys() - set(previous['systems']):
-                    baselines[system] = require_sha(previous['baseCommits'][system])
-        return scope_for(candidate, baselines, requested)
+                    baselines[system] = require_sha(previous['baseCommits'].get(system, base))
+        return scope_for(candidate, baselines, requested, config=config)
 
     def plan(self, head: str, systems: str = "") -> dict:
         from tools.release_preflight import release_plan
@@ -653,11 +654,12 @@ class Train:
         self.mutable()
         default, _ = self.default(); self.protection(default)
         record = self.required_record()
-        from tools.release_pipeline import matrix, select_targets
+        from tools.release_pipeline import matrix, release_config_at, select_targets
         recorded_scope = record.get('packageScope')
         recorded_systems = package_systems(record)
         if systems and (recorded_scope or record.get('packageRunId') or record.get('artifact')):
-            if select_targets(matrix(), systems) != select_targets(matrix(), recorded_systems):
+            targets = matrix(release_config_at(record['candidate']))
+            if select_targets(targets, systems) != select_targets(targets, recorded_systems):
                 raise ValueError('requested systems differ from the recorded package scope')
         if record.get('finalizationPR') and self.tag() and self.pr(record['finalizationPR'])['state'] == 'MERGED':
             return self.verify()
@@ -711,12 +713,14 @@ class Train:
     def record_artifact(self, directory: Path, artifact_id: int):
         self.mutable()
         record = self.required_record()
-        from tools.release_pipeline import matrix, select_targets
+        from tools.release_pipeline import matrix, release_config_at, select_targets
         archives = list(directory.glob('*.zip'))
         if len(archives) != 1:
             raise ValueError("one downloaded verified release ZIP is required")
         systems = package_systems(record)
-        receipt = artifact_receipt(archives[0], self.version, record['candidate'], select_targets(matrix(), systems))
+        candidate = record['candidate']
+        targets = select_targets(matrix(release_config_at(candidate)), systems)
+        receipt = artifact_receipt(archives[0], self.version, candidate, targets)
         remote = api(f'repos/{self.repository}/actions/artifacts/{artifact_id}')
         if remote['expired'] or remote['name'] != 'verified-release-'+record['candidate']:
             raise ValueError("uploaded Artifact identity or retention is invalid")
@@ -928,10 +932,12 @@ def main():
         if args.operation == 'check':
             result = source_check(args.branch, args.base, args.head, args.event)
         elif args.operation == 'verify-package':
-            from tools.release_pipeline import matrix, select_targets
+            from tools.release_pipeline import matrix, release_config_at, select_targets
             archives = list(args.directory.glob('*.zip'))
             if len(archives) != 1: raise ValueError('one delivery ZIP required')
-            result = artifact_receipt(archives[0], args.version, args.candidate, select_targets(matrix(), args.systems))
+            candidate = require_sha(args.candidate)
+            targets = select_targets(matrix(release_config_at(candidate)), args.systems)
+            result = artifact_receipt(archives[0], args.version, candidate, targets)
         else:
             train = Train(args.version, args.execute)
             train.operation = args.operation

@@ -23,7 +23,8 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = tomllib.loads((ROOT / "release/release_matrix.toml").read_text(encoding="utf-8"))
+MATRIX_PATH = "release/release_matrix.toml"
+CONFIG = tomllib.loads((ROOT / MATRIX_PATH).read_text(encoding="utf-8"))
 REGISTRY = ROOT / "neurobridge/version_registry.toml"
 # Only software business source requires an application bump. CI, packaging,
 # installation scripts, dependency manifests, docs and registry bookkeeping
@@ -46,6 +47,10 @@ def run(*args: str) -> str:
     # Git paths and the version registry may contain Chinese text. Decode
     # explicitly instead of trusting the platform's locale.
     return subprocess.check_output(args, cwd=ROOT, text=True, encoding="utf-8", stderr=subprocess.PIPE).strip()
+
+
+def release_config_at(commit: str) -> dict:
+    return tomllib.loads(run("git", "--no-replace-objects", "show", f"{commit}:{MATRIX_PATH}"))
 
 
 def sha256(path: Path) -> str:

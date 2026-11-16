@@ -10,7 +10,7 @@ import subprocess
 import tomllib
 
 from .external_document_package import collect_external_documents
-from .release_pipeline import matrix, run, save_json, select_targets, system_version
+from .release_pipeline import matrix, release_config_at, run, save_json, select_targets, system_version
 
 
 REGISTRY_PATH = "neurobridge/version_registry.toml"
@@ -21,7 +21,7 @@ def release_plan(head: str, base: str) -> dict:
     baseline = run("git", "rev-parse", "--verify", "--end-of-options", f"{base}^{{commit}}")
     registry = tomllib.loads(run("git", "show", f"{source}:{REGISTRY_PATH}"))
     old_registry = tomllib.loads(run("git", "show", f"{baseline}:{REGISTRY_PATH}"))
-    config = tomllib.loads(run("git", "show", f"{source}:release/release_matrix.toml"))
+    config = release_config_at(source)
 
     def file_exists(path: str) -> bool:
         try:

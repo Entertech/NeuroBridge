@@ -255,29 +255,36 @@ assert suite.countTestCases() > 0
             ensure_candidate.assert_not_called()
 
     def test_release_retry_refuses_a_different_system_selection(self):
+        from tools.release_pipeline import CONFIG as release_config
         obj = train.Train('1.2.3', True)
         record = {'candidate': GOOD, 'review': {'sha': GOOD}, 'packageRunId': '12',
                   'packageScope': {'systems': ['windows-11']}}
         with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'default', return_value=('master', OTHER)), \
              mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'required_record', return_value=record), \
+             mock.patch('tools.release_pipeline.release_config_at', return_value=release_config), \
              mock.patch.object(obj, 'save') as save:
             with self.assertRaisesRegex(ValueError, 'differ from the recorded package scope'):
                 obj.begin_release('windows-10')
         save.assert_not_called()
 
     def test_package_scope_carries_forward_undelivered_system_baselines(self):
+        from tools.release_pipeline import CONFIG as release_config
         obj = train.Train('1.2.3')
         older = '3' * 40
         previous = {'candidate': GOOD, 'repository': obj.repository,
                     'packageScope': {'systems': ['windows-10'],
                                      'baseCommits': {'windows-10': older, 'windows-11': older, 'kylin-v10': older}}}
         with mock.patch('tools.release_pipeline.release_base', return_value=GOOD), \
+             mock.patch('tools.release_pipeline.release_config_at', return_value=release_config), \
              mock.patch.object(train, 'version_at', return_value='1.2.2'), \
              mock.patch.object(obj, 'ref', return_value=GOOD), mock.patch.object(obj, 'fetch', return_value=GOOD), \
              mock.patch.object(train, 'run', return_value=json.dumps(previous)), \
              mock.patch('tools.release_scope.scope_for') as scope:
             obj.package_scope(OTHER, 'kylin-v10')
-        scope.assert_called_once_with(OTHER, {'windows-10': GOOD, 'windows-11': older, 'kylin-v10': older}, 'kylin-v10')
+        scope.assert_called_once_with(
+            OTHER, {'windows-10': GOOD, 'windows-11': older, 'kylin-v10': older},
+            'kylin-v10', config=release_config,
+        )
 
     def test_merge_uses_preserving_method_and_expected_head_without_bypass(self):
         obj = train.Train('1.2.3', True)
@@ -468,7 +475,7 @@ class ArtifactTests(unittest.TestCase):
             f.writestr('release-manifest.json', json.dumps({'documents': []}))
         spec = importlib.util.spec_from_file_location('fixture_bundle', pipeline.ROOT/'tools/build-release-bundle.py')
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-        archive = root/'downloaded'/'bundle.zip'
+        archive = root/'delivery'/f'neurobridge-v{APPLICATION_VERSION}.zip'
         with mock.patch.object(module, 'render_directory_pdf', return_value=b'%PDF-1.4 fixture'):
             module.build_bundle(directory, documents, archive)
         return archive, APPLICATION_VERSION, commit, targets
@@ -486,6 +493,19 @@ class ArtifactTests(unittest.TestCase):
             systems = manifest['bundleManifest']['systemArchives']
             self.assertEqual([(system['platform'], [variant['name'] for variant in system['variants']])
                               for system in systems], [('windows', ['windows-11'])])
+
+    def test_receipt_cli_reads_delivery_zip_with_intermediate_archives_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive, version, commit, _ = self.bundle(root, systems='windows-11')
+            self.assertEqual(len(list((root / 'release').glob('*.zip'))), 2)
+            result = subprocess.run(
+                [sys.executable, '-m', 'tools.source_train', 'verify-package',
+                 '--version', version, '--candidate', commit, '--systems', 'windows-11',
+                 '--directory', str(archive.parent)],
+                cwd=train.ROOT, capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(json.loads(result.stdout)['targets'], ['windows-11-x86_64-exe', 'windows-11-x86_64-msi'])
 
     def test_scoped_release_requires_every_selected_installer(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -538,10 +558,12 @@ class ArtifactTests(unittest.TestCase):
 
 
     def test_downloaded_artifact_must_match_the_pre_upload_receipt(self):
-        from tools.release_pipeline import matrix
+        from tools import release_pipeline
         with tempfile.TemporaryDirectory() as directory:
             archive, version, candidate, targets = self.bundle(Path(directory))
             original = train.artifact_receipt(archive, version, candidate, targets)
+            working_config = copy.deepcopy(release_pipeline.CONFIG)
+            working_config['build']['windows_coordinator'] = 'windows-latest'
             obj = train.Train(version, True)
             record = {'candidate': candidate, 'packageRunId': '17', 'phase': 'packaging'}
             def api(path):
@@ -555,6 +577,7 @@ class ArtifactTests(unittest.TestCase):
                     return ''
                 with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'required_record', return_value=copy.deepcopy(record)), \
                      mock.patch.object(train, 'api', side_effect=api), mock.patch.object(train, 'run', side_effect=download), \
+                     mock.patch.object(release_pipeline, 'CONFIG', working_config), \
                      mock.patch.object(obj, 'save') as save:
                     if tamper:
                         with self.assertRaisesRegex(ValueError, 'pre-upload'):
@@ -569,6 +592,48 @@ class ArtifactTests(unittest.TestCase):
 
 class RemoteAncestryTests(GitSourceTests):
     # Exercise real local Git remotes; no hosting writes or real packages.
+    def test_plan_and_release_lock_use_candidate_configuration(self):
+        from tools import release_pipeline
+        matrix_file = self.root / release_pipeline.MATRIX_PATH
+        matrix_file.parent.mkdir()
+        matrix_file.write_text((release_pipeline.ROOT / release_pipeline.MATRIX_PATH).read_text(encoding='utf-8'), encoding='utf-8')
+        self.commit('default policy')
+        default = self.git('rev-parse', 'HEAD')
+        self.git('branch', 'default-policy')
+        matrix_file.write_text(matrix_file.read_text(encoding='utf-8')
+                               .replace('default_systems = []', 'default_systems = ["windows-11"]')
+                               .replace('windows_coordinator = "windows-2022"', 'windows_coordinator = "windows-2025"'),
+                               encoding='utf-8')
+        self.registry('0.3.3')
+        self.commit('candidate policy')
+        candidate = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-q', 'default-policy')
+        # Only the remote and document gates are stubbed. Both paths read the
+        # candidate's real Git matrix while checked out on the default branch.
+        obj = train.Train('0.3.3', True)
+        record = {'candidate': candidate, 'review': {'sha': candidate}}
+        release_plan = {'applicationVersion': '0.3.3', 'sourceCommit': candidate, 'documentBlockers': [],
+                        'packages': release_pipeline.matrix(tomllib.loads(self.git('show', f'{candidate}:{release_pipeline.MATRIX_PATH}')))}
+        with mock.patch.object(release_pipeline, 'ROOT', self.root), \
+             mock.patch.object(release_pipeline, 'release_base', return_value=default), \
+             mock.patch('tools.release_preflight.release_plan', return_value=release_plan), \
+             mock.patch.object(obj, 'default_repository', return_value=('master', {})), \
+             mock.patch.object(obj, 'default', return_value=('master', default)), \
+             mock.patch.object(obj, 'fetch', return_value=default), mock.patch.object(obj, 'ref', return_value=None), \
+             mock.patch.object(obj, 'load', return_value=None), mock.patch.object(obj, 'protection'), \
+             mock.patch.object(obj, 'plan_actions_secrets', return_value={'status': 'unknown'}), \
+             mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'required_record', return_value=record), \
+             mock.patch.object(obj, 'checks'), mock.patch.object(obj, 'tag', return_value=None), \
+             mock.patch.object(obj, 'save'), mock.patch.object(obj, 'ensure_candidate'), \
+             mock.patch.dict(os.environ, {'GITHUB_RUN_ID': '17'}):
+            preview = obj.plan(candidate)
+            attempt = obj.begin_release()
+        self.assertEqual(preview['packageScope']['systems'], ['windows-11'])
+        self.assertEqual(attempt['packageScope']['systems'], ['windows-11'])
+        self.assertEqual([target['format'] for target in preview['packages']], ['exe', 'msi'])
+        self.assertEqual({target['runner'] for target in preview['packages']}, {'windows-2025'})
+
+
     def test_fresh_remote_tag_wins_over_cached_local_tag_and_replace_refs(self):
         self.registry('0.3.3'); self.commit('candidate'); candidate = self.git('rev-parse', 'HEAD')
         self.git('branch', 'candidate')

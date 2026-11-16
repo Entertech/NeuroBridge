@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from tools.release_pipeline import matrix, select_targets
+from tools.release_pipeline import CONFIG, matrix, select_targets
 from tools.release_scope import changed_business_paths, scope_for
 
 
@@ -23,11 +23,14 @@ class ReleaseScopeTests(unittest.TestCase):
             (["windows/service.py"], ["windows-10", "windows-11"]),
             (["packaging/kylin/bootstrap-install.sh"], ["kylin-v10"]),
             (["neurobridge/algorithm/runner.py"], list(SYSTEMS)),
+            (["mac/algorithm_bridge/CMakeLists.txt"], list(SYSTEMS)),
+            (["third_party/AffectiveCloud-Algorithm-SDK/cpp/package/cmake/import_library.cmake"], list(SYSTEMS)),
+            (["third_party/NumCpp/cmake/NumCppTools.cmake", "windows/service.py"], list(SYSTEMS)),
             (["windows/README.md", ".github/workflows/release.yml"], []),
         ]
         for changes, expected in cases:
             with self.subTest(changes=changes), patch("tools.release_scope.changed_business_paths", return_value=changes):
-                plan = scope_for("head", dict.fromkeys(SYSTEMS, "previous"))
+                plan = scope_for("head", dict.fromkeys(SYSTEMS, "previous"), config=CONFIG)
                 self.assertEqual(plan["systems"], expected)
 
     def test_omitted_system_compares_against_its_own_last_delivery(self):
@@ -35,7 +38,7 @@ class ReleaseScopeTests(unittest.TestCase):
         baselines["windows-11"] = "older-release"
         changes = {"last-release": [], "older-release": ["windows/remote-support.ps1"]}
         with patch("tools.release_scope.changed_business_paths", side_effect=lambda base, head: changes[base]):
-            plan = scope_for("head", baselines)
+            plan = scope_for("head", baselines, config=CONFIG)
         self.assertEqual(plan["systems"], ["windows-11"])
         self.assertEqual(plan["changedFiles"]["windows-11"], ["windows/remote-support.ps1"])
 

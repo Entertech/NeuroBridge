@@ -59,6 +59,15 @@ class ReleaseTriggerTests(unittest.TestCase):
         self.assertNotIn('workflow_run', bootstrap)
         self.assertIn('workflow_dispatch:', bootstrap)
 
+    def test_delivery_receipt_and_upload_use_the_zip_outside_the_build_directory(self):
+        block = job_block('release-aggregate', WORKFLOWS/'release.yml')
+        self.assertIn('DELIVERY_DIR: artifacts/delivery', block)
+        self.assertIn('DELIVERY_ZIP: artifacts/delivery/neurobridge-v', block)
+        self.assertIn('--release-dir artifacts/release', block)
+        self.assertIn('--output "$DELIVERY_ZIP"', block)
+        self.assertIn('--directory "$DELIVERY_DIR"', block)
+        self.assertIn('path: ${{ env.DELIVERY_ZIP }}', block)
+
     def test_failure_path_retains_tagged_source(self):
         text = job_block('retain-failed-attempt', WORKFLOWS/'source-train.yml')
         self.assertIn("needs.packages.result == 'failure'", text)

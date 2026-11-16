@@ -340,6 +340,9 @@ jobs:
     needs: [release-plan, release-targets]
     if: always() && needs.release-plan.outputs.should_release == 'true' && needs.release-targets.result == 'success'
     runs-on: ubuntu-22.04
+    env:
+      DELIVERY_DIR: artifacts/delivery
+      DELIVERY_ZIP: artifacts/delivery/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
     outputs:
       archive_sha256: ${{ steps.bundle.outputs.archive_sha256 }}
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
@@ -378,12 +381,12 @@ jobs:
           python tools/build-release-bundle.py \
             --release-dir artifacts/release \
             --documents-dir artifacts/documents \
-            --output artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
-          printf 'archive_sha256=%s\n' "$(sha256sum artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+            --output "$DELIVERY_ZIP"
+          printf 'archive_sha256=%s\n' "$(sha256sum "$DELIVERY_ZIP" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - name: Check directory PDF and render every page
         run: |
           mkdir -p "$RUNNER_TEMP/directory-guide" artifacts/directory-guide-preview
-          unzip -p artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip bundle-directory-guide.pdf > "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
+          unzip -p "$DELIVERY_ZIP" bundle-directory-guide.pdf > "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
           pdfinfo "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf"
           pdffonts "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" | tee "$RUNNER_TEMP/directory-guide/fonts.txt"
           if ! grep -Eqi "Noto.*(CJK|SansSC|SerifSC)" "$RUNNER_TEMP/directory-guide/fonts.txt"; then
@@ -411,7 +414,7 @@ jobs:
           python -m tools.source_train verify-package \
             --version "${{ needs.release-plan.outputs.version }}" --candidate "$SOURCE_SHA" \
             --systems "$RELEASE_SYSTEMS" \
-            --directory artifacts/release > "$RUNNER_TEMP/package-receipt.json"
+            --directory "$DELIVERY_DIR" > "$RUNNER_TEMP/package-receipt.json"
       - uses: actions/upload-artifact@v4
         if: inputs.source_train
         with:
@@ -423,7 +426,7 @@ jobs:
         id: upload
         with:
           name: verified-release-${{ env.SOURCE_SHA }}
-          path: artifacts/release/neurobridge-v${{ needs.release-plan.outputs.version }}.zip
+          path: ${{ env.DELIVERY_ZIP }}
           if-no-files-found: error
           retention-days: 90
 

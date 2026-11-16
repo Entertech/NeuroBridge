@@ -6,16 +6,19 @@ from fnmatch import fnmatchcase
 import subprocess
 import tomllib
 
-from .release_pipeline import CONFIG, is_business_source, matrix, run, select_targets, system_version
+from .release_pipeline import is_business_source, matrix, run, select_targets, system_version
 
 
-def scope_for(head: str, baselines: dict[str, str], requested: str = "") -> dict:
-    targets = matrix()
+def scope_for(head: str, baselines: dict[str, str], requested: str = "", *, config: dict) -> dict:
+    targets = matrix(config)
     available = list(dict.fromkeys(system_version(target) for target in targets))
     if set(baselines) != set(available):
         raise ValueError("release baselines do not cover the configured systems")
-    selection = CONFIG["selection"]
-    configured = ",".join(selection["default_systems"])
+    selection = config.get("selection")
+    if selection is None and not requested:
+        # Source snapshots from before system selection used the entire matrix.
+        return {"mode": "legacy", "systems": available, "baseCommits": baselines}
+    configured = ",".join(selection["default_systems"]) if selection is not None else ""
     mode = "explicit" if requested else "configured" if configured else "affected"
     if requested or configured:
         chosen = select_targets(targets, requested or configured)
