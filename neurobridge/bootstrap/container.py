@@ -16,6 +16,7 @@ from ..adapters.parsers import HeadbandBleParser, HeadsetRev181Parser
 from ..adapters.sources import BluetoothBleakSource, PosixSerialSource, WindowsSerialSource
 from ..application.service import ApplicationService
 from ..application.eeg_alignment import EegAlignmentCache
+from ..application.eeg_diagnostics import HeadsetEegDiagnostics
 from ..application.gateway import GatewayApplication as Gateway
 from ..application.snapshots import InMemoryLatestSnapshotStore
 from ..adapters.northbound.protocol import project_window
@@ -109,6 +110,7 @@ class _ApplicationPipelineAdapter:
             "connectionSessionId": source.connection_session_id,
             "recordingSessionId": self.gateway.store.recording_id,
             "connectionState": source.state.value,
+            "gatewayConnectionState": self.gateway.status["connectionState"],
             "dataState": data.data_state.value, "storageState": storage.state.value,
             "persistenceGuaranteed": storage.persistence_guaranteed,
             "availableBytes": storage.available_bytes, "persistenceGaps": storage.gap_count,
@@ -262,6 +264,10 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     else:
         raise ValueError(f"No parser is registered for {profile.device_protocol}")
 
+    observe_batch = None
+    if profile.profile_id == "windows_headset_local":
+        observe_batch = HeadsetEegDiagnostics().observe
+
     application = ApplicationService(
         device_protocol=profile.device_protocol,
         requires_algorithm_to_start=profile.transport == "serial",
@@ -277,9 +283,8 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
         algorithm_queue_size=config.pipeline.algorithm_queue_size,
         persistence_timeout_ms=config.pipeline.persistence_timeout_ms,
         shutdown_timeout_ms=config.pipeline.shutdown_timeout_ms,
-        observe_batch=eeg_alignment.observe_headband if eeg_alignment and profile.transport == "bluetooth" else None,
-        observe_raw_eeg=eeg_alignment.observe_raw_eeg if eeg_alignment else None,
-        prepare_eeg_frames=eeg_alignment.prepare_headset if eeg_alignment and profile.transport == "serial" else None,
+        observe_batch=observe_batch,
+        align_eeg_result=eeg_alignment.align_result if eeg_alignment else None,
     )
     bridge_ref: dict[str, _ApplicationPipelineAdapter] = {}
 
@@ -359,25 +364,11 @@ def build_runtime(
         recording=replace(config.recording, directory=config.recording.directory / "headband"),
     )
 
-    def connected_session(container: ApplicationContainer) -> str | None:
-        status = container.source.status()
-        return status.connection_session_id if status.state == ConnectionState.CONNECTED else None
-
     alignment = None
-    LOG.info("Windows EEG alignment configuration: enabled=%s maxAdjustmentPercent=%s waitMs=%s "
-             "rawTimeoutMs=%s cacheWindows=%s",
-             bool(config.data_source.eeg_alignment_percent), config.data_source.eeg_alignment_percent,
-             config.data_source.eeg_alignment_wait_ms, config.data_source.eeg_alignment_raw_timeout_ms,
-             config.pipeline.algorithm_queue_size)
+    LOG.info("Windows EEG alignment configuration: enabled=%s adjustmentPercent=%s stage=algorithm_output",
+             bool(config.data_source.eeg_alignment_percent), config.data_source.eeg_alignment_percent)
     if config.data_source.eeg_alignment_percent:
-        alignment = EegAlignmentCache(
-            percent=config.data_source.eeg_alignment_percent,
-            wait_ms=config.data_source.eeg_alignment_wait_ms,
-            raw_timeout_ms=config.data_source.eeg_alignment_raw_timeout_ms,
-            max_windows=config.pipeline.algorithm_queue_size,
-            headset_session=lambda: connected_session(primary),
-            headband_session=lambda: connected_session(headband),
-        )
+        alignment = EegAlignmentCache(percent=config.data_source.eeg_alignment_percent)
     primary = build_container(config, runtime, eeg_alignment=alignment)
     headband = build_container(headband_config, runtime, eeg_alignment=alignment)
     return (primary, headband), SourceRouter(primary.northbound_controller, headband.northbound_controller)

@@ -199,6 +199,25 @@ class WindowAndSnapshotTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_connection_cancellation_propagates_when_algorithm_finishes_at_the_same_time(self) -> None:
+        async def scenario() -> None:
+            batch = self._result().batch
+
+            class CompletingEngine:
+                async def evaluate(self, value: AlgorithmInput) -> AlgorithmResult:
+                    asyncio.get_running_loop().call_soon(worker.cancel)
+                    return AlgorithmResult(value.batch_id, "test", 1, 2, {"attention": 42})
+
+            aggregator = WindowResultAggregator(CompletingEngine())
+            worker = asyncio.create_task(aggregator.evaluate(
+                batch, AlgorithmInput(batch.batch_id, {}, "1"), persistence_guaranteed=True,
+            ))
+            with self.assertRaises(asyncio.CancelledError):
+                await worker
+            await aggregator.close()
+
+        asyncio.run(scenario())
+
 
 class StateMachineTests(unittest.TestCase):
     def test_connection_and_data_states_are_independent(self) -> None:

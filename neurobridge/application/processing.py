@@ -64,7 +64,10 @@ class WindowResultAggregator:
         task = asyncio.create_task(self.engine.evaluate(value))
         self._open[batch.batch_id] = task
         try:
-            result = await asyncio.wait_for(asyncio.shield(task), self.timeout_ms / 1000)
+            # Python 3.11 wait_for can consume an external cancellation if the
+            # SDK result becomes ready while the connection is being closed.
+            async with asyncio.timeout(self.timeout_ms / 1000):
+                result = await asyncio.shield(task)
             self._open.pop(batch.batch_id, None)
         except TimeoutError:
             result = self._invalid(batch.batch_id, "ALGORITHM_TIMEOUT")

@@ -425,9 +425,14 @@ function updateDeviceState(data, panel) {
     if (panel.deviceStatusTimestamp !== null && timestamp < panel.deviceStatusTimestamp) return false;
     panel.deviceStatusTimestamp = timestamp;
   }
-  if (sharedConnection) {
-    if (state !== "connected") clearEegState(panel);
-    else if (panel.section.hidden) showMissingEeg(panel, "无脑波数据");
+  if (state !== "connected") {
+    clearEegState(panel);
+    if (!panel.section.hidden) {
+      resetAlgorithmReadings(panel, "等待设备接入");
+      panel.identity = {};
+    }
+  } else if (sharedConnection && panel.section.hidden) {
+    showMissingEeg(panel, "无脑波数据");
   }
   showDevice(panel, state === "connected");
   return true;

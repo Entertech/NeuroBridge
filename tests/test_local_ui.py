@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from pathlib import Path
+import re
 import socket
 import tempfile
 import unittest
+from urllib.parse import urljoin
 
 from neurobridge.config import (
     AlgorithmConfig,
@@ -92,11 +94,17 @@ class LocalUiIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(b"\r\nLocation: /\r\n", response)
 
     async def test_serves_capture_viewer_from_the_same_gateway(self) -> None:
-        page = await self.request("/capture/")
-        script = await self.request("/capture/app.js")
-        self.assertIn(b"HTTP/1.1 200 OK", page)
-        self.assertTrue(page.endswith(b"capture:index.html\n"))
-        self.assertTrue(script.endswith(b"capture:app.js\n"))
+        bundled_page = Path(__file__).resolve().parents[1] / "web" / "capture" / "index.html"
+        (Path(self.directory.name) / "capture" / "index.html").write_bytes(bundled_page.read_bytes())
+        for path in ("/capture", "/capture/", "/capture/index.html"):
+            with self.subTest(path=path):
+                page = await self.request(path)
+                headers, body = page.split(b"\r\n\r\n", 1)
+                self.assertIn(b"HTTP/1.1 200 OK", headers)
+                assets = [urljoin(path, asset) for asset in re.findall(r'<(?:link|script)\b[^>]*\b(?:href|src)="([^"]+)"', body.decode("utf-8"))]
+                self.assertEqual(assets, ["/capture/styles.css", "/version.js", "/runtime-config.js", "/capture/app.js"])
+                for asset in ("/capture/styles.css", "/capture/app.js"):
+                    self.assertTrue((await self.request(asset)).endswith(f"capture:{Path(asset).name}\n".encode()))
 
     async def test_rejects_unapproved_host_and_unknown_paths(self) -> None:
         bad_host = await self.request("/", host="example.com")

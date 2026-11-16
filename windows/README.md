@@ -54,6 +54,8 @@ Windows 安装包内置 Bleak 0.19.5，用于修复 Python 3.11 下头环连接�
 
 Windows 头环建立连接后，`Flowtime WinRT GATT session status changed` 会记录 Windows 报告的会话状态及蓝牙错误（名称和数值）。可用 `attempt` 与同一连接的断开回调、`stopping` 标志及采集日志对照。`status=CLOSED(0) bluetoothError=SUCCESS(0)` 表示会话已关闭，Windows 未报告 GATT 错误。判断由哪一端发起断开需要蓝牙控制器层的证据。若 WinRT 会话事件无法订阅，日志会显示 `Flowtime WinRT GATT session diagnostics unavailable`。
 
+Windows 网关会启动实时 HCI 跟踪，日志出现 `Windows Bluetooth HCI trace active` 后即可采集。使用 `Windows Bluetooth HCI` 搜索控制器事件，并按 `eventUtc`、`attempt` 和 `handle` 对照 WinRT 日志。日志记录 HCI 断开命令、断开完成事件、已匹配头环的连接参数及更新结果。只有通过连接完成事件关联到当前目标的句柄会标记 `association=headband`；`unmatched` 需与应用日志时间对照。跟踪使用内存会话，日志只写事件摘要、原因码和参数，不保存 ETL、蓝牙地址或 EEG／心率载荷。驱动或权限不支持时记录 `Windows Bluetooth HCI trace unavailable`，采集继续运行。
+
 若 Windows 控制器的 `HCI Disconnection Complete` 记录 `0x3B`，排查头环固件的 BLE 连接参数更新。对照连接间隔、外设延迟、监督超时和更新请求的应答，确认固件在更新被拒或未获应答时能否继续用已协商的参数采集。修复后在 Windows 10 上连续采集，覆盖多个原掉线周期，并检查是否再次出现 `0x3B`。
 
 源码部署双击启动器重新启动，安装包部署执行 `Start-Service NeuroBridge`。打开 `http://127.0.0.1:8080/`（自定义端口以配置为准），等待「头环蓝牙」区显示设备已连接。点击 `getLatest` 查看最新算法结果，或点击 `subscribe` 接收连续窗口。需要确认原始数据时，先勾选 EEG 和 HR 原始字节流再订阅。旧的 `/capture/` 入口在头环模式下跳转至联调页。
@@ -62,11 +64,13 @@ Windows 头环建立连接后，`Flowtime WinRT GATT session status changed` 会
 
 双设备联调页分别显示 EEG 与心率状态。设备仍连接时，脑电质量为 `0` 且波形没有有效振幅的窗口显示「无有效脑波」。波形停更超过 `[data_source].stale_after_ms` 时显示「无脑波数据」，收到未佩戴状态或全 FF 波形提示时显示「脱落」。算法返回 `0 bpm` 时，心率及其相关指标显示「无心率数据」。设备断开后隐藏对应栏。
 
-Windows 双设备模式默认开启原始 EEG 校准。网关解析串口帧并分窗后，在组装算法输入前直接调整帧副本里的 EEG 字节。耳机左右通道各自参考同窗口的头环幅度，增益最多调整 5%。校准保留各通道的中心值、采样顺序、包序号和包数。可在 `[data_source]` 设置 `eeg_alignment_percent = 0` 并重启网关来关闭，原有配置中显式设置的 `0` 也会生效。
+Windows 双设备模式默认开启 EEG 输出校准。耳机和头环各用原始数据独立计算。耳机左右波形分别参考头环对应通道的幅度，默认增益最多调整 5%，波形继续遵守 SDK 的 ±2000 输出范围。放松度、注意力、愉悦度、Flow 分数和各频段能量默认向对应头环值移动两路差值的 5%。校准后的结果同时用于实时输出和录制。脑电质量、心率、HRV、压力、冥想提示和睡眠状态保持各自算法结果。可在 `[data_source]` 设置 `eeg_alignment_percent = 0` 并重启网关关闭。
 
-双路校准要求两台设备都已连接，且各自在最近 `eeg_alignment_raw_timeout_ms`（默认 300 ms）内收到过通过帧校验的原始 EEG。心率和设备状态包不刷新 EEG 计时。任一路超时或掉线就暂停校准，恢复后只用新一段连续数据；此超时只用于校准输入的可用性判断。两路数据可用时，`eeg_alignment_wait_ms`（默认 100 ms）控制算法等待同一窗口头环 EEG 的时长。超时、ADC 饱和、脱落码或窗口无效时，耳机算法使用原输入。原始录制、北向原始字节和两路心率继续使用设备原始数据。
+耳机结果出数时优先使用已完成的同窗口头环结果，同窗口尚无结果时可使用紧邻的上一窗口。找不到参考、任一路窗口无效或没有可用波形时，耳机直接输出自身结果。缺失指标、零值占位和无信号波形保持原值。旧配置里的 `eeg_alignment_wait_ms` 和 `eeg_alignment_raw_timeout_ms` 可以保留，输出校准只按窗口匹配已完成的结果。
 
-在 `neurobridge.log` 搜索 `Windows EEG alignment configuration` 核对开关。启用后，`Headset EEG alignment decision` 按窗口记录匹配结果、回退原因、两路包数、等待时长和校准增益。默认 `INFO` 每约 10 秒记录各原因的窗口数，并为每种原因保留一条窗口详情。联调时可将 `[logging].level` 设为 `DEBUG`，用 `batchId` 将每个校准窗口与 `Headset EEG algorithm response` 的成功状态、错误原因和算法耗时对应起来。这些日志只记录诊断元数据。
+在 `neurobridge.log` 搜索 `Windows EEG alignment configuration` 核对开关和 `stage=algorithm_output`。启用后，`Headset EEG alignment decision` 按窗口记录参考结果、回退原因、各通道增益和校准字段名。默认 `INFO` 每约 10 秒记录各原因的窗口数，并为每种原因保留一条窗口详情。联调时可将 `[logging].level` 设为 `DEBUG`，用 `batchId` 和 `referenceBatchId` 对照两路 `EEG algorithm response` 的成功状态、错误原因和算法耗时。这些日志只记录诊断元数据。
+
+`Headset raw EEG` 在算法和校准之前记录 Windows 耳机的原始 EEG 异常窗口，关掉校准也能看到。记录区分 `all_zero`、`all_ff`、`near_adc_rail`，以及异常后样本回到 ADC 范围内的 `within_adc_range`。每条包括 `batchId`、连接会话、窗口时间、EEG 和心率包数、左右通道的零值与边界样本计数。每种状态在同一连接会话内最多每 10 秒记录一次。压力值走独立心率算法，EEG 异常时仍可能有值。
 
 耳机串口与头环蓝牙各用独立的算法会话，结果随设备来源分别录制和显示。升级后请重新构建或替换算法桥。源码部署可先停止网关，再用启动器菜单 `6` 重建。耳机模式启动前会检查算法桥是否支持 SDK 耳道 EEG 模式。
 

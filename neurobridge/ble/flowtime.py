@@ -12,6 +12,7 @@ from ..device.packet import DevicePacket
 if TYPE_CHECKING:
     from bleak.backends.device import BLEDevice
     from bleak.backends.scanner import AdvertisementData
+    from .windows_hci import WindowsHciDiagnostics
 
 LOG = logging.getLogger(__name__)
 BASE = "-1212-abcd-1523-785feabcd123"
@@ -64,10 +65,11 @@ def _observe_winrt_session(client: object, attempt: int) -> Callable[[], None] |
 
 class FlowtimeAdapter:
     """Bleak adapter for the FF31/FF32/FF51/FF21 profile in the device specification."""
-    def __init__(self, config: BleConfig, packet: Callable[[DevicePacket], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]], error: Callable[[str], Awaitable[None]] | None = None, *, external_control: bool = False) -> None:
+    def __init__(self, config: BleConfig, packet: Callable[[DevicePacket], Awaitable[None]], status: Callable[[str, object], Awaitable[None]], device_ready: Callable[[], Awaitable[None]], error: Callable[[str], Awaitable[None]] | None = None, *, external_control: bool = False, hci_diagnostics: WindowsHciDiagnostics | None = None) -> None:
         self.config, self.packet, self.status, self.device_ready = config, packet, status, device_ready
         self.error = error
         self.external_control = external_control
+        self._hci_diagnostics = hci_diagnostics
         self._io_lock = asyncio.Lock()
         self._client = None
         self._stopping = False
@@ -138,6 +140,8 @@ class FlowtimeAdapter:
                 disconnected_at: float | None = None
                 last_notifications: dict[str, float] = {}
                 LOG.info("Connecting to Flowtime candidate: attempt=%s rssi=%s", attempt, advertisement.rssi)
+                if self._hci_diagnostics is not None:
+                    self._hci_diagnostics.track(candidate.address, attempt)
 
                 def disconnected(_: object, callback_attempt: int = attempt) -> None:
                     nonlocal disconnected_at

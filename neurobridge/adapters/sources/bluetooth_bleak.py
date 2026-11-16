@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 import logging
+import sys
 import time
 import uuid
 
 from .bluetooth_control import BluetoothSessionControl
 from ...ble.flowtime import FlowtimeAdapter
+from ...ble.windows_hci import WindowsHciDiagnostics
 from ...config import BleConfig
 from ...device.packet import DevicePacket
 from ...domain.raw import RawChunk
@@ -32,7 +34,9 @@ class BluetoothBleakSource:
         self.dropped_raw_bytes = 0
         self._pending_gap_bytes = 0
         self.enqueue_timeout_ms = enqueue_timeout_ms
-        self._adapter = FlowtimeAdapter(config, self._packet, self._status_changed, self._prepare_device, error, external_control=True)
+        self._hci_diagnostics = WindowsHciDiagnostics() if sys.platform == "win32" and config.enabled else None
+        self._adapter = FlowtimeAdapter(config, self._packet, self._status_changed, self._prepare_device, error,
+                                        external_control=True, hci_diagnostics=self._hci_diagnostics)
         self.control = BluetoothSessionControl(lambda: self._session_id, lambda: False, self._write_control)
 
     async def _write_control(self, command: bytes) -> None:
@@ -41,17 +45,23 @@ class BluetoothBleakSource:
 
     async def start(self) -> None:
         if self._task is None or self._task.done():
+            if self._hci_diagnostics is not None:
+                await asyncio.to_thread(self._hci_diagnostics.start)
             self._task = asyncio.create_task(self._adapter.run())
 
     async def stop(self) -> None:
-        if self._session_id is not None:
-            await self.control.stop_stream(self._session_id)
-        await self._adapter.stop()
-        if self._task and not self._task.done():
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
-        self._finish_queue(self._chunks)
-        self._finish_queue(self._events)
+        try:
+            if self._session_id is not None:
+                await self.control.stop_stream(self._session_id)
+            await self._adapter.stop()
+            if self._task and not self._task.done():
+                self._task.cancel()
+                await asyncio.gather(self._task, return_exceptions=True)
+            self._finish_queue(self._chunks)
+            self._finish_queue(self._events)
+        finally:
+            if self._hci_diagnostics is not None:
+                await asyncio.to_thread(self._hci_diagnostics.stop)
 
     def status(self) -> SourceStatus:
         return self._status

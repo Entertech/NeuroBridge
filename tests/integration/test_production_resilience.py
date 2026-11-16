@@ -231,8 +231,9 @@ class ProductionResilienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(self.service.metrics()["algorithm_queue_depth"], 1)
         await self.source._emit_state(ConnectionState.RECONNECTING)
         async with asyncio.timeout(1):
-            while self.service.data.snapshot.data_state != DataState.UNAVAILABLE:
+            while self.gateway.status_result()["connectionState"] != "disconnected":
                 await asyncio.sleep(0.005)
+        self.assertEqual(self.service.data.snapshot.data_state, DataState.UNAVAILABLE)
         self.assertFalse(self.events.done(), "disconnect must not crash on nonexistent parser")
 
     async def test_status_and_data_have_separate_pending_slots_and_send_deadline(self):
