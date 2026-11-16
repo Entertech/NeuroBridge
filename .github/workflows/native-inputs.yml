@@ -80,9 +80,8 @@ jobs:
         shell: powershell
         env:
           TARGET_ID: ${{ matrix.id }}
-          # Test replacement of the last published EXE, including builds that
-          # retain the release version on a requirement branch.
-          PREVIOUS_SOURCE: ce30b2ca1575fe512d4ca461b3097204505968f6
+          # Verify upgrade from the deployed Windows 0.4.13 test EXE.
+          PREVIOUS_SOURCE: 1a9e64c2363002c01fea66df1738cffa4f394d3a
         run: |
           $ErrorActionPreference = 'Stop'
           $previous = Join-Path $env:RUNNER_TEMP 'neurobridge-previous-source'
