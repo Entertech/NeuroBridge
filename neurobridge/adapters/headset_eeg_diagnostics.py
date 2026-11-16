@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 import time
 
-from ..adapters.parsers.headset_rev181 import EEG_END, EEG_START
 from ..domain.signal import ParsedSignalBatch
+from .parsers.headset_rev181 import EEG_END, EEG_START
 
 
 LOG = logging.getLogger(__name__)

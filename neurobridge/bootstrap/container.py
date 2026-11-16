@@ -9,6 +9,7 @@ import json
 import time
 
 from ..adapters.algorithms import AffectiveSdkAlgorithmEngine
+from ..adapters.headset_eeg_diagnostics import HeadsetEegDiagnostics
 from ..adapters.northbound.codec import GatewayWireCodec
 from ..adapters.northbound import GatewayNorthboundSink, NorthboundController
 from ..adapters.northbound.controller import SourceRouter
@@ -16,7 +17,6 @@ from ..adapters.parsers import HeadbandBleParser, HeadsetRev181Parser
 from ..adapters.sources import BluetoothBleakSource, PosixSerialSource, WindowsSerialSource
 from ..application.service import ApplicationService
 from ..application.eeg_alignment import EegAlignmentCache
-from ..application.eeg_diagnostics import HeadsetEegDiagnostics
 from ..application.gateway import GatewayApplication as Gateway
 from ..application.processing import AlgorithmInputMapper
 from ..application.snapshots import InMemoryLatestSnapshotStore

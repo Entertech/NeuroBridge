@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from neurobridge.application.eeg_diagnostics import ADC_MAX, HeadsetEegDiagnostics
+from neurobridge.adapters.headset_eeg_diagnostics import ADC_MAX, HeadsetEegDiagnostics
 from neurobridge.domain.signal import ParsedSignal, ParsedSignalBatch
 
 
@@ -17,7 +17,7 @@ def batch(samples, session="session"):
 class HeadsetEegDiagnosticsTests(unittest.TestCase):
     def test_reports_raw_patterns_and_channel_counts_without_dumping_samples(self):
         diagnostic = HeadsetEegDiagnostics()
-        with self.assertLogs("neurobridge.application.eeg_diagnostics", level="INFO") as logs:
+        with self.assertLogs("neurobridge.adapters.headset_eeg_diagnostics", level="INFO") as logs:
             diagnostic.observe(batch([5000] * 6))
             diagnostic.observe(batch([0] * 6))
             diagnostic.observe(batch([ADC_MAX] * 6))
@@ -40,8 +40,8 @@ class HeadsetEegDiagnosticsTests(unittest.TestCase):
         diagnostic = HeadsetEegDiagnostics()
         zero = batch([0] * 6)
         with (
-            patch("neurobridge.application.eeg_diagnostics.time.monotonic", side_effect=[1, 2, 11, 12]),
-            self.assertLogs("neurobridge.application.eeg_diagnostics", level="INFO") as logs,
+            patch("neurobridge.adapters.headset_eeg_diagnostics.time.monotonic", side_effect=[1, 2, 11, 12]),
+            self.assertLogs("neurobridge.adapters.headset_eeg_diagnostics", level="INFO") as logs,
         ):
             diagnostic.observe(zero)
             diagnostic.observe(zero)
