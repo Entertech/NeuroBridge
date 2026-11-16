@@ -56,7 +56,7 @@ Windows 头环建立连接后，`Flowtime WinRT GATT session status changed` 会
 
 Windows 网关会启动实时 HCI 跟踪，日志出现 `Windows Bluetooth HCI trace active` 后即可采集。使用 `Windows Bluetooth HCI` 搜索控制器事件，并按 `eventUtc`、`attempt` 和 `handle` 对照 WinRT 日志。日志记录 HCI 断开命令、断开完成事件、已匹配头环的连接参数及更新结果。只有通过连接完成事件关联到当前目标的句柄会标记 `association=headband`；`unmatched` 需与应用日志时间对照。跟踪使用内存会话，日志只写事件摘要、原因码和参数，不保存 ETL、蓝牙地址或 EEG／心率载荷。驱动或权限不支持时记录 `Windows Bluetooth HCI trace unavailable`，采集继续运行。
 
-若 Windows 控制器的 `HCI Disconnection Complete` 记录 `0x3B`，排查头环固件的 BLE 连接参数更新。对照连接间隔、外设延迟、监督超时和更新请求的应答，确认固件在更新被拒或未获应答时能否继续用已协商的参数采集。修复后在 Windows 10 上连续采集，覆盖多个原掉线周期，并检查是否再次出现 `0x3B`。
+若 `disconnection_complete` 记录 `reason=0x3B`，按同一 `handle` 查找此前的 `le_remote_parameter_request`、正面／负面应答、`le_connection_update_command` 和控制器返回的状态。若走 LE L2CAP 信令，使用 `identifier` 将 `l2cap_parameter_update_request` 配对到 `l2cap_parameter_update_response`。请求会记录连接间隔范围、外设延迟和监督超时，`parameterIssues` 标出基础范围或超时裕量违规。只有整组拒绝码时，仍需对照头环固件或空口日志才能定位具体字段。修复后在 Windows 10 上连续采集，覆盖多个原掉线周期，再检查是否出现 `0x3B`。
 
 源码部署双击启动器重新启动，安装包部署执行 `Start-Service NeuroBridge`。打开 `http://127.0.0.1:8080/`（自定义端口以配置为准），等待「头环蓝牙」区显示设备已连接。点击 `getLatest` 查看最新算法结果，或点击 `subscribe` 接收连续窗口。需要确认原始数据时，先勾选 EEG 和 HR 原始字节流再订阅。旧的 `/capture/` 入口在头环模式下跳转至联调页。
 
