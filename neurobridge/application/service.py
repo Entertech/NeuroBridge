@@ -8,7 +8,7 @@ import time
 from dataclasses import replace
 from collections.abc import Awaitable, Callable
 
-from ..domain.algorithm import AlgorithmInput, AlgorithmResult, AlgorithmSession, AlgorithmState
+from ..domain.algorithm import AlgorithmResult, AlgorithmSession, AlgorithmState
 from ..domain.raw import DeviceFrame, ParseOutcome, RawChunk
 from ..domain.result import WindowResult
 from ..domain.signal import ParsedSignal, ParsedSignalBatch
@@ -55,7 +55,8 @@ class ApplicationService:
         persistence_timeout_ms: int = 1000,
         shutdown_timeout_ms: int = 5000,
         observe_batch: Callable[[ParsedSignalBatch], None] | None = None,
-        prepare_algorithm_input: Callable[[ParsedSignalBatch, AlgorithmInput], Awaitable[AlgorithmInput]] | None = None,
+        observe_raw_eeg: Callable[[RawChunk], None] | None = None,
+        prepare_eeg_frames: Callable[[ParsedSignalBatch, tuple[DeviceFrame, ...]], Awaitable[tuple[DeviceFrame, ...]]] | None = None,
     ) -> None:
         self.device_protocol = device_protocol
         self.requires_algorithm_to_start = requires_algorithm_to_start
@@ -69,7 +70,8 @@ class ApplicationService:
         self.recording = recording
         self.control = control
         self.observe_batch = observe_batch
-        self.prepare_algorithm_input = prepare_algorithm_input
+        self.observe_raw_eeg = observe_raw_eeg
+        self.prepare_eeg_frames = prepare_eeg_frames
         if min(algorithm_queue_size, persistence_timeout_ms, shutdown_timeout_ms) <= 0:
             raise ValueError("Pipeline limits must be positive")
         self.persistence_timeout_ms = persistence_timeout_ms
@@ -303,6 +305,8 @@ class ApplicationService:
         if chunk.dropped_before_bytes:
             outcome = replace(outcome, signals=tuple(replace(signal, valid=False,
                 invalid_reasons=tuple(dict.fromkeys((*signal.invalid_reasons, "SOURCE_QUEUE_GAP")))) for signal in outcome.signals))
+        if self.observe_raw_eeg is not None and any(signal.signal_type == "eeg" and signal.valid for signal in outcome.signals):
+            self.observe_raw_eeg(chunk)
         self.diagnostics["frames"] += len(outcome.frames)
         if outcome.frames:
             self._last_frame_monotonic = time.monotonic()
@@ -485,13 +489,17 @@ class ApplicationService:
             result = WindowResult(batch, self.aggregator._invalid(batch.batch_id, "ALGORITHM_BACKLOG"), "live", self.clock_ms(), False)
         elif self._algorithm_state in {AlgorithmState.READY, AlgorithmState.ERROR}:
             evaluation_started = time.monotonic()
-            algorithm_input = self.mapper.map(batch, (self._frames[ref] for ref in batch.frame_refs if ref in self._frames))
-            if self.prepare_algorithm_input is not None:
-                algorithm_input = await self.prepare_algorithm_input(batch, algorithm_input)
+            frames = tuple(self._frames[ref] for ref in batch.frame_refs if ref in self._frames)
+            prepared_frames = frames
+            if self.prepare_eeg_frames is not None:
+                prepared_frames = await self.prepare_eeg_frames(batch, frames)
                 if batch.connection_session_id != self._connection_session_id:
                     LOG.debug("EEG alignment input discarded: batchId=%s reason=CONNECTION_SESSION_ENDED", batch.batch_id)
                     return WindowResult(batch, self.aggregator._invalid(batch.batch_id, "CONNECTION_SESSION_ENDED"),
                                         "live", self.clock_ms(), False)
+            algorithm_input = self.mapper.map(batch, prepared_frames)
+            if prepared_frames is not frames:
+                algorithm_input = replace(algorithm_input, mapping_version="2")
             algorithm_started = time.monotonic()
             result = await self.aggregator.evaluate(
                 batch,
@@ -499,7 +507,7 @@ class ApplicationService:
                 persistence_guaranteed=persistence_guaranteed,
                 on_late_result=lambda value: self._persist_late(batch, value),
             )
-            if self.prepare_algorithm_input is not None:
+            if self.prepare_eeg_frames is not None:
                 LOG.debug("Headset EEG algorithm response: batchId=%s windowEndMs=%s mappingVersion=%s "
                           "valid=%s invalidReasons=%s evaluationMs=%s",
                           batch.batch_id, batch.window_end_ms, algorithm_input.mapping_version,

@@ -115,7 +115,7 @@ function createSourcePanel(source) {
     source, section, fields, algorithmGroups, overview: createOverview(source),
     socket: null, initialStatusRequestId: null, statusSubscriptionRequestId: null, statusSubscriptionId: null,
     deviceStatusTimestamp: null,
-    eegStateTimestamp: null, eegStaleTimer: null, headsetWearState: "unknown",
+    eegStateTimestamp: null, eegStaleTimer: null, wearState: "unknown",
     subscriptions: new Map(), channels: {}, bandPower: {}, identity: {}, eegTimestamp: null,
   };
 }
@@ -405,7 +405,7 @@ function showDevice(panel, visible) {
 
 function resetSource(panel, status, waiting) {
   panel.deviceStatusTimestamp = null;
-  clearHeadsetEegState(panel);
+  clearEegState(panel);
   showDevice(panel, false);
   panel.fields.details.hidden = panel.socket === null;
   for (const value of panel.fields.details.querySelectorAll(".status-list dd")) value.textContent = "—";
@@ -425,28 +425,36 @@ function updateDeviceState(data, panel) {
     if (panel.deviceStatusTimestamp !== null && timestamp < panel.deviceStatusTimestamp) return false;
     panel.deviceStatusTimestamp = timestamp;
   }
-  if (sharedConnection && panel.source === "serial") {
-    if (state !== "connected") clearHeadsetEegState(panel);
-    else if (panel.section.hidden) showHeadsetEegState(panel, "无脑波数据");
+  if (sharedConnection) {
+    if (state !== "connected") clearEegState(panel);
+    else if (panel.section.hidden) showMissingEeg(panel, "无脑波数据");
   }
   showDevice(panel, state === "connected");
   return true;
 }
 
-function clearHeadsetEegState(panel) {
+function clearEegState(panel) {
   clearTimeout(panel.eegStaleTimer);
   panel.eegStaleTimer = null;
   panel.eegStateTimestamp = null;
-  panel.headsetWearState = "unknown";
+  panel.wearState = "unknown";
 }
 
-function showHeadsetEegState(panel, label, timestamp = null) {
-  for (const metric of panel.overview.metrics.filter(({ stream }) => stream === "eeg")) {
+function showMissingAlgorithmStream(panel, stream, label, timestamp) {
+  for (const metric of panel.overview.metrics.filter((metric) => metric.stream === stream)) {
+    if (metric.timestamp !== null && timestamp !== null && timestamp < metric.timestamp) continue;
     metric.output.textContent = "—";
     metric.meta.textContent = label;
     metric.timestamp = timestamp;
   }
-  showAlgorithmWindow(panel.algorithmGroups.find(({ stream }) => stream === "eeg"), "waiting", timestamp, label);
+  const group = panel.algorithmGroups.find((group) => group.stream === stream);
+  if (group.timestamp == null || timestamp === null || timestamp >= group.timestamp) {
+    showAlgorithmWindow(group, "missing", timestamp, label);
+  }
+}
+
+function showMissingEeg(panel, label, timestamp = null) {
+  showMissingAlgorithmStream(panel, "eeg", label, timestamp);
   panel.channels = {};
   panel.bandPower = {};
   panel.eegTimestamp = null;
@@ -455,50 +463,60 @@ function showHeadsetEegState(panel, label, timestamp = null) {
   drawSourceCharts(panel);
 }
 
-function updateHeadsetEegState(message, panel) {
-  if (!sharedConnection || panel.source !== "serial" || panel.section.hidden) return;
+function updateEegState(message, panel) {
+  if (!sharedConnection || panel.section.hidden) return;
   const data = message.data;
   const result = data?.result || data;
   const status = result?.payload?.status || result;
   if (status?.wearState !== undefined) {
-    const wasDetached = panel.headsetWearState === "notWorn";
-    panel.headsetWearState = status.wearState;
+    const wasDetached = panel.wearState === "notWorn";
+    panel.wearState = status.wearState;
     if (status.wearState === "notWorn") {
       clearTimeout(panel.eegStaleTimer);
       panel.eegStaleTimer = null;
-      showHeadsetEegState(panel, "脱落", panel.eegStateTimestamp);
+      showMissingEeg(panel, "脱落", panel.eegStateTimestamp);
     } else if (wasDetached) {
-      showHeadsetEegState(panel, "无脑波数据", panel.eegStateTimestamp);
+      showMissingEeg(panel, "无脑波数据", panel.eegStateTimestamp);
     }
   }
   if (data?.event !== "data" && data?.action !== "getLatest") return;
   const timestamp = result.timestampMs;
   if (!Number.isFinite(timestamp) || (panel.eegStateTimestamp !== null && timestamp < panel.eegStateTimestamp)) return;
 
-  const wave = result.payload?.algorithm?.eeg?.wave;
-  const channels = Object.values(wave || {}).filter((values) => Array.isArray(values) && values.length);
+  const eeg = result.payload?.algorithm?.eeg;
+  const channels = Object.values(eeg?.wave || {}).filter((values) => Array.isArray(values) && values.length);
   const detachedWindow = message.message === "未佩戴：脑波数据全为 FF"
     || channels.some((values) => values.every((value) => [255, -1, "FF", "ff"].includes(value)));
   const hasWave = result.valid === true && channels.some((values) => values.some(Number.isFinite));
+  const zeroPlaceholder = eeg?.quality === 0
+    && !channels.some((values) => values.some((value) => Number.isFinite(value) && value !== 0));
   const streams = panel.subscriptions.get(data.subscriptionId) || [];
   const hasEegWindow = detachedWindow || result.payload?.algorithm?.eeg
     || (data.event === "data" && streams.includes("eeg") && result.payload?.algorithm && result.valid === false);
   if (!hasEegWindow) return;
 
-  const detached = detachedWindow || panel.headsetWearState === "notWorn";
+  const detached = detachedWindow || panel.wearState === "notWorn";
   panel.eegStateTimestamp = timestamp;
   clearTimeout(panel.eegStaleTimer);
   panel.eegStaleTimer = null;
-  if (detached || !hasWave) {
-    showHeadsetEegState(panel, detached ? "脱落" : "无脑波数据", timestamp);
+  if (detached || !hasWave || zeroPlaceholder) {
+    showMissingEeg(panel, detached ? "脱落" : zeroPlaceholder ? "无有效脑波" : "无脑波数据", timestamp);
     return;
   }
   if (Number.isFinite(staleAfterMs)) {
     const remaining = data.action === "getLatest" ? staleAfterMs - Math.max(0, Date.now() - timestamp) : staleAfterMs;
     panel.eegStaleTimer = setTimeout(() => {
       panel.eegStaleTimer = null;
-      showHeadsetEegState(panel, "无脑波数据", timestamp);
+      showMissingEeg(panel, "无脑波数据", timestamp);
     }, Math.max(0, remaining));
+  }
+}
+
+function updateMissingHeartRate(data, panel) {
+  if (!sharedConnection || panel.section.hidden || (data?.event !== "data" && data?.action !== "getLatest")) return;
+  const result = data.result || data;
+  if (result.valid === true && Number.isFinite(result.timestampMs) && result.payload?.algorithm?.hr?.value === 0) {
+    showMissingAlgorithmStream(panel, "hr", "无心率数据", result.timestampMs);
   }
 }
 
@@ -642,7 +660,7 @@ function updateVisuals(data, panel) {
   const invalid = result?.valid === false;
   const eegSubscribed = panel.subscriptions.get(data?.subscriptionId)?.includes("eeg");
   if (!eeg && !(invalid && eegSubscribed && result.payload?.algorithm)) return;
-  if (sharedConnection && panel.source === "serial" && panel.eegStateTimestamp !== null
+  if (sharedConnection && panel.eegStateTimestamp !== null
     && result.timestampMs < panel.eegStateTimestamp) return;
   if (panel.eegTimestamp !== null && result.timestampMs < panel.eegTimestamp) return;
   const newWindow = result.timestampMs !== panel.eegTimestamp;
@@ -700,7 +718,8 @@ function handleGatewayMessage(message, panel) {
     updateSnapshot(data, panel);
     updateLiveAlgorithm(data, panel);
     updateVisuals(data, panel);
-    updateHeadsetEegState(message, panel);
+    updateEegState(message, panel);
+    updateMissingHeartRate(data, panel);
   }
 
   const subscriptionId = data?.result?.subscriptionId;

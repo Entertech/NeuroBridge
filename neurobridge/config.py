@@ -11,6 +11,7 @@ from .configuration.migration import migrate
 
 DEFAULT_ALGORITHM_COMMAND = ("/usr/local/lib/neurobridge/neurobridge_affective_bridge",)
 DEFAULT_EEG_ALIGNMENT_PERCENT = 5
+DEFAULT_EEG_ALIGNMENT_RAW_TIMEOUT_MS = 300
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class DataSourceConfig:
     include_headband: bool = False
     eeg_alignment_percent: int = DEFAULT_EEG_ALIGNMENT_PERCENT
     eeg_alignment_wait_ms: int = 100
+    eeg_alignment_raw_timeout_ms: int = DEFAULT_EEG_ALIGNMENT_RAW_TIMEOUT_MS
 
 
 @dataclass(frozen=True)
@@ -348,10 +350,13 @@ def load(
         "eeg_alignment_percent", DEFAULT_EEG_ALIGNMENT_PERCENT if include_headband else 0,
     )
     eeg_alignment_wait_ms = data_source.get("eeg_alignment_wait_ms", 100)
+    eeg_alignment_raw_timeout_ms = data_source.get("eeg_alignment_raw_timeout_ms", DEFAULT_EEG_ALIGNMENT_RAW_TIMEOUT_MS)
     if not 0 <= eeg_alignment_percent <= 10:
         raise ValueError("data_source.eeg_alignment_percent must be between 0 and 10")
     if not 0 <= eeg_alignment_wait_ms < window_interval_ms:
         raise ValueError("data_source.eeg_alignment_wait_ms must be smaller than the data window and non-negative")
+    if eeg_alignment_raw_timeout_ms <= 0:
+        raise ValueError("data_source.eeg_alignment_raw_timeout_ms must be positive")
     replay_recording_id = recording.get("replay_recording_id") or None
     if data_source_type == "serial" and replay_recording_id:
         raise ValueError("recording.replay_recording_id is not supported when data_source.type is serial")
@@ -472,7 +477,7 @@ def load(
             local_ui_directory,
         ),
         data_source=DataSourceConfig(data_source_type, window_interval_ms, stale_after_ms, include_headband,
-                                     eeg_alignment_percent, eeg_alignment_wait_ms),
+                                     eeg_alignment_percent, eeg_alignment_wait_ms, eeg_alignment_raw_timeout_ms),
         serial=serial_config,
         storage=StorageConfig(**storage_values, auto_cleanup_enabled=auto_cleanup_enabled),
         pipeline=PipelineConfig(**pipeline_values),
@@ -509,6 +514,7 @@ def _validate_types(raw: dict) -> None:
                "serial.command_response_timeout_ms", "serial.max_buffer_bytes",
                "algorithm.request_timeout_ms", "data_source.window_interval_ms", "data_source.stale_after_ms",
                "data_source.eeg_alignment_percent", "data_source.eeg_alignment_wait_ms",
+               "data_source.eeg_alignment_raw_timeout_ms",
                "logging.max_bytes", "logging.backup_count", "recording.transport_trace_max_bytes"}
     number = {"serial.data_timeout_seconds", "serial.reconnect_delay_seconds", "serial.stats_interval_seconds",
               "recording.replay_speed"}

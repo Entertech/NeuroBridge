@@ -98,10 +98,11 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         root = Path(__file__).resolve().parents[2]
         template = (root / "windows/gateway.toml.example").read_text(encoding="utf-8")
         config_path = Path(self.enterContext(tempfile.TemporaryDirectory())) / "gateway.toml"
-        previous_config = template.replace("eeg_alignment_percent = 5\n", "")
+        previous_config = template.replace("eeg_alignment_percent = 5\n", "").replace("eeg_alignment_raw_timeout_ms = 300\n", "")
         config_path.write_text(previous_config, encoding="utf-8")
         config = load(config_path)
         self.assertEqual(config.data_source.eeg_alignment_percent, 5)
+        self.assertEqual(config.data_source.eeg_alignment_raw_timeout_ms, 300)
         config_path.write_text(template.replace("eeg_alignment_percent = 5", "eeg_alignment_percent = 0"), encoding="utf-8")
         self.assertEqual(load(config_path).data_source.eeg_alignment_percent, 0)
         config = replace(config, recording=replace(config.recording, directory=config_path.parent / "recordings"))
@@ -128,12 +129,14 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         now = int(time.time() * 1000)
         with (
             patch.object(headband.source, "status", return_value=SourceStatus(ConnectionState.CONNECTED, "ble")),
+            patch.object(headset.source, "status", return_value=SourceStatus(ConnectionState.CONNECTED, "serial")),
+            patch.object(headset.application.mapper, "map", wraps=headset.application.mapper.map) as map_input,
             self.assertLogs("neurobridge.application", level="DEBUG") as logs,
         ):
-            await headband.application.process(RawChunk("bluetooth", "ff31", reference, now, 0, "ble", "ble-trace"))
+            await headband.application.process(RawChunk("bluetooth", "ff31", reference, now, time.monotonic_ns(), "ble", "ble-trace"))
             await headband.application.flush()
             frame = b"\xaa\xaa\xaa\x1c" + original + b"\x48\xbb\xbb\xbb"
-            await headset.application.process(RawChunk("serial", "serial", frame, now, 0, "serial", "serial-trace"))
+            await headset.application.process(RawChunk("serial", "serial", frame, now, time.monotonic_ns(), "serial", "serial-trace"))
             await headset.application.flush()
 
         headband_value, = headband.application.algorithm.inputs
@@ -142,6 +145,9 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(base64.b64decode(headset_value.payload["eegRawBase64"]),
                          eeg_bytes([895, 1790, 1000, 2000, 1105, 2210]))
         self.assertEqual(base64.b64decode(headset_value.payload["hrRawBase64"]), b"\x48")
+        mapped_frames = map_input.call_args.args[1]
+        self.assertEqual(mapped_frames[0].raw_bytes, b"\xaa\xaa\xaa\x1c"
+                         + eeg_bytes([895, 1790, 1000, 2000, 1105, 2210]) + b"\x48\xbb\xbb\xbb")
         headset_window, = headset.application.northbound.events
         self.assertEqual(headset_window.result.batch.signals[0].samples, original[2:])
         self.assertEqual(headset.application.diagnostics["window_processing_errors"], 0)

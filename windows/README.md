@@ -60,9 +60,11 @@ Windows 头环建立连接后，`Flowtime WinRT GATT session status changed` 会
 
 双设备模式用同一个 WebSocket 地址和连接收两路数据，默认地址为 `ws://127.0.0.1:8765/neurobridge/v1/ws`。两路均为实时采集，响应和事件带有 `data.source`，协议请求在 `params.source` 指定设备。联调页每栏自动填写对应来源。双设备模式下头环录制保存在录制目录的 `headband` 子目录，两路均可从原下载地址导出。切回仅采集耳机时，在串口耳机配置中将 `include_headband` 设为 `false` 并重启。
 
-双设备联调页中，耳机已连接但没有有效波形，或波形超过 `[data_source].stale_after_ms` 未更新时，脑波区域显示「无脑波数据」。收到未佩戴状态或全 FF 波形时显示「脱落」。耳机断开后隐藏耳机栏。
+双设备联调页分别显示 EEG 与心率状态。设备仍连接时，脑电质量为 `0` 且波形没有有效振幅的窗口显示「无有效脑波」。波形停更超过 `[data_source].stale_after_ms` 时显示「无脑波数据」，收到未佩戴状态或全 FF 波形提示时显示「脱落」。算法返回 `0 bpm` 时，心率及其相关指标显示「无心率数据」。设备断开后隐藏对应栏。
 
-Windows 双设备模式默认开启原始 EEG 校准，耳机左右通道各自参考同窗口的头环幅度，增益最多调整 5%。校准保留各通道的中心值、采样顺序、包序号和包数。可在 `[data_source]` 设置 `eeg_alignment_percent = 0` 并重启网关来关闭，原有配置中显式设置的 `0` 也会生效。`eeg_alignment_wait_ms` 默认 100，超时、任一侧出现 ADC 饱和或脱落码、窗口无效或头环断开时，耳机算法使用原输入。原始录制、北向原始字节和两路心率继续使用设备原始数据。
+Windows 双设备模式默认开启原始 EEG 校准。网关解析串口帧并分窗后，在组装算法输入前直接调整帧副本里的 EEG 字节。耳机左右通道各自参考同窗口的头环幅度，增益最多调整 5%。校准保留各通道的中心值、采样顺序、包序号和包数。可在 `[data_source]` 设置 `eeg_alignment_percent = 0` 并重启网关来关闭，原有配置中显式设置的 `0` 也会生效。
+
+双路校准要求两台设备都已连接，且各自在最近 `eeg_alignment_raw_timeout_ms`（默认 300 ms）内收到过通过帧校验的原始 EEG。心率和设备状态包不刷新 EEG 计时。任一路超时或掉线就暂停校准，恢复后只用新一段连续数据；此超时只用于校准输入的可用性判断。两路数据可用时，`eeg_alignment_wait_ms`（默认 100 ms）控制算法等待同一窗口头环 EEG 的时长。超时、ADC 饱和、脱落码或窗口无效时，耳机算法使用原输入。原始录制、北向原始字节和两路心率继续使用设备原始数据。
 
 在 `neurobridge.log` 搜索 `Windows EEG alignment configuration` 核对开关。启用后，`Headset EEG alignment decision` 按窗口记录匹配结果、回退原因、两路包数、等待时长和校准增益。默认 `INFO` 每约 10 秒记录各原因的窗口数，并为每种原因保留一条窗口详情。联调时可将 `[logging].level` 设为 `DEBUG`，用 `batchId` 将每个校准窗口与 `Headset EEG algorithm response` 的成功状态、错误原因和算法耗时对应起来。这些日志只记录诊断元数据。
 

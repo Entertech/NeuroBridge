@@ -278,7 +278,8 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
         persistence_timeout_ms=config.pipeline.persistence_timeout_ms,
         shutdown_timeout_ms=config.pipeline.shutdown_timeout_ms,
         observe_batch=eeg_alignment.observe_headband if eeg_alignment and profile.transport == "bluetooth" else None,
-        prepare_algorithm_input=eeg_alignment.prepare_headset if eeg_alignment and profile.transport == "serial" else None,
+        observe_raw_eeg=eeg_alignment.observe_raw_eeg if eeg_alignment else None,
+        prepare_eeg_frames=eeg_alignment.prepare_headset if eeg_alignment and profile.transport == "serial" else None,
     )
     bridge_ref: dict[str, _ApplicationPipelineAdapter] = {}
 
@@ -358,20 +359,24 @@ def build_runtime(
         recording=replace(config.recording, directory=config.recording.directory / "headband"),
     )
 
-    def headband_session() -> str | None:
-        status = headband.source.status()
+    def connected_session(container: ApplicationContainer) -> str | None:
+        status = container.source.status()
         return status.connection_session_id if status.state == ConnectionState.CONNECTED else None
 
     alignment = None
-    LOG.info("Windows EEG alignment configuration: enabled=%s maxAdjustmentPercent=%s waitMs=%s cacheWindows=%s",
+    LOG.info("Windows EEG alignment configuration: enabled=%s maxAdjustmentPercent=%s waitMs=%s "
+             "rawTimeoutMs=%s cacheWindows=%s",
              bool(config.data_source.eeg_alignment_percent), config.data_source.eeg_alignment_percent,
-             config.data_source.eeg_alignment_wait_ms, config.pipeline.algorithm_queue_size)
+             config.data_source.eeg_alignment_wait_ms, config.data_source.eeg_alignment_raw_timeout_ms,
+             config.pipeline.algorithm_queue_size)
     if config.data_source.eeg_alignment_percent:
         alignment = EegAlignmentCache(
             percent=config.data_source.eeg_alignment_percent,
             wait_ms=config.data_source.eeg_alignment_wait_ms,
+            raw_timeout_ms=config.data_source.eeg_alignment_raw_timeout_ms,
             max_windows=config.pipeline.algorithm_queue_size,
-            headband_session=headband_session,
+            headset_session=lambda: connected_session(primary),
+            headband_session=lambda: connected_session(headband),
         )
     primary = build_container(config, runtime, eeg_alignment=alignment)
     headband = build_container(headband_config, runtime, eeg_alignment=alignment)
