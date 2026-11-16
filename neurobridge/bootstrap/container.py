@@ -18,6 +18,7 @@ from ..application.service import ApplicationService
 from ..application.eeg_alignment import EegAlignmentCache
 from ..application.eeg_diagnostics import HeadsetEegDiagnostics
 from ..application.gateway import GatewayApplication as Gateway
+from ..application.processing import AlgorithmInputMapper
 from ..application.snapshots import InMemoryLatestSnapshotStore
 from ..adapters.northbound.protocol import project_window
 from ..adapters.storage.filesystem import SegmentedRecordingRepository
@@ -265,8 +266,11 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
         raise ValueError(f"No parser is registered for {profile.device_protocol}")
 
     observe_batch = None
-    if profile.profile_id == "windows_headset_local":
+    windows_headset = profile.profile_id == "windows_headset_local"
+    if windows_headset:
         observe_batch = HeadsetEegDiagnostics().observe
+        LOG.info("Windows headset HR algorithm input: sampleIntervalMs=%s mappingVersion=%s",
+                 AlgorithmInputMapper.HR_SAMPLE_INTERVAL_MS, AlgorithmInputMapper.HEADSET_HR_MAPPING_VERSION)
 
     application = ApplicationService(
         device_protocol=profile.device_protocol,
@@ -285,6 +289,7 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
         shutdown_timeout_ms=config.pipeline.shutdown_timeout_ms,
         observe_batch=observe_batch,
         eeg_alignment=eeg_alignment,
+        input_mapper=AlgorithmInputMapper(pace_headset_hr=windows_headset),
     )
     bridge_ref: dict[str, _ApplicationPipelineAdapter] = {}
 

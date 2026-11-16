@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from pathlib import Path
 import shutil
@@ -111,11 +112,43 @@ class WindowAndSnapshotTests(unittest.TestCase):
         batch = assembler.flush()
         assert batch is not None
         mapped = AlgorithmInputMapper().map(batch, parsed.frames)
-        import base64
-
         self.assertEqual(base64.b64decode(mapped.payload["eegRawBase64"]), frame(0x1234)[4:24])
         self.assertEqual(mapped.payload["eegPacketCount"], 1)
         self.assertEqual(mapped.payload["hrPacketCount"], 1)
+
+    def test_windows_headset_hr_sampling_uses_real_values_once_per_slot_and_session(self) -> None:
+        mapper = AlgorithmInputMapper(pace_headset_hr=True)
+
+        def map_frames(session, readings):
+            parser = HeadsetRev181Parser()
+            assembler = SignalWindowAssembler(600)
+            frames = []
+            for sequence, (timestamp, bpm) in enumerate(readings):
+                data = frame(sequence)
+                data = data[:24] + bytes([bpm]) + data[25:]
+                parsed = parser.feed(RawChunk("serial", "serial", data, timestamp, timestamp * 1_000_000,
+                                              session, str(sequence)))
+                frames.extend(parsed.frames)
+                for signal in parsed.signals:
+                    self.assertFalse(assembler.append(signal, device_protocol="headset_rev181",
+                                                      connection_session_id=session, recording_session_id="rec"))
+            batch = assembler.flush()
+            assert batch is not None
+            return mapper.map(batch, frames), frames
+
+        mapped, frames = map_frames("headset-1", [(610, 60), (610, 61), (790, 62), (805, 0), (1010, 65)])
+        self.assertEqual(base64.b64decode(mapped.payload["hrRawBase64"]), bytes([62, 0, 65]))
+        self.assertEqual(mapped.payload["hrPacketCount"], 3)
+        self.assertEqual(mapped.payload["eegPacketCount"], 5)
+        self.assertEqual(base64.b64decode(mapped.payload["eegRawBase64"]),
+                         b"".join(item.raw_bytes[4:24] for item in frames))
+        self.assertEqual([item.raw_bytes[24] for item in frames], [60, 61, 62, 0, 65])
+        late, _ = map_frames("headset-1", [(1100, 66)])
+        self.assertEqual(late.payload["hrPacketCount"], 0)
+        after_gap, _ = map_frames("headset-1", [(1600, 67)])
+        self.assertEqual(base64.b64decode(after_gap.payload["hrRawBase64"]), bytes([67]))
+        reconnected, _ = map_frames("headset-2", [(1600, 68)])
+        self.assertEqual(base64.b64decode(reconnected.payload["hrRawBase64"]), bytes([68]))
 
     def test_snapshot_replace_is_one_batch_transaction(self) -> None:
         store = InMemoryLatestSnapshotStore()

@@ -159,7 +159,8 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(base64.b64decode(headband_value.payload["eegRawBase64"]), reference)
         self.assertEqual(base64.b64decode(headset_value.payload["eegRawBase64"]), original)
         self.assertEqual(base64.b64decode(headset_value.payload["hrRawBase64"]), b"\x48")
-        self.assertEqual(headset_value.mapping_version, "1")
+        self.assertEqual(headset_value.mapping_version, "2")
+        self.assertEqual(headband_value.mapping_version, "1")
         self.assertEqual(headset_value.device_protocol, "headset_rev181")
         headset_window, = headset.application.northbound.events
         headband_window, = headband.application.northbound.events
@@ -189,7 +190,7 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
                             and "waveTolerancePercent=5 pairedSamples={'left': 3, 'right': 3}" in line
                             and "changedSamples={'left': 2, 'right': 2}" in line for line in logs.output))
         self.assertTrue(any(f"algorithm response: source=serial batchId={headset_value.batch_id}" in line
-                            and "mappingVersion=1 valid=True" in line for line in logs.output))
+                            and "mappingVersion=2 valid=True" in line for line in logs.output))
         self.assertFalse(any(headset_value.payload["eegRawBase64"] in line for line in logs.output))
 
     async def test_windows_two_sources_share_one_websocket_and_independent_subscriptions(self) -> None:

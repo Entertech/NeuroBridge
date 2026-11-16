@@ -57,6 +57,7 @@ class ApplicationService:
         shutdown_timeout_ms: int = 5000,
         observe_batch: Callable[[ParsedSignalBatch], None] | None = None,
         eeg_alignment: EegAlignmentCache | None = None,
+        input_mapper: AlgorithmInputMapper | None = None,
     ) -> None:
         self.device_protocol = device_protocol
         self.requires_algorithm_to_start = requires_algorithm_to_start
@@ -84,7 +85,7 @@ class ApplicationService:
         self.connection = ConnectionStateMachine()
         self.data = DataStateMachine()
         self.assembler = SignalWindowAssembler(interval_ms)
-        self.mapper = AlgorithmInputMapper()
+        self.mapper = input_mapper if input_mapper is not None else AlgorithmInputMapper()
         self.aggregator = WindowResultAggregator(algorithm, algorithm_timeout_ms)
         if stale_after_ms <= interval_ms:
             raise ValueError("stale_after_ms must be greater than interval_ms")
