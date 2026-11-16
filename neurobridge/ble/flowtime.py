@@ -129,11 +129,14 @@ class FlowtimeAdapter:
         from bleak import BleakClient, BleakScanner
         attempt = 0
         link_lost_at: float | None = None
+        failed_candidates: set[str] = set()
         while not self._stopping:
             attempt += 1
             phase = "scan"
             remove_winrt_observer = None
             retry_delay = self.config.reconnect_delay_seconds
+            rediscovered = None
+            candidate_address = None
             try:
                 await self.status("connectionState", "connecting")
                 scan_started = time.monotonic()
@@ -159,7 +162,11 @@ class FlowtimeAdapter:
                 if rediscovered is not None:
                     candidate, advertisement = rediscovered
                 elif candidates:
-                    candidate, advertisement = max(candidates, key=lambda item: item[1].rssi)
+                    failed_candidates.intersection_update(device.address.casefold() for device, _ in candidates)
+                    untried = [item for item in candidates if item[0].address.casefold() not in failed_candidates]
+                    if not untried:
+                        failed_candidates.clear()
+                    candidate, advertisement = max(untried or candidates, key=lambda item: item[1].rssi)
                 else:
                     if not devices:
                         LOG.warning("No BLE advertisements received; check the Bluetooth adapter and nearby devices")
@@ -168,6 +175,7 @@ class FlowtimeAdapter:
                     else:
                         LOG.warning("Flowtime model UUID found, but no device matched the configured name or identifier")
                     raise RuntimeError("No Flowtime headband matching the configured profile was found")
+                candidate_address = candidate.address.casefold()
                 phase = "connect"
                 connect_started = time.monotonic()
                 disconnected_at: float | None = None
@@ -221,7 +229,8 @@ class FlowtimeAdapter:
                 # A connection is only published after all notifications, the FF21
                 # start command, and the per-session algorithm initialization succeed.
                 phase = "streaming"
-                self._last_connected_address = candidate.address.casefold()
+                self._last_connected_address = candidate_address
+                failed_candidates.clear()
                 await self.status("connectionState", "connected")
                 if link_lost_at is not None:
                     LOG.info(
@@ -267,6 +276,11 @@ class FlowtimeAdapter:
                         retry_delay,
                     )
             except Exception as exc:
+                if candidate_address is not None and sys.platform == "win32":
+                    failed_candidates.add(candidate_address)
+                if rediscovered is not None:
+                    self._last_connected_address = None
+                    LOG.info("Flowtime preferred reconnect failed; next scan uses profile filters: attempt=%s", attempt)
                 LOG.exception(
                     "Flowtime connection failed: attempt=%s phase=%s errorType=%s",
                     attempt,

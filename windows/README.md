@@ -50,7 +50,7 @@ Windows 安装包内置 Bleak 0.19.5，用于修复 Python 3.11 下头环连接�
 
 排查头环连接时，在 `neurobridge.log` 搜索 `Flowtime scan completed`。若 `discovered=0`，优先检查蓝牙适配器、驱动和附近设备是否在广播。若 `discovered>0` 且 `modelMatches=0`，检查头环是否在广播及型号 UUID 是否正确。若 `modelMatches>0` 且 `matched=0`，检查名称和设备标识配置。
 
-已连接的头环掉线后，Windows 立即开始第一次扫描。程序会记住本次运行中最后一个完成连接和采集初始化的头环地址，收到该地址的新广播后就尝试重连，并重新验证 GATT 特征和采集初始化。此时日志的 `previousDeviceSeen=True` 可以解释为什么名称或型号字段尚未收到就开始连接。如果在扫描窗口内没有遇到该地址，继续按原有名称、型号和设备标识配置筛选。扫描或连接失败后的重复尝试仍按 `reconnect_delay_seconds` 间隔进行。
+已连接的头环掉线后，Windows 立即开始第一次扫描。程序会记住本次运行中最后一个完成连接和采集初始化的头环地址，收到该地址的新广播后就尝试重连，并重新验证 GATT 特征和采集初始化。此时日志的 `previousDeviceSeen=True` 可以解释为什么名称或型号字段尚未收到就开始连接。如果在扫描窗口内没有遇到该地址，继续按原有名称、型号和设备标识配置筛选。如果首选设备连接或初始化失败，下次恢复完整扫描，并优先尝试本轮尚未失败的匹配设备。所有匹配设备都已尝试后，从信号最强的设备重新开始。扫描或连接失败后的重复尝试仍按 `reconnect_delay_seconds` 间隔进行。
 
 `Flowtime EEG notifications` 和 `Flowtime EEG session ended` 记录头环 EEG 包的累计分类计数。全零和全 FF 只检查采样字节，跳过两字节序号。计数与原始数据来自同一通知回调，便于区分采样字节全零和通知停止。
 

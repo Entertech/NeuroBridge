@@ -125,6 +125,60 @@ class FlowtimeSelectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(preferred)
         self.assertEqual(adapter.matching_candidates(devices.values()), (1, []))
 
+    async def test_failed_preferred_reconnect_scans_for_other_eligible_devices(self) -> None:
+        settings = replace(config(Path("/tmp")).ble, enabled=True, reconnect_delay_seconds=0)
+
+        def candidate(address, rssi, model):
+            device = SimpleNamespace(address=address, name=settings.device_name)
+            return device, SimpleNamespace(local_name=device.name, service_uuids=[model], rssi=rssi)
+
+        previous = candidate("A1", -10, settings.model_nbr_uuid)
+        alternative = candidate("A2", -40, settings.model_nbr_uuid)
+        wrong_model = candidate("A3", -5, "other")
+        attempts = []
+        scans = []
+
+        class Scanner:
+            def __init__(self, detection_callback):
+                self.detect = detection_callback
+
+            async def __aenter__(self):
+                scans.append("preferred")
+                self.detect(*previous)
+                return self
+
+            async def __aexit__(self, *_):
+                pass
+
+            @classmethod
+            async def discover(cls, **_):
+                scans.append("full")
+                return {device.address: (device, adv) for device, adv in (previous, alternative, wrong_model)}
+
+        class Client:
+            is_connected = False
+
+            def __init__(self, device, **_):
+                self.device = device
+
+            async def connect(self):
+                attempts.append(self.device.address)
+                if self.device is previous[0]:
+                    raise OSError("Preferred device refused the connection")
+                raise asyncio.CancelledError
+
+        async def ignored(*_):
+            pass
+
+        with patch.dict(sys.modules, {"bleak": SimpleNamespace(BleakScanner=Scanner, BleakClient=Client)}), \
+                patch("neurobridge.ble.flowtime.sys", SimpleNamespace(platform="win32")):
+            adapter = FlowtimeAdapter(settings, ignored, ignored, ignored)
+            adapter._last_connected_address = "a1"
+            with self.assertLogs("neurobridge.ble.flowtime", level="INFO"), self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(adapter.run(), 1)
+        self.assertEqual(scans, ["preferred", "full"])
+        self.assertEqual(attempts, ["A1", "A2"])
+
 
 class FlowtimeSubscriptionTests(unittest.IsolatedAsyncioTestCase):
     async def test_ff51_notification_is_subscribed_and_forwarded_as_raw_hr(self) -> None:
