@@ -23,10 +23,14 @@ class WindowsSshCommandTests(unittest.TestCase):
             (root / 'cli').mkdir()
             shutil.copy2(ROOT / 'windows/cli/neurobridge.cmd', root / 'cli/neurobridge.cmd')
             (root / 'open-web.ps1').write_text(
-                'param([switch]$UrlOnly)\nWrite-Output $UrlOnly.IsPresent\nexit 7\n',
+                'param([switch]$UrlOnly, [switch]$Capture)\n'
+                'Write-Output ("{0} {1}" -f $UrlOnly.IsPresent, $Capture.IsPresent)\nexit 7\n',
                 encoding='ascii',
             )
-            for arguments, expected in ((['web'], 'False'), (['web', '--url'], 'True'), (['web', '--unknown'], None)):
+            for arguments, expected in (
+                (['web'], 'False False'), (['web', '--url'], 'True False'),
+                (['web', 'capture'], 'False True'), (['web', '--unknown'], None),
+            ):
                 with self.subTest(arguments=arguments):
                     result = subprocess.run(
                         ['cmd.exe', '/d', '/c', 'cli\\neurobridge.cmd', *arguments],

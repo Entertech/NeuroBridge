@@ -24,6 +24,7 @@ exit /b %ERRORLEVEL%
 :web
 if not "%~3"=="" goto invalid
 if "%~2"=="" goto open_web
+if /i "%~2"=="capture" goto open_capture
 if /i not "%~2"=="--url" goto invalid
 "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\open-web.ps1" -UrlOnly
 exit /b %ERRORLEVEL%
@@ -32,14 +33,20 @@ exit /b %ERRORLEVEL%
 "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\open-web.ps1"
 exit /b %ERRORLEVEL%
 
+:open_capture
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\open-web.ps1" -Capture
+exit /b %ERRORLEVEL%
+
 :help
 echo Usage: neurobridge web [--url]
+echo Usage: neurobridge web capture
 echo Usage: neurobridge ssh ^<install^|status^|disable^>
 echo Usage: neurobridge ssh enable ["path\to\sshd.exe"]
 exit /b 0
 
 :invalid
 echo Usage: neurobridge web [--url] 1>&2
+echo Usage: neurobridge web capture 1>&2
 echo Usage: neurobridge ssh ^<install^|status^|disable^> 1>&2
 echo Usage: neurobridge ssh enable ["path\to\sshd.exe"] 1>&2
 exit /b 2

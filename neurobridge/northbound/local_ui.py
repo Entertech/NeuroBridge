@@ -145,11 +145,6 @@ async def _handle_client(
             await writer.drain()
             return
         path = unquote(parsed.path)
-        if config.profile == "windows_headband_local" and path in {"/capture", "/capture/", "/capture/index.html"}:
-            # The capture viewer restores serial frames from paired EEG/HR packets.
-            writer.write(_response(config, 302, "Found", "text/plain; charset=utf-8", b"", location="/"))
-            await writer.drain()
-            return
         if path == "/runtime-config.js":
             body = _runtime_config(config)
             content_type = "text/javascript; charset=utf-8"

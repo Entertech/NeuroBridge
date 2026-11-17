@@ -1,4 +1,4 @@
-param([switch]$UrlOnly)
+param([switch]$UrlOnly, [switch]$Capture)
 
 $ErrorActionPreference = 'Stop'
 
@@ -48,6 +48,9 @@ function Get-GatewayWebEndpoint {
 
 try {
     $endpoint = Get-GatewayWebEndpoint
+    if ($Capture) {
+        $endpoint.Url = $endpoint.Url.TrimEnd('/') + '/capture/'
+    }
     if ($UrlOnly) {
         Write-Output $endpoint.Url
         exit 0
@@ -61,7 +64,7 @@ try {
         if ($connection.Count -ne 4 -or -not [Net.IPAddress]::TryParse($connection[2], [ref]$address) -or
             $connection[3] -notmatch '^[0-9]{1,5}$' -or [int]$connection[3] -lt 1 -or [int]$connection[3] -gt 65535 -or
             $account -notmatch '^[\p{L}\p{N}_.@-]+(?:\\[\p{L}\p{N}_.@-]+)?$') {
-            throw 'Could not read the SSH connection address or Windows account. Run neurobridge web --url to see the gateway URL.'
+            throw 'Could not read the SSH connection address or Windows account. Run neurobridge web --url to see the gateway URL, or neurobridge web capture to open the raw-data page.'
         }
         $http = $endpoint.HttpPort
         $ws = $endpoint.WebSocketPort

@@ -4,29 +4,29 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <title>NeuroBridge · 耳机数据查看</title>
+    <title>NeuroBridge · 原始数据查看</title>
     <link rel="stylesheet" href="/capture/styles.css" />
   </head>
   <body>
     <main>
       <header class="hero">
         <p class="eyebrow">NEUROBRIDGE / GATEWAY DATA VIEWER</p>
-        <h1>耳机数据<br />实时查看</h1>
+        <h1>原始数据<br />实时查看</h1>
         <p class="intro">
-          本页只连接正在运行的 NeuroBridge 网关，不直接访问 USB 串口。网页连接后，网关会通过 WebSocket 实时转发设备状态；点击“开始接收”后再转发 EEG 和心率数据。
-          页面按已确认串口结构还原完整 28 字节帧，并在独立区域展示解析结果。银河麒麟耳机 USB 串口路径不可用时不会切换为历史录播。
+          本页只连接正在运行的 NeuroBridge 网关，不直接访问 USB 串口或蓝牙。网页连接后，网关会通过 WebSocket 实时转发设备状态；点击“开始接收”后再转发耳机和头环的 EEG、心率原始数据。
+          耳机按已确认串口结构还原完整 28 字节帧；头环按蓝牙通知原样展示，不还原成串口帧。银河麒麟耳机 USB 串口路径不可用时不会切换为历史录播。
         </p>
       </header>
 
       <section class="card overview" aria-labelledby="overviewTitle">
         <div class="section-heading">
-          <div><p class="label">数据链路</p><h2 id="overviewTitle">耳机 → USB 串口 → 网关服务 → 当前网页</h2></div>
+          <div><p class="label">数据链路</p><h2 id="overviewTitle">设备 → 网关服务 → 当前网页</h2></div>
           <span class="service-badge">网关托管</span>
         </div>
         <dl class="protocol-grid">
           <div><dt>网页入口</dt><dd>127.0.0.1:8080/capture/</dd></div>
           <div><dt>数据通道</dt><dd>WebSocket · neurobridge.v1</dd></div>
-          <div><dt>原始数据</dt><dd>eeg.raw · hr.raw</dd></div>
+          <div><dt>原始数据</dt><dd>耳机 / 头环 · eeg.raw · hr.raw</dd></div>
           <div><dt>开始接收</dt><dd>subscribe</dd></div>
           <div><dt>停止接收</dt><dd>unsubscribe</dd></div>
           <div><dt>串口占用</dt><dd>始终由网关独占</dd></div>
@@ -53,7 +53,7 @@
         </div>
         <p id="gatewayMessage" class="message" role="status">正在等待连接网关。</p>
         <p class="control-note">
-          网页连接网关后会立即订阅耳机状态并持续实时更新。“开始/停止”只控制当前网页的 EEG/心率数据订阅，不会停止状态更新、网关进程、USB 串口或设备连接。关闭网页后，网关仍正常运行。
+          网页连接网关后会立即订阅耳机和头环状态并持续实时更新。“开始/停止”只控制当前网页的 EEG/心率原始数据订阅，不会停止状态更新、网关进程、USB 串口或蓝牙连接。关闭网页后，网关仍正常运行。
         </p>
       </section>
 
@@ -62,11 +62,14 @@
         <div class="metrics">
           <div><span>数据模式</span><strong id="modeValue">—</strong></div>
           <div><span>耳机连接</span><strong id="deviceState">—</strong></div>
+          <div><span>头环连接</span><strong id="headbandState">—</strong></div>
           <div><span>本地算法</span><strong id="algorithmState">—</strong></div>
           <div><span>订阅状态</span><strong id="subscriptionState">未订阅</strong></div>
           <div><span>数据事件</span><strong id="eventCount">0</strong></div>
-          <div><span>EEG 包 / 字节</span><strong id="eegCount">0 / 0</strong></div>
-          <div><span>HR 包 / 字节</span><strong id="hrCount">0 / 0</strong></div>
+          <div><span>耳机 EEG 包 / 字节</span><strong id="eegCount">0 / 0</strong></div>
+          <div><span>耳机 HR 包 / 字节</span><strong id="hrCount">0 / 0</strong></div>
+          <div><span>头环 EEG 包 / 字节</span><strong id="headbandEegCount">0 / 0</strong></div>
+          <div><span>头环 HR 包 / 字节</span><strong id="headbandHrCount">0 / 0</strong></div>
           <div><span>最新序列号</span><strong id="sequenceValue">—</strong></div>
           <div><span>页面推算丢包</span><strong id="lostPackets">0</strong></div>
           <div><span>页面推算丢包率</span><strong id="lossRate">0.000000%</strong></div>
@@ -81,6 +84,21 @@
           “窗口”表示网关聚合数据的本地时间范围，默认时长 600ms，不是设备序列号。页面丢包率 = 累计缺失 EEG 包数 ÷ 从首包到最高序列号的累计应收包数；支持 65535 → 0 回绕，重复包不增加已收包数，统计窗口内的乱序补包会减少缺失数。
         </p>
       </section>
+
+      <div class="data-workspace" id="headbandWorkspace">
+        <section class="logs data-panel raw-panel" aria-labelledby="headbandRawTitle">
+          <div class="logs-title">
+            <div><h2 id="headbandRawTitle">头环原始包</h2><span>按蓝牙通知原样显示，不还原成耳机 28 字节串口帧</span></div>
+            <button id="exportHeadbandButton" class="secondary compact-button" type="button" disabled>导出头环原始包</button>
+          </div>
+          <pre id="headbandRawData" aria-live="polite">等待网关数据……</pre>
+        </section>
+
+        <section class="logs data-panel decoded-panel" aria-labelledby="headbandDecodedTitle">
+          <div class="logs-title"><div><h2 id="headbandDecodedTitle">头环数据解析</h2><span>与上方原始包使用相同时间戳；序号后 18 字节为 EEG 采样</span></div></div>
+          <pre id="headbandDecodedData" aria-live="polite">等待网关数据……</pre>
+        </section>
+      </div>
 
       <div class="data-workspace">
         <section class="logs data-panel raw-panel" aria-labelledby="rawTitle">
@@ -110,7 +128,7 @@
 
       <section class="card privacy-note">
         <strong>运行边界</strong>
-        <p>页面资源和 WebSocket 都由本机网关提供，只访问配置好的网关地址；不直接访问串口，不上传数据，不使用 CDN、遥测或浏览器持久化存储。完整帧导出只包含时间戳，以及页面根据收到的 EEG/HR 原始负载按已确认串口结构还原的 28 字节帧；诊断日志仍会隐藏完整 EEG/心率原始数据及 Base64，只保留状态、计数和异常信息。</p>
+        <p>页面资源和 WebSocket 都由本机网关提供，只访问配置好的网关地址；不直接访问串口或蓝牙，不上传数据，不使用 CDN、遥测或浏览器持久化存储。耳机导出只包含时间戳，以及页面根据收到的 EEG/HR 原始负载按已确认串口结构还原的 28 字节帧。头环导出只包含时间戳和网关转发的原始通知字节。诊断日志仍会隐藏完整 EEG/心率原始数据及 Base64，只保留状态、计数和异常信息。</p>
       </section>
     </main>
     <script src="/version.js"></script>

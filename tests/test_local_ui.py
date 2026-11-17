@@ -81,7 +81,7 @@ class LocalUiIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"window.NEUROBRIDGE_B_CLIENT_WINDOWS = false;", response)
         self.assertIn(f"window.NEUROBRIDGE_B_CLIENT_STALE_AFTER_MS = {self.config.data_source.stale_after_ms};".encode("ascii"), response)
 
-    async def test_windows_headband_redirects_the_serial_capture_view(self) -> None:
+    async def test_windows_headband_serves_the_capture_view(self) -> None:
         self.server.close()
         await self.server.wait_closed()
         config = replace(self.config, profile="windows_headband_local", data_source=DataSourceConfig("bluetooth"))
@@ -90,8 +90,8 @@ class LocalUiIntegrationTests(unittest.IsolatedAsyncioTestCase):
         for path in ("/capture", "/capture/", "/capture/index.html"):
             with self.subTest(path=path):
                 response = await self.request(path)
-                self.assertIn(b"HTTP/1.1 302 Found", response)
-                self.assertIn(b"\r\nLocation: /\r\n", response)
+                self.assertIn(b"HTTP/1.1 200 OK", response)
+                self.assertTrue(response.endswith(b"capture:index.html\n"))
 
     async def test_serves_capture_viewer_from_the_same_gateway(self) -> None:
         bundled_page = Path(__file__).resolve().parents[1] / "web" / "capture" / "index.html"

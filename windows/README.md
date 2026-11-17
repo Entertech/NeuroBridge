@@ -24,7 +24,7 @@
 
 离线运行使用 `-Offline`：已有环境不再安装依赖；缺失环境须预先提供完整 Python 3.11 x64（含 venv/pip，可放 `python-runtime\windows\`）及 `wheelhouse\windows\` 下的匹配 wheel。算法未构建时还需在 `algorithm-packages\windows\` 放入 `sdk.lock` 中四个原名 ZIP；已验证的缓存可直接复用。离线参数禁止 winget、网络 pip 安装及算法依赖下载，缺少材料时显示具体文件名。双击入口使用进程级 ExecutionPolicy Bypass；若组织策略禁止脚本，按组织批准方式运行，不修改机器策略。
 
-需要排障菜单时运行 `.\windows\neurobridge-windows-bootstrap.cmd -Action menu`。菜单支持 `1` 一键准备启动、`2` 直接启动、`4` 检查采集来源、`5` 创建/校验配置、`6` 算法准备/修复、`7` 诊断摘要、`8` 最近日志、`9` 自启状态、`10` 启用自启并启动、`11` 关闭自启并停止服务、`12` 一键退出（移除服务注册与源码）、`13` 导出运行日志、`0` 退出。也可用 `-Action start|check|config|algorithm|diagnostics|logs|export-logs|uninstall|purge` 执行对应动作；`uninstall` 和 `purge` 是破坏性动作，非交互执行需显式加 `-Yes`。除 `prepare` 外不安装运行时，缺少环境时重新双击入口即可准备。没有 COM 时网关仍可启动并等待插入设备；算法不可用、已有进程占用端口或配置错误时不会启动第二个网关。
+需要排障菜单时运行 `.\windows\neurobridge-windows-bootstrap.cmd -Action menu`。菜单支持 `1` 一键准备启动、`2` 直接启动、`4` 检查采集来源、`5` 创建/校验配置、`6` 算法准备/修复、`7` 诊断摘要、`8` 最近日志、`9` 自启状态、`10` 启用自启并启动、`11` 关闭自启并停止服务、`12` 一键退出（移除服务注册与源码）、`13` 导出运行日志、`14` 打开原始数据查看页、`0` 退出。也可用 `-Action start|check|config|algorithm|diagnostics|logs|export-logs|capture|uninstall|purge` 执行对应动作；`capture` 打开 `http://127.0.0.1:<端口>/capture/`，不改变正在运行的网关。安装包部署可用 `neurobridge web capture` 打开同一页面，`neurobridge web` 仍打开联调首页。`uninstall` 和 `purge` 是破坏性动作，非交互执行需显式加 `-Yes`。除 `prepare` 外不安装运行时，缺少环境时重新双击入口即可准备。没有 COM 时网关仍可启动并等待插入设备；算法不可用、已有进程占用端口或配置错误时不会启动第二个网关。
 
 自动化测试覆盖配置保留、路径转义、录播/监听策略拒绝、端口冲突、算法失败与诊断脱敏；Windows CI 另外运行 PowerShell 5.1 语法、进程锁和离线一键流程检查。CI 不替代真实设备或目标机验收。
 
@@ -64,7 +64,7 @@ Windows 网关会启动实时 HCI 跟踪，日志出现 `Windows Bluetooth HCI t
 
 若 `disconnection_complete` 记录 `reason=0x3B`，按同一 `handle` 查找此前的 `le_remote_parameter_request`、正面／负面应答、`le_connection_update_command` 和控制器返回的状态。若走 LE L2CAP 信令，使用 `identifier` 将 `l2cap_parameter_update_request` 配对到 `l2cap_parameter_update_response`。请求会记录连接间隔范围、外设延迟和监督超时，`parameterIssues` 标出基础范围或超时裕量违规。只有整组拒绝码时，仍需对照头环固件或空口日志才能定位具体字段。修复后在 Windows 10 上连续采集，覆盖多个原掉线周期，再检查是否出现 `0x3B`。
 
-源码部署双击启动器重新启动，安装包部署执行 `Start-Service NeuroBridge`。打开 `http://127.0.0.1:8080/`（自定义端口以配置为准），等待「头环蓝牙」区显示设备已连接。点击 `getLatest` 查看最新算法结果，或点击 `subscribe` 接收连续窗口。需要确认原始数据时，先勾选 EEG 和 HR 原始字节流再订阅。旧的 `/capture/` 入口在头环模式下跳转至联调页。
+源码部署双击启动器重新启动，安装包部署执行 `Start-Service NeuroBridge`。打开 `http://127.0.0.1:8080/`（自定义端口以配置为准），等待「头环蓝牙」区显示设备已连接。点击 `getLatest` 查看最新算法结果，或点击 `subscribe` 接收连续窗口。需要确认原始字节时，源码部署用菜单 `14` 或 `-Action capture`，安装包部署用 `neurobridge web capture`，打开 `/capture/`。该页同时展示耳机 28 字节串口帧和头环蓝牙通知原始包；仅头环模式不再跳回联调页。
 
 双设备模式用同一个 WebSocket 地址和连接收两路数据，默认地址为 `ws://127.0.0.1:8765/neurobridge/v1/ws`。两路均为实时采集，响应和事件带有 `data.source`，协议请求在 `params.source` 指定设备。联调页每栏自动填写对应来源。双设备模式下头环录制保存在录制目录的 `headband` 子目录，两路均可从原下载地址导出。切回仅采集耳机时，在串口耳机配置中将 `include_headband` 设为 `false` 并重启。
 
