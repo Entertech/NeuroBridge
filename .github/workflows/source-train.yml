@@ -64,6 +64,10 @@ jobs:
   source:
     if: (github.event_name == 'workflow_dispatch' && inputs.operation != 'plan') || (github.event.pull_request.merged && github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'dev_') || startsWith(github.head_ref, 'finalize_')))
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
     outputs:
       complete: ${{ steps.source.outputs.complete }}
       operation: ${{ steps.route.outputs.operation }}
@@ -81,14 +85,21 @@ jobs:
       recovery_runs: ${{ steps.source.outputs.recovery_runs }}
       software_result: ${{ steps.source.outputs.software_result }}
     steps:
-      - name: Require the automation identity
+      - name: Select the release identity
+        id: identity
         env:
           APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
           APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
         run: |
-          test -n "$APP_ID" && test -n "$APP_KEY" || { echo 'Configure the repository release GitHub App before enabling source mutations.' >&2; exit 1; }
+          if test -n "$APP_ID" && test -n "$APP_KEY"; then
+            echo 'mode=app' >> "$GITHUB_OUTPUT"
+          else
+            echo 'mode=workflow' >> "$GITHUB_OUTPUT"
+            echo '::warning::Release GitHub App secrets are absent. This run uses the triggering workflow identity; branches, pull requests, and tags it creates do not start new workflow runs.'
+          fi
       - uses: actions/create-github-app-token@v2
         id: app
+        if: steps.identity.outputs.mode == 'app'
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
@@ -96,7 +107,7 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -131,9 +142,9 @@ jobs:
       - name: Run source orchestration
         id: source
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          TRAIN_APP_TOKEN_USED: 'true'
-          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          GH_TOKEN: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
+          TRAIN_RELEASE_IDENTITY: ${{ steps.identity.outputs.mode }}
+          TRAIN_APP_LOGIN: ${{ steps.identity.outputs.mode == 'app' && format('{0}[bot]', steps.app.outputs.app-slug) || github.actor }}
           TRAIN_OPERATION: ${{ steps.route.outputs.operation }}
           TRAIN_VERSION: ${{ steps.route.outputs.version }}
           TRAIN_REQUIREMENTS: ${{ inputs.requirements }}
@@ -154,7 +165,7 @@ jobs:
     # The reusable workflow cleans intermediate Artifacts with this token.
     # Called workflows cannot elevate the caller job's permissions.
     permissions:
-      contents: read
+      contents: write
       actions: write
     needs: [source]
     if: needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.should_package == 'true' && needs.source.outputs.parallel_systems != 'true'
@@ -169,7 +180,7 @@ jobs:
 
   system-packages:
     permissions:
-      contents: read
+      contents: write
       actions: write
     needs: [source]
     if: needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems == 'true' && needs.source.outputs.software_result != 'success' && needs.source.outputs.complete != 'true'
@@ -193,18 +204,30 @@ jobs:
     needs: [source, system-packages]
     if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems == 'true' && needs.source.outputs.complete != 'true' }}
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
     outputs:
       software_result: ${{ steps.finish.outputs.software_result }}
     steps:
+      - name: Select the release identity
+        id: identity
+        env:
+          APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+          APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+        run: |
+          if test -n "$APP_ID" && test -n "$APP_KEY"; then echo 'mode=app' >> "$GITHUB_OUTPUT"
+          else echo 'mode=workflow' >> "$GITHUB_OUTPUT"; fi
       - uses: actions/create-github-app-token@v2
         id: app
+        if: steps.identity.outputs.mode == 'app'
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -212,9 +235,9 @@ jobs:
       - name: Record public software releases
         id: finish
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          TRAIN_APP_TOKEN_USED: 'true'
-          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          GH_TOKEN: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
+          TRAIN_RELEASE_IDENTITY: ${{ steps.identity.outputs.mode }}
+          TRAIN_APP_LOGIN: ${{ steps.identity.outputs.mode == 'app' && format('{0}[bot]', steps.app.outputs.app-slug) || github.actor }}
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
         run: |
           git config user.name 'NeuroBridge release automation'
@@ -225,17 +248,29 @@ jobs:
     needs: [source, finish-systems]
     if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems == 'true' && (needs.finish-systems.outputs.software_result == 'success' || needs.source.outputs.software_result == 'success') }}
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
     continue-on-error: true
     steps:
+      - name: Select the release identity
+        id: identity
+        env:
+          APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+          APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+        run: |
+          if test -n "$APP_ID" && test -n "$APP_KEY"; then echo 'mode=app' >> "$GITHUB_OUTPUT"
+          else echo 'mode=workflow' >> "$GITHUB_OUTPUT"; fi
       - uses: actions/create-github-app-token@v2
         id: app
+        if: steps.identity.outputs.mode == 'app'
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -243,9 +278,9 @@ jobs:
       - run: python -m pip install -r requirements-ci.lock
       - name: Publish the verified delivery ZIP
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          TRAIN_APP_TOKEN_USED: 'true'
-          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          GH_TOKEN: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
+          TRAIN_RELEASE_IDENTITY: ${{ steps.identity.outputs.mode }}
+          TRAIN_APP_LOGIN: ${{ steps.identity.outputs.mode == 'app' && format('{0}[bot]', steps.app.outputs.app-slug) || github.actor }}
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
         run: |
           python -m tools.source_train publish-delivery --version "$TRAIN_VERSION" --execute
@@ -260,16 +295,29 @@ jobs:
     needs: [source, packages]
     if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems != 'true' && needs.source.outputs.complete != 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
     steps:
+      - name: Select the release identity
+        id: identity
+        env:
+          APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+          APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+        run: |
+          if test -n "$APP_ID" && test -n "$APP_KEY"; then echo 'mode=app' >> "$GITHUB_OUTPUT"
+          else echo 'mode=workflow' >> "$GITHUB_OUTPUT"; fi
       - uses: actions/create-github-app-token@v2
         id: app
+        if: steps.identity.outputs.mode == 'app'
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -278,13 +326,13 @@ jobs:
         with:
           artifact-ids: ${{ needs.packages.outputs.artifact_id || needs.source.outputs.artifact_id }}
           run-id: ${{ needs.source.outputs.package_run_id }}
-          github-token: ${{ steps.app.outputs.token }}
+          github-token: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
           path: artifacts/source-train
       - name: Record verified Artifact, tag exact source, and open finalization PR
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          TRAIN_APP_TOKEN_USED: 'true'
-          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          GH_TOKEN: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
+          TRAIN_RELEASE_IDENTITY: ${{ steps.identity.outputs.mode }}
+          TRAIN_APP_LOGIN: ${{ steps.identity.outputs.mode == 'app' && format('{0}[bot]', steps.app.outputs.app-slug) || github.actor }}
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
           TRAIN_ARTIFACT: ${{ needs.packages.outputs.artifact_id || needs.source.outputs.artifact_id }}
         run: |
@@ -297,25 +345,37 @@ jobs:
     needs: [source, packages, finalize]
     if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && (needs.packages.result == 'failure' || needs.packages.result == 'cancelled' || needs.finalize.result == 'failure' || needs.finalize.result == 'cancelled')
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
     steps:
+      - name: Select the release identity
+        id: identity
+        env:
+          APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+          APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+        run: |
+          if test -n "$APP_ID" && test -n "$APP_KEY"; then echo 'mode=app' >> "$GITHUB_OUTPUT"
+          else echo 'mode=workflow' >> "$GITHUB_OUTPUT"; fi
       - uses: actions/create-github-app-token@v2
         id: app
+        if: steps.identity.outputs.mode == 'app'
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Keep retry checkpoint and preserve every tagged candidate
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          TRAIN_APP_TOKEN_USED: 'true'
-          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          GH_TOKEN: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
+          TRAIN_RELEASE_IDENTITY: ${{ steps.identity.outputs.mode }}
+          TRAIN_APP_LOGIN: ${{ steps.identity.outputs.mode == 'app' && format('{0}[bot]', steps.app.outputs.app-slug) || github.actor }}
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
         run: |
           git config user.name 'NeuroBridge release automation'

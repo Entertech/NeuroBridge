@@ -58,7 +58,8 @@ on:
           - candidate
 
 permissions:
-  contents: read
+  contents: write
+  actions: read
 
 env:
   SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
@@ -520,15 +521,24 @@ jobs:
     continue-on-error: true
     runs-on: ubuntu-22.04
     steps:
+      - name: Select the release identity
+        id: identity
+        env:
+          APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+          APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+        run: |
+          if test -n "$APP_ID" && test -n "$APP_KEY"; then echo 'mode=app' >> "$GITHUB_OUTPUT"
+          else echo 'mode=workflow' >> "$GITHUB_OUTPUT"; fi
       - uses: actions/create-github-app-token@v2
         id: app
+        if: steps.identity.outputs.mode == 'app'
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.SOURCE_SHA }}
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -536,20 +546,20 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: verified-release-${{ env.SOURCE_SHA }}${{ env.ARTIFACT_SUFFIX }}
-          github-token: ${{ steps.app.outputs.token }}
+          github-token: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
           run-id: ${{ needs.system-recovery.outputs.run_id || github.run_id }}
           path: ${{ runner.temp }}/system-delivery
       - uses: actions/download-artifact@v4
         with:
           name: train-package-receipt-${{ env.SOURCE_SHA }}${{ env.ARTIFACT_SUFFIX }}
-          github-token: ${{ steps.app.outputs.token }}
+          github-token: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
           run-id: ${{ needs.system-recovery.outputs.run_id || github.run_id }}
           path: ${{ runner.temp }}/system-proof
       - name: Tag and publish only this verified system
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          TRAIN_APP_TOKEN_USED: 'true'
-          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          GH_TOKEN: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
+          TRAIN_RELEASE_IDENTITY: ${{ steps.identity.outputs.mode }}
+          TRAIN_APP_LOGIN: ${{ steps.identity.outputs.mode == 'app' && format('{0}[bot]', steps.app.outputs.app-slug) || github.actor }}
           TRAIN_VERSION: ${{ inputs.train_version }}
           ARTIFACT_RUN: ${{ needs.system-recovery.outputs.run_id || github.run_id }}
         run: |

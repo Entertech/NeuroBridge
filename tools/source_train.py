@@ -265,8 +265,8 @@ class Train:
               'remoteWrites': 'only the selected source operation; no force-push or Ruleset changes'}, ensure_ascii=False), file=sys.stderr)
         if run('git', 'status', '--porcelain'):
             raise ValueError("source orchestration requires a clean worktree")
-        if os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('TRAIN_APP_TOKEN_USED') != 'true':
-            raise ValueError("automated source writes require the repository GitHub App")
+        if os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('TRAIN_RELEASE_IDENTITY') not in ('app', 'workflow'):
+            raise ValueError("automated source writes require the repository GitHub App or the triggering workflow identity")
         origin = run('git', 'remote', 'get-url', 'origin')
         origin = origin.replace('git@github.com:', 'https://github.com/', 1)
         parsed = urlsplit(origin)

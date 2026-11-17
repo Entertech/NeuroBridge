@@ -65,8 +65,14 @@ class ContractTests(unittest.TestCase):
         obj = train.Train('1.2.3')
         with self.assertRaisesRegex(ValueError, '--execute'): obj.mutable()
         obj.execute = True
-        with mock.patch.object(train, 'run', return_value=''), mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'TRAIN_APP_TOKEN_USED': 'false'}):
-            with self.assertRaisesRegex(ValueError, 'GitHub App'): obj.mutable()
+        with mock.patch.object(train, 'run', return_value=''), mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}, clear=False):
+            os.environ.pop('TRAIN_RELEASE_IDENTITY', None)
+            with self.assertRaisesRegex(ValueError, 'triggering workflow identity'): obj.mutable()
+        def git_result(*args, **kwargs):
+            return '' if args[:2] == ('git', 'status') else 'https://github.com/Entertech/NeuroBridge.git'
+        with mock.patch.object(train, 'run', side_effect=git_result), \
+             mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'TRAIN_RELEASE_IDENTITY': 'workflow'}):
+            obj.mutable()
         with mock.patch.object(train, 'run', return_value=' M user-file'):
             with self.assertRaisesRegex(ValueError, 'clean worktree'): obj.mutable()
 

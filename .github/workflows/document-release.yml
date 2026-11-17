@@ -17,7 +17,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: document-release-${{ github.repository }}
@@ -28,8 +28,17 @@ jobs:
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
+      - name: Select the release identity
+        id: identity
+        env:
+          APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
+          APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+        run: |
+          if test -n "$APP_ID" && test -n "$APP_KEY"; then echo 'mode=app' >> "$GITHUB_OUTPUT"
+          else echo 'mode=workflow' >> "$GITHUB_OUTPUT"; echo '::warning::Release GitHub App secrets are absent. This document tag uses the triggering workflow identity and does not start another workflow.' >&2; fi
       - uses: actions/create-github-app-token@v2
         id: app
+        if: steps.identity.outputs.mode == 'app'
         with:
           app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
@@ -37,15 +46,15 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: sudo apt-get update && sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
       - name: Publish approved PDF after software and verify delivery
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          TRAIN_APP_TOKEN_USED: 'true'
+          GH_TOKEN: ${{ steps.identity.outputs.mode == 'app' && steps.app.outputs.token || github.token }}
+          TRAIN_RELEASE_IDENTITY: ${{ steps.identity.outputs.mode }}
           DOCUMENT_KEY: ${{ inputs.document }}
           DOCUMENT_VERSION: ${{ inputs.version }}
           SOFTWARE_TAGS: ${{ inputs.software_tags }}
