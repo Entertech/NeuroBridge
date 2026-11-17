@@ -106,6 +106,18 @@ class EegAlignmentTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(headset.algorithm_result.metrics["flow"]["meditation"], 0)
                 self.assertEqual(reference.algorithm_result.metrics["flow"]["meditation"], 30)
 
+    async def test_nonzero_flow_is_aligned_when_headset_eeg_is_usable(self):
+        cache = self.cache()
+        await self.warm(cache)
+        wave = [-123, -120, 10]
+        headset = window("headset_rev181", wave, [], packets=[(300, 2400, 42)])
+        headset.algorithm_result.metrics["flow"]["meditation"] = 10
+        reference = window("headband_ble", wave, [], packets=[(65735, 2400, 42)])
+        await cache.align_result(reference)
+        result = await cache.align_result(headset)
+        self.assertEqual(result.algorithm_result.metrics["flow"]["meditation"], 28.5)
+        self.assertEqual(headset.algorithm_result.metrics["flow"]["meditation"], 10)
+
     async def test_zero_flow_stays_zero_without_usable_eeg_pairing_and_reference_score(self):
         for quality, ear_packets, band_packets, band_flow in (
             (0, [(300, 2400, 42)], [(65735, 2400, 42)], 30),

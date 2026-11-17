@@ -219,7 +219,9 @@ class EegAlignmentCache:
         flow_fallback_reference = None
         headset_flow = flow.get("meditation")
         quality = eeg.get("quality")
-        if (matched_refs and type(headset_flow) in (int, float) and headset_flow == 0
+        # A usable EEG window makes every finite Flow score eligible, including zero.
+        # The ordinary score path skips zero because other metrics use it as a placeholder.
+        if (matched_refs and type(headset_flow) in (int, float) and isfinite(headset_flow)
                 and type(quality) in (int, float) and isfinite(quality) and quality > 0):
             # Prefer the same receive window, but the reference must have contributed paired EEG samples.
             for candidate in sorted(nearby, key=lambda ref: abs(ref.window_end_ms - batch.window_end_ms)):
