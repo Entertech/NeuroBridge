@@ -246,6 +246,7 @@ assert suite.countTestCases() > 0
              mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'required_record', return_value=record), \
              mock.patch.object(obj, 'checks'), mock.patch.object(obj, 'tag', return_value=None), \
              mock.patch.object(obj, 'fetch', return_value=OTHER), mock.patch.object(train, 'version_at', return_value='1.2.2'), \
+             mock.patch.object(obj, 'package_scope', return_value={'systems': ['windows-11'], 'baseCommits': {}}), \
              mock.patch('tools.release_preflight.release_plan', return_value={'documentBlockers': ['Windows guide is still unpublished.']}) as plan, \
              mock.patch.object(obj, 'save') as save, mock.patch.object(obj, 'ensure_candidate') as ensure_candidate:
             with self.assertRaisesRegex(ValueError, 'Windows guide is still unpublished'):
@@ -629,7 +630,7 @@ class RemoteAncestryTests(GitSourceTests):
         from tools import release_pipeline
         matrix_file = self.root / release_pipeline.MATRIX_PATH
         matrix_file.parent.mkdir()
-        matrix_file.write_text((release_pipeline.ROOT / release_pipeline.MATRIX_PATH).read_text(encoding='utf-8'), encoding='utf-8')
+        matrix_file.write_text((Path(release_pipeline.__file__).resolve().parents[1] / release_pipeline.MATRIX_PATH).read_text(encoding='utf-8'), encoding='utf-8')
         self.commit('default policy')
         default = self.git('rev-parse', 'HEAD')
         self.git('branch', 'default-policy')
