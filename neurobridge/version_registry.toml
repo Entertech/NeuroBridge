@@ -160,19 +160,30 @@ reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已�
 
 
 [documents.external_windows_operations]
-version = "1.2"
+version = "1.3"
 status = "published"
 audience = "b_side"
 delivery = "platform_bound"
 platforms = ["windows"]
 title = "数据网关 Windows 部署与使用指南"
-markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数据网关 Windows 部署与使用指南_v1.2.md"
-pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.2.pdf"
-created_date = "2026-11-16"
-published_date = "2026-11-16"
-markdown_sha256 = "292254599e72f639053588c11734bd8bd1e3f9537ade024edd1e5d8af9d92544"
-publication_record = "2026-11-16-public-windows-operations-v1.2"
-reason = "用户明确要求将 Windows 录制数据保存位置补充到对外文档；本次只补充现场查找录制目录的方法。"
+markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数据网关 Windows 部署与使用指南_v1.3.md"
+pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.3.pdf"
+created_date = "2026-11-17"
+published_date = "2026-11-17"
+markdown_sha256 = "121b48d02148bb0c54b56ddefe33e4a30638fdb1bfcdea873cab178a1cd2d9d9"
+publication_record = "2026-11-17-public-windows-operations-v1.3"
+reason = "用户明确要求把打开原始数据页的命令和两路原始数据查看方式补充到对外文档；新增独立 v1.3，保留已锁定 v1.2。"
+
+[[change_records]]
+id = "2026-11-17-public-windows-operations-v1.3"
+date = "2026-11-17"
+scope = "external_windows_operations_document"
+summary = "部署指南 v1.3 补充 neurobridge web capture 打开原始数据页，以及该页分两路查看和导出原始数据的方式。"
+external_document_action = "explicit_user_authorized"
+external_document_version = "1.3"
+change_state = "locked"
+release_lock = "windows-operations-v1.2-to-v1.3"
+reason = "用户当前请求明确要求补充到对外文档；保留已发布 v1.2 独立文件与摘要，不回写旧版。PR 合入后由 CI 生成 v1.3 PDF Artifact。"
 
 [[change_records]]
 id = "2026-11-16-windows-openssh-install-hints"
@@ -229,6 +240,21 @@ published_date = "2026-11-16"
 markdown_sha256 = "292254599e72f639053588c11734bd8bd1e3f9537ade024edd1e5d8af9d92544"
 publication_record = "2026-11-16-public-windows-operations-v1.2"
 reason = "用户明确要求将 Windows 录制数据保存位置补充到对外文档；本次只补充现场查找录制目录的方法。"
+
+[[documents.external_windows_operations.versions]]
+version = "1.3"
+status = "published"
+audience = "b_side"
+delivery = "platform_bound"
+platforms = ["windows"]
+title = "数据网关 Windows 部署与使用指南"
+markdown_path = "doc/tech/对外/数据网关 Windows 部署与使用指南/数据网关 Windows 部署与使用指南_v1.3.md"
+pdf_artifact_name = "数据网关 Windows 部署与使用指南_v1.3.pdf"
+created_date = "2026-11-17"
+published_date = "2026-11-17"
+markdown_sha256 = "121b48d02148bb0c54b56ddefe33e4a30638fdb1bfcdea873cab178a1cd2d9d9"
+publication_record = "2026-11-17-public-windows-operations-v1.3"
+reason = "用户明确要求把打开原始数据页的命令和两路原始数据查看方式补充到对外文档；新增独立 v1.3，保留已锁定 v1.2。"
 
 
 [[documents.external_northbound.versions]]
@@ -320,6 +346,15 @@ to_version = "1.2"
 status = "locked"
 locked_by = "2026-11-16-public-windows-operations-v1.2"
 locked_at = "2026-11-16"
+
+[[release_locks]]
+id = "windows-operations-v1.2-to-v1.3"
+scope = "external_windows_operations_document"
+from_version = "1.2"
+to_version = "1.3"
+status = "locked"
+locked_by = "2026-11-17-public-windows-operations-v1.3"
+locked_at = "2026-11-17"
 
 [change_policy]
 external_documents_require_explicit_user_request = true
