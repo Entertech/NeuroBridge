@@ -70,8 +70,9 @@ def formal_document_blockers(plan: dict) -> list[str]:
 
 
 def software_documents(registry: dict, documents: list[ExternalDocument], file_exists) -> tuple[list[ExternalDocument], dict]:
-    from .document_release import document_tag, verify
+    from .document_release import document_tag, prior_public_versions, verify
     from .publish_release import release_info
+    from .release_version_policy import fixed_path, formal_document
 
     legacy_tag = registry.get("document_delivery", {}).get("legacy_software_tag")
     if legacy_tag is None:
@@ -79,7 +80,7 @@ def software_documents(registry: dict, documents: list[ExternalDocument], file_e
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", legacy_tag):
         raise ValueError("invalid legacy software tag for document delivery")
     legacy = tomllib.loads(run("git", "show", f"refs/tags/{legacy_tag}^{{commit}}:{REGISTRY_PATH}"))
-    baseline = {doc.key: doc for doc in collect_external_documents(legacy, file_exists=file_exists)}
+    baseline = {doc.key: doc for doc in collect_external_documents(legacy, file_exists=lambda _: True)}
     selected, evidence = [], {}
     with tempfile.TemporaryDirectory(prefix="neurobridge-doc-preflight-") as temporary:
         for doc in documents:
@@ -87,6 +88,8 @@ def software_documents(registry: dict, documents: list[ExternalDocument], file_e
             history = {entry["version"]: entry for entry in section.get("versions", [])}
             if "version" in section:
                 history[section["version"]] = section
+            if doc.markdown_path == fixed_path(formal_document(registry, doc.key)):
+                history.update(prior_public_versions(doc.key, known=history))
             previous = baseline.get(doc.key)
             for version in sorted(history, key=document_version, reverse=True):
                 item = history[version]
@@ -99,6 +102,8 @@ def software_documents(registry: dict, documents: list[ExternalDocument], file_e
                 receipt = verify(doc.key, version, Path(temporary) / doc.key)
                 if receipt["markdownSha256"] != item["markdown_sha256"] or receipt["pdf"]["fileName"] != item["pdf_artifact_name"]:
                     raise ValueError(f"formal document {tag} differs from the approved registry")
+                if "taggedCommit" in item and receipt["sourceCommit"] != item["taggedCommit"]:
+                    raise ValueError(f"formal document {tag} differs from its Git snapshot")
                 selected.append(ExternalDocument(
                     doc.key, doc.title, version, "published", doc.delivery, doc.platforms,
                     item["markdown_path"], item["pdf_artifact_name"],
@@ -112,7 +117,8 @@ def software_documents(registry: dict, documents: list[ExternalDocument], file_e
                     prior_record = legacy_section if legacy_section.get("version") == previous.version else next(
                         entry for entry in legacy_section["versions"] if entry["version"] == previous.version
                     )
-                    evidence[doc.key] = {"markdownSha256": prior_record["markdown_sha256"]}
+                    evidence[doc.key] = {"markdownSha256": prior_record["markdown_sha256"],
+                                         "markdownRef": f"refs/tags/{legacy_tag}^{{commit}}"}
     return selected, evidence
 
 
@@ -132,6 +138,8 @@ def release_plan(head: str, base: str, *, software: bool = False) -> dict:
     documents = collect_external_documents(registry, file_exists=file_exists)
     bundled, evidence = software_documents(registry, documents, file_exists) if software else (documents, {})
     packages = matrix(config)
+    from tools.release_pipeline import software_versions, system_version
+    versions = software_versions(registry, (system_version(target) for target in packages))
     previous_sections = old_registry["documents"]
     previous_versions = {
         name.removeprefix("external_"): section.get("version")
@@ -177,6 +185,7 @@ def release_plan(head: str, base: str, *, software: bool = False) -> dict:
         "baseCommit": baseline,
         "baseApplicationVersion": old_registry["application"]["version"],
         "applicationVersion": registry["application"]["version"],
+        "softwareVersions": versions,
         "packages": packages,
         "generatedDocuments": ["bundle-directory-guide.pdf"],
         "documents": [
@@ -189,7 +198,7 @@ def release_plan(head: str, base: str, *, software: bool = False) -> dict:
             "wireVersion": wire,
             "baseWireVersion": previous_wire,
             "releasedDocumentVersion": released,
-            "prereleaseDocumentVersion": registry["protocol_lifecycle"]["prerelease_version"],
+            "prereleaseDocumentVersion": registry["protocol_lifecycle"].get("prerelease_version"),
         },
         "documentBlockers": blockers,
         "warnings": warnings,

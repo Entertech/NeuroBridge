@@ -478,6 +478,9 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path, *,
         platform = preflight["softwareSystem"].split("-", 1)[0]
         formal = {doc["key"] for doc in preflight["documents"] if doc.get("documentTag")}
         bundle_manifest["softwareSystem"] = preflight["softwareSystem"]
+        bundle_manifest["softwareVersion"] = preflight.get("softwareVersions", {}).get(
+            preflight["softwareSystem"], preflight["applicationVersion"],
+        )
         bundle_manifest["documentObligations"] = [
             {key: impact[key] for key in ("changeId", "document", "requiredVersion", "pullRequest")}
             for impact in preflight["documentImpacts"]
@@ -510,7 +513,8 @@ def build_system_bundles(results: Path, documents: Path, output: Path, preflight
         for system in systems:
             staging = Path(temporary) / system
             assemble(results, staging, systems=system, subset=True)
-            name = f"neurobridge-{system}-v{preflight['applicationVersion']}.zip"
+            version = preflight.get("softwareVersions", {}).get(system, preflight["applicationVersion"])
+            name = f"neurobridge-{system}-v{version}.zip"
             build_bundle(staging, documents, output / "systems" / system / name,
                          preflight=preflight | {"softwareSystem": system})
 

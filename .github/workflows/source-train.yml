@@ -70,6 +70,7 @@ jobs:
       version: ${{ steps.route.outputs.version }}
       candidate: ${{ steps.source.outputs.candidate }}
       candidate_branch: ${{ steps.source.outputs.candidate_branch }}
+      skip_release: ${{ steps.source.outputs.skip_release }}
       should_package: ${{ steps.source.outputs.should_package }}
       artifact_id: ${{ steps.source.outputs.artifact_id }}
       package_run_id: ${{ steps.source.outputs.package_run_id }}
@@ -156,7 +157,7 @@ jobs:
       contents: read
       actions: write
     needs: [source]
-    if: needs.source.outputs.operation == 'release' && needs.source.outputs.should_package == 'true' && needs.source.outputs.parallel_systems != 'true'
+    if: needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.should_package == 'true' && needs.source.outputs.parallel_systems != 'true'
     uses: ./.github/workflows/release.yml
     with:
       source_sha: ${{ needs.source.outputs.candidate }}
@@ -171,7 +172,7 @@ jobs:
       contents: read
       actions: write
     needs: [source]
-    if: needs.source.outputs.operation == 'release' && needs.source.outputs.parallel_systems == 'true' && needs.source.outputs.software_result != 'success' && needs.source.outputs.complete != 'true'
+    if: needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems == 'true' && needs.source.outputs.software_result != 'success' && needs.source.outputs.complete != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -190,7 +191,7 @@ jobs:
 
   finish-systems:
     needs: [source, system-packages]
-    if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.parallel_systems == 'true' && needs.source.outputs.complete != 'true' }}
+    if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems == 'true' && needs.source.outputs.complete != 'true' }}
     runs-on: ubuntu-22.04
     outputs:
       software_result: ${{ steps.finish.outputs.software_result }}
@@ -222,7 +223,7 @@ jobs:
 
   publish-delivery:
     needs: [source, finish-systems]
-    if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.parallel_systems == 'true' && (needs.finish-systems.outputs.software_result == 'success' || needs.source.outputs.software_result == 'success') }}
+    if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems == 'true' && (needs.finish-systems.outputs.software_result == 'success' || needs.source.outputs.software_result == 'success') }}
     runs-on: ubuntu-22.04
     continue-on-error: true
     steps:
@@ -257,7 +258,7 @@ jobs:
 
   finalize:
     needs: [source, packages]
-    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.parallel_systems != 'true' && needs.source.outputs.complete != 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
+    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems != 'true' && needs.source.outputs.complete != 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/create-github-app-token@v2
@@ -294,7 +295,7 @@ jobs:
 
   retain-failed-attempt:
     needs: [source, packages, finalize]
-    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && (needs.packages.result == 'failure' || needs.packages.result == 'cancelled' || needs.finalize.result == 'failure' || needs.finalize.result == 'cancelled')
+    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && (needs.packages.result == 'failure' || needs.packages.result == 'cancelled' || needs.finalize.result == 'failure' || needs.finalize.result == 'cancelled')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/create-github-app-token@v2

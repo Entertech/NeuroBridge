@@ -9,6 +9,10 @@ SYSTEMS = ("windows-10", "windows-11", "kylin-v10")
 
 
 class ReleaseScopeTests(unittest.TestCase):
+    def setUp(self):
+        registry = patch("tools.release_scope.registry_at", return_value={"application": {"version": "0.3.2"}})
+        registry.start()
+        self.addCleanup(registry.stop)
     def test_explicit_windows_version_includes_both_formats(self):
         targets = select_targets(matrix(), "windows-11")
         self.assertEqual([target["format"] for target in targets], ["exe", "msi"])

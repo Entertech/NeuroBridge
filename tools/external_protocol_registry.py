@@ -34,8 +34,8 @@ def select_external_protocol(registry: dict, version: str | None = None) -> dict
 
 def select_prerelease_protocol(registry: dict, version: str | None = None) -> dict:
     lifecycle = registry["protocol_lifecycle"]
-    prerelease = registry["documents"]["internal_prerelease"]
-    selected_version = normalize_version(version) if version else lifecycle["prerelease_version"]
-    if prerelease["status"] != "prerelease" or prerelease["version"] != selected_version:
+    prerelease = registry["documents"].get("internal_prerelease")
+    selected_version = normalize_version(version) if version else lifecycle.get("prerelease_version")
+    if not prerelease or prerelease["status"] != "prerelease" or prerelease["version"] != selected_version:
         raise ValueError(f"Unknown active prerelease protocol version v{selected_version}")
     return prerelease

@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import zipfile
 
-from tools.release_pipeline import ROOT, log, matrix, require_digest, save_json, select_targets, sha256, software_tag, validate_target_coverage, version_tuple
+from tools.release_pipeline import ROOT, log, matrix, require_digest, save_json, select_targets, sha256, software_tag, software_version_at, validate_target_coverage, version_tuple
 
 ARCHIVE_CHECKPOINT = "<!-- neurobridge-verified-archive\n"
 
@@ -276,15 +276,17 @@ def publish(directory: Path, expected_sha256: str, *, systems: str = "", system:
         archive = directory / manifest["aggregateArchive"]["fileName"]
     version = manifest["applicationVersion"]
     version_tuple(version)
-    tag = software_tag(system, version) if system else f"v{version}"
     commit = command("git", "rev-parse", "HEAD")
+    package_version = software_version_at(commit, system) if system else version
+    tag = software_tag(system, package_version) if system else f"v{version}"
     if manifest["git"]["commit"] != commit or manifest["releaseStatus"] != "candidate" or manifest["trigger"] != "push_master":
         raise ValueError("manifest commit, release state or trigger does not match this checkout")
     if manifest["git"]["dirty"] or command("git", "status", "--porcelain", "--untracked-files=no"):
         raise ValueError("release checkout is dirty")
     if system and (not bundle_mode or systems or manifest["bundleManifest"].get("softwareSystem") != system):
         raise ValueError("software release requires a verified bundle for exactly one system")
-    if system and archive.name != f"neurobridge-{system}-v{version}.zip":
+    if system and (archive.name != f"neurobridge-{system}-v{package_version}.zip"
+                   or manifest["bundleManifest"].get("softwareVersion", version) != package_version):
         raise ValueError("software archive name differs from the system tag")
     targets = select_targets(matrix(), system or systems)
     results = validate_target_coverage(manifest["coverage"], targets)

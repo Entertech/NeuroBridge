@@ -1,3 +1,4 @@
 # CI-only workflow parser and delivery guide tooling.
 PyYAML==6.0.2
 pypdf==7.1.0
+tomlkit==0.13.3

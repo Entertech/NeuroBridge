@@ -135,6 +135,29 @@ def software_tag(system: str, version: str) -> str:
     return f"{system}/v{version}"
 
 
+def software_versions(registry: dict, systems) -> dict[str, str]:
+    systems = set(systems)
+    versions = registry.get("software_versions")
+    if versions is None:
+        return dict.fromkeys(systems, registry["application"]["version"])
+    if set(versions) != systems:
+        raise ValueError("software_versions must cover the release matrix exactly")
+    for version in versions.values():
+        version_tuple(version)
+    return versions
+
+
+def software_version_at(ref: str, system: str) -> str:
+    registry = tomllib.loads(run("git", "show", f"{ref}:neurobridge/version_registry.toml"))
+    return software_versions(registry, (system_version(target) for target in matrix(release_config_at(ref))))[system]
+
+
+def installer_version(system: str) -> str:
+    registry = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))
+    versions = software_versions(registry, (system_version(target) for target in matrix()))
+    return versions.get(system, registry["application"]["version"])
+
+
 def system_release_bases(repository: str, systems: set[str]) -> dict[str, str]:
     pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"))
     latest = {}
@@ -153,8 +176,7 @@ def system_release_bases(repository: str, systems: set[str]) -> dict[str, str]:
         tag = software_tag(system, text)
         run("git", "fetch", "--no-tags", "--refmap=", "origin", f"refs/tags/{tag}")
         base = run("git", "rev-parse", "--verify", "FETCH_HEAD^{commit}")
-        registry = tomllib.loads(run("git", "show", f"{base}:neurobridge/version_registry.toml"))
-        if registry["application"]["version"] != text:
+        if software_version_at(base, system) != text:
             raise ValueError(f"published Release {tag} differs from its source version")
         bases[system] = base
     return bases
@@ -214,7 +236,7 @@ def gate(base: str) -> dict[str, object]:
     product_changed = any(is_business_source(path) for path in changed)
     if new_parts < old_parts:
         raise ValueError(f"application version regressed: {old} -> {new}")
-    if product_changed and new_parts == old_parts:
+    if product_changed and new_parts == old_parts and "software_versions" not in current_registry:
         raise ValueError(f"software business code changed without application version bump: {old}")
     cursor = old
     while version_tuple(cursor) < new_parts:
@@ -343,13 +365,10 @@ def target_result(target_id: str, input_root: Path, output_root: Path) -> dict[s
                 raise ValueError("package filename, path or format mismatch")
             if package.name == "result.json" or report["validationLog"] == "result.json":
                 raise ValueError("input cannot overwrite target result")
-            identity = (target["platform"], target["architecture"], tomllib.loads(REGISTRY.read_text(encoding="utf-8"))["application"]["version"])
-            # The bootstrap package names itself with a build timestamp rather
-            # than the matrix target id, so "kylin" stands in for "kylin-v10".
-            if CONFIG["kylin"].get("package_kind") == "bootstrap" and target["platform"] == "kylin":
-                identity = ("kylin", target["architecture"], identity[2])
-            if not all(fragment in package.stem.lower() for fragment in identity):
-                raise ValueError("package filename must identify platform, architecture and application version")
+            version = installer_version(system_version(target))
+            tokens = package.stem.lower().split("-")
+            if not {target["platform"], target["architecture"], version}.issubset(tokens):
+                raise ValueError("package filename must identify platform, architecture and software version")
             if report["targetId"] != target_id or report["sourceCommit"] != result["sourceCommit"] or report.get("targetArchitecture") != target["architecture"]:
                 raise ValueError("target ID or source commit mismatch")
             if report.get("automatedValidation") != "passed" or not report.get("validationLog"):

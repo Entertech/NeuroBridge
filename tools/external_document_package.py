@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -225,9 +225,15 @@ def build_package(output_directory: Path, pdf_directory: Path, mode: str, *, pre
                     copyfile(downloaded / pdf.name, pdf)
                     pdfs.append(pdf)
                 else:
-                    if planned.get("markdownSha256") and sha256((ROOT / doc.markdown_path).read_bytes()).hexdigest() != planned["markdownSha256"]:
+                    source = ROOT / doc.markdown_path
+                    ref = planned.get("markdownRef")
+                    if ref:
+                        markdown = subprocess.check_output(["git", "show", f"{ref}:{doc.markdown_path}"], cwd=ROOT)
+                        source = Path(temporary) / f"{doc.key}.md"
+                        source.write_bytes(markdown)
+                    if planned.get("markdownSha256") and sha256(source.read_bytes()).hexdigest() != planned["markdownSha256"]:
                         raise ValueError(f"legacy Markdown differs from its published digest: {doc.key}")
-                    pdfs.extend(render_documents([doc], pdf_directory))
+                    pdfs.extend(render_documents([replace(doc, markdown_path=str(source)) if ref else doc], pdf_directory))
         for entry, planned in zip(manifest["documents"], preflight["documents"], strict=True):
             if planned.get("documentTag"):
                 entry["documentTag"] = planned["documentTag"]

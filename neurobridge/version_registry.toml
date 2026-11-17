@@ -4,6 +4,12 @@
 [application]
 version = "0.3.2"
 
+# Current release identities, initialized from the existing delivery baseline.
+[software_versions]
+windows-10 = "0.3.2"
+windows-11 = "0.3.2"
+kylin-v10 = "0.3.2"
+
 [[application_release_changes]]
 from_version = "0.1.0"
 to_version = "0.2.0"

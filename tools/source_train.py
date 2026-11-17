@@ -177,7 +177,7 @@ def artifact_receipt(archive: Path, version: str, candidate: str, matrix: list[d
             'packages': sorted(package_records, key=lambda item: item['targetId'])}
 
 
-def delivery_receipt(archive: Path, version: str, candidate: str, targets: list[dict], *, per_system=False) -> dict:
+def delivery_receipt(archive: Path, version: str, candidate: str, targets: list[dict], *, per_system=False, software_versions=None) -> dict:
     from tools.release_pipeline import software_tag, system_version
 
     receipt = artifact_receipt(archive, version, candidate, targets)
@@ -190,7 +190,8 @@ def delivery_receipt(archive: Path, version: str, candidate: str, targets: list[
         raise ValueError("downloaded system bundles differ from the selected systems")
     for system in sorted(systems):
         selected = [target for target in targets if system_version(target) == system]
-        system_archive = root / system / f"neurobridge-{system}-v{version}.zip"
+        software_version = (software_versions or {}).get(system, version)
+        system_archive = root / system / f"neurobridge-{system}-v{software_version}.zip"
         scoped = artifact_receipt(system_archive, version, candidate, selected)
         canonical = [item for item in receipt["packages"] if item["targetId"] in scoped["targets"]]
         if scoped["packages"] != canonical:
@@ -199,7 +200,9 @@ def delivery_receipt(archive: Path, version: str, candidate: str, targets: list[
             manifest = json.loads(bundle.read("metadata/bundle-manifest.json"))
             if manifest.get("softwareSystem") != system or not isinstance(manifest.get("documentObligations"), list):
                 raise ValueError(f"{system} bundle lacks system or document obligation evidence")
-        receipt["systems"][system] = scoped | {"tag": software_tag(system, version)}
+            if manifest.get("softwareVersion", version) != software_version:
+                raise ValueError(f"{system} bundle version differs from the registry")
+        receipt["systems"][system] = scoped | {"tag": software_tag(system, software_version)}
     return receipt
 
 
@@ -352,7 +355,7 @@ class Train:
         elif systems and select_targets(result['packages'], systems) != select_targets(result['packages'], package_systems(record)):
             raise ValueError('requested systems differ from the recorded package scope')
         result['packageScope'] = scope
-        result['systemTags'] = {system: software_tag(system, self.version) for system in scope['systems']}
+        result['systemTags'] = {system: software_tag(system, result.get("softwareVersions", {}).get(system, self.version)) for system in scope['systems']}
         result['packages'] = select_targets(result['packages'], ','.join(scope['systems'])) if scope['systems'] else []
         result['formalDocumentBlockers'] = formal_document_blockers(result)
         try:
@@ -432,9 +435,11 @@ class Train:
     def delivery_tag(self, record: dict | None, *, complete=False) -> str | None:
         if not record or not record.get("systemTags"):
             return self.tag()
-        from tools.release_pipeline import software_tag
+        from tools.release_pipeline import software_tag, software_version_at
 
-        expected = {system: software_tag(system, self.version) for system in package_systems(record).split(",")}
+        expected = {system: software_tag(system, software_version_at(record["candidate"], system)
+                                         if "softwareVersions" in record else self.version)
+                    for system in package_systems(record).split(",")}
         if record["systemTags"] != expected:
             raise ValueError("recorded software tags differ from the locked release scope")
         if record.get("parallelSystems"):
@@ -754,17 +759,19 @@ class Train:
         if self.delivery_tag(record):
             raise ValueError("tagged candidate is missing its publication receipt; do not rebuild")
         default_tip = self.fetch('refs/heads/'+default)
-        if numeric(self.version) <= numeric(version_at(default_tip)):
-            raise ValueError('new package version must advance the current default version')
         from tools.release_preflight import formal_document_blockers, release_plan
         plan = release_plan(record['candidate'], default_tip, software=True)
-        if plan['documentBlockers']:
-            raise ValueError('formal document preflight failed: ' + ' '.join(plan['documentBlockers']))
         scope = recorded_scope
         if scope is None and not previous_run:
             scope = self.package_scope(record['candidate'], systems)
             if not scope['systems']:
+                if scope.get('versionControlled'):
+                    return record | {'skipRelease': True, 'skipReason': 'no selected software version has advanced'}
                 raise ValueError('no affected systems since the last delivery; specify systems to package explicitly')
+        if numeric(self.version) <= numeric(version_at(default_tip)):
+            raise ValueError('new train version must advance the current default version')
+        if plan['documentBlockers']:
+            raise ValueError('formal document preflight failed: ' + ' '.join(plan['documentBlockers']))
         if scope:
             plan['packages'] = select_targets(plan['packages'], ','.join(scope['systems']))
         blockers = formal_document_blockers(plan)
@@ -773,7 +780,10 @@ class Train:
         if recorded_scope is None and scope:
             record['packageScope'] = {key: scope[key] for key in ('mode', 'systems', 'baseCommits')}
         if not previous_run:
-            record["systemTags"] = {system: software_tag(system, self.version) for system in record["packageScope"]["systems"]}
+            if "softwareVersions" in plan:
+                record["softwareVersions"] = plan["softwareVersions"]
+            record["systemTags"] = {system: software_tag(system, plan.get("softwareVersions", {}).get(system, self.version))
+                                    for system in record["packageScope"]["systems"]}
             record["parallelSystems"] = True
         record['packageRunId'] = os.environ['GITHUB_RUN_ID']
         record['packageRunAttempt'] = os.environ.get('GITHUB_RUN_ATTEMPT', '1')
@@ -793,7 +803,8 @@ class Train:
         systems = package_systems(record)
         candidate = record['candidate']
         targets = select_targets(matrix(release_config_at(candidate)), systems)
-        receipt = delivery_receipt(archives[0], self.version, candidate, targets, per_system=bool(record.get("systemTags")))
+        versions = {system: tag.split("/v", 1)[1] for system, tag in record.get("systemTags", {}).items()}
+        receipt = delivery_receipt(archives[0], self.version, candidate, targets, per_system=bool(versions), software_versions=versions)
         remote = api(f'repos/{self.repository}/actions/artifacts/{artifact_id}')
         if remote['expired'] or remote['name'] != 'verified-release-'+record['candidate']:
             raise ValueError("uploaded Artifact identity or retention is invalid")
@@ -839,11 +850,12 @@ class Train:
             raise ValueError("system publication checkout differs from candidate")
         targets = select_targets(matrix(release_config_at(candidate)), system)
         archive = directory / f"neurobridge-v{self.version}.zip"
-        verified = delivery_receipt(archive, self.version, candidate, targets, per_system=True)
+        tag = record["systemTags"][system]
+        verified = delivery_receipt(archive, self.version, candidate, targets, per_system=True,
+                                    software_versions={system: tag.split("/v", 1)[1]})
         if verified != json.loads(proof.read_bytes()):
             raise ValueError("downloaded system package differs from its pre-upload receipt")
         receipt = verified["systems"][system]
-        tag = record["systemTags"][system]
         if receipt["tag"] != tag:
             raise ValueError("verified installer receipt differs from the locked system tag")
         ref = f"refs/tags/{tag}"
@@ -1068,6 +1080,9 @@ def source_check(branch: str, base: str, head: str = 'HEAD', event: str | None =
         print(f'comparison baseline resolved to {base} from {default}', file=sys.stderr)
     require_sha(base)
     from tools.release_pipeline import gate
+    if event == 'pull_request':
+        from tools.release_version_policy import check_versions
+        check_versions(run('git', 'merge-base', base, head), head)
     if branch.startswith(tuple(config['branches']['requirement_prefixes'])):
         fork = run('git', 'merge-base', base, head)
         if version_at(head) != version_at(fork):
@@ -1122,12 +1137,15 @@ def main():
         if args.operation == 'check':
             result = source_check(args.branch, args.base, args.head, args.event)
         elif args.operation == 'verify-package':
-            from tools.release_pipeline import matrix, release_config_at, select_targets
+            from tools.release_pipeline import matrix, release_config_at, select_targets, software_version_at, system_version
             archives = list(args.directory.glob('*.zip'))
             if len(archives) != 1: raise ValueError('one delivery ZIP required')
             candidate = require_sha(args.candidate)
             targets = select_targets(matrix(release_config_at(candidate)), args.systems)
-            result = delivery_receipt(archives[0], args.version, candidate, targets, per_system=args.system_bundles)
+            versions = {system: software_version_at(candidate, system)
+                        for system in {system_version(target) for target in targets}} if args.system_bundles else {}
+            result = delivery_receipt(archives[0], args.version, candidate, targets, per_system=args.system_bundles,
+                                      software_versions=versions)
         else:
             train = Train(args.version, args.execute)
             train.operation = args.operation
@@ -1158,6 +1176,7 @@ def main():
                 target.write('candidate='+result['candidate']+'\n')
                 target.write('candidate_branch='+result['candidateBranch']+'\n')
                 target.write('should_package='+str(not bool(result.get('artifact'))).lower()+'\n')
+                target.write('skip_release='+str(bool(result.get('skipRelease'))).lower()+'\n')
                 target.write('artifact_id='+str((result.get('artifact') or {}).get('id', ''))+'\n')
                 target.write('package_run_id='+str(result.get('packageRunId', ''))+'\n')
                 target.write('systems='+package_systems(result)+'\n')

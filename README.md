@@ -6,7 +6,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 源码发布采用 `需求分支 → dev_B → publish_B → 独立候选提交 → 各系统软件发布 → finalize_B → master`。需求开发不升版，用户选定版本和需求范围后才初始化版本；各阶段 PR 和 push 只做代码检查，合入 `master` 不再自动发版。源码流程通过 GitHub App 编排，配置见 [code-release-train.toml](.release/code-release-train.toml)，操作和启用条件见[发布技术方案](doc/tech/发布工作流技术方案.md)。
 
-版本列车默认按各系统上次交付后的变化选包，也可显式指定 Windows 10、Windows 11 或麒麟 V10。各系统并行构建和验包，用独立的 `<system>/v<applicationVersion>` tag 记录软件发布结果。等本轮系统任务结束后，`delivery/v<applicationVersion>` 发布一份交付 ZIP，包含全部成功系统的原始软件 ZIP、各自适用的已核验文档和汇总清单。只有全部系统失败才判定软件发布失败。失败系统保留诊断并沿用上次交付基准。软件回执登记新版文档待办，文档随后独立发布和核销。手动 `Release` 和 `Kylin bootstrap package` 用于诊断构建。详见[发布配置](release/release_matrix.toml)。
+版本列车按台账 `[software_versions]` 比较各系统上次正式交付，只选择已升版且有对应代码变化的系统。可显式限定 Windows 10、Windows 11 或麒麟 V10 的范围。各系统并行构建、验包并使用 `<system>/v<softwareVersion>` tag。等本轮系统任务结束后，`delivery/v<applicationVersion>` 发布一份交付 ZIP，包含全部成功系统的原始软件 ZIP、各自适用的已核验文档和汇总清单。只有全部系统失败才判定软件发布失败。失败系统保留诊断并沿用上次交付基准。软件回执登记新版文档待办，文档随后独立发布和核销。手动 `Release` 和 `Kylin bootstrap package` 用于诊断构建。详见[发布配置](release/release_matrix.toml)。
 
 原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。
 
@@ -178,7 +178,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 - [B 端联调网页](web/b-client-test/README.md)：零依赖的浏览器测试工具，可连接网关并测试 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。
 
-对外 Markdown 按版本独立保存在仓库，PDF 通过 Artifact 或 Release 交付。软件先发布，其回执列出随附文档和待办。文档 PR 完成审核和锁定后，在 `master` 手动运行 `External document release`，指定文档键、批准版本和已发布的软件 tag。工作流逐页渲染 PDF，发布 `docs/<文档键>/v<版本>` 及回执，并回下载核对 PDF 的 SHA-256。后续软件从正式文档 Release 取用相同 PDF。迁移前的文档沿用历史软件总包基线。详见[版本台账](neurobridge/version_registry.toml)。
+文档有独立的台账版本，内部预发布稿可以暂时为空。文档发布 PR 将预发布正文晋升到固定的正式 Markdown 路径，更新台账和锁定记录，再移除该预发布稿。历史正式稿可通过 Git 提交和文档 tag 追溯。软件先发布，其回执列出随附文档和待办。文档 PR 完成审核和锁定后，在 `master` 手动运行 `External document release`，指定文档键、批准版本和已发布的软件 tag。工作流逐页渲染 PDF，发布 `docs/<文档键>/v<版本>` 及回执，并回下载核对 PDF 的 SHA-256。后续软件从正式文档 Release 取用相同 PDF。迁移前的文档沿用历史软件总包基线。详见[版本台账](neurobridge/version_registry.toml)。
 
 安装排错：麒麟安装日志保存在 `/var/log/neurobridge-bootstrap`，服务尚未创建时也可运行 `sudo /usr/lib/neurobridge-bootstrap/export-install-logs.sh --output-dir "$HOME/下载"`。Windows 10/11 64 位包随附 `install-with-logs.ps1`，通过 `-Installer` 安装、`-Export` 导出失败日志；Windows 7 和 32 位目标不参与构建与交付。交付 ZIP 的 PDF 副本使用英文文件名，原名称对照保存在 `metadata/document-filenames.json`。上述源码与模拟验证不替代银河麒麟现场验收。
 

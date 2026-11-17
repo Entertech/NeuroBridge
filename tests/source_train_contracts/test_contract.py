@@ -324,6 +324,8 @@ class GitSourceTests(unittest.TestCase):
         original = train.run
         self.p = mock.patch.object(train, 'run', side_effect=lambda *a, **k: original(*a, **({'cwd': self.root} | k)))
         self.p.start(); self.addCleanup(self.p.stop)
+        pipeline_root = mock.patch('tools.release_pipeline.ROOT', self.root)
+        pipeline_root.start(); self.addCleanup(pipeline_root.stop)
         self.git('init', '-q'); self.git('config', 'user.name', 'Fixture'); self.git('config', 'user.email', 'fixture@example.invalid')
         (self.root/'neurobridge').mkdir(); (self.root/'.release').mkdir()
         self.registry('0.3.2'); self.commit('baseline'); self.baseline = self.git('rev-parse', 'HEAD')
