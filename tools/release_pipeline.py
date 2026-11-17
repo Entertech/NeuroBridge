@@ -128,6 +128,38 @@ def version_tuple(value: str) -> tuple[int, int, int]:
     return tuple(map(int, match.groups()))
 
 
+def software_tag(system: str, version: str) -> str:
+    version_tuple(version)
+    if system not in {system_version(target) for target in matrix()}:
+        raise ValueError(f"unknown release system: {system}")
+    return f"{system}/v{version}"
+
+
+def system_release_bases(repository: str, systems: set[str]) -> dict[str, str]:
+    pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"))
+    latest = {}
+    for release in (release for page in pages for release in page):
+        system, _, version = release["tag_name"].partition("/v")
+        if (system not in systems or not VERSION_RE.fullmatch(version) or release["draft"]
+                or release["prerelease"] or not release.get("published_at")):
+            continue
+        assets = {asset["name"] for asset in release["assets"] if asset.get("state") == "uploaded"}
+        if {f"neurobridge-{system}-v{version}.zip", "software-receipt.json"} - assets:
+            continue
+        latest[system] = max(latest.get(system, ()), version_tuple(version))
+    bases = {}
+    for system, version in latest.items():
+        text = ".".join(map(str, version))
+        tag = software_tag(system, text)
+        run("git", "fetch", "--no-tags", "--refmap=", "origin", f"refs/tags/{tag}")
+        base = run("git", "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+        registry = tomllib.loads(run("git", "show", f"{base}:neurobridge/version_registry.toml"))
+        if registry["application"]["version"] != text:
+            raise ValueError(f"published Release {tag} differs from its source version")
+        bases[system] = base
+    return bases
+
+
 def is_business_source(path: str) -> bool:
     return path not in BUILD_ONLY_SOURCES and path.startswith(BUSINESS_SOURCE_ROOTS) and Path(path).suffix in BUSINESS_SOURCE_SUFFIXES
 
@@ -368,7 +400,7 @@ def add_zip_entry(bundle: zipfile.ZipFile, path: Path, name: str, timestamp: tup
 
 
 def assemble(results_root: Path, output: Path, trigger: str = "push_master", *,
-             enforce_minimum: bool | None = None, systems: str = "") -> dict[str, object]:
+             enforce_minimum: bool | None = None, systems: str = "", subset: bool = False) -> dict[str, object]:
     if trigger not in {"pull_request", "push_master"}:
         raise ValueError(f"invalid release trigger: {trigger}")
     # PR runs must still emit a diagnostic archive when every native installer is
@@ -376,7 +408,7 @@ def assemble(results_root: Path, output: Path, trigger: str = "push_master", *,
     enforce = trigger == "push_master" if enforce_minimum is None else enforce_minimum
     targets = select_targets(matrix(), systems)
     platforms = tuple(dict.fromkeys(target["platform"] for target in targets))
-    if systems:
+    if systems and not subset:
         unexpected = {path.parent.name for path in results_root.glob("*/result.json")} - {target["id"] for target in targets}
         if unexpected:
             raise ValueError(f"results include unselected release targets: {', '.join(sorted(unexpected))}")

@@ -58,7 +58,7 @@ shared_paths = [
 # push_master remains the internal strict-coverage manifest enum for compatibility.
 # Live source publication is orchestrated by .release/code-release-train.toml.
 trigger = "source_train"
-tag_pattern = "v<applicationVersion>"
+tag_pattern = "<system>/v<applicationVersion>"
 github_release_required = true
 github_release_starts_as_draft = true
 release_receipt_schema = "schemas/release-receipt.schema.json"

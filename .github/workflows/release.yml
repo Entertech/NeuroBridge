@@ -14,6 +14,9 @@ on:
       source_train:
         type: boolean
         default: false
+      system_releases:
+        type: boolean
+        default: false
       systems:
         type: string
         default: ''
@@ -70,6 +73,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.SOURCE_SHA }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-plan-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/document-preflight
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -83,9 +90,12 @@ jobs:
           fc-cache -f
           fc-match "Noto Sans CJK SC" | grep -Eqi "Noto.*CJK"
       - name: Build external document PDF package and page previews
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p artifacts/document-preview "$RUNNER_TEMP/external-document-pdfs"
-          python tools/build-external-document-package.py \
+          python -m tools.build-external-document-package \
+            --preflight "$RUNNER_TEMP/document-preflight/release-preflight.json" \
             --output-dir artifacts \
             --pdf-dir "$RUNNER_TEMP/external-document-pdfs" \
             --mode "$EXTERNAL_DOCUMENT_MODE"
@@ -193,6 +203,8 @@ jobs:
           print('candidate_matrix=' + json.dumps(candidate_matrix, separators=(',', ':')))
           PY
       - name: Preview packages and validate external documents
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python -m tools.release_preflight \
             --head "$SOURCE_SHA" \
@@ -381,12 +393,15 @@ jobs:
         id: bundle
         env:
           GH_TOKEN: ${{ github.token }}
+          SYSTEM_RELEASES: ${{ inputs.system_releases }}
         run: |
+          system_args=()
+          if [[ "$SYSTEM_RELEASES" == true ]]; then system_args=(--system-results artifacts/targets); fi
           python tools/build-release-bundle.py \
             --release-dir artifacts/release \
             --documents-dir artifacts/documents \
             --preflight artifacts/preflight/release-preflight.json \
-            --output "$DELIVERY_ZIP"
+            --output "$DELIVERY_ZIP" "${system_args[@]}"
           printf 'archive_sha256=%s\n' "$(sha256sum "$DELIVERY_ZIP" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - name: Check directory PDF and render every page
         run: |
@@ -415,10 +430,15 @@ jobs:
           retention-days: 30
       - name: Verify every defined installer and persist the pre-upload receipt
         if: inputs.source_train
+        env:
+          SYSTEM_RELEASES: ${{ inputs.system_releases }}
         run: |
+          system_args=()
+          if [[ "$SYSTEM_RELEASES" == true ]]; then system_args=(--system-bundles); fi
           python -m tools.source_train verify-package \
             --version "${{ needs.release-plan.outputs.version }}" --candidate "$SOURCE_SHA" \
             --systems "$RELEASE_SYSTEMS" \
+            "${system_args[@]}" \
             --directory "$DELIVERY_DIR" > "$RUNNER_TEMP/package-receipt.json"
       - uses: actions/upload-artifact@v4
         if: inputs.source_train
@@ -431,7 +451,7 @@ jobs:
         id: upload
         with:
           name: verified-release-${{ env.SOURCE_SHA }}
-          path: ${{ env.DELIVERY_ZIP }}
+          path: artifacts/delivery/
           if-no-files-found: error
           retention-days: 90
 

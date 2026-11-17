@@ -68,7 +68,8 @@ class ReleaseTriggerTests(unittest.TestCase):
         self.assertIn('name: release-plan-${{ env.SOURCE_SHA }}', block)
         self.assertIn('--preflight artifacts/preflight/release-preflight.json', block)
         self.assertIn('--directory "$DELIVERY_DIR"', block)
-        self.assertIn('path: ${{ env.DELIVERY_ZIP }}', block)
+        self.assertIn('path: artifacts/delivery/', block)
+        self.assertIn('--system-bundles', block)
 
     def test_failure_path_retains_tagged_source(self):
         text = job_block('retain-failed-attempt', WORKFLOWS/'source-train.yml')
@@ -76,6 +77,14 @@ class ReleaseTriggerTests(unittest.TestCase):
         self.assertIn("needs.finalize.result == 'failure'", text)
         self.assertIn('tools.source_train fail', text)
         self.assertNotIn('git push', text)
+
+    def test_document_publication_is_a_manual_master_operation_with_software_evidence(self):
+        path = WORKFLOWS/'document-release.yml'
+        self.assertIn('workflow_dispatch:', path.read_text())
+        block = job_block('publish', path)
+        self.assertIn("github.ref == 'refs/heads/master'", block)
+        self.assertIn('tools.document_release publish', block)
+        self.assertIn('--software-tags "$SOFTWARE_TAGS"', block)
 
     def test_cleanup_preserves_both_test_diagnostics_and_train_receipts(self):
         block = job_block('release-cleanup', WORKFLOWS/'release.yml')

@@ -74,6 +74,7 @@ jobs:
       artifact_id: ${{ steps.source.outputs.artifact_id }}
       package_run_id: ${{ steps.source.outputs.package_run_id }}
       systems: ${{ steps.source.outputs.systems }}
+      system_releases: ${{ steps.source.outputs.system_releases }}
     steps:
       - name: Require the automation identity
         env:
@@ -157,6 +158,7 @@ jobs:
       source_sha: ${{ needs.source.outputs.candidate }}
       source_branch: ${{ needs.source.outputs.candidate_branch }}
       source_train: true
+      system_releases: ${{ needs.source.outputs.system_releases == 'true' }}
       systems: ${{ needs.source.outputs.systems }}
     secrets: inherit
 

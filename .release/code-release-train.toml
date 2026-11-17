@@ -15,7 +15,6 @@ publish_template = "publish_{version}"
 finalization_template = "finalize_{version}"
 release_candidate_template = "release-candidate/{version}/{attempt}"
 state_template = "release-state/{version}"
-tag_prefix = "v"
 
 [source]
 version_source = "neurobridge/version_registry.toml"

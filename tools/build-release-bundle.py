@@ -404,6 +404,9 @@ def verify_bundled_documents(bundle: zipfile.ZipFile, systems: list[dict], prefl
             raise ValueError(f"document {key} differs from preflight (expected v{expected['version']}, got v{entry['version']})")
         if entry["artifactStatus"] != ("published" if mode == "publish" else "candidate"):
             raise ValueError(f"document {key} artifact status differs from preflight mode")
+        if expected.get("documentTag") and (
+                entry.get("documentTag") != expected["documentTag"] or entry["pdfSha256"] != expected["pdfSha256"]):
+            raise ValueError(f"document {key} tag or digest differs from preflight")
         if expected["delivery"] == "review_only":
             continue
         name = delivery_pdf_name(expected["pdf_artifact_name"])
@@ -471,6 +474,15 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path, *,
         "validationFiles": sorted(name for name in files if name.startswith("metadata/validation/")),
         "metadataFiles": ["metadata/document-filenames.json"],
     }
+    if preflight is not None and preflight.get("softwareSystem"):
+        platform = preflight["softwareSystem"].split("-", 1)[0]
+        formal = {doc["key"] for doc in preflight["documents"] if doc.get("documentTag")}
+        bundle_manifest["softwareSystem"] = preflight["softwareSystem"]
+        bundle_manifest["documentObligations"] = [
+            {key: impact[key] for key in ("changeId", "document", "requiredVersion", "pullRequest")}
+            for impact in preflight["documentImpacts"]
+            if platform in impact["platforms"] and not (impact["satisfied"] and impact["document"] in formal)
+        ]
     files["metadata/bundle-manifest.json"] = json.dumps(bundle_manifest, ensure_ascii=False, indent=2, sort_keys=True).encode() + b"\n"
     files["metadata/build-manifest.json"] = (release_directory / "build-manifest.json").read_bytes()
     files["metadata/release-logs.jsonl"] = (release_directory / "release-logs.jsonl").read_bytes()
@@ -488,16 +500,36 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path, *,
     return {**bundle_manifest, "fileName": output.name, "sha256": digest_file(output), "size": output.stat().st_size}
 
 
+def build_system_bundles(results: Path, documents: Path, output: Path, preflight: dict) -> None:
+    from release_pipeline import assemble, system_version
+
+    systems = sorted({system_version(target) for target in preflight["packages"]})
+    if not systems:
+        raise ValueError("no selected systems for software delivery")
+    with tempfile.TemporaryDirectory(prefix="neurobridge-system-build-") as temporary:
+        for system in systems:
+            staging = Path(temporary) / system
+            assemble(results, staging, systems=system, subset=True)
+            name = f"neurobridge-{system}-v{preflight['applicationVersion']}.zip"
+            build_bundle(staging, documents, output / "systems" / system / name,
+                         preflight=preflight | {"softwareSystem": system})
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--release-dir", required=True, type=Path)
     parser.add_argument("--documents-dir", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--preflight", type=Path)
+    parser.add_argument("--system-results", type=Path)
     args = parser.parse_args()
     try:
         preflight = json.loads(args.preflight.read_text(encoding="utf-8")) if args.preflight else None
         result = build_bundle(args.release_dir, args.documents_dir, args.output, preflight=preflight)
+        if args.system_results is not None:
+            if preflight is None or preflight["documentMode"] != "publish":
+                raise ValueError("system deliveries require formal preflight")
+            build_system_bundles(args.system_results, args.documents_dir, args.output.parent, preflight)
     except (OSError, KeyError, ValueError, json.JSONDecodeError, zipfile.BadZipFile, subprocess.CalledProcessError) as error:
         parser.error(str(error))
     print(json.dumps(result, ensure_ascii=False, indent=2))

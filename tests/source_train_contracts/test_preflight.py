@@ -1,12 +1,15 @@
 from pathlib import Path
+from copy import deepcopy
 from dataclasses import replace
 import json
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 
 from tools import release_preflight
 from tools.external_document_package import ExternalDocument
+from tools.external_document_package import collect_external_documents
 
 
 class ReleasePreflightTests(unittest.TestCase):
@@ -107,17 +110,42 @@ pdf_artifact_name = "windows.pdf"
             "northbound": {"wireVersion": "1.0", "baseWireVersion": "1.0", "prereleaseDocumentVersion": "0.3"},
         }
         platforms = {"windows", "kylin"}
-        for version, status, blocked in (("0.2", "published", True), ("0.3", "unpublished", True),
+        for version, status, pending in (("0.2", "published", True), ("0.3", "unpublished", True),
                                          ("0.3", "published", False), ("0.10", "published", False)):
             with self.subTest(version=version, status=status):
                 plan["documentImpacts"] = release_preflight.document_impacts(
                     registry, [replace(doc, version=version, status=status)], platforms,
                 )
                 summary = release_preflight.render_summary(plan, "publish", "version_advanced")
-                self.assertEqual(bool(release_preflight.formal_document_blockers(plan)), blocked)
-                self.assertEqual("document PR #12" in summary, blocked)
-                if blocked:
-                    self.assertIn(f"candidate selects v{version}", summary)
+                self.assertEqual(release_preflight.formal_document_blockers(plan), [])
+                self.assertEqual("pending document publication" in summary, pending)
+                self.assertIn(f"required v0.3 · bundled v{version}", summary)
+                self.assertIn("PR #12", summary)
         registry["change_records"][0]["required_document"]["platforms"] = ["kylin"]
         plan["documentImpacts"] = release_preflight.document_impacts(registry, [doc], platforms)
         self.assertEqual(release_preflight.formal_document_blockers(plan), [])
+
+    def test_software_uses_legacy_pdf_until_the_document_tag_is_public(self):
+        root = Path(release_preflight.__file__).resolve().parents[1]
+        legacy = (root / "neurobridge/version_registry.toml").read_text(encoding="utf-8")
+        registry = deepcopy(tomllib.loads(legacy))
+        section = registry["documents"]["external_northbound"]
+        entry = section["versions"][-1] | {"version": "0.3", "pdf_artifact_name": "formal-v0.3.pdf"}
+        section["current_version"] = "0.3"
+        section["versions"].append(entry)
+        registry["protocol_lifecycle"]["released_version"] = "0.3"
+        exists = lambda path: True
+        current = collect_external_documents(registry, file_exists=exists)
+        receipt = {"markdownSha256": entry["markdown_sha256"],
+                   "pdf": {"fileName": "formal-v0.3.pdf", "sha256": "1" * 64}}
+        for public in (False, True):
+            def info(tag):
+                return {"isDraft": False} if public and tag == "docs/northbound/v0.3" else None
+            with self.subTest(public=public), patch.object(release_preflight, "run", return_value=legacy), \
+                 patch("tools.publish_release.release_info", side_effect=info), \
+                 patch("tools.document_release.verify", return_value=receipt) as verify:
+                documents, evidence = release_preflight.software_documents(registry, current, exists)
+                self.assertEqual(next(doc for doc in documents if doc.key == "northbound").version,
+                                 "0.3" if public else "0.2")
+                self.assertEqual(bool(evidence["northbound"].get("documentTag")), public)
+                self.assertEqual(verify.call_count, int(public))

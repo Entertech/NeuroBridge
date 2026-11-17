@@ -250,7 +250,7 @@ assert suite.countTestCases() > 0
              mock.patch.object(obj, 'save') as save, mock.patch.object(obj, 'ensure_candidate') as ensure_candidate:
             with self.assertRaisesRegex(ValueError, 'Windows guide is still unpublished'):
                 obj.begin_release()
-            plan.assert_called_once_with(GOOD, OTHER)
+            plan.assert_called_once_with(GOOD, OTHER, software=True)
             save.assert_not_called()
             ensure_candidate.assert_not_called()
 
@@ -275,6 +275,7 @@ assert suite.countTestCases() > 0
                     'packageScope': {'systems': ['windows-10'],
                                      'baseCommits': {'windows-10': older, 'windows-11': older, 'kylin-v10': older}}}
         with mock.patch('tools.release_pipeline.release_base', return_value=GOOD), \
+             mock.patch('tools.release_pipeline.system_release_bases', return_value={'windows-10': OTHER}), \
              mock.patch('tools.release_pipeline.release_config_at', return_value=release_config), \
              mock.patch.object(train, 'version_at', return_value='1.2.2'), \
              mock.patch.object(obj, 'ref', return_value=GOOD), mock.patch.object(obj, 'fetch', return_value=GOOD), \
@@ -282,7 +283,7 @@ assert suite.countTestCases() > 0
              mock.patch('tools.release_scope.scope_for') as scope:
             obj.package_scope(OTHER, 'kylin-v10')
         scope.assert_called_once_with(
-            OTHER, {'windows-10': GOOD, 'windows-11': older, 'kylin-v10': older},
+            OTHER, {'windows-10': OTHER, 'windows-11': older, 'kylin-v10': older},
             'kylin-v10', config=release_config,
         )
 
@@ -520,6 +521,36 @@ class ArtifactTests(unittest.TestCase):
             _, manifest = load_bundle_manifest(archive.parent)
             self.assertEqual([system['platform'] for system in manifest['bundleManifest']['systemArchives']], ['kylin'])
 
+    def test_combined_review_artifact_has_independent_system_release_receipts(self):
+        import importlib.util
+        from tools import release_pipeline as pipeline
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive, version, commit, targets = self.bundle(root, systems='windows-10,windows-11')
+            import zipfile
+            documents = root / 'documents'
+            with zipfile.ZipFile(documents / 'neurobridge-external-documents.zip', 'w') as package:
+                package.writestr('release-manifest.json', json.dumps({'documents': [], 'packageMode': 'publish'}))
+            spec = importlib.util.spec_from_file_location('fixture_bundle', pipeline.ROOT / 'tools/build-release-bundle.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            preflight = {'sourceCommit': commit, 'applicationVersion': version, 'documentMode': 'publish',
+                         'formalDocumentBlockers': [], 'documents': [], 'packages': targets, 'documentImpacts': [{
+                             'changeId': 'replay-loop', 'document': 'northbound', 'requiredVersion': '0.3',
+                             'pullRequest': 12, 'platforms': ['windows'], 'satisfied': False,
+                         }]}
+            with mock.patch.object(module, 'render_directory_pdf', return_value=b'%PDF-1.4 fixture'), \
+                 mock.patch.dict(sys.modules, {'release_pipeline': pipeline}):
+                module.build_system_bundles(root / 'targets', documents, archive.parent, preflight)
+            receipts = train.delivery_receipt(archive, version, commit, targets, per_system=True)['systems']
+            self.assertEqual(set(receipts), {'windows-10', 'windows-11'})
+            for system, receipt in receipts.items():
+                self.assertEqual(receipt['tag'], f'{system}/v{version}')
+                self.assertEqual(receipt['targets'], [f'{system}-x86_64-exe', f'{system}-x86_64-msi'])
+                with zipfile.ZipFile(archive.parent / 'systems' / system / receipt['fileName']) as bundle:
+                    contents = json.loads(bundle.read('metadata/bundle-manifest.json'))
+                self.assertEqual(contents['documentObligations'][0]['pullRequest'], 12)
+
     def test_every_defined_installer_and_exact_sha_required(self):
         with tempfile.TemporaryDirectory() as directory:
             args = self.bundle(Path(directory))
@@ -616,6 +647,7 @@ class RemoteAncestryTests(GitSourceTests):
                         'packages': release_pipeline.matrix(tomllib.loads(self.git('show', f'{candidate}:{release_pipeline.MATRIX_PATH}')))}
         with mock.patch.object(release_pipeline, 'ROOT', self.root), \
              mock.patch.object(release_pipeline, 'release_base', return_value=default), \
+             mock.patch.object(release_pipeline, 'system_release_bases', return_value={}), \
              mock.patch('tools.release_preflight.release_plan', return_value=release_plan), \
              mock.patch.object(obj, 'default_repository', return_value=('master', {})), \
              mock.patch.object(obj, 'default', return_value=('master', default)), \
@@ -632,15 +664,10 @@ class RemoteAncestryTests(GitSourceTests):
                 'plannedVersion': '0.2', 'status': 'published', 'satisfied': False,
                 'platforms': ['windows'], 'pullRequest': 12,
             }]
-            with mock.patch.object(obj, 'save') as save, mock.patch.object(obj, 'ensure_candidate') as ensure:
-                with self.assertRaisesRegex(ValueError, r'requires published v0\.3.*selects v0\.2.*PR #12'):
-                    obj.begin_release()
-                save.assert_not_called()
-                ensure.assert_not_called()
-            release_plan['documentImpacts'][0]['satisfied'] = True
             attempt = obj.begin_release()
         self.assertEqual(preview['packageScope']['systems'], ['windows-11'])
         self.assertEqual(attempt['packageScope']['systems'], ['windows-11'])
+        self.assertEqual(attempt['systemTags'], {'windows-11': 'windows-11/v0.3.3'})
         self.assertEqual([target['format'] for target in preview['packages']], ['exe', 'msi'])
         self.assertEqual({target['runner'] for target in preview['packages']}, {'windows-2025'})
 

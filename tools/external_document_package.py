@@ -7,6 +7,8 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import subprocess
+import tempfile
+from shutil import copyfile
 import zipfile
 
 if __package__:
@@ -68,7 +70,7 @@ def _make_document(key: str, policy_source: dict, content_source: dict) -> Exter
     )
 
 
-def collect_external_documents(registry: dict, *, file_exists=None) -> list[ExternalDocument]:
+def collect_external_documents(registry: dict, *, file_exists=None, published_only=False) -> list[ExternalDocument]:
     """Return every registered external document in delivery order.
 
     Documents are discovered from the registry, so adding one only needs a
@@ -84,7 +86,13 @@ def collect_external_documents(registry: dict, *, file_exists=None) -> list[Exte
             continue
         if not isinstance(section, dict) or "markdown_path" not in section:
             continue
-        documents.append(_make_document(name.removeprefix("external_"), section, section))
+        content = section
+        if published_only and section["status"] == "unpublished":
+            history = [item for item in section.get("versions", []) if item["status"] == "published"]
+            if not history:
+                continue
+            content = max(history, key=lambda item: tuple(map(int, item["version"].split("."))))
+        documents.append(_make_document(name.removeprefix("external_"), section, content))
     if len({document.pdf_artifact_name for document in documents}) != len(documents):
         raise ValueError("Every external document must have a unique PDF artifact filename.")
     for document in documents:
@@ -185,14 +193,42 @@ def package_documents(rendered_pdfs: list[Path], web_client_files: list[Path], m
     return package_path
 
 
-def build_package(output_directory: Path, pdf_directory: Path, mode: str) -> Path:
-    documents = collect_external_documents(load_registry())
+def build_package(output_directory: Path, pdf_directory: Path, mode: str, *, preflight=None) -> Path:
+    if preflight is None:
+        documents = collect_external_documents(load_registry(), published_only=mode == "publish")
+    else:
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        if preflight["sourceCommit"] != commit or preflight["documentMode"] != mode:
+            raise ValueError("document package source or mode differs from preflight")
+        fields = ExternalDocument.__dataclass_fields__
+        documents = [ExternalDocument(**{key: item[key] for key in fields}) for item in preflight["documents"]]
     manifest = build_release_manifest(documents, mode)
     if mode == "publish":
         subprocess.run(["python3", "tools/check-version-registry.py"], cwd=ROOT, check=True)
-    return package_documents(
-        render_documents(documents, pdf_directory),
-        collect_web_client_files(),
-        manifest,
-        output_directory,
-    )
+    if preflight is None:
+        pdfs = render_documents(documents, pdf_directory)
+    else:
+        from tools.document_release import verify
+        pdfs = []
+        pdf_directory.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="neurobridge-formal-pdfs-") as temporary:
+            for doc, planned in zip(documents, preflight["documents"], strict=True):
+                tag = planned.get("documentTag")
+                if tag:
+                    downloaded = Path(temporary) / doc.key
+                    receipt = verify(doc.key, doc.version, downloaded)
+                    if receipt["tag"] != tag or receipt["pdf"] != {
+                        "fileName": doc.pdf_artifact_name, "sha256": planned["pdfSha256"],
+                    }:
+                        raise ValueError(f"document receipt changed after preflight: {tag}")
+                    pdf = pdf_directory / doc.pdf_artifact_name
+                    copyfile(downloaded / pdf.name, pdf)
+                    pdfs.append(pdf)
+                else:
+                    if planned.get("markdownSha256") and sha256((ROOT / doc.markdown_path).read_bytes()).hexdigest() != planned["markdownSha256"]:
+                        raise ValueError(f"legacy Markdown differs from its published digest: {doc.key}")
+                    pdfs.extend(render_documents([doc], pdf_directory))
+        for entry, planned in zip(manifest["documents"], preflight["documents"], strict=True):
+            if planned.get("documentTag"):
+                entry["documentTag"] = planned["documentTag"]
+    return package_documents(pdfs, collect_web_client_files(), manifest, output_directory)

@@ -177,6 +177,32 @@ def artifact_receipt(archive: Path, version: str, candidate: str, matrix: list[d
             'packages': sorted(package_records, key=lambda item: item['targetId'])}
 
 
+def delivery_receipt(archive: Path, version: str, candidate: str, targets: list[dict], *, per_system=False) -> dict:
+    from tools.release_pipeline import software_tag, system_version
+
+    receipt = artifact_receipt(archive, version, candidate, targets)
+    if not per_system:
+        return receipt
+    receipt["systems"] = {}
+    systems = {system_version(target) for target in targets}
+    root = archive.parent / "systems"
+    if not root.is_dir() or {path.name for path in root.iterdir()} != systems:
+        raise ValueError("downloaded system bundles differ from the selected systems")
+    for system in sorted(systems):
+        selected = [target for target in targets if system_version(target) == system]
+        system_archive = root / system / f"neurobridge-{system}-v{version}.zip"
+        scoped = artifact_receipt(system_archive, version, candidate, selected)
+        canonical = [item for item in receipt["packages"] if item["targetId"] in scoped["targets"]]
+        if scoped["packages"] != canonical:
+            raise ValueError(f"{system} bundle differs from the verified installer bytes")
+        with zipfile.ZipFile(system_archive) as bundle:
+            manifest = json.loads(bundle.read("metadata/bundle-manifest.json"))
+            if manifest.get("softwareSystem") != system or not isinstance(manifest.get("documentObligations"), list):
+                raise ValueError(f"{system} bundle lacks system or document obligation evidence")
+        receipt["systems"][system] = scoped | {"tag": software_tag(system, version)}
+    return receipt
+
+
 class Train:
     def __init__(self, version: str, execute: bool = False):
         numeric(version)
@@ -291,7 +317,7 @@ class Train:
         return {'status': secret_status, 'notConfirmed': missing, 'unreadableScopes': unreadable}
 
     def package_scope(self, candidate: str, requested: str = "") -> dict:
-        from tools.release_pipeline import matrix, release_base, release_config_at, system_version
+        from tools.release_pipeline import matrix, release_base, release_config_at, system_release_bases, system_version
         from tools.release_scope import scope_for
 
         base = release_base(self.repository, report=False)
@@ -308,15 +334,16 @@ class Train:
             if previous is not None:
                 for system in baselines.keys() - set(previous['systems']):
                     baselines[system] = require_sha(previous['baseCommits'].get(system, base))
+        baselines.update(system_release_bases(self.repository, set(baselines)))
         return scope_for(candidate, baselines, requested, config=config)
 
     def plan(self, head: str, systems: str = "") -> dict:
         from tools.release_preflight import formal_document_blockers, release_plan
-        from tools.release_pipeline import select_targets
+        from tools.release_pipeline import select_targets, software_tag
 
         default, meta = self.default_repository()
         baseline = self.fetch(f'refs/heads/{default}')
-        result = release_plan(head, baseline)
+        result = release_plan(head, baseline, software=True)
         record = self.load()
         same_source = record and record['candidate'] == result['sourceCommit']
         scope = record.get('packageScope') if same_source else None
@@ -325,6 +352,7 @@ class Train:
         elif systems and select_targets(result['packages'], systems) != select_targets(result['packages'], package_systems(record)):
             raise ValueError('requested systems differ from the recorded package scope')
         result['packageScope'] = scope
+        result['systemTags'] = {system: software_tag(system, self.version) for system in scope['systems']}
         result['packages'] = select_targets(result['packages'], ','.join(scope['systems'])) if scope['systems'] else []
         result['formalDocumentBlockers'] = formal_document_blockers(result)
         try:
@@ -401,6 +429,27 @@ class Train:
             return None
         return self.fetch(ref)
 
+    def delivery_tag(self, record: dict | None, *, complete=False) -> str | None:
+        if not record or not record.get("systemTags"):
+            return self.tag()
+        from tools.release_pipeline import software_tag
+
+        expected = {system: software_tag(system, self.version) for system in package_systems(record).split(",")}
+        if record["systemTags"] != expected:
+            raise ValueError("recorded software tags differ from the locked release scope")
+        found = []
+        for tag in expected.values():
+            ref = f"refs/tags/{tag}"
+            if self.ref(ref) is None:
+                if complete:
+                    raise ValueError(f"missing immutable software tag: {tag}")
+                continue
+            commit = self.fetch(ref)
+            if commit != record["candidate"]:
+                raise ValueError(f"software tag {tag} differs from packaged candidate")
+            found.append(commit)
+        return found[0] if found else None
+
     def ensure_candidate(self, record: dict):
         ref = 'refs/heads/'+record['candidateBranch']
         existing = self.ref(ref)
@@ -427,7 +476,7 @@ class Train:
     def fail(self):
         self.mutable()
         record = self.required_record()
-        if self.tag() is None:
+        if self.delivery_tag(record) is None:
             branch = record['candidateBranch']
             existing = self.ref('refs/heads/'+branch)
             if existing is not None and existing != record['candidate']:
@@ -578,7 +627,7 @@ class Train:
             raise ValueError("publication branch changed after promotion")
         meta = self.metadata(publication)
         record = self.load()
-        tag = self.tag()
+        tag = self.delivery_tag(record, complete=bool(record and record.get("taggedCandidate")))
         if record:
             if record.get('policyFingerprint') != self.fingerprint():
                 raise ValueError('release policy changed; preserve existing attempt for reconciliation')
@@ -624,7 +673,7 @@ class Train:
         record = self.load()
         if record is None:
             raise ValueError("no durable candidate record; prepare the promotion first")
-        tag = self.tag()
+        tag = self.delivery_tag(record, complete=bool(record.get("taggedCandidate")))
         if record.get('taggedCandidate') and tag is None:
             raise ValueError('previously recorded immutable tag disappeared; do not recreate it')
         if tag and tag != record['candidate']:
@@ -655,14 +704,14 @@ class Train:
         self.mutable()
         default, _ = self.default(); self.protection(default)
         record = self.required_record()
-        from tools.release_pipeline import matrix, release_config_at, select_targets
+        from tools.release_pipeline import matrix, release_config_at, select_targets, software_tag
         recorded_scope = record.get('packageScope')
         recorded_systems = package_systems(record)
         if systems and (recorded_scope or record.get('packageRunId') or record.get('artifact')):
             targets = matrix(release_config_at(record['candidate']))
             if select_targets(targets, systems) != select_targets(targets, recorded_systems):
                 raise ValueError('requested systems differ from the recorded package scope')
-        if record.get('finalizationPR') and self.tag() and self.pr(record['finalizationPR'])['state'] == 'MERGED':
+        if record.get('finalizationPR') and self.delivery_tag(record, complete=True) and self.pr(record['finalizationPR'])['state'] == 'MERGED':
             return self.verify()
         if not record.get('review') or record['review']['sha'] != record['candidate']:
             raise ValueError("exact post-rebase candidate requires human source review")
@@ -689,13 +738,13 @@ class Train:
             status = api(f'repos/{self.repository}/actions/runs/{previous_run}/attempts/{attempt}')
             if status['status'] != 'completed' or status.get('conclusion') not in ('failure', 'cancelled'):
                 raise ValueError('previous package run still active or uncertain')
-        if self.tag():
+        if self.delivery_tag(record):
             raise ValueError("tagged candidate is missing its publication receipt; do not rebuild")
         default_tip = self.fetch('refs/heads/'+default)
         if numeric(self.version) <= numeric(version_at(default_tip)):
             raise ValueError('new package version must advance the current default version')
         from tools.release_preflight import formal_document_blockers, release_plan
-        plan = release_plan(record['candidate'], default_tip)
+        plan = release_plan(record['candidate'], default_tip, software=True)
         if plan['documentBlockers']:
             raise ValueError('formal document preflight failed: ' + ' '.join(plan['documentBlockers']))
         scope = recorded_scope
@@ -710,6 +759,11 @@ class Train:
             raise ValueError('formal document preflight failed: ' + ' '.join(blockers))
         if recorded_scope is None and scope:
             record['packageScope'] = {key: scope[key] for key in ('mode', 'systems', 'baseCommits')}
+        if not previous_run:
+            record["systemTags"] = {system: software_tag(system, self.version) for system in record["packageScope"]["systems"]}
+            for tag in record["systemTags"].values():
+                if self.ref(f"refs/tags/{tag}"):
+                    raise ValueError(f"software tag {tag} exists without a packaging checkpoint")
         record['packageRunId'] = os.environ['GITHUB_RUN_ID']
         record['packageRunAttempt'] = os.environ.get('GITHUB_RUN_ATTEMPT', '1')
         record['phase'] = 'packaging'
@@ -728,7 +782,7 @@ class Train:
         systems = package_systems(record)
         candidate = record['candidate']
         targets = select_targets(matrix(release_config_at(candidate)), systems)
-        receipt = artifact_receipt(archives[0], self.version, candidate, targets)
+        receipt = delivery_receipt(archives[0], self.version, candidate, targets, per_system=bool(record.get("systemTags")))
         remote = api(f'repos/{self.repository}/actions/artifacts/{artifact_id}')
         if remote['expired'] or remote['name'] != 'verified-release-'+record['candidate']:
             raise ValueError("uploaded Artifact identity or retention is invalid")
@@ -763,12 +817,13 @@ class Train:
         # Revalidate downloaded bytes on every retry before tag or Release writes.
         self.record_artifact(directory, int(artifact['id']))
         record = self.required_record()
-        tag = self.tag()
-        if tag is None:
-            # App token emits normal tag/PR events. No force push or retagging.
-            run('git', 'tag', '-a', 'v'+self.version, record['candidate'], '-m', 'NeuroBridge '+self.version)
-            run('git', 'push', 'origin', 'refs/tags/v'+self.version)
-        if self.tag() != record['candidate']:
+        self.delivery_tag(record)
+        tags = record.get("systemTags")
+        for tag in tags.values() if tags else ('v'+self.version,):
+            if self.ref(f'refs/tags/{tag}') is None:
+                run('git', 'tag', '-a', tag, record['candidate'], '-m', 'NeuroBridge '+tag)
+                run('git', 'push', 'origin', f'refs/tags/{tag}')
+        if self.delivery_tag(record, complete=True) != record['candidate']:
             raise ValueError("remote tag identity check failed")
         record['phase'] = 'tagged-pending-merge'; record['taggedCandidate'] = record['candidate']; self.save(record)
         if not record.get('download'):
@@ -780,9 +835,15 @@ class Train:
                 work = Path(temporary)/'source'
                 run('git', 'worktree', 'add', '--detach', str(work), record['candidate'])
                 try:
-                    systems = package_systems(record)
-                    run(sys.executable, '-m', 'tools.publish_release', '--dir', str(directory.resolve()),
-                        '--expected-sha256', artifact['sha256'], '--systems', systems, cwd=work)
+                    if tags:
+                        for system in tags:
+                            receipt = artifact['systems'][system]
+                            run(sys.executable, '-m', 'tools.publish_release',
+                                '--dir', str((directory / 'systems' / system).resolve()),
+                                '--expected-sha256', receipt['sha256'], '--system', system, cwd=work)
+                    else:
+                        run(sys.executable, '-m', 'tools.publish_release', '--dir', str(directory.resolve()),
+                            '--expected-sha256', artifact['sha256'], '--systems', package_systems(record), cwd=work)
                 finally:
                     run('git', 'worktree', 'remove', '--force', str(work))
             record['download'] = {'status': 'success'}; self.save(record)
@@ -801,7 +862,7 @@ class Train:
         self.mutable()
         record = self.required_record()
         default, default_tip = self.default(); self.protection(default)
-        if self.tag() != record['candidate']:
+        if self.delivery_tag(record, complete=True) != record['candidate']:
             raise ValueError('finalization cannot merge before the source tag is verified')
         if numeric(version_at(default_tip)) > numeric(self.version):
             raise ValueError('finalization may not regress a newer default version')
@@ -825,7 +886,7 @@ class Train:
         pr = self.pr(record['finalizationPR'])
         if pr['state'] != 'MERGED':
             raise ValueError('finalization requires the protected PR to merge')
-        tag = self.tag()
+        tag = self.delivery_tag(record, complete=True)
         if tag != record['candidate']:
             raise ValueError("fetched tag does not equal packaged candidate")
         run('git', 'merge-base', '--is-ancestor', tag, tip)
@@ -916,7 +977,7 @@ def source_check(branch: str, base: str, head: str = 'HEAD', event: str | None =
             record = train.required_record()
             run('git', 'merge-base', '--is-ancestor', record['candidate'], 'HEAD')
             if branch.startswith('finalize_'):
-                if train.tag() != record['candidate']: raise ValueError('finalization tag mismatch')
+                if train.delivery_tag(record, complete=True) != record['candidate']: raise ValueError('finalization tag mismatch')
                 preserving_updates(record['candidate'], 'HEAD', train.default()[1])
         # dev/publish receive requirements after one version initialization.
         return gate(meta['defaultBaseline'])
@@ -935,6 +996,7 @@ def main():
     p.add_argument('--directory', type=Path); p.add_argument('--artifact-id', type=int)
     p.add_argument('--summary', type=Path, help='plan: append a Markdown preflight summary')
     p.add_argument('--systems', default='', help='plan/begin-release/verify-package: comma-separated system versions')
+    p.add_argument('--system-bundles', action='store_true', help='also verify the per-system delivery ZIPs')
     args = p.parse_args()
     try:
         if args.operation == 'check':
@@ -945,7 +1007,7 @@ def main():
             if len(archives) != 1: raise ValueError('one delivery ZIP required')
             candidate = require_sha(args.candidate)
             targets = select_targets(matrix(release_config_at(candidate)), args.systems)
-            result = artifact_receipt(archives[0], args.version, candidate, targets)
+            result = delivery_receipt(archives[0], args.version, candidate, targets, per_system=args.system_bundles)
         else:
             train = Train(args.version, args.execute)
             train.operation = args.operation
@@ -976,6 +1038,7 @@ def main():
                 target.write('artifact_id='+str((result.get('artifact') or {}).get('id', ''))+'\n')
                 target.write('package_run_id='+str(result.get('packageRunId', ''))+'\n')
                 target.write('systems='+package_systems(result)+'\n')
+                target.write('system_releases='+str(bool(result.get("systemTags"))).lower()+'\n')
                 target.write('complete='+str(result.get('phase') == 'complete').lower()+'\n')
     except (ValueError, RuntimeError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         print(f'source train blocked: {error}', file=sys.stderr)
