@@ -75,6 +75,12 @@ class ReleaseTriggerTests(unittest.TestCase):
         finish = job_block('finish-systems', source)
         self.assertIn('needs: [source, system-packages]', finish)
         self.assertIn('tools.source_train finish-systems', finish)
+        delivery = job_block('publish-delivery', source)
+        self.assertIn('needs: [source, finish-systems]', delivery)
+        self.assertIn("needs.finish-systems.outputs.software_result == 'success'", delivery)
+        self.assertIn('tools.source_train publish-delivery', delivery)
+        self.assertIn('continue-on-error: true', delivery)
+        self.assertNotIn('document-release', delivery)
 
     def test_delivery_receipt_and_upload_use_the_zip_outside_the_build_directory(self):
         block = job_block('release-aggregate', WORKFLOWS/'release.yml')

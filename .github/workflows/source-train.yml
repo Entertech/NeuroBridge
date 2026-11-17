@@ -192,6 +192,8 @@ jobs:
     needs: [source, system-packages]
     if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.parallel_systems == 'true' && needs.source.outputs.complete != 'true' }}
     runs-on: ubuntu-22.04
+    outputs:
+      software_result: ${{ steps.finish.outputs.software_result }}
     steps:
       - uses: actions/create-github-app-token@v2
         id: app
@@ -207,6 +209,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Record public software releases
+        id: finish
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           TRAIN_APP_TOKEN_USED: 'true'
@@ -216,6 +219,41 @@ jobs:
           git config user.name 'NeuroBridge release automation'
           git config user.email 'release-automation@users.noreply.github.com'
           python -m tools.source_train finish-systems --version "$TRAIN_VERSION" --execute
+
+  publish-delivery:
+    needs: [source, finish-systems]
+    if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.parallel_systems == 'true' && (needs.finish-systems.outputs.software_result == 'success' || needs.source.outputs.software_result == 'success') }}
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ steps.app.outputs.token }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-ci.lock
+      - name: Publish the verified delivery ZIP
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TRAIN_APP_TOKEN_USED: 'true'
+          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          TRAIN_VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          python -m tools.source_train publish-delivery --version "$TRAIN_VERSION" --execute
+          printf '## Delivery ZIP published\n\n`delivery/v%s`\n' "$TRAIN_VERSION" >> "$GITHUB_STEP_SUMMARY"
+      - name: Record delivery publication failure
+        if: failure()
+        run: |
+          echo '::warning::Delivery ZIP was not published. Retry the same version to use the recorded software Releases.'
+          printf '## Delivery ZIP publication failed\n\nRetry the same version to use the recorded software Releases.\n' >> "$GITHUB_STEP_SUMMARY"
 
   finalize:
     needs: [source, packages]

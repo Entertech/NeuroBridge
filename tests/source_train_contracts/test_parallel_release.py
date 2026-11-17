@@ -42,6 +42,12 @@ class ParallelReleaseTests(unittest.TestCase):
         with patch.object(obj, "ref", return_value=SHA) as ref, patch.object(obj, "fetch", return_value=SHA):
             self.assertEqual(obj.delivery_tag(result, complete=True), SHA)
             ref.assert_called_once_with("refs/tags/windows-11/v1.2.3")
+        with patch.object(obj, "mutable"), patch.object(obj, "required_record", return_value=record), \
+             patch("tools.document_release.verified_software_receipt") as check:
+            self.assertEqual(obj.finish_systems()["systemResults"], result["systemResults"])
+            check.assert_not_called()
+            with self.assertRaisesRegex(ValueError, "missed the recorded delivery"):
+                obj.publish_system("windows-10", Path(), Path(), "18")
 
     def test_all_systems_failed_marks_workflow_failed_and_saves_results(self):
         obj = train.Train("1.2.3", True)

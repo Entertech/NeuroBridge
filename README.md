@@ -6,7 +6,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 源码发布采用 `需求分支 → dev_B → publish_B → 独立候选提交 → 各系统软件发布 → finalize_B → master`。需求开发不升版，用户选定版本和需求范围后才初始化版本；各阶段 PR 和 push 只做代码检查，合入 `master` 不再自动发版。源码流程通过 GitHub App 编排，配置见 [code-release-train.toml](.release/code-release-train.toml)，操作和启用条件见[发布技术方案](doc/tech/发布工作流技术方案.md)。
 
-版本列车默认按各系统上次交付后的变化选包，也可显式指定 Windows 10、Windows 11 或麒麟 V10。各系统并行构建和验包，验证通过的系统立即发布自己的 ZIP 和 `<system>/v<applicationVersion>` tag。至少一个公开 Release 通过核验，本次软件发布即成功；失败系统保留诊断并沿用上次交付基准。软件回执登记文档待办，文档随后独立发布和核销，文档结果不计入软件发布。手动 `Release` 和 `Kylin bootstrap package` 用于诊断构建。详见[发布配置](release/release_matrix.toml)。
+版本列车默认按各系统上次交付后的变化选包，也可显式指定 Windows 10、Windows 11 或麒麟 V10。各系统并行构建和验包，用独立的 `<system>/v<applicationVersion>` tag 记录软件发布结果。等本轮系统任务结束后，`delivery/v<applicationVersion>` 发布一份交付 ZIP，包含全部成功系统的原始软件 ZIP、各自适用的已核验文档和汇总清单。只有全部系统失败才判定软件发布失败。失败系统保留诊断并沿用上次交付基准。软件回执登记新版文档待办，文档随后独立发布和核销。手动 `Release` 和 `Kylin bootstrap package` 用于诊断构建。详见[发布配置](release/release_matrix.toml)。
 
 原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。
 
@@ -182,7 +182,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 安装排错：麒麟安装日志保存在 `/var/log/neurobridge-bootstrap`，服务尚未创建时也可运行 `sudo /usr/lib/neurobridge-bootstrap/export-install-logs.sh --output-dir "$HOME/下载"`。Windows 10/11 64 位包随附 `install-with-logs.ps1`，通过 `-Installer` 安装、`-Export` 导出失败日志；Windows 7 和 32 位目标不参与构建与交付。交付 ZIP 的 PDF 副本使用英文文件名，原名称对照保存在 `metadata/document-filenames.json`。上述源码与模拟验证不替代银河麒麟现场验收。
 
-交付总 ZIP 根目录生成 `bundle-directory-guide.pdf`（《NeuroBridge 交付包目录说明》），面向部署人员介绍各层压缩包、解压顺序、安装包与部署指南、日志工具及校验资料的位置；按本次实际清单生成，不再交付根目录 `PRD.md`。PDF 使用英文文件名、中文标题和正文。需求见[发布工作流 PRD](doc/product/发布工作流%20PRD.md#26-总包根目录-pdf-目录说明)。
+交付 ZIP 根目录的 `bundle-directory-guide.pdf`（《NeuroBridge 交付包目录说明》）汇总本轮成功系统的目录说明，可按软件 ZIP 路径跳转到对应章节。各系统随附的 PDF 位于 `docs/<system>/`，各系统 tag、文件摘要和文档待办记录在 `metadata/delivery-manifest.json`。需求见[发布工作流 PRD](doc/product/发布工作流%20PRD.md#26-总包根目录-pdf-目录说明)。
 
 详细支持表及扩展架构影响见[发布工作流 PRD §2.7–2.9](doc/product/发布工作流%20PRD.md#27-系统与-cpu-架构支持表)：Windows 保持 10/11 x86_64；麒麟新增六个源码构建候选 Profile，与既有 x86_64 共用引导入口。运行时依然须匹配 CPU/ABI，各架构分别完成算法与 USB 真机验收；既有 N100/N150 结果不能替代其他架构。
 

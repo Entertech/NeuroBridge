@@ -828,6 +828,11 @@ class Train:
         if (not record.get("parallelSystems") or system not in record["systemTags"]
                 or (record.get("review") or {}).get("sha") != candidate):
             raise ValueError("system publication requires the reviewed candidate and locked release scope")
+        if record.get("softwareResult") == "success":
+            result = record["systemResults"][system]
+            if result["status"] != "published":
+                raise ValueError("system missed the recorded delivery; include it in a later train")
+            return result
         if artifact_run not in (str(record["packageRunId"]), *record.get("recoveryRunIds", [])):
             raise ValueError("system packages did not come from a recorded packaging run")
         if run("git", "rev-parse", "HEAD") != candidate:
@@ -860,29 +865,25 @@ class Train:
         record = self.required_record()
         if not record.get("parallelSystems"):
             raise ValueError("parallel software release is not active")
-        results = {}
+        results = record.get("systemResults", {})
         errors = (ValueError, RuntimeError, KeyError, TypeError, OSError, subprocess.CalledProcessError)
-        with tempfile.TemporaryDirectory(prefix="neurobridge-release-results-") as temporary:
-            for system, tag in record["systemTags"].items():
-                try:
-                    receipt = verified_software_receipt(tag, Path(temporary) / system)
-                    if receipt["sourceCommit"] != record["candidate"]:
-                        raise ValueError("public release differs from the reviewed source")
-                except errors as error:
-                    if record.get("systemResults", {}).get(system, {}).get("status") == "published":
-                        # Transient reads cannot revoke a previously verified success.
-                        results[system] = record["systemResults"][system]
-                    else:
+        if record.get("softwareResult") != "success":
+            with tempfile.TemporaryDirectory(prefix="neurobridge-release-results-") as temporary:
+                for system, tag in record["systemTags"].items():
+                    try:
+                        receipt = verified_software_receipt(tag, Path(temporary) / system)
+                        if receipt["sourceCommit"] != record["candidate"]:
+                            raise ValueError("public release differs from the reviewed source")
+                    except errors as error:
                         results[system] = {"tag": tag, "status": "failed", "reason": str(error)}
-                else:
-                    results[system] = {"tag": tag, "status": "published", "sha256": receipt["archive"]["sha256"]}
-        succeeded = any(item["status"] == "published" for item in results.values())
-        record["systemResults"] = results
-        record["softwareResult"] = "success" if succeeded else "failure"
-        record["phase"] = "tagged-pending-merge" if succeeded else "failed"
-        if succeeded:
-            record["taggedCandidate"] = record["candidate"]
-        self.save(record)
+                    else:
+                        results[system] = {"tag": tag, "status": "published", "sha256": receipt["archive"]["sha256"]}
+            record["systemResults"] = results
+            record["softwareResult"] = "success" if any(item["status"] == "published" for item in results.values()) else "failure"
+            record["phase"] = "tagged-pending-merge" if record["softwareResult"] == "success" else "failed"
+            if record["softwareResult"] == "success":
+                record["taggedCandidate"] = record["candidate"]
+            self.save(record)
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
             with Path(summary).open("a", encoding="utf-8") as output:
@@ -890,7 +891,7 @@ class Train:
                 for system, result in results.items():
                     reason = f" · {result['reason']}" if "reason" in result else ""
                     output.write(f"- `{system}` · `{result['tag']}` · {result['status']}{reason}\n")
-        if not succeeded:
+        if record["softwareResult"] != "success":
             raise ValueError("all selected systems failed to publish")
         if not record.get("finalizationPR"):
             try:
@@ -909,6 +910,20 @@ class Train:
                 record["finalizationError"] = str(error)
                 print(f"Software published; finalization PR needs follow-up: {error}", file=sys.stderr)
         return record
+
+    def publish_delivery(self) -> dict:
+        from tools.delivery_release import assemble, publish
+
+        self.mutable()
+        record = self.required_record()
+        candidate = record["candidate"]
+        tag = f"delivery/v{self.version}"
+        ref = f"refs/tags/{tag}"
+        with tempfile.TemporaryDirectory(prefix="neurobridge-delivery-") as temporary:
+            archive = assemble(self.version, record, Path(temporary))
+            if self.ref(ref) is None:
+                run("git", "push", "origin", f"{candidate}:{ref}")
+            return publish(tag, candidate, archive)
 
     def finalize(self, directory: Path):
         self.mutable()
@@ -1091,7 +1106,7 @@ def source_check(branch: str, base: str, head: str = 'HEAD', event: str | None =
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('operation', choices=['plan', 'initialize', 'select', 'promote', 'prepare', 'review', 'begin-release', 'record-artifact', 'finalize', 'verify', 'merge', 'check', 'verify-package', 'fail', 'publish-system', 'finish-systems'])
+    p.add_argument('operation', choices=['plan', 'initialize', 'select', 'promote', 'prepare', 'review', 'begin-release', 'record-artifact', 'finalize', 'verify', 'merge', 'check', 'verify-package', 'fail', 'publish-system', 'finish-systems', 'publish-delivery'])
     p.add_argument('--version'); p.add_argument('--execute', action='store_true')
     p.add_argument('--requirements', default=''); p.add_argument('--promotion', type=int)
     p.add_argument('--candidate'); p.add_argument('--branch'); p.add_argument('--base'); p.add_argument('--head', default='HEAD')
@@ -1135,7 +1150,7 @@ def main():
                 result = train.publish_system(args.systems, args.directory, args.proof, args.artifact_run)
             elif args.operation == 'finish-systems': result = train.finish_systems()
             elif args.operation == 'fail': result = train.fail()
-            else: result = getattr(train, args.operation)()
+            else: result = getattr(train, args.operation.replace('-', '_'))()
         print(json.dumps(result, ensure_ascii=False, indent=2))
         output = os.environ.get('GITHUB_OUTPUT')
         if output and isinstance(result, dict) and 'candidate' in result:
@@ -1152,7 +1167,7 @@ def main():
                 target.write('recovery_runs='+','.join(result.get("recoveryRunIds", []))+'\n')
                 target.write('software_result='+str(result.get("softwareResult", ""))+'\n')
                 target.write('complete='+str(result.get('phase') == 'complete').lower()+'\n')
-    except (ValueError, RuntimeError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, RuntimeError, KeyError, TypeError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile) as error:
         print(f'source train blocked: {error}', file=sys.stderr)
         return 1
     return 0
