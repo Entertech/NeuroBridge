@@ -135,29 +135,31 @@ class EegAlignmentCache:
         if band_session is None:
             self._log_decision(result, "no_reference_window", None)
             return result
+        # Both devices keep their own window queue. A headset window pairs only
+        # with the headband window covering the same samples. Later headband
+        # windows may wake this wait, but the deadline stays fixed: after one
+        # window interval the unpaired headset result is dropped.
         wait_started = time.monotonic()
-        wait_ms = min(self._wait_ms, batch.window_end_ms + self._wait_ms - self._clock_ms())
-        if wait_ms > 0:
-            deadline = time.monotonic() + wait_ms / 1000
-            while self._clocks.get("headband_ble") is band_session and not self._reference_covers(
-                batch.window_end_ms, positions, headset_time, band_session[1],
-            ):
-                # A continuous headband stream keeps producing later windows. Those
-                # updates must wake this wait, but must not renew its deadline;
-                # otherwise the headset pipeline never publishes its own data.
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    await asyncio.wait_for(self._reference_changed.wait(), remaining)
-                except TimeoutError:
-                    break
+        deadline = wait_started + self._window_ms / 1000
+        while self._clocks.get("headband_ble") is band_session and not self._reference_covers(
+            batch.window_end_ms, positions, headset_time, band_session[1],
+        ):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                await asyncio.wait_for(self._reference_changed.wait(), remaining)
+            except TimeoutError:
+                break
         waited_ms = round((time.monotonic() - wait_started) * 1000)
         if self._clocks.get(batch.device_protocol) is not active or self._clocks.get("headband_ble") is not band_session:
             return result
+        if not self._reference_covers(batch.window_end_ms, positions, headset_time, band_session[1]):
+            self._log_decision(result, "reference_wait_expired", None, waited_ms=waited_ms)
+            return self._drop_headset_result(result)
 
-        nearby = tuple(ref for ref in self._references if abs(ref.window_end_ms - batch.window_end_ms) <= self._window_ms)
-        same_window = tuple(ref for ref in nearby if ref.window_end_ms == batch.window_end_ms)
+        nearby = tuple(self._references)
+        same_window = nearby
         reference = next((ref for ref in reversed(same_window) if ref.raw_eeg_all_ff), None)
         if reference is not None:
             self._log_decision(result, "headband_raw_eeg_all_ff", reference, waited_ms=waited_ms)
@@ -257,17 +259,39 @@ class EegAlignmentCache:
         )
         return replace(result, algorithm_result=replace(result.algorithm_result, metrics={**metrics, **updates}))
 
+    def _drop_headset_result(self, result: WindowResult) -> WindowResult:
+        metrics = dict(result.algorithm_result.metrics)
+        eeg = dict(_fields(metrics.get("eeg")))
+        wave = dict(_fields(eeg.get("wave")))
+        for channel in _CHANNELS:
+            if _usable_wave(wave.get(channel)):
+                wave[channel] = []
+        if wave:
+            eeg["wave"] = wave
+            metrics["eeg"] = eeg
+        return replace(result, algorithm_result=replace(
+            result.algorithm_result, metrics=metrics, valid=False, invalid_reasons=("REFERENCE_WAIT_EXPIRED",),
+        ))
+
     def _reference_covers(self, window_end_ms: int, positions: tuple[int, ...],
                           headset_time: EegSampleTime | None, band_clock: EegPacketClock) -> bool:
         next_end = window_end_ms + self._window_ms
         latest = next((ref for ref in reversed(self._references)
                        if window_end_ms <= ref.window_end_ms <= next_end and (ref.channels or ref.raw_eeg_all_ff)), None)
-        if latest is None:
-            return bool(self._references and self._references[-1].window_end_ms > next_end)
-        band_time = band_clock.estimate()
-        if latest.raw_eeg_all_ff or not positions or headset_time is None or band_time is None:
+        if latest is not None and latest.raw_eeg_all_ff:
             return True
-        return bool(latest.positions and band_time.at(latest.positions[-1]) + band_time.step_ms / 2 >= headset_time.at(positions[-1]))
+        band_time = band_clock.estimate()
+        covered = [ref for ref in self._references if ref.positions and ref.channels]
+        if positions and headset_time is not None and band_time is not None and covered:
+            # Pair only the headband samples inside this headset window.
+            # A packet that ended during the previous window is not this window.
+            slack = max(headset_time.step_ms, band_time.step_ms)
+            band_end = band_time.at(max(ref.positions[-1] for ref in covered))
+            headset_end = headset_time.at(positions[-1])
+            return headset_end - slack <= band_end <= headset_end + slack
+        # Without a sample-time estimate, only a headband window that has already
+        # moved past this headset window can release the wait.
+        return bool(self._references and self._references[-1].window_end_ms > next_end)
 
     def _align_values(self, values: Mapping[str, object], reference: Mapping[str, object],
                       fields: tuple[str, ...]) -> dict[str, float]:
