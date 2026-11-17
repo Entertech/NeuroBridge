@@ -17,6 +17,11 @@ on:
           - available
           - windows
           - all
+      target_id:
+        description: "留空构建全部 Windows 目标；填写一个目标 ID 时只构建该项"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -24,7 +29,7 @@ permissions:
 jobs:
   windows:
     name: Windows native input ${{ matrix.id }}
-    if: inputs.platforms == 'available' || inputs.platforms == 'windows' || inputs.platforms == 'all'
+    if: (inputs.platforms == 'available' || inputs.platforms == 'windows' || inputs.platforms == 'all') && (inputs.target_id == '' || inputs.target_id == matrix.id)
     runs-on: windows-2022
     strategy:
       fail-fast: false
