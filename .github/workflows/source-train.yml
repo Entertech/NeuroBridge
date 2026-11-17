@@ -75,6 +75,10 @@ jobs:
       package_run_id: ${{ steps.source.outputs.package_run_id }}
       systems: ${{ steps.source.outputs.systems }}
       system_releases: ${{ steps.source.outputs.system_releases }}
+      parallel_systems: ${{ steps.source.outputs.parallel_systems }}
+      system_matrix: ${{ steps.source.outputs.system_matrix }}
+      recovery_runs: ${{ steps.source.outputs.recovery_runs }}
+      software_result: ${{ steps.source.outputs.software_result }}
     steps:
       - name: Require the automation identity
         env:
@@ -152,7 +156,7 @@ jobs:
       contents: read
       actions: write
     needs: [source]
-    if: needs.source.outputs.operation == 'release' && needs.source.outputs.should_package == 'true'
+    if: needs.source.outputs.operation == 'release' && needs.source.outputs.should_package == 'true' && needs.source.outputs.parallel_systems != 'true'
     uses: ./.github/workflows/release.yml
     with:
       source_sha: ${{ needs.source.outputs.candidate }}
@@ -162,9 +166,60 @@ jobs:
       systems: ${{ needs.source.outputs.systems }}
     secrets: inherit
 
+  system-packages:
+    permissions:
+      contents: read
+      actions: write
+    needs: [source]
+    if: needs.source.outputs.operation == 'release' && needs.source.outputs.parallel_systems == 'true' && needs.source.outputs.software_result != 'success' && needs.source.outputs.complete != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        system: ${{ fromJSON(needs.source.outputs.system_matrix) }}
+    uses: ./.github/workflows/release.yml
+    with:
+      source_sha: ${{ needs.source.outputs.candidate }}
+      source_branch: ${{ needs.source.outputs.candidate_branch }}
+      source_train: true
+      system_releases: true
+      publish_system: true
+      systems: ${{ matrix.system }}
+      recovery_runs: ${{ needs.source.outputs.recovery_runs }}
+      train_version: ${{ needs.source.outputs.version }}
+    secrets: inherit
+
+  finish-systems:
+    needs: [source, system-packages]
+    if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.parallel_systems == 'true' && needs.source.outputs.complete != 'true' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ steps.app.outputs.token }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Record public software releases
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TRAIN_APP_TOKEN_USED: 'true'
+          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          TRAIN_VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          git config user.name 'NeuroBridge release automation'
+          git config user.email 'release-automation@users.noreply.github.com'
+          python -m tools.source_train finish-systems --version "$TRAIN_VERSION" --execute
+
   finalize:
     needs: [source, packages]
-    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.complete != 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
+    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.parallel_systems != 'true' && needs.source.outputs.complete != 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/create-github-app-token@v2

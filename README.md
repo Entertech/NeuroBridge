@@ -6,7 +6,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 源码发布采用 `需求分支 → dev_B → publish_B → 独立候选提交 → 各系统软件发布 → finalize_B → master`。需求开发不升版，用户选定版本和需求范围后才初始化版本；各阶段 PR 和 push 只做代码检查，合入 `master` 不再自动发版。源码流程通过 GitHub App 编排，配置见 [code-release-train.toml](.release/code-release-train.toml)，操作和启用条件见[发布技术方案](doc/tech/发布工作流技术方案.md)。
 
-版本列车默认按各系统上次交付后的变化选包，也可显式指定 Windows 10、Windows 11 或麒麟 V10。Actions 回下载验证后，各选中系统分别发布自己的 ZIP 和 `<system>/v<applicationVersion>` tag。应用版本仍从候选台账读取，各系统独立记录最后交付的版本和源码。软件发布时登记适用的文档待办，正式文档随后用独立 tag 发布并验收 PDF 摘要。手动 `Release` 和 `Kylin bootstrap package` 用于诊断构建。详见[发布配置](release/release_matrix.toml)。
+版本列车默认按各系统上次交付后的变化选包，也可显式指定 Windows 10、Windows 11 或麒麟 V10。各系统并行构建和验包，验证通过的系统立即发布自己的 ZIP 和 `<system>/v<applicationVersion>` tag。至少一个公开 Release 通过核验，本次软件发布即成功；失败系统保留诊断并沿用上次交付基准。软件回执登记文档待办，文档随后独立发布和核销，文档结果不计入软件发布。手动 `Release` 和 `Kylin bootstrap package` 用于诊断构建。详见[发布配置](release/release_matrix.toml)。
 
 原生麒麟 DEB/RPM 安装时为 `neurobridge` 服务账户追加实际 USB TTY 所属的非 root 组。建议连接耳机后安装；未接设备会提示授权尚未就绪，接入后需重装同包完成授权，再重启服务。授权失败阻止安装脚本继续，安装成功不代表采集已通过目标机验收。操作步骤见[原生安装说明](doc/tech/源码原生安装包构建.md#麒麟deb--rpm)。
 

@@ -47,10 +47,12 @@ class ReleaseTriggerTests(unittest.TestCase):
         for job in ('external-documents', 'product-candidates', 'release-targets'):
             self.assertRegex(job_block(job, release_path), r'needs: .*release-plan')
 
-    def test_packaging_never_creates_tags_or_releases(self):
+    def test_manual_packaging_cannot_reach_publication(self):
         text = (WORKFLOWS/'release.yml').read_text()
-        self.assertNotIn('release-publish:', text)
-        self.assertNotIn('tools.publish_release', text)
+        dispatch_inputs = text.split('  workflow_dispatch:\n', 1)[1].split('\npermissions:', 1)[0]
+        self.assertNotIn('publish_system:', dispatch_inputs)
+        publish = job_block('publish-system', WORKFLOWS/'release.yml')
+        self.assertIn('inputs.publish_system &&', publish)
         self.assertIn('tools.source_train verify-package', text)
         self.assertLess(text.index('train-package-receipt-'), text.index('id: upload'))
         self.assertIn('retention-days: 90', text)
@@ -58,6 +60,21 @@ class ReleaseTriggerTests(unittest.TestCase):
         bootstrap = (WORKFLOWS/'kylin-bootstrap.yml').read_text()
         self.assertNotIn('workflow_run', bootstrap)
         self.assertIn('workflow_dispatch:', bootstrap)
+
+    def test_system_releases_run_in_isolated_matrix_and_document_result_is_independent(self):
+        source = WORKFLOWS/'source-train.yml'
+        packages = job_block('system-packages', source)
+        self.assertIn("needs.source.outputs.operation == 'release'", packages)
+        self.assertIn('fail-fast: false', packages)
+        self.assertIn('systems: ${{ matrix.system }}', packages)
+        worker = job_block('publish-system', WORKFLOWS/'release.yml')
+        self.assertIn('needs: [system-recovery, release-aggregate]', worker)
+        self.assertIn('continue-on-error: true', worker)
+        self.assertIn('tools.source_train publish-system', worker)
+        self.assertIn("needs.system-recovery.outputs.run_id || github.run_id", worker)
+        finish = job_block('finish-systems', source)
+        self.assertIn('needs: [source, system-packages]', finish)
+        self.assertIn('tools.source_train finish-systems', finish)
 
     def test_delivery_receipt_and_upload_use_the_zip_outside_the_build_directory(self):
         block = job_block('release-aggregate', WORKFLOWS/'release.yml')

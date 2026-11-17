@@ -1,7 +1,6 @@
 name: Release
 
-# Packaging interface only. Source train owns publication receipts, tags and finalization.
-# Manual dispatch builds candidates without creating a tag or GitHub Release.
+# Manual dispatch builds diagnostics. The source train can delegate one system's publication.
 on:
   workflow_call:
     inputs:
@@ -17,6 +16,15 @@ on:
       system_releases:
         type: boolean
         default: false
+      publish_system:
+        type: boolean
+        default: false
+      recovery_runs:
+        type: string
+        default: ''
+      train_version:
+        type: string
+        default: ''
       systems:
         type: string
         default: ''
@@ -57,17 +65,58 @@ env:
   SOURCE_BRANCH: ${{ inputs.source_branch || github.ref_name }}
   EXTERNAL_DOCUMENT_MODE: ${{ !inputs.source_train && inputs.external_document_mode || 'publish' }}
   RELEASE_SYSTEMS: ${{ inputs.systems }}
+  ARTIFACT_SUFFIX: ${{ inputs.publish_system && format('-{0}', inputs.systems) || '' }}
 
 concurrency:
-  group: package-source-${{ github.repository }}-${{ inputs.source_sha || github.sha }}
+  group: package-source-${{ github.repository }}-${{ inputs.source_sha || github.sha }}${{ inputs.publish_system && format('-{0}', inputs.systems) || '' }}
   cancel-in-progress: false
 
 jobs:
+  system-recovery:
+    name: Locate prior verified system package
+    if: inputs.publish_system && inputs.recovery_runs != ''
+    continue-on-error: true
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      ready: ${{ steps.recover.outputs.ready }}
+      run_id: ${{ steps.recover.outputs.run_id }}
+    steps:
+      - name: Locate the upload and its pre-upload receipt
+        id: recover
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_RUNS: ${{ inputs.recovery_runs }}
+        run: |
+          IFS=, read -ra runs <<< "$RECOVERY_RUNS"
+          for run_id in "${runs[@]}"; do
+            [[ "$run_id" =~ ^[0-9]+$ ]] || exit 1
+            artifacts=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100")
+            state=$(jq -r --arg bundle "verified-release-$SOURCE_SHA$ARTIFACT_SUFFIX" \
+              --arg receipt "train-package-receipt-$SOURCE_SHA$ARTIFACT_SUFFIX" \
+              '[.[].artifacts[] | select(.name == $bundle or .name == $receipt)] |
+                if length == 0 then "absent"
+                elif length == 2 and ([.[].name] | unique | length) == 2 and all(.[]; .expired == false) then "ready"
+                else "invalid" end' <<< "$artifacts")
+            if [[ "$state" == invalid ]]; then
+              echo "Prior system package or pre-upload receipt is missing, ambiguous or expired." >&2
+              exit 1
+            fi
+            if [[ "$state" == ready ]]; then
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+
   external-documents:
     name: Build the external document package
     # The release plan validates document inputs before any rendering or build.
     needs: [release-plan]
-    if: needs.release-plan.outputs.should_release == 'true'
+    if: needs.release-plan.outputs.ready == 'true'
+    continue-on-error: ${{ inputs.publish_system }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,7 +124,7 @@ jobs:
           ref: ${{ env.SOURCE_SHA }}
       - uses: actions/download-artifact@v4
         with:
-          name: release-plan-${{ env.SOURCE_SHA }}
+          name: release-plan-${{ env.SOURCE_SHA }}${{ env.ARTIFACT_SUFFIX }}
           path: ${{ runner.temp }}/document-preflight
       - uses: actions/setup-python@v5
         with:
@@ -111,7 +160,7 @@ jobs:
           test "$(find "$RUNNER_TEMP/external-document-pdfs" -type f -name '*.pdf' | wc -l | tr -d ' ')" = "$expected_count"
       - uses: actions/upload-artifact@v4
         with:
-          name: external-document-package
+          name: external-document-package${{ env.ARTIFACT_SUFFIX }}
           path: artifacts/
           if-no-files-found: error
           retention-days: 90
@@ -119,7 +168,7 @@ jobs:
   product-candidates:
     name: Unsigned ${{ matrix.platform }} product candidate
     needs: [release-plan]
-    if: needs.release-plan.outputs.should_release == 'true'
+    if: needs.release-plan.outputs.ready == 'true' && !inputs.publish_system
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -157,13 +206,16 @@ jobs:
 
   release-plan:
     name: Release preflight and target plan
-    if: github.event_name == 'workflow_dispatch' || inputs.source_train
+    needs: [system-recovery]
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || inputs.source_train) && (inputs.recovery_runs == '' || (needs.system-recovery.outputs.ready == 'true' && needs.system-recovery.outputs.run_id == '')) }}
+    continue-on-error: ${{ inputs.publish_system }}
     runs-on: ubuntu-22.04
     outputs:
       should_release: ${{ steps.plan.outputs.should_release }}
       version: ${{ steps.plan.outputs.version }}
       matrix: ${{ steps.plan.outputs.matrix }}
       candidate_matrix: ${{ steps.plan.outputs.candidate_matrix }}
+      ready: ${{ steps.ready.outputs.ready }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -233,18 +285,22 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: release-plan-${{ env.SOURCE_SHA }}
+          name: release-plan-${{ env.SOURCE_SHA }}${{ env.ARTIFACT_SUFFIX }}
           path: |
             ${{ runner.temp }}/release-gate.json
             ${{ runner.temp }}/release-matrix.json
             ${{ runner.temp }}/release-preflight.json
           if-no-files-found: warn
           retention-days: 30
+      - id: ready
+        if: steps.plan.outputs.should_release == 'true'
+        run: echo 'ready=true' >> "$GITHUB_OUTPUT"
 
   release-targets:
     name: Release target ${{ matrix.id }}
     needs: [release-plan, external-documents]
-    if: needs.release-plan.outputs.should_release == 'true'
+    if: needs.release-plan.outputs.ready == 'true' && needs.external-documents.result == 'success'
+    continue-on-error: ${{ inputs.publish_system }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -342,7 +398,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: release-target-${{ matrix.id }}
+          name: release-target-${{ matrix.id }}${{ env.ARTIFACT_SUFFIX }}
           path: artifacts/targets/
           if-no-files-found: error
           retention-days: 30
@@ -350,7 +406,8 @@ jobs:
   release-aggregate:
     name: Verify packages and assemble one release ZIP
     needs: [release-plan, release-targets]
-    if: always() && needs.release-plan.outputs.should_release == 'true' && needs.release-targets.result == 'success'
+    if: ${{ !cancelled() && needs.release-plan.outputs.ready == 'true' && needs.release-targets.result == 'success' }}
+    continue-on-error: ${{ inputs.publish_system }}
     runs-on: ubuntu-22.04
     env:
       DELIVERY_DIR: artifacts/delivery
@@ -367,16 +424,16 @@ jobs:
           python-version: '3.11'
       - uses: actions/download-artifact@v4
         with:
-          pattern: release-target-*
+          pattern: release-target-*${{ env.ARTIFACT_SUFFIX }}
           path: artifacts/targets
           merge-multiple: true
       - uses: actions/download-artifact@v4
         with:
-          name: external-document-package
+          name: external-document-package${{ env.ARTIFACT_SUFFIX }}
           path: artifacts/documents
       - uses: actions/download-artifact@v4
         with:
-          name: release-plan-${{ env.SOURCE_SHA }}
+          name: release-plan-${{ env.SOURCE_SHA }}${{ env.ARTIFACT_SUFFIX }}
           path: artifacts/preflight
       - name: Check all target results and produce verified ZIP
         env:
@@ -424,7 +481,7 @@ jobs:
           pdftoppm -png -r 144 "$RUNNER_TEMP/directory-guide/bundle-directory-guide.pdf" artifacts/directory-guide-preview/page
       - uses: actions/upload-artifact@v4
         with:
-          name: delivery-directory-guide-preview-${{ env.SOURCE_SHA }}
+          name: delivery-directory-guide-preview-${{ env.SOURCE_SHA }}${{ env.ARTIFACT_SUFFIX }}
           path: artifacts/directory-guide-preview/
           if-no-files-found: error
           retention-days: 30
@@ -443,22 +500,68 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: inputs.source_train
         with:
-          name: train-package-receipt-${{ env.SOURCE_SHA }}
+          name: train-package-receipt-${{ env.SOURCE_SHA }}${{ env.ARTIFACT_SUFFIX }}
           path: ${{ runner.temp }}/package-receipt.json
           if-no-files-found: error
           retention-days: 90
       - uses: actions/upload-artifact@v4
         id: upload
         with:
-          name: verified-release-${{ env.SOURCE_SHA }}
+          name: verified-release-${{ env.SOURCE_SHA }}${{ env.ARTIFACT_SUFFIX }}
           path: artifacts/delivery/
           if-no-files-found: error
           retention-days: 90
 
+  publish-system:
+    name: Publish this system after package verification
+    needs: [system-recovery, release-aggregate]
+    if: ${{ !cancelled() && inputs.publish_system && (needs.system-recovery.outputs.run_id != '' || needs.release-aggregate.outputs.artifact_id != '') }}
+    continue-on-error: true
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          token: ${{ steps.app.outputs.token }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-release-${{ env.SOURCE_SHA }}${{ env.ARTIFACT_SUFFIX }}
+          github-token: ${{ steps.app.outputs.token }}
+          run-id: ${{ needs.system-recovery.outputs.run_id || github.run_id }}
+          path: ${{ runner.temp }}/system-delivery
+      - uses: actions/download-artifact@v4
+        with:
+          name: train-package-receipt-${{ env.SOURCE_SHA }}${{ env.ARTIFACT_SUFFIX }}
+          github-token: ${{ steps.app.outputs.token }}
+          run-id: ${{ needs.system-recovery.outputs.run_id || github.run_id }}
+          path: ${{ runner.temp }}/system-proof
+      - name: Tag and publish only this verified system
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TRAIN_APP_TOKEN_USED: 'true'
+          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          TRAIN_VERSION: ${{ inputs.train_version }}
+          ARTIFACT_RUN: ${{ needs.system-recovery.outputs.run_id || github.run_id }}
+        run: |
+          git config user.name 'NeuroBridge release automation'
+          git config user.email 'release-automation@users.noreply.github.com'
+          python -m tools.source_train publish-system --version "$TRAIN_VERSION" --systems "$RELEASE_SYSTEMS" \
+            --artifact-run "$ARTIFACT_RUN" --directory "$RUNNER_TEMP/system-delivery" \
+            --proof "$RUNNER_TEMP/system-proof/package-receipt.json" --execute
+
   release-cleanup:
     name: Remove release intermediate artifacts
     needs: [release-plan, release-aggregate, product-candidates]
-    if: always() && needs.release-aggregate.result == 'success'
+    if: always() && !inputs.publish_system && needs.release-aggregate.result == 'success'
     runs-on: ubuntu-22.04
     permissions:
       actions: write

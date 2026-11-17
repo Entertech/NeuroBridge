@@ -65,29 +65,34 @@ def download(tag: str, name: str, directory: Path) -> Path:
     return path
 
 
+def verified_software_receipt(tag: str, directory: Path) -> dict:
+    system, _, source_version = tag.partition("/v")
+    if software_tag(system, source_version) != tag:
+        raise ValueError(f"invalid software tag: {tag}")
+    info = public_release(tag)
+    archive = f"neurobridge-{system}-v{source_version}.zip"
+    if {archive, "software-receipt.json"} - {asset["name"] for asset in info["assets"]}:
+        raise ValueError(f"software release is missing its verified assets: {tag}")
+    receipt = json.loads(download(tag, "software-receipt.json", directory).read_bytes())
+    if (receipt.get("schemaVersion") != 1 or receipt["tag"] != tag or receipt["system"] != system
+            or receipt["archive"]["fileName"] != archive):
+        raise ValueError(f"software receipt differs from release: {tag}")
+    require_digest(receipt["archive"]["sha256"], "verified software ZIP SHA-256")
+    saved = checkpoint(info, ARCHIVE_CHECKPOINT)
+    if (saved["fileName"], saved["sha256"], saved["sourceCommit"]) != (
+        archive, receipt["archive"]["sha256"], receipt["sourceCommit"],
+    ):
+        raise ValueError(f"software receipt differs from verified archive checkpoint: {tag}")
+    ensure_tag(tag, require_sha(receipt["sourceCommit"]))
+    return receipt
+
+
 def software_obligations(tags: list[str], key: str, version: str, directory: Path) -> dict[str, list[str]]:
     if not tags or len(set(tags)) != len(tags):
         raise ValueError("provide distinct public software tags before releasing the document")
     closed = {}
     for index, tag in enumerate(sorted(tags)):
-        system, _, source_version = tag.partition("/v")
-        if software_tag(system, source_version) != tag:
-            raise ValueError(f"invalid software tag: {tag}")
-        info = public_release(tag)
-        archive = f"neurobridge-{system}-v{source_version}.zip"
-        if {archive, "software-receipt.json"} - {asset["name"] for asset in info["assets"]}:
-            raise ValueError(f"software release is missing its verified assets: {tag}")
-        receipt = json.loads(download(tag, "software-receipt.json", directory / str(index)).read_bytes())
-        if (receipt.get("schemaVersion") != 1 or receipt["tag"] != tag or receipt["system"] != system
-                or receipt["archive"]["fileName"] != archive):
-            raise ValueError(f"software receipt differs from release: {tag}")
-        require_digest(receipt["archive"]["sha256"], "verified software ZIP SHA-256")
-        saved = checkpoint(info, ARCHIVE_CHECKPOINT)
-        if (saved["fileName"], saved["sha256"], saved["sourceCommit"]) != (
-            archive, receipt["archive"]["sha256"], receipt["sourceCommit"],
-        ):
-            raise ValueError(f"software receipt differs from verified archive checkpoint: {tag}")
-        ensure_tag(tag, require_sha(receipt["sourceCommit"]))
+        receipt = verified_software_receipt(tag, directory / str(index))
         applicable = [item for item in receipt["documentObligations"] if item["document"] == key]
         if any(document_version(version) < document_version(item["requiredVersion"]) for item in applicable):
             raise ValueError(f"{tag} requires a newer version of {key}")

@@ -437,6 +437,11 @@ class Train:
         expected = {system: software_tag(system, self.version) for system in package_systems(record).split(",")}
         if record["systemTags"] != expected:
             raise ValueError("recorded software tags differ from the locked release scope")
+        if record.get("parallelSystems"):
+            expected = {system: tag for system, tag in expected.items()
+                        if record.get("systemResults", {}).get(system, {}).get("status") == "published"}
+            if complete and not expected:
+                raise ValueError("no successful system Release has been recorded")
         found = []
         for tag in expected.values():
             ref = f"refs/tags/{tag}"
@@ -720,7 +725,15 @@ class Train:
             return record
         # Reconcile an interrupted Artifact upload instead of rebuilding blindly.
         previous_run = record.get('packageRunId')
-        if previous_run:
+        if previous_run and record.get("parallelSystems"):
+            if any(item["status"] == "published" for item in record.get("systemResults", {}).values()):
+                return record
+            attempt = record.get('packageRunAttempt', '1')
+            status = api(f'repos/{self.repository}/actions/runs/{previous_run}/attempts/{attempt}')
+            if status['status'] != 'completed' or status.get('conclusion') not in ('failure', 'cancelled'):
+                raise ValueError('previous parallel software release still active or uncertain')
+            record["recoveryRunIds"] = list(dict.fromkeys([previous_run, *record.get("recoveryRunIds", [])]))
+        elif previous_run:
             artifacts = api(f'repos/{self.repository}/actions/runs/{previous_run}/artifacts?per_page=100')['artifacts']
             matching = [a for a in artifacts if a['name'] == 'verified-release-'+record['candidate']]
             if any(a['expired'] for a in matching):
@@ -755,15 +768,13 @@ class Train:
         if scope:
             plan['packages'] = select_targets(plan['packages'], ','.join(scope['systems']))
         blockers = formal_document_blockers(plan)
-        if blockers:
+        if previous_run and not record.get("parallelSystems") and blockers:
             raise ValueError('formal document preflight failed: ' + ' '.join(blockers))
         if recorded_scope is None and scope:
             record['packageScope'] = {key: scope[key] for key in ('mode', 'systems', 'baseCommits')}
         if not previous_run:
             record["systemTags"] = {system: software_tag(system, self.version) for system in record["packageScope"]["systems"]}
-            for tag in record["systemTags"].values():
-                if self.ref(f"refs/tags/{tag}"):
-                    raise ValueError(f"software tag {tag} exists without a packaging checkpoint")
+            record["parallelSystems"] = True
         record['packageRunId'] = os.environ['GITHUB_RUN_ID']
         record['packageRunAttempt'] = os.environ.get('GITHUB_RUN_ATTEMPT', '1')
         record['phase'] = 'packaging'
@@ -805,6 +816,98 @@ class Train:
         record['artifact'] = receipt | {'id': artifact_id, 'runId': record['packageRunId'], 'status': 'verified'}
         record['phase'] = 'published'
         self.save(record)
+        return record
+
+    def publish_system(self, system: str, directory: Path, proof: Path, artifact_run: str) -> dict:
+        self.mutable()
+        from tools.publish_release import publish
+        from tools.release_pipeline import matrix, release_config_at, select_targets
+
+        record = self.required_record()
+        candidate = record["candidate"]
+        if (not record.get("parallelSystems") or system not in record["systemTags"]
+                or (record.get("review") or {}).get("sha") != candidate):
+            raise ValueError("system publication requires the reviewed candidate and locked release scope")
+        if artifact_run not in (str(record["packageRunId"]), *record.get("recoveryRunIds", [])):
+            raise ValueError("system packages did not come from a recorded packaging run")
+        if run("git", "rev-parse", "HEAD") != candidate:
+            raise ValueError("system publication checkout differs from candidate")
+        targets = select_targets(matrix(release_config_at(candidate)), system)
+        archive = directory / f"neurobridge-v{self.version}.zip"
+        verified = delivery_receipt(archive, self.version, candidate, targets, per_system=True)
+        if verified != json.loads(proof.read_bytes()):
+            raise ValueError("downloaded system package differs from its pre-upload receipt")
+        receipt = verified["systems"][system]
+        tag = record["systemTags"][system]
+        if receipt["tag"] != tag:
+            raise ValueError("verified installer receipt differs from the locked system tag")
+        ref = f"refs/tags/{tag}"
+        if self.ref(ref) is None:
+            if run("git", "tag", "--list", tag):
+                if run("git", "rev-parse", f"{ref}^{{commit}}") != candidate:
+                    raise ValueError(f"local tag {tag} differs from the reviewed candidate")
+            else:
+                run("git", "tag", "-a", tag, candidate, "-m", f"NeuroBridge {tag}")
+            run("git", "push", "origin", ref)
+        if self.fetch(ref) != candidate:
+            raise ValueError(f"remote tag {tag} differs from the reviewed candidate")
+        return publish(directory / "systems" / system, receipt["sha256"], system=system)
+
+    def finish_systems(self) -> dict:
+        self.mutable()
+        from tools.document_release import verified_software_receipt
+
+        record = self.required_record()
+        if not record.get("parallelSystems"):
+            raise ValueError("parallel software release is not active")
+        results = {}
+        errors = (ValueError, RuntimeError, KeyError, TypeError, OSError, subprocess.CalledProcessError)
+        with tempfile.TemporaryDirectory(prefix="neurobridge-release-results-") as temporary:
+            for system, tag in record["systemTags"].items():
+                try:
+                    receipt = verified_software_receipt(tag, Path(temporary) / system)
+                    if receipt["sourceCommit"] != record["candidate"]:
+                        raise ValueError("public release differs from the reviewed source")
+                except errors as error:
+                    if record.get("systemResults", {}).get(system, {}).get("status") == "published":
+                        # Transient reads cannot revoke a previously verified success.
+                        results[system] = record["systemResults"][system]
+                    else:
+                        results[system] = {"tag": tag, "status": "failed", "reason": str(error)}
+                else:
+                    results[system] = {"tag": tag, "status": "published", "sha256": receipt["archive"]["sha256"]}
+        succeeded = any(item["status"] == "published" for item in results.values())
+        record["systemResults"] = results
+        record["softwareResult"] = "success" if succeeded else "failure"
+        record["phase"] = "tagged-pending-merge" if succeeded else "failed"
+        if succeeded:
+            record["taggedCandidate"] = record["candidate"]
+        self.save(record)
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with Path(summary).open("a", encoding="utf-8") as output:
+                output.write(f"## Software release: {record['softwareResult']}\n\n")
+                for system, result in results.items():
+                    reason = f" · {result['reason']}" if "reason" in result else ""
+                    output.write(f"- `{system}` · `{result['tag']}` · {result['status']}{reason}\n")
+        if not succeeded:
+            raise ValueError("all selected systems failed to publish")
+        if not record.get("finalizationPR"):
+            try:
+                default, _ = self.default()
+                self.protection(default)
+                final = self.ref("refs/heads/" + self.names["finalization"])
+                if final is None:
+                    run("git", "push", "origin", f"{record['candidate']}:refs/heads/{self.names['finalization']}")
+                else:
+                    final = self.fetch("refs/heads/" + self.names["finalization"])
+                    default_tip = self.fetch("refs/heads/" + default)
+                    preserving_updates(record["candidate"], final, default_tip)
+                record["finalizationPR"] = self.open_pr(self.names["finalization"], default, f"Finalize verified {self.version}")
+                self.save(record)
+            except errors as error:
+                record["finalizationError"] = str(error)
+                print(f"Software published; finalization PR needs follow-up: {error}", file=sys.stderr)
         return record
 
     def finalize(self, directory: Path):
@@ -988,7 +1091,7 @@ def source_check(branch: str, base: str, head: str = 'HEAD', event: str | None =
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('operation', choices=['plan', 'initialize', 'select', 'promote', 'prepare', 'review', 'begin-release', 'record-artifact', 'finalize', 'verify', 'merge', 'check', 'verify-package', 'fail'])
+    p.add_argument('operation', choices=['plan', 'initialize', 'select', 'promote', 'prepare', 'review', 'begin-release', 'record-artifact', 'finalize', 'verify', 'merge', 'check', 'verify-package', 'fail', 'publish-system', 'finish-systems'])
     p.add_argument('--version'); p.add_argument('--execute', action='store_true')
     p.add_argument('--requirements', default=''); p.add_argument('--promotion', type=int)
     p.add_argument('--candidate'); p.add_argument('--branch'); p.add_argument('--base'); p.add_argument('--head', default='HEAD')
@@ -997,6 +1100,8 @@ def main():
     p.add_argument('--summary', type=Path, help='plan: append a Markdown preflight summary')
     p.add_argument('--systems', default='', help='plan/begin-release/verify-package: comma-separated system versions')
     p.add_argument('--system-bundles', action='store_true', help='also verify the per-system delivery ZIPs')
+    p.add_argument('--proof', type=Path)
+    p.add_argument('--artifact-run')
     args = p.parse_args()
     try:
         if args.operation == 'check':
@@ -1026,6 +1131,9 @@ def main():
             elif args.operation == 'begin-release': result = train.begin_release(args.systems)
             elif args.operation == 'record-artifact': result = train.record_artifact(args.directory, args.artifact_id)
             elif args.operation == 'finalize': result = train.finalize(args.directory)
+            elif args.operation == 'publish-system':
+                result = train.publish_system(args.systems, args.directory, args.proof, args.artifact_run)
+            elif args.operation == 'finish-systems': result = train.finish_systems()
             elif args.operation == 'fail': result = train.fail()
             else: result = getattr(train, args.operation)()
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -1039,6 +1147,10 @@ def main():
                 target.write('package_run_id='+str(result.get('packageRunId', ''))+'\n')
                 target.write('systems='+package_systems(result)+'\n')
                 target.write('system_releases='+str(bool(result.get("systemTags"))).lower()+'\n')
+                target.write('parallel_systems='+str(bool(result.get("parallelSystems"))).lower()+'\n')
+                target.write('system_matrix='+json.dumps(sorted(result.get("systemTags", {})))+'\n')
+                target.write('recovery_runs='+','.join(result.get("recoveryRunIds", []))+'\n')
+                target.write('software_result='+str(result.get("softwareResult", ""))+'\n')
                 target.write('complete='+str(result.get('phase') == 'complete').lower()+'\n')
     except (ValueError, RuntimeError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         print(f'source train blocked: {error}', file=sys.stderr)
