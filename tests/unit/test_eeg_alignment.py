@@ -168,6 +168,34 @@ class EegAlignmentTests(unittest.IsolatedAsyncioTestCase):
             unavailable = window("headset_rev181", left, right, valid=valid)
             self.assertIs(await cache.align_result(unavailable), unavailable)
 
+    async def test_continuous_headband_updates_do_not_extend_the_headset_wait(self):
+        cache = self.cache(wait_ms=80, clock_ms=lambda: 2400)
+        await self.warm(cache)
+        headset = window("headset_rev181", [-1000, -800, 102], [], packets=[(300, 2400, 42)])
+        stop = asyncio.Event()
+
+        async def keep_headband_behind():
+            # These updates wake the wait but never cover the headset window.
+            # They must not renew its deadline.
+            sequence = 0
+            while not stop.is_set():
+                await asyncio.sleep(0.02)
+                await cache.align_result(window("headband_ble", [-123, -120, 10], [], start=0,
+                                                packets=[(sequence, 0, 42)]))
+                sequence += 1
+
+        started = asyncio.get_running_loop().time()
+        stream = asyncio.create_task(keep_headband_behind())
+        try:
+            result = await asyncio.wait_for(cache.align_result(headset), 0.3)
+        finally:
+            stop.set()
+            stream.cancel()
+            await asyncio.gather(stream, return_exceptions=True)
+        self.assertLess(asyncio.get_running_loop().time() - started, 0.2)
+        self.assertIs(result.batch, headset.batch)
+        self.assertEqual(result.algorithm_result.metrics["eeg"]["wave"]["left"], [-1000, -800, 102])
+
     async def test_disconnect_releases_wait_and_discards_old_reference(self):
         cache = self.cache(wait_ms=300)
         await self.warm(cache)

@@ -138,14 +138,20 @@ class EegAlignmentCache:
         wait_started = time.monotonic()
         wait_ms = min(self._wait_ms, batch.window_end_ms + self._wait_ms - self._clock_ms())
         if wait_ms > 0:
-            try:
-                async with asyncio.timeout(wait_ms / 1000):
-                    while self._clocks.get("headband_ble") is band_session and not self._reference_covers(
-                        batch.window_end_ms, positions, headset_time, band_session[1],
-                    ):
-                        await self._reference_changed.wait()
-            except TimeoutError:
-                pass
+            deadline = time.monotonic() + wait_ms / 1000
+            while self._clocks.get("headband_ble") is band_session and not self._reference_covers(
+                batch.window_end_ms, positions, headset_time, band_session[1],
+            ):
+                # A continuous headband stream keeps producing later windows. Those
+                # updates must wake this wait, but must not renew its deadline;
+                # otherwise the headset pipeline never publishes its own data.
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    await asyncio.wait_for(self._reference_changed.wait(), remaining)
+                except TimeoutError:
+                    break
         waited_ms = round((time.monotonic() - wait_started) * 1000)
         if self._clocks.get(batch.device_protocol) is not active or self._clocks.get("headband_ble") is not band_session:
             return result
