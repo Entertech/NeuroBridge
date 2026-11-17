@@ -247,7 +247,7 @@ def render_summary(plan: dict, mode: str, version_gate: str) -> str:
     ])
     if "gates" in plan:
         gates = plan["gates"]
-        secrets = gates["actionsSecrets"]
+        identity = gates["releaseIdentity"]
         candidate = gates["candidate"]
         merge_policy = gates["mergePolicy"]
         scope = plan["packageScope"]
@@ -257,8 +257,7 @@ def render_summary(plan: dict, mode: str, version_gate: str) -> str:
             *(f"  - Planned software tag: `{tag}`." for tag in plan.get("systemTags", {}).values()),
             *(f"  - `{system}`: compared against `{base}`."
               for system, base in scope["baseCommits"].items()),
-            f"- Actions Secrets: {secrets['status']}.",
-            *(f"  - Could not confirm `{name}`." for name in secrets["notConfirmed"]),
+            f"- Release identity: {identity['status']}. {identity.get('reason', '')}".rstrip(),
             f"- Repository merge policy: {merge_policy['status']}. {merge_policy.get('reason', '')}".rstrip(),
             *(f"- Branch protection `{branch}`: {check['status']}. {check.get('reason', '')}".rstrip()
               for branch, check in gates["branchProtection"].items()),

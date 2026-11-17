@@ -4,7 +4,7 @@ NeuroBridge 是将设备数据接入本机浏览器或兼容第三方 B 端主�
 
 统一架构与分阶段范围见 [NeuroBridge 项目结构与多系统接入 PRD](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_PRD.md)和[技术方案](doc/tech/NeuroBridge项目结构与多系统接入/NeuroBridge项目结构与多系统接入_技术方案.md)；M1 设备细节继续以[银河麒麟 V10 耳机 USB 串口接入 PRD](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_PRD.md)和[专项技术方案](doc/tech/%E9%93%B6%E6%B2%B3%E9%BA%92%E9%BA%9FV10%E8%80%B3%E6%9C%BAUSB%E4%B8%B2%E5%8F%A3%E6%8E%A5%E5%85%A5_%E6%8A%80%E6%9C%AF%E6%96%B9%E6%A1%88.md)为准。历史头环 BLE、Ubuntu、macOS 和独立 B 端方案不属于 M1 验收范围。
 
-源码发布采用 `需求分支 → dev_B → publish_B → 独立候选提交 → 各系统软件发布 → finalize_B → master`。需求开发不升版，用户选定版本和需求范围后才初始化版本；各阶段 PR 和 push 只做代码检查，合入 `master` 不再自动发版。源码流程优先使用 GitHub App 编排；未配置 App Secrets 时，手动触发的发布使用当前工作流身份完成本次写入，但不会自动接续后续工作流。配置见 [code-release-train.toml](.release/code-release-train.toml)，操作和启用条件见[发布技术方案](doc/tech/发布工作流技术方案.md)。
+源码发布采用 `需求分支 → dev_B → publish_B → 独立候选提交 → 各系统软件发布 → finalize_B → master`。需求开发不升版，用户选定版本和需求范围后才初始化版本；各阶段 PR 和 push 只做代码检查，合入 `master` 不再自动发版。源码流程使用当前 workflow 的 `github.token` 完成写入；合入后的下一步由当前运行显式调度，不依赖 GitHub App。配置见 [code-release-train.toml](.release/code-release-train.toml)，操作和启用条件见[发布技术方案](doc/tech/发布工作流技术方案.md)。
 
 版本列车按台账 `[software_versions]` 比较各系统上次正式交付，只选择已升版且有对应代码变化的系统。可显式限定 Windows 10、Windows 11 或麒麟 V10 的范围。各系统并行构建、验包并使用 `<system>/v<softwareVersion>` tag。等本轮系统任务结束后，`delivery/v<applicationVersion>` 发布一份交付 ZIP，包含全部成功系统的原始软件 ZIP、各自适用的已核验文档和汇总清单。只有全部系统失败才判定软件发布失败。失败系统保留诊断并沿用上次交付基准。软件回执登记新版文档待办，文档随后独立发布和核销。手动 `Release` 和 `Kylin bootstrap package` 用于诊断构建。详见[发布配置](release/release_matrix.toml)。
 

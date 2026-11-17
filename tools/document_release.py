@@ -226,7 +226,7 @@ def main() -> None:
         with tempfile.TemporaryDirectory(prefix="neurobridge-doc-release-") as temporary:
             directory = Path(temporary)
             if args.operation == "publish":
-                if not args.execute or (os.getenv("GITHUB_ACTIONS") == "true" and os.getenv("TRAIN_RELEASE_IDENTITY") not in ("app", "workflow")):
+                if not args.execute or (os.getenv("GITHUB_ACTIONS") == "true" and os.getenv("TRAIN_RELEASE_IDENTITY") != "workflow"):
                     raise ValueError("document publication requires explicit execution and a release identity in Actions")
                 receipt = publish(args.document, args.version, args.software_tags.split(",") if args.software_tags else [], directory)
                 if args.preview_dir:

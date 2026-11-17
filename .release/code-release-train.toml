@@ -5,8 +5,7 @@ schema_version = 1
 [repository]
 name = "Entertech/NeuroBridge"
 default_branch = "master"
-app_id_secret = "RELEASE_BOT_APP_ID"
-private_key_secret = "RELEASE_BOT_PRIVATE_KEY"
+release_identity = "workflow"
 
 [branches]
 requirement_prefixes = ["feature/", "bugfix/", "codex/"]

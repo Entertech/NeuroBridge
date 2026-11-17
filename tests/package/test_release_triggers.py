@@ -24,9 +24,10 @@ class ReleaseTriggerTests(unittest.TestCase):
         self.assertIn('source_train: true', block)
         self.assertIn('systems: ${{ needs.source.outputs.systems }}', block)
         source = (WORKFLOWS/'source-train.yml').read_text()
-        self.assertIn('actions/create-github-app-token@v2', source)
-        self.assertIn('secrets.RELEASE_BOT_APP_ID', source)
-        self.assertNotIn('token: ${{ github.token }}', source)
+        self.assertNotIn('actions/create-github-app-token', source)
+        self.assertNotIn('RELEASE_BOT', source)
+        self.assertIn('token: ${{ github.token }}', source)
+        self.assertIn("workflow_id: 'source-train.yml'", source)
         self.assertIn("group: source-train-${{ github.repository }}${{ inputs.operation == 'plan' && format('-plan-{0}', github.run_id) || '' }}", source)
 
     def test_read_only_plan_does_not_use_the_release_app(self):

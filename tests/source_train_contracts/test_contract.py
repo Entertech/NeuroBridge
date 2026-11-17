@@ -92,7 +92,7 @@ class ContractTests(unittest.TestCase):
         obj = train.Train('1.2.3')
         with mock.patch.object(train, 'api', return_value={'default_branch': 'master'}), \
              mock.patch.object(obj, 'fetch', return_value=OTHER), mock.patch.object(obj, 'protection'), \
-             mock.patch.object(obj, 'plan_actions_secrets', return_value={'status': 'missing'}), \
+             mock.patch.object(obj, 'plan_actions_identity', return_value={'status': 'workflow'}), \
              mock.patch.object(obj, 'load', return_value=None), \
              mock.patch.object(obj, 'package_scope', return_value={'mode': 'affected', 'systems': []}), \
              mock.patch('tools.release_preflight.release_plan', return_value={'applicationVersion': '1.2.3', 'sourceCommit': GOOD, 'documentBlockers': []}):
@@ -100,7 +100,7 @@ class ContractTests(unittest.TestCase):
         self.assertFalse(result['writes'])
         self.assertEqual(result['gates']['mergePolicy']['status'], 'unverified')
         self.assertEqual(result['gates']['branchProtection']['master']['status'], 'passed')
-        self.assertEqual(result['gates']['actionsSecrets']['status'], 'missing')
+        self.assertEqual(result['gates']['releaseIdentity']['status'], 'workflow')
 
     def test_existing_tag_without_record_never_starts_a_candidate(self):
         obj = train.Train('1.2.3', True)
@@ -662,7 +662,7 @@ class RemoteAncestryTests(GitSourceTests):
              mock.patch.object(obj, 'default', return_value=('master', default)), \
              mock.patch.object(obj, 'fetch', return_value=default), mock.patch.object(obj, 'ref', return_value=None), \
              mock.patch.object(obj, 'load', return_value=None), mock.patch.object(obj, 'protection'), \
-             mock.patch.object(obj, 'plan_actions_secrets', return_value={'status': 'unknown'}), \
+             mock.patch.object(obj, 'plan_actions_identity', return_value={'status': 'workflow'}), \
              mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'required_record', return_value=record), \
              mock.patch.object(obj, 'checks'), mock.patch.object(obj, 'tag', return_value=None), \
              mock.patch.object(obj, 'save'), mock.patch.object(obj, 'ensure_candidate'), \

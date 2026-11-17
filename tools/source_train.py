@@ -265,8 +265,8 @@ class Train:
               'remoteWrites': 'only the selected source operation; no force-push or Ruleset changes'}, ensure_ascii=False), file=sys.stderr)
         if run('git', 'status', '--porcelain'):
             raise ValueError("source orchestration requires a clean worktree")
-        if os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('TRAIN_RELEASE_IDENTITY') not in ('app', 'workflow'):
-            raise ValueError("automated source writes require the repository GitHub App or the triggering workflow identity")
+        if os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('TRAIN_RELEASE_IDENTITY') != 'workflow':
+            raise ValueError("automated source writes use the triggering workflow identity")
         origin = run('git', 'remote', 'get-url', 'origin')
         origin = origin.replace('git@github.com:', 'https://github.com/', 1)
         parsed = urlsplit(origin)
@@ -296,28 +296,11 @@ class Train:
         if policy.get('required_linear_history', {}).get('enabled'):
             raise ValueError("linear-only protection cannot preserve candidate ancestry")
 
-    def plan_actions_secrets(self) -> dict:
-        required = [self.config['repository'][key] for key in ('app_id_secret', 'private_key_secret')]
-        if os.environ.get('GITHUB_ACTIONS') == 'true':
-            presence = [os.environ.get(key) for key in ('TRAIN_PLAN_APP_ID_PRESENT', 'TRAIN_PLAN_APP_KEY_PRESENT')]
-            if all(value in ('true', 'false') for value in presence):
-                missing = [name for name, present in zip(required, presence) if present == 'false']
-                return {'status': 'missing' if missing else 'configured', 'notConfirmed': missing, 'unreadableScopes': []}
-        secret_names = set()
-        unreadable = []
-        for scope in ('secrets', 'organization-secrets'):
-            try:
-                pages = json.loads(run('gh', 'api', '--paginate', '--slurp',
-                                       f'repos/{self.repository}/actions/{scope}?per_page=100'))
-            except RuntimeError:
-                unreadable.append(scope)
-            else:
-                secret_names.update(secret['name'] for page in pages for secret in page['secrets'])
-        missing = [name for name in required if name not in secret_names]
-        secret_status = 'configured'
-        if missing:
-            secret_status = 'unknown' if unreadable else 'missing'
-        return {'status': secret_status, 'notConfirmed': missing, 'unreadableScopes': unreadable}
+    def plan_actions_identity(self) -> dict:
+        identity = self.config['repository'].get('release_identity')
+        if identity != 'workflow':
+            return {'status': 'blocked', 'reason': 'release writes must use the triggering workflow token'}
+        return {'status': 'workflow', 'continuation': 'explicit-workflow-dispatch'}
 
     def package_scope(self, candidate: str, requested: str = "") -> dict:
         from tools.release_pipeline import matrix, release_base, release_config_at, system_release_bases, system_version
@@ -394,7 +377,7 @@ class Train:
                 'sourceVersion': 'matches_target' if result['applicationVersion'] == self.version else 'differs_from_target',
                 'mergePolicy': merge_policy,
                 'branchProtection': protections,
-                'actionsSecrets': self.plan_actions_secrets(),
+                'releaseIdentity': self.plan_actions_identity(),
                 'requiredCodeChecks': self.config['code_gates']['checks'],
                 'candidate': candidate_gates,
                 'packages': 'verified_receipt_required',
