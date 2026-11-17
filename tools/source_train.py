@@ -311,7 +311,7 @@ class Train:
         return scope_for(candidate, baselines, requested, config=config)
 
     def plan(self, head: str, systems: str = "") -> dict:
-        from tools.release_preflight import release_plan
+        from tools.release_preflight import formal_document_blockers, release_plan
         from tools.release_pipeline import select_targets
 
         default, meta = self.default_repository()
@@ -326,6 +326,7 @@ class Train:
             raise ValueError('requested systems differ from the recorded package scope')
         result['packageScope'] = scope
         result['packages'] = select_targets(result['packages'], ','.join(scope['systems'])) if scope['systems'] else []
+        result['formalDocumentBlockers'] = formal_document_blockers(result)
         try:
             if 'allow_merge_commit' not in meta or 'delete_branch_on_merge' not in meta:
                 merge_policy = {'status': 'unverified', 'reason': 'Repository merge settings are not visible to this token.'}
@@ -693,14 +694,21 @@ class Train:
         default_tip = self.fetch('refs/heads/'+default)
         if numeric(self.version) <= numeric(version_at(default_tip)):
             raise ValueError('new package version must advance the current default version')
-        from tools.release_preflight import release_plan
+        from tools.release_preflight import formal_document_blockers, release_plan
         plan = release_plan(record['candidate'], default_tip)
         if plan['documentBlockers']:
             raise ValueError('formal document preflight failed: ' + ' '.join(plan['documentBlockers']))
-        if recorded_scope is None and not previous_run:
+        scope = recorded_scope
+        if scope is None and not previous_run:
             scope = self.package_scope(record['candidate'], systems)
             if not scope['systems']:
                 raise ValueError('no affected systems since the last delivery; specify systems to package explicitly')
+        if scope:
+            plan['packages'] = select_targets(plan['packages'], ','.join(scope['systems']))
+        blockers = formal_document_blockers(plan)
+        if blockers:
+            raise ValueError('formal document preflight failed: ' + ' '.join(blockers))
+        if recorded_scope is None and scope:
             record['packageScope'] = {key: scope[key] for key in ('mode', 'systems', 'baseCommits')}
         record['packageRunId'] = os.environ['GITHUB_RUN_ID']
         record['packageRunAttempt'] = os.environ.get('GITHUB_RUN_ATTEMPT', '1')

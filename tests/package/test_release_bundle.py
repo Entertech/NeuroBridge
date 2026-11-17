@@ -38,10 +38,11 @@ PACKAGE_SPECS = {
 }
 
 
-def write_document_package(documents: Path) -> None:
+def write_document_package(documents: Path, *, protocol_version="0.3", protocol_bytes=b"pdf") -> list[dict]:
     """Write the review artifact with one document per delivery policy."""
     documents.mkdir(parents=True)
     manifest = {
+        "packageMode": "publish",
         "documents": [
             {"pdf_artifact_name": "protocol.pdf", "delivery": "always", "platforms": []},
             {"pdf_artifact_name": WINDOWS_GUIDE, "delivery": "platform_bound", "platforms": ["windows"]},
@@ -50,14 +51,20 @@ def write_document_package(documents: Path) -> None:
             {"pdf_artifact_name": WIRED_GUIDE, "delivery": "review_only", "platforms": []},
         ]
     }
+    pdfs = {"protocol.pdf": b"pdf", WINDOWS_GUIDE: b"windows guide", KYLIN_GUIDE: b"kylin guide",
+            SSH_GUIDE: b"excluded", WIRED_GUIDE: b"excluded"}
+    keys = ("northbound", "windows_operations", "kylin_operations", "ssh_operations", "wired_network_operations")
+    for key, entry in zip(keys, manifest["documents"], strict=True):
+        entry.update(key=key, version=protocol_version if key == "northbound" else "1.0",
+                     status="published", artifactStatus="published", markdown_path=f"{key}.md",
+                     pdfSha256=_build_release_bundle.digest_bytes(pdfs[entry["pdf_artifact_name"]]))
+    pdfs["protocol.pdf"] = protocol_bytes
     with zipfile.ZipFile(documents / "neurobridge-external-documents.zip", "w") as archive:
-        archive.writestr("protocol.pdf", b"pdf")
-        archive.writestr(WINDOWS_GUIDE, b"windows guide")
-        archive.writestr(KYLIN_GUIDE, b"kylin guide")
-        archive.writestr(SSH_GUIDE, b"excluded")
-        archive.writestr(WIRED_GUIDE, b"excluded")
+        for name, payload in pdfs.items():
+            archive.writestr(name, payload)
         archive.writestr("b-client-test/index.html", b"<html></html>")
         archive.writestr("release-manifest.json", json.dumps(manifest, ensure_ascii=False))
+    return manifest["documents"]
 
 
 def write_release_fixture(release: Path, built_platforms: tuple[str, ...]) -> None:
@@ -126,6 +133,29 @@ class ReleaseBundleTests(unittest.TestCase):
                                      side_effect=lambda markdown: b'%PDF-1.4\n' + markdown.encode('utf-8'))
         renderer.start()
         self.addCleanup(renderer.stop)
+
+    def test_delivery_checks_planned_document_versions_and_pdf_digests(self) -> None:
+        cases = [
+            ("0.3", b"pdf", None),
+            ("0.2", b"pdf", "expected v0.3, got v0.2"),
+            ("0.3", b"modified pdf", "document SHA-256 mismatch"),
+        ]
+        for version, pdf, failure in cases:
+            with self.subTest(version=version, pdf=pdf), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                entries = write_document_package(root / "documents", protocol_version=version, protocol_bytes=pdf)
+                write_release_fixture(root / "release", ("windows",))
+                planned = [entry | {"version": "0.3"} if entry["key"] == "northbound" else entry for entry in entries]
+                preflight = {"sourceCommit": run("git", "rev-parse", "HEAD"), "applicationVersion": "0.2.0",
+                             "documentMode": "publish", "formalDocumentBlockers": [], "documents": planned}
+                output = root / "bundle.zip"
+                if failure:
+                    with self.assertRaisesRegex(ValueError, failure):
+                        build_bundle(root / "release", root / "documents", output, preflight=preflight)
+                    self.assertFalse(output.exists())
+                else:
+                    build_bundle(root / "release", root / "documents", output, preflight=preflight)
+                    self.assertTrue(output.is_file())
 
     def test_delivery_aliases_are_ascii_and_preserve_pdf_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

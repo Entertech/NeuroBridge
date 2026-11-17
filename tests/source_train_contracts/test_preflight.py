@@ -1,10 +1,12 @@
 from pathlib import Path
+from dataclasses import replace
 import json
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from tools import release_preflight
+from tools.external_document_package import ExternalDocument
 
 
 class ReleasePreflightTests(unittest.TestCase):
@@ -86,5 +88,36 @@ pdf_artifact_name = "windows.pdf"
                             patch.object(release_preflight, "release_plan", return_value=plan), \
                             patch.object(release_preflight, "render_summary", return_value="Release preflight\n"):
                         self.assertEqual(release_preflight.main(), expected_status)
-                    self.assertEqual(json.loads(output.read_text()), plan)
+                        self.assertEqual(json.loads(output.read_text()), plan | {
+                            "formalDocumentBlockers": plan["documentBlockers"], "documentMode": mode,
+                        })
                     self.assertTrue(summary.is_file())
+
+    def test_pr12_document_requirement_is_independent_of_wire_version(self):
+        doc = ExternalDocument("northbound", "Northbound", "0.2", "published", "always", (), "v0.2.md", "v0.2.pdf")
+        registry = {"change_records": [{
+            "id": "replay-loop",
+            "required_document": {"key": "northbound", "minimum_version": "0.3", "pull_request": 12},
+        }]}
+        plan = {
+            "sourceCommit": "1" * 40, "baseCommit": "2" * 40,
+            "applicationVersion": "0.3.3", "baseApplicationVersion": "0.3.2",
+            "packages": [{"id": "windows-11-x86_64-exe", "runner": "windows-2022", "platform": "windows"}],
+            "documents": [], "documentBlockers": [], "warnings": [], "generatedDocuments": [],
+            "northbound": {"wireVersion": "1.0", "baseWireVersion": "1.0", "prereleaseDocumentVersion": "0.3"},
+        }
+        platforms = {"windows", "kylin"}
+        for version, status, blocked in (("0.2", "published", True), ("0.3", "unpublished", True),
+                                         ("0.3", "published", False), ("0.10", "published", False)):
+            with self.subTest(version=version, status=status):
+                plan["documentImpacts"] = release_preflight.document_impacts(
+                    registry, [replace(doc, version=version, status=status)], platforms,
+                )
+                summary = release_preflight.render_summary(plan, "publish", "version_advanced")
+                self.assertEqual(bool(release_preflight.formal_document_blockers(plan)), blocked)
+                self.assertEqual("document PR #12" in summary, blocked)
+                if blocked:
+                    self.assertIn(f"candidate selects v{version}", summary)
+        registry["change_records"][0]["required_document"]["platforms"] = ["kylin"]
+        plan["documentImpacts"] = release_preflight.document_impacts(registry, [doc], platforms)
+        self.assertEqual(release_preflight.formal_document_blockers(plan), [])

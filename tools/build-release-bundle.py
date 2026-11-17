@@ -387,8 +387,59 @@ def render_directory_pdf(markdown: str) -> bytes:
         return result
 
 
-def build_bundle(release_directory: Path, documents_root: Path, output: Path) -> dict:
+def verify_bundled_documents(bundle: zipfile.ZipFile, systems: list[dict], preflight: dict) -> None:
+    manifest = json.loads(bundle.read(f"docs/external/{MANIFEST_FILENAME}"))
+    mode = preflight["documentMode"]
+    if manifest["packageMode"] != mode:
+        raise ValueError("document package mode differs from release preflight")
+    planned = {item["key"]: item for item in preflight["documents"]}
+    actual = {item["key"]: item for item in manifest["documents"]}
+    if len(actual) != len(manifest["documents"]) or actual.keys() != planned.keys():
+        raise ValueError("document manifest does not cover the preflight document set")
+    shared, bound = {}, {}
+    for key, expected in planned.items():
+        entry = actual[key]
+        identity = ("version", "status", "pdf_artifact_name", "markdown_path", "delivery", "platforms")
+        if any(entry[field] != expected[field] for field in identity):
+            raise ValueError(f"document {key} differs from preflight (expected v{expected['version']}, got v{entry['version']})")
+        if entry["artifactStatus"] != ("published" if mode == "publish" else "candidate"):
+            raise ValueError(f"document {key} artifact status differs from preflight mode")
+        if expected["delivery"] == "review_only":
+            continue
+        name = delivery_pdf_name(expected["pdf_artifact_name"])
+        digest = entry["pdfSha256"]
+        if expected["delivery"] == "always":
+            shared[name] = digest
+        else:
+            for platform in expected["platforms"]:
+                bound.setdefault(platform, {})[name] = digest
+
+    def verify_copies(archive: zipfile.ZipFile, directory: str, expected: dict) -> None:
+        paths = {f"{directory}/{name}": digest for name, digest in expected.items()}
+        actual_paths = [name for name in archive.namelist() if name.startswith(f"{directory}/") and name.endswith(".pdf")]
+        if len(actual_paths) != len(paths) or set(actual_paths) != paths.keys():
+            raise ValueError(f"PDF members differ from preflight in {directory}")
+        for path, digest in paths.items():
+            if digest_bytes(archive.read(path)) != digest:
+                raise ValueError(f"document SHA-256 mismatch: {path}")
+
+    verify_copies(bundle, "docs/external", shared)
+    for system in systems:
+        expected = shared | bound.get(system["platform"], {})
+        with zipfile.ZipFile(io.BytesIO(bundle.read(system["fileName"]))) as platform_zip:
+            for variant in system["variants"]:
+                with zipfile.ZipFile(io.BytesIO(platform_zip.read(variant["fileName"]))) as variant_zip:
+                    verify_copies(variant_zip, "docs", expected)
+
+
+def build_bundle(release_directory: Path, documents_root: Path, output: Path, *, preflight: dict | None = None) -> dict:
     release_manifest = json.loads((release_directory / "release-manifest.json").read_text(encoding="utf-8"))
+    if preflight is not None:
+        if (preflight["sourceCommit"] != release_manifest["git"]["commit"]
+                or preflight["applicationVersion"] != release_manifest["applicationVersion"]):
+            raise ValueError("delivery bundle source or version differs from release preflight")
+        if preflight["documentMode"] == "publish" and preflight["formalDocumentBlockers"]:
+            raise ValueError("cannot assemble a formal delivery ZIP with unresolved document blockers")
     timestamp = zip_timestamp(release_manifest)
     grouped, validation = collect_native_packages(release_directory, release_manifest)
     available_platforms = {platform for platform, _, _ in grouped}
@@ -431,6 +482,8 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
     with zipfile.ZipFile(temporary) as bundle:
         if bundle.testzip() is not None or set(bundle.namelist()) != set(files):
             raise ValueError("release bundle validation failed")
+        if preflight is not None:
+            verify_bundled_documents(bundle, system_manifest, preflight)
     temporary.replace(output)
     return {**bundle_manifest, "fileName": output.name, "sha256": digest_file(output), "size": output.stat().st_size}
 
@@ -440,9 +493,11 @@ def main() -> int:
     parser.add_argument("--release-dir", required=True, type=Path)
     parser.add_argument("--documents-dir", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--preflight", type=Path)
     args = parser.parse_args()
     try:
-        result = build_bundle(args.release_dir, args.documents_dir, args.output)
+        preflight = json.loads(args.preflight.read_text(encoding="utf-8")) if args.preflight else None
+        result = build_bundle(args.release_dir, args.documents_dir, args.output, preflight=preflight)
     except (OSError, KeyError, ValueError, json.JSONDecodeError, zipfile.BadZipFile, subprocess.CalledProcessError) as error:
         parser.error(str(error))
     print(json.dumps(result, ensure_ascii=False, indent=2))

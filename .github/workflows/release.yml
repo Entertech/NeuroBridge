@@ -362,6 +362,10 @@ jobs:
         with:
           name: external-document-package
           path: artifacts/documents
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-plan-${{ env.SOURCE_SHA }}
+          path: artifacts/preflight
       - name: Check all target results and produce verified ZIP
         env:
           # `push_master` is the only trigger that enforces the minimum-package
@@ -381,6 +385,7 @@ jobs:
           python tools/build-release-bundle.py \
             --release-dir artifacts/release \
             --documents-dir artifacts/documents \
+            --preflight artifacts/preflight/release-preflight.json \
             --output "$DELIVERY_ZIP"
           printf 'archive_sha256=%s\n' "$(sha256sum "$DELIVERY_ZIP" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
       - name: Check directory PDF and render every page

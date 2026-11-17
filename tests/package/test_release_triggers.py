@@ -65,6 +65,8 @@ class ReleaseTriggerTests(unittest.TestCase):
         self.assertIn('DELIVERY_ZIP: artifacts/delivery/neurobridge-v', block)
         self.assertIn('--release-dir artifacts/release', block)
         self.assertIn('--output "$DELIVERY_ZIP"', block)
+        self.assertIn('name: release-plan-${{ env.SOURCE_SHA }}', block)
+        self.assertIn('--preflight artifacts/preflight/release-preflight.json', block)
         self.assertIn('--directory "$DELIVERY_DIR"', block)
         self.assertIn('path: ${{ env.DELIVERY_ZIP }}', block)
 

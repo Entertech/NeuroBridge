@@ -89,7 +89,7 @@ class ContractTests(unittest.TestCase):
              mock.patch.object(obj, 'plan_actions_secrets', return_value={'status': 'missing'}), \
              mock.patch.object(obj, 'load', return_value=None), \
              mock.patch.object(obj, 'package_scope', return_value={'mode': 'affected', 'systems': []}), \
-             mock.patch('tools.release_preflight.release_plan', return_value={'applicationVersion': '1.2.3', 'sourceCommit': GOOD}):
+             mock.patch('tools.release_preflight.release_plan', return_value={'applicationVersion': '1.2.3', 'sourceCommit': GOOD, 'documentBlockers': []}):
             result = obj.plan(GOOD)
         self.assertFalse(result['writes'])
         self.assertEqual(result['gates']['mergePolicy']['status'], 'unverified')
@@ -627,6 +627,17 @@ class RemoteAncestryTests(GitSourceTests):
              mock.patch.object(obj, 'save'), mock.patch.object(obj, 'ensure_candidate'), \
              mock.patch.dict(os.environ, {'GITHUB_RUN_ID': '17'}):
             preview = obj.plan(candidate)
+            release_plan['documentImpacts'] = [{
+                'changeId': 'replay-loop', 'title': 'Northbound', 'requiredVersion': '0.3',
+                'plannedVersion': '0.2', 'status': 'published', 'satisfied': False,
+                'platforms': ['windows'], 'pullRequest': 12,
+            }]
+            with mock.patch.object(obj, 'save') as save, mock.patch.object(obj, 'ensure_candidate') as ensure:
+                with self.assertRaisesRegex(ValueError, r'requires published v0\.3.*selects v0\.2.*PR #12'):
+                    obj.begin_release()
+                save.assert_not_called()
+                ensure.assert_not_called()
+            release_plan['documentImpacts'][0]['satisfied'] = True
             attempt = obj.begin_release()
         self.assertEqual(preview['packageScope']['systems'], ['windows-11'])
         self.assertEqual(attempt['packageScope']['systems'], ['windows-11'])

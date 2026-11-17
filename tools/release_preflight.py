@@ -6,14 +6,67 @@ import argparse
 from dataclasses import asdict
 import json
 from pathlib import Path
+import re
 import subprocess
 import tomllib
 
-from .external_document_package import collect_external_documents
+from .external_document_package import ExternalDocument, collect_external_documents
 from .release_pipeline import matrix, release_config_at, run, save_json, select_targets, system_version
 
 
 REGISTRY_PATH = "neurobridge/version_registry.toml"
+
+
+def document_version(value: str) -> tuple[int, ...]:
+    if not isinstance(value, str) or not re.fullmatch(r"(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))+", value):
+        raise ValueError(f"Invalid external document version: {value!r}")
+    return tuple(map(int, value.split(".")))
+
+
+def document_impacts(registry: dict, documents: list[ExternalDocument], platforms: set[str]) -> list[dict]:
+    by_key = {doc.key: doc for doc in documents}
+    impacts = []
+    for change in registry.get("change_records", []):
+        if "required_document" not in change:
+            continue
+        requirement = change["required_document"]
+        change_id = change["id"]
+        if not isinstance(requirement, dict) or set(requirement) - {"key", "minimum_version", "platforms", "pull_request"}:
+            raise ValueError(f"{change_id}: invalid required_document")
+        key = requirement.get("key")
+        doc = by_key.get(key) if isinstance(key, str) else None
+        if doc is None or doc.delivery == "review_only":
+            raise ValueError(f"{change_id}: required_document must identify a deliverable external document")
+        applicable = set(doc.platforms) if doc.delivery == "platform_bound" else platforms
+        scoped = requirement.get("platforms", sorted(applicable))
+        if (not isinstance(scoped, list) or not scoped or any(not isinstance(platform, str) for platform in scoped)
+                or set(scoped) - (applicable & platforms)):
+            raise ValueError(f"{change_id}: invalid required_document platforms")
+        minimum = requirement.get("minimum_version")
+        satisfied = document_version(doc.version) >= document_version(minimum) and doc.status == "published"
+        pull_request = requirement.get("pull_request")
+        if pull_request is not None and (type(pull_request) is not int or pull_request < 1):
+            raise ValueError(f"{change_id}: invalid required_document pull_request")
+        impacts.append({
+            "changeId": change_id, "document": doc.key, "title": doc.title, "requiredVersion": minimum,
+            "plannedVersion": doc.version, "status": doc.status, "platforms": scoped,
+            "pullRequest": pull_request, "satisfied": satisfied,
+        })
+    return impacts
+
+
+def formal_document_blockers(plan: dict) -> list[str]:
+    blockers = list(plan["documentBlockers"])
+    selected = {target["platform"] for target in plan.get("packages", [])}
+    for impact in plan.get("documentImpacts", []):
+        if impact["satisfied"] or selected.isdisjoint(impact["platforms"]):
+            continue
+        reference = f" (document PR #{impact['pullRequest']})" if impact["pullRequest"] else ""
+        blockers.append(
+            f"{impact['changeId']}: {impact['title']} requires published v{impact['requiredVersion']} or later; "
+            f"candidate selects v{impact['plannedVersion']} ({impact['status']}){reference}."
+        )
+    return blockers
 
 
 def release_plan(head: str, base: str) -> dict:
@@ -30,6 +83,7 @@ def release_plan(head: str, base: str) -> dict:
             return False
 
     documents = collect_external_documents(registry, file_exists=file_exists)
+    packages = matrix(config)
     previous_sections = old_registry["documents"]
     previous_versions = {
         name.removeprefix("external_"): section.get("version")
@@ -47,9 +101,10 @@ def release_plan(head: str, base: str) -> dict:
         "baseCommit": baseline,
         "baseApplicationVersion": old_registry["application"]["version"],
         "applicationVersion": registry["application"]["version"],
-        "packages": matrix(config),
+        "packages": packages,
         "generatedDocuments": ["bundle-directory-guide.pdf"],
         "documents": [{**asdict(doc), "baseVersion": previous_versions.get(doc.key)} for doc in documents],
+        "documentImpacts": document_impacts(registry, documents, {target["platform"] for target in packages}),
         "northbound": {
             "wireVersion": wire,
             "baseWireVersion": previous_wire,
@@ -84,12 +139,21 @@ def render_summary(plan: dict, mode: str, version_gate: str) -> str:
         if doc["delivery"] == "platform_bound" and selected_platforms.isdisjoint(doc["platforms"]):
             delivery += " (not selected)"
         lines.append(f"| {title} | {doc['baseVersion'] or '—'} | {doc['version']} | {doc['status']} | {delivery} |")
+    if plan.get("documentImpacts"):
+        lines.extend(["", "### Required document updates", ""])
+        for impact in plan["documentImpacts"]:
+            status = "satisfied" if impact["satisfied"] else "update required"
+            if selected_platforms.isdisjoint(impact["platforms"]):
+                status = "outside selected scope"
+            reference = f" · PR #{impact['pullRequest']}" if impact["pullRequest"] else ""
+            lines.append(f"- `{impact['changeId']}` · {impact['title']} · required v{impact['requiredVersion']}"
+                         f" · planned v{impact['plannedVersion']} · {status}{reference}")
     protocol = plan["northbound"]
     lines.extend([
         "", f"Wire protocol: `{protocol['baseWireVersion']}` → `{protocol['wireVersion']}`.",
         f"Internal northbound prerelease: `{protocol['prereleaseDocumentVersion']}`.",
         "Generated in the delivery ZIP: " + ", ".join(plan["generatedDocuments"]) + ".", "",
-        *(f"- Formal document gate: {item}" for item in plan["documentBlockers"]),
+        *(f"- Formal document gate: {item}" for item in formal_document_blockers(plan)),
         *(f"- Review: {item}" for item in plan["warnings"]),
     ])
     if "gates" in plan:
@@ -136,11 +200,14 @@ def main() -> int:
         plan["systems"] = list(dict.fromkeys(map(system_version, plan["packages"])))
     if plan["sourceCommit"] != run("git", "rev-parse", "HEAD") or plan["applicationVersion"] != gate["applicationVersion"]:
         parser.error("release plan and version gate must use the same checked-out source")
+    blockers = formal_document_blockers(plan)
+    plan["formalDocumentBlockers"] = blockers
+    plan["documentMode"] = args.mode
     save_json(args.output, plan)
     with args.summary.open("a", encoding="utf-8") as summary:
         summary.write(render_summary(plan, args.mode, gate["reason"]))
-    if gate["shouldRelease"] and args.mode == "publish" and plan["documentBlockers"]:
-        for reason in plan["documentBlockers"]:
+    if gate["shouldRelease"] and args.mode == "publish" and blockers:
+        for reason in blockers:
             print(reason)
         return 1
     return 0
