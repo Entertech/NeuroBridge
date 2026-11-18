@@ -11,7 +11,7 @@ import re
 import subprocess
 import tempfile
 
-from .external_protocol_registry import ROOT, load_registry, select_external_protocol
+from .external_protocol_registry import ROOT, load_registry, markdown_digest, select_external_protocol
 from .publish_release import ARCHIVE_CHECKPOINT, command, ensure_release, ensure_tag, release_info, verify_asset
 from .release_pipeline import require_digest, save_json, sha256, software_tag
 from .release_preflight import document_version
@@ -42,7 +42,7 @@ def registered_document(key: str, version: str) -> dict:
         raise ValueError("document must be approved and registered as published on master")
     path = ROOT / doc["markdown_path"]
     require_digest(doc["markdown_sha256"], "approved Markdown SHA-256")
-    if sha256(path) != doc["markdown_sha256"]:
+    if markdown_digest(path) != doc["markdown_sha256"]:
         raise ValueError("approved Markdown differs from its locked SHA-256")
     if Path(doc["pdf_artifact_name"]).name != doc["pdf_artifact_name"] or not doc["pdf_artifact_name"].endswith(".pdf"):
         raise ValueError("registered PDF must be a flat .pdf filename")

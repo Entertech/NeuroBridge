@@ -158,7 +158,7 @@ suite = loader.discover(str(root/'tests'), pattern='test_contract.py')
 assert not loader.errors, loader.errors
 assert suite.countTestCases() > 0
 """
-        subprocess.run([sys.executable, '-c', script], cwd=root, check=True, capture_output=True, text=True)
+        subprocess.run([sys.executable, '-c', script], cwd=root, check=True, capture_output=True, text=True, encoding='utf-8')
 
     def test_cleanup_uses_atomic_expected_tips_without_forcing(self):
         obj = train.Train('1.2.3', True)
@@ -338,7 +338,7 @@ class GitSourceTests(unittest.TestCase):
         self.registry('0.3.2'); self.commit('baseline'); self.baseline = self.git('rev-parse', 'HEAD')
 
     def git(self, *a):
-        return subprocess.check_output(['git', *a], cwd=self.root, text=True).strip()
+        return subprocess.check_output(['git', *a], cwd=self.root, text=True, encoding='utf-8').strip()
 
     def registry(self, version):
         (self.root/'neurobridge/version_registry.toml').write_text('[application]\nversion="'+version+'"\n')
@@ -513,7 +513,7 @@ class ArtifactTests(unittest.TestCase):
                 [sys.executable, '-m', 'tools.source_train', 'verify-package',
                  '--version', version, '--candidate', commit, '--systems', 'windows-11',
                  '--directory', str(archive.parent)],
-                cwd=train.ROOT, capture_output=True, text=True, check=True,
+                cwd=train.ROOT, capture_output=True, text=True, encoding='utf-8', check=True,
             )
             self.assertEqual(json.loads(result.stdout)['targets'], ['windows-11-x86_64-exe', 'windows-11-x86_64-msi'])
 

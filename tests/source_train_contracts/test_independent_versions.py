@@ -33,7 +33,7 @@ class IndependentVersionsTests(unittest.TestCase):
         self.base = self.commit()
 
     def git(self, *args):
-        return subprocess.check_output(["git", *args], cwd=self.root, text=True).strip()
+        return subprocess.check_output(["git", *args], cwd=self.root, text=True, encoding="utf-8").strip()
 
     def commit(self):
         self.git("add", "-A")
@@ -97,6 +97,13 @@ class IndependentVersionsTests(unittest.TestCase):
         head = self.commit()
         with self.assertRaisesRegex(ValueError, "without a new document version"):
             release_version_policy.check_versions(self.base, head)
+
+    def test_crlf_checkout_matches_the_published_markdown_digest(self):
+        markdown_files = sorted((self.root / "doc").rglob("*.md"))
+        self.assertTrue(markdown_files)
+        for markdown in markdown_files:
+            markdown.write_bytes(markdown.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+        subprocess.run([sys.executable, "tools/check-version-registry.py"], cwd=self.root, check=True)
 
     def test_pr_rejects_document_version_bump_if_only_delivery_metadata_changed(self):
         old = release_version_policy.formal_document(release_scope.registry_at(self.base), "northbound")

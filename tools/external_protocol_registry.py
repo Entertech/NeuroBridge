@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 import tomllib
 
@@ -16,6 +17,16 @@ def load_registry() -> dict:
 
 def normalize_version(version: str) -> str:
     return version.removeprefix("v")
+
+
+def markdown_digest(path: Path) -> str:
+    """Hash a Markdown document by its LF-normalized UTF-8 bytes.
+
+    Registry digests are recorded from the LF text. Git checkouts on Windows
+    keep CRLF copies in the working tree, so comparing raw bytes would report a
+    phantom edit there; normalize line endings before hashing instead.
+    """
+    return sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def external_protocol_catalog(registry: dict) -> dict:

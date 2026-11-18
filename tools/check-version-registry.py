@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from hashlib import sha256
 from pathlib import Path
 import re
 import subprocess
@@ -14,6 +13,7 @@ from external_protocol_registry import (
     ROOT,
     external_protocol_catalog,
     load_registry,
+    markdown_digest,
     select_external_protocol,
     select_prerelease_protocol,
 )
@@ -38,10 +38,6 @@ def fail(message: str) -> None:
     raise SystemExit(f"version-registry check failed: {message}")
 
 
-def digest(path: Path) -> str:
-    return sha256(path.read_bytes()).hexdigest()
-
-
 DELIVERY_MODES = {"always", "platform_bound", "review_only"}
 
 
@@ -63,7 +59,7 @@ def validate_published_operations_document(registry: dict, locks: dict, document
     required_fields = ("published_date", "markdown_sha256", "publication_record", "pdf_artifact_name")
     if any(field not in document for field in required_fields):
         fail(f"published {label} document requires publication metadata")
-    if not markdown.is_file() or digest(markdown) != document["markdown_sha256"]:
+    if not markdown.is_file() or markdown_digest(markdown) != document["markdown_sha256"]:
         fail(f"published {label} Markdown hash is invalid")
     records = [record for record in registry["change_records"] if record["id"] == document["publication_record"]]
     if len(records) != 1 or records[0]["external_document_action"] != "explicit_user_authorized" or records[0]["change_state"] != "locked":
@@ -159,7 +155,7 @@ def main() -> None:
         markdown = ROOT / versioned_protocol["markdown_path"]
         if not markdown.is_file():
             fail("every published external Markdown must exist")
-        if digest(markdown) != versioned_protocol["markdown_sha256"]:
+        if markdown_digest(markdown) != versioned_protocol["markdown_sha256"]:
             fail("external document changed without a persisted version-registry update")
         if Path(versioned_protocol["pdf_artifact_name"]).name != versioned_protocol["pdf_artifact_name"]:
             fail("external PDFs must be uploaded as flat CI artifact filenames")
@@ -191,7 +187,7 @@ def main() -> None:
         capture_markdown = ROOT / capture_package["markdown_path"]
         if not capture_markdown.is_file():
             fail("external capture package Markdown must exist")
-        if digest(capture_markdown) != capture_package["markdown_sha256"]:
+        if markdown_digest(capture_markdown) != capture_package["markdown_sha256"]:
             fail("external capture package changed without a persisted version-registry update")
         capture_text = capture_markdown.read_text(encoding="utf-8")
         if capture_text.splitlines()[0] != f'# {capture_package["title"]} v{capture_package["version"]}':

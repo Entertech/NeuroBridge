@@ -12,9 +12,9 @@ from shutil import copyfile
 import zipfile
 
 if __package__:
-    from .external_protocol_registry import ROOT, load_registry, select_external_protocol
+    from .external_protocol_registry import ROOT, load_registry, markdown_digest, select_external_protocol
 else:
-    from external_protocol_registry import ROOT, load_registry, select_external_protocol
+    from external_protocol_registry import ROOT, load_registry, markdown_digest, select_external_protocol
 
 
 PACKAGE_FILENAME = "neurobridge-external-documents.zip"
@@ -231,7 +231,7 @@ def build_package(output_directory: Path, pdf_directory: Path, mode: str, *, pre
                         markdown = subprocess.check_output(["git", "show", f"{ref}:{doc.markdown_path}"], cwd=ROOT)
                         source = Path(temporary) / f"{doc.key}.md"
                         source.write_bytes(markdown)
-                    if planned.get("markdownSha256") and sha256(source.read_bytes()).hexdigest() != planned["markdownSha256"]:
+                    if planned.get("markdownSha256") and markdown_digest(source) != planned["markdownSha256"]:
                         raise ValueError(f"legacy Markdown differs from its published digest: {doc.key}")
                     pdfs.extend(render_documents([replace(doc, markdown_path=str(source)) if ref else doc], pdf_directory))
         for entry, planned in zip(manifest["documents"], preflight["documents"], strict=True):

@@ -44,8 +44,8 @@ def create_draft(key: str, version: str) -> str:
         if line.startswith(("版本：", "状态：")):
             lines[index] = ""
     lines[1:1] = ["", f"版本：v{version}（预发布）<br>", "状态：**仅供内部评审，尚未对 B 端发布**"]
-    (ROOT / path).write_text("\n".join(lines) + "\n", encoding="utf-8")
-    registry_path.write_text(tomlkit.dumps(registry), encoding="utf-8")
+    (ROOT / path).write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    registry_path.write_text(tomlkit.dumps(registry), encoding="utf-8", newline="\n")
     return path.as_posix()
 
 
@@ -129,9 +129,9 @@ def promote(key: str, version: str, published: str) -> str:
         prior = path.relative_to(ROOT).as_posix()
         updated_readme = updated_readme.replace(prior, replacement).replace(quote(prior), quote(replacement))
     updated_readme = updated_readme.replace(f"{current['title']} v{current['version']}", f"{current['title']} v{version}")
-    destination.write_text(markdown, encoding="utf-8")
-    registry_path.write_text(updated_registry, encoding="utf-8")
-    readme.write_text(updated_readme, encoding="utf-8")
+    destination.write_text(markdown, encoding="utf-8", newline="\n")
+    registry_path.write_text(updated_registry, encoding="utf-8", newline="\n")
+    readme.write_text(updated_readme, encoding="utf-8", newline="\n")
     for path in (obsolete | {source}) - {destination}:
         path.unlink(missing_ok=True)
     return entry["markdown_path"]
