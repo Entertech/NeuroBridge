@@ -16,6 +16,11 @@ MANIFEST = "metadata/delivery-manifest.json"
 GUIDE = "bundle-directory-guide.pdf"
 
 
+def delivery_entry(name: str) -> zipfile.ZipInfo:
+    """Fixed ZIP metadata keeps the delivery archive byte-identical on rebuild."""
+    return zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+
+
 def directory_guide(guides: dict[str, bytes]) -> bytes:
     from pypdf import PdfReader, PdfWriter
     from pypdf.errors import PdfReadError
@@ -110,20 +115,20 @@ def assemble(version: str, record: dict, directory: Path) -> Path:
             manifest["systems"][system] = receipt
             with zipfile.ZipFile(path) as bundle:
                 for name, pdf in sorted(bundled_documents(bundle, receipt).items()):
-                    delivery.writestr(f"docs/{system}/{name}", pdf)
+                    delivery.writestr(delivery_entry(f"docs/{system}/{name}"), pdf)
                 guide = bundle.read(GUIDE)
                 guides[member] = guide
                 guide_member = f"docs/{system}/{GUIDE}"
-                delivery.writestr(guide_member, guide)
+                delivery.writestr(delivery_entry(guide_member), guide)
                 digests[guide_member] = sha256_bytes(guide)
             for doc in receipt["bundledDocuments"]:
                 digests[doc["deliveryFileName"]] = doc["pdfSha256"]
         guide = directory_guide(guides)
-        delivery.writestr(GUIDE, guide)
+        delivery.writestr(delivery_entry(GUIDE), guide)
         digests[GUIDE] = sha256_bytes(guide)
         manifest["directoryGuide"] = {"fileName": GUIDE, "sha256": digests[GUIDE]}
         payload = json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2).encode() + b"\n"
-        delivery.writestr(MANIFEST, payload)
+        delivery.writestr(delivery_entry(MANIFEST), payload)
         digests[MANIFEST] = sha256_bytes(payload)
     with zipfile.ZipFile(archive) as delivery:
         if sorted(delivery.namelist()) != sorted(digests):
