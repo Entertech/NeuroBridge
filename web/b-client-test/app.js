@@ -116,7 +116,7 @@ function createSourcePanel(source) {
     source, section, fields, algorithmGroups, overview: createOverview(source),
     socket: null, initialStatusRequestId: null, statusSubscriptionRequestId: null, statusSubscriptionId: null,
     deviceStatusTimestamp: null,
-    eegStateTimestamp: null, eegStaleTimer: null, wearState: "unknown",
+    eegStateTimestamp: null, eegStaleTimer: null, wearState: "unknown", eegDisplay: "shown",
     subscriptions: new Map(), channels: {}, bandPower: {}, identity: {}, eegTimestamp: null,
   };
 }
@@ -456,6 +456,7 @@ function clearEegState(panel) {
   panel.eegStaleTimer = null;
   panel.eegStateTimestamp = null;
   panel.wearState = "unknown";
+  panel.eegDisplay = "shown";
 }
 
 function showMissingAlgorithmStream(panel, stream, label, timestamp) {
@@ -480,18 +481,18 @@ function showMissingEeg(panel, label, timestamp = null, clearChartOnly = false) 
   drawSourceCharts(panel);
 }
 
-function eegWindowState(message, wearState) {
+function eegWindowState(message, wearState, eegDisplay) {
   const data = message.data;
   const result = data?.result || data;
   const eeg = result?.payload?.algorithm?.eeg;
   const channels = Object.values(eeg?.wave || {}).filter((values) => Array.isArray(values) && values.length);
-  const detached = wearState === "notWorn" || message.message === "未佩戴：脑波数据全为 FF"
+  const detached = eegDisplay === "hidden" || wearState === "notWorn" || message.message === "未佩戴：脑波数据全为 FF"
     || channels.some((values) => values.every((value) => [255, -1, "FF", "ff"].includes(value)));
   const zeroPlaceholder = eeg?.quality === 0
     && !channels.some((values) => values.some((value) => Number.isFinite(value) && value !== 0));
   return {
-    issue: detached ? "脱落" : zeroPlaceholder ? "无有效脑波" : null,
-    hasWave: result?.valid === true && channels.some((values) => values.some(Number.isFinite)),
+    issue: detached ? "未佩戴" : zeroPlaceholder ? "无有效脑波" : null,
+    hasWave: result?.valid === true && !detached && channels.some((values) => values.some(Number.isFinite)),
   };
 }
 
@@ -500,13 +501,15 @@ function updateEegState(message, panel, { issue, hasWave }) {
   const data = message.data;
   const result = data?.result || data;
   const status = result?.payload?.status || result;
+  const display = result?.payload?.display?.eeg;
+  if (display === "shown" || display === "hidden") panel.eegDisplay = display;
   if (status?.wearState !== undefined) {
-    const wasDetached = panel.wearState === "notWorn";
+    const wasDetached = panel.wearState === "notWorn" || panel.eegDisplay === "hidden";
     panel.wearState = status.wearState;
-    if (status.wearState === "notWorn") {
+    if (status.wearState === "notWorn" || panel.eegDisplay === "hidden") {
       clearTimeout(panel.eegStaleTimer);
       panel.eegStaleTimer = null;
-      showMissingEeg(panel, "脱落", panel.eegStateTimestamp);
+      showMissingEeg(panel, "未佩戴", panel.eegStateTimestamp);
     } else if (wasDetached && !hasWave) {
       showMissingEeg(panel, "无脑波数据", panel.eegStateTimestamp);
     }
@@ -517,7 +520,7 @@ function updateEegState(message, panel, { issue, hasWave }) {
 
   const eeg = result.payload?.algorithm?.eeg;
   const streams = panel.subscriptions.get(data.subscriptionId) || [];
-  const hasEegWindow = issue === "脱落" || eeg
+  const hasEegWindow = issue === "未佩戴" || eeg
     || (data.event === "data" && streams.includes("eeg") && result.payload?.algorithm && result.valid === false);
   if (!hasEegWindow) return;
 
@@ -756,8 +759,12 @@ function handleGatewayMessage(message, panel) {
   }
   if (!showConnectedDevicesOnly || updateDeviceState(data, panel)) {
     const result = data?.result || data;
-    const wearState = (result?.payload?.status || result)?.wearState ?? panel.wearState;
-    const eeg = eegWindowState(message, wearState);
+    const status = result?.payload?.status || result;
+    const display = result?.payload?.display?.eeg;
+    if (display === "shown" || display === "hidden") panel.eegDisplay = display;
+    const wearState = status?.wearState ?? panel.wearState;
+    const eeg = eegWindowState(message, wearState, panel.eegDisplay);
+    if (panel.eegDisplay === "hidden") showMissingEeg(panel, "未佩戴", result?.timestampMs ?? panel.eegStateTimestamp);
     const unavailable = {
       eeg: eeg.issue,
       hr: result?.payload?.algorithm?.hr?.value === 0 ? "无心率数据" : null,

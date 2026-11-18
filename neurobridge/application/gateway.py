@@ -70,7 +70,7 @@ class GatewayApplication:
         self.recording_repository: RecordingRepository | None = None
         self.algorithm = algorithm
         self.live_connection_states = frozenset(live_connection_states)
-        self.status: dict[str, Any] = {"connectionState": initial_connection_state, "wearState": "unknown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
+        self.status: dict[str, Any] = {"connectionState": initial_connection_state, "wearState": "unknown", "eegDisplay": "shown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
         # This is deliberately an operational-only field: the released B-side
         # status contract is unchanged.  Linux operators can inspect it in the
         # durable gateway log, matching the failure detail shown by the macOS
@@ -165,6 +165,8 @@ class GatewayApplication:
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
             await self.algorithm.stop()
             self.status["algorithmState"] = "unavailable"
+            self.status["wearState"] = "unknown"
+            self.status["eegDisplay"] = "shown"
             self._log_capture_summary("disconnected")
             self._capture_final_summary_logged = True
             recording_id = self.store.recording_id
@@ -223,6 +225,8 @@ class GatewayApplication:
         for session in tuple(self.sessions):
             for subscription in tuple(session.subscriptions.values()):
                 payload = self.filtered_payload(raw, algorithm_payload, subscription.streams)
+                if subscription.streams & {"eeg", "hr"}:
+                    payload["display"] = {"eeg": self.status.get("eegDisplay", "shown")}
                 algorithm_requested = bool(subscription.streams & {"eeg", "hr"})
                 subscription_valid = result.batch.valid and (
                     result.algorithm_result.valid if algorithm_requested else True

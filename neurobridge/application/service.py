@@ -434,6 +434,17 @@ class ApplicationService:
         await self.algorithm.close()
         self._closed = True
 
+    async def _publish_wear_state(self, batch: ParsedSignalBatch) -> None:
+        from .eeg_alignment import raw_eeg_worn
+
+        worn = raw_eeg_worn(batch)
+        publish_status = getattr(self.northbound, "publish_status", None)
+        if publish_status is None:
+            return
+        if worn is not None:
+            await publish_status("wearState", "worn" if worn else "notWorn")
+        await publish_status("eegDisplay", "shown" if self.eeg_alignment.display_eeg.get(batch.device_protocol, True) else "hidden")
+
     def _persist_parsed(self, batch: ParsedSignalBatch) -> PersistenceReceipt:
         return self._persist(
             PersistenceRecord(
@@ -512,6 +523,7 @@ class ApplicationService:
             self.diagnostics["algorithm_evaluations"] += 1
             self.diagnostics["algorithm_max_duration_ms"] = max(self.diagnostics["algorithm_max_duration_ms"], duration_ms)
             if self.eeg_alignment is not None and batch.connection_session_id == self._connection_session_id:
+                await self._publish_wear_state(batch)
                 result = await self.eeg_alignment.align_result(result)
         else:
             timestamp = self.clock_ms()
