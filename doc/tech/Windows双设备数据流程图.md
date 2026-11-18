@@ -15,7 +15,7 @@ Windows 双设备新安装默认 `[pipeline] batch_mode = "as_available"`，以�
 ![图 8 · 事件流模式下的双设备数据流](assets/windows-dual-device/figure-8-event-stream.png)
 
 - 设备数据到达后按源数据块合并（默认最多 50 ms）调用算法，**算法结果就绪即发布**，不再等固定 600 ms 窗口；
-- 头环 EEG 结果是唯一 EEG 来源：同一 `timestampMs`、同一波形长度分别发给头环和耳机，耳机逐点做 ±5% 数值波动，`eegOrigin="headband"`；
+- 头环 EEG 结果是唯一 EEG 来源：同一 `timestampMs`、同一波形长度分别发给头环和耳机，耳机逐点做 ±20% 数值波动，`eegOrigin="headband"`；
 - 头环未连接、未佩戴或没有可用 EEG 时，耳机回退自身 EEG（`eegOrigin="headset"`）；
 - v1.0/v1.1 订阅仍由兼容聚合器每 600 ms 合并一批，响应继续带 `intervalMs=600`；v1.2 的 `subscribe` 使用 `mode="as_available"`，响应不再返回固定间隔；
 - UI 每路只维护 500 点环形缓冲，收到 `eeg.wave` 就追加；仅明确 `notWorn` 时清空，不再有 1800 ms 超时清屏；
@@ -27,7 +27,7 @@ Windows 双设备新安装默认 `[pipeline] batch_mode = "as_available"`，以�
 
 - 双设备模式是**一个网关进程、一个 asyncio 事件循环、两套独立容器**：耳机走 USB 串口，头环走 BLE。
 - 每套容器各自拥有 `RawDataSource`、`RawDataParser`、`SignalWindowAssembler`、算法桥子进程（每路一个活跃）、`GatewayApplication`、录制仓库、快照和订阅集合。
-- 两路唯一共享的运行时对象是 `EegAlignmentCache`（默认开启，`eeg_alignment_percent = 5`）：头环结果先保存“最新 EEG 参考”，耳机窗口的 EEG 类输出再参考它做 ±5% 波动。
+- 两路唯一共享的运行时对象是 `EegAlignmentCache`（默认开启，`eeg_alignment_percent = 20`）：头环结果先保存“最新 EEG 参考”，耳机窗口的 EEG 类输出再参考它做 ±20% 波动。
 - 每个设备的数据都按“原始字节 → 解析批次 → 算法结果”分别落盘；窗口事件按 600 ms 节奏发布，两路节奏相互独立。
 - 北向只有一个 WebSocket 入口：v1.1 用 `params.source` 路由、用 `data.source` 标注；v1.0 或省略来源的 v1.1 请求默认耳机；两路的 `gatewayBootId`、订阅、状态、录制目录各自独立。
 - 双设备下两路均为实时采集（`mode = "live"`），**不支持录播**；设备离线时 `getLatest` 与含数据流的 `subscribe` 返回 `409 STREAM_NOT_AVAILABLE_REASON`，`getStatus` 和仅订阅 `status` 仍可用。
@@ -126,7 +126,7 @@ Windows 双设备新安装默认 `[pipeline] batch_mode = "as_available"`，以�
 | 场景 | 头环输出 | 耳机输出 |
 | --- | --- | --- |
 | 耳机已佩戴、头环未连接 | 不适用 | 保留耳机自身结果 |
-| 耳机已佩戴、头环连接且佩戴 | 原样输出，缓存最新 EEG 类指标 | EEG 类字段替换为头环最新参考值并做 ±5% 随机波动；心率/压力/HRV/和谐度/激活度保留耳机自身值 |
+| 耳机已佩戴、头环连接且佩戴 | 原样输出，缓存最新 EEG 类指标 | EEG 类字段替换为头环最新参考值并做 ±20% 随机波动；心率/压力/HRV/和谐度/激活度保留耳机自身值 |
 | 耳机已佩戴、头环连接但未佩戴 | 隐藏 EEG 类字段 | 保留耳机自身结果（不被头环影响） |
 | 耳机未佩戴（头环未连接或已连接） | 未连接时不适用；连接且已佩戴时原样输出 | 隐藏 EEG 类字段，仅保留心率类字段 |
 | 双方均未佩戴 | 隐藏 EEG 类字段 | 隐藏 EEG 类字段 |
@@ -136,9 +136,9 @@ Windows 双设备新安装默认 `[pipeline] batch_mode = "as_available"`，以�
 
 - 校准是**算法输出层**处理：只改变发布和落盘的算法指标，不改变原始帧、解析批次和算法输入。
 - 耳机被校准的字段：`eeg`（波形 `wave`、`quality`、`bandPower`）、`attention`、`relaxation`、`pleasure`、`flow`、`sleep`；心率 `hr`、压力 `pressure`、和谐度 `coherence`、激活度 `arousal` 不跨设备。
-- 波动规则：对头环参考值中的每个有限数值在 `[0.95, 1.05]` 区间内随机取值。标量字段（`attention`/`relaxation`/`pleasure`）参考缺失或为 0 时保留耳机原值；`flow`/`sleep`/`eeg` 映射字段参考缺失时会被置空为 `{}`。
+- 波动规则：设 `p = eeg_alignment_percent / 100`（默认 0.20），对头环参考值中的每个有限数值在 `[1-p, 1+p]` 区间内随机取值。标量字段（`attention`/`relaxation`/`pleasure`）参考缺失或为 0 时保留耳机原值；`flow`/`sleep`/`eeg` 映射字段参考缺失时会被置空为 `{}`。
 - 当前分支**不等待同一窗口**：耳机窗口到达时直接使用“头环最近一次成功窗口”的 EEG 参考；也不做逐样本时间对齐（旧字段 `eeg_alignment_output_wait_ms`、`eeg_alignment_reference_batches`、`eeg_alignment_clock_packets` 仍被配置解析和校验，但不参与当前校准逻辑）。
-- 关闭校准后两路完全独立；`eeg_alignment_percent` 当前只作为开关使用：设为 0 关闭，1–10 与默认 5 的行为相同，EEG 类输出的波动幅度固定为 ±5%，不影响心率。
+- 关闭校准后两路完全独立；`eeg_alignment_percent` 直接控制波动幅度：设为 0 关闭，1–100 按百分比生效，默认 20，EEG 类输出的波动幅度为参考值的 ±该百分比，不影响心率。
 
 ## 6. 北向：单 WebSocket 入口、双来源路由（图 6）
 
@@ -221,7 +221,7 @@ Windows 双设备新安装默认 `[pipeline] batch_mode = "as_available"`，以�
 | `data_source.include_headband` | `true`（模板） | 开启双容器与 `SourceRouter` |
 | `data_source.window_interval_ms` | `600` | 固定校验值，窗口与 600 ms 发布节奏一致 |
 | `data_source.stale_after_ms` | `1800` | 数据过期判定，须大于窗口长度 |
-| `data_source.eeg_alignment_percent` | `5`（双设备默认） | `0` 关闭跨设备校准；非 0 即开启，范围 0–10，实际波动幅度固定 ±5% |
+| `data_source.eeg_alignment_percent` | `20`（双设备默认） | `0` 关闭跨设备校准；非 0 即开启，范围 0–100，实际波动幅度等于配置百分比 |
 | `data_source.eeg_alignment_output_wait_ms` | `800` | 配置仍被解析校验，**当前分支不生效** |
 | `data_source.eeg_alignment_reference_batches` | `16` | 配置仍被解析校验，**当前分支不生效** |
 | `data_source.eeg_alignment_clock_packets` | `4096` | 配置仍被解析校验，**当前分支不生效** |
@@ -243,7 +243,7 @@ Windows 双设备新安装默认 `[pipeline] batch_mode = "as_available"`，以�
 | `download.port` | `8766` | 录制/日志下载 |
 | 耳机 HR 限制 | 5 个/秒 | 算法输入映射 |
 | 头环 HR 限制 | 5 个/秒 | 算法输入映射 |
-| 耳机 EEG 波动幅度 | ±5% | `eeg_alignment_percent` 当前只被读取为开关/范围，实际波动固定 5% |
+| 耳机 EEG 波动幅度 | ±20% | 由 `eeg_alignment_percent` 控制，默认 20% |
 
 > 采样率、每 600 ms 的实际样本数、算法输入分组细节仍属双方待确认项，代码不假定固定值：窗口按实际收到的帧/通知分组，算法输入按窗口内实际包数拼接。
 

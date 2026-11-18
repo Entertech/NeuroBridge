@@ -10,7 +10,7 @@ import tomllib
 from .configuration.migration import migrate
 
 DEFAULT_ALGORITHM_COMMAND = ("/usr/local/lib/neurobridge/neurobridge_affective_bridge",)
-DEFAULT_EEG_ALIGNMENT_PERCENT = 5
+DEFAULT_EEG_ALIGNMENT_PERCENT = 20
 DEFAULT_EEG_ALIGNMENT_OUTPUT_WAIT_MS = 800
 DEFAULT_BLE_NOTIFICATION_TIMEOUT_SECONDS = 10
 
@@ -357,8 +357,8 @@ def load(
     eeg_alignment_percent = data_source.get(
         "eeg_alignment_percent", DEFAULT_EEG_ALIGNMENT_PERCENT if include_headband else 0,
     )
-    if not 0 <= eeg_alignment_percent <= 10:
-        raise ValueError("data_source.eeg_alignment_percent must be between 0 and 10")
+    if not 0 <= eeg_alignment_percent <= 100:
+        raise ValueError("data_source.eeg_alignment_percent must be between 0 and 100")
     eeg_alignment_output_wait_ms = data_source.get("eeg_alignment_output_wait_ms", DEFAULT_EEG_ALIGNMENT_OUTPUT_WAIT_MS)
     if not 0 <= eeg_alignment_output_wait_ms <= 2 * window_interval_ms:
         raise ValueError("data_source.eeg_alignment_output_wait_ms must be between 0 and twice window_interval_ms")

@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.4.3"
+version = "0.4.4"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -66,6 +66,13 @@ to_version = "0.4.3"
 impact = "patch"
 compatibility = "No northbound or configuration change. The local Windows page keeps ±2000 clipped samples in the waveform polyline and marks them separately instead of converting them to NaN gaps."
 evidence = "Target 101.8 headset-only observation showed 84.6% of wave samples at ±2000; the page converted them to NaN and broke the trace. Keep the values, mark clipped points in red, and keep null only for windows without data. Target UI re-verification pending."
+
+[[application_release_changes]]
+from_version = "0.4.3"
+to_version = "0.4.4"
+impact = "patch"
+compatibility = "No northbound field or configuration schema change. eeg_alignment_percent now controls the actual EEG variation instead of acting as a fixed ±5% switch; the default is 20 and 0 still disables calibration."
+evidence = "User requested the calibration amplitude limit change from 5% to 20%. EegAlignmentCache applies the configured percentage to waveform and EEG metrics, default 20%, allowed 0-100; configuration, documentation and tests updated. Target re-verification pending."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
@@ -208,6 +215,17 @@ published_date = "2026-10-10"
 markdown_sha256 = "fcfe3eb6bd86e01debb6fc242b9cc8e2a0ab1e31189a30452e0c715345abf464"
 publication_record = "2026-10-10-public-windows-operations-v1.1"
 reason = "用户明确要求完善部署文档；新增独立 v1.1，保留已锁定 v1.0。PR 合入后由 CI 生成正式 PDF。"
+
+[[change_records]]
+id = "2026-11-18-windows-eeg-alignment-20-percent"
+date = "2026-11-18"
+scope = "windows_eeg_alignment"
+summary = "Windows 双设备 EEG 输出校准幅度从固定 ±5% 调整为可配置百分比，默认 20%；eeg_alignment_percent 现在直接控制波动幅度，0 仍关闭校准。"
+external_document_action = "record_only"
+change_state = "unlocked"
+base_locked_release = "0.2"
+target_external_release = "0.3"
+reason = "已发布北向协议 v0.2 未约定该内部校准百分比；仅更新内部预发布说明和实现，不修改已锁定对外文档。"
 
 [[change_records]]
 id = "2026-11-17-windows-capture-page-prerelease"

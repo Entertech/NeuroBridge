@@ -77,6 +77,19 @@ class DeviceStrategyConfigurationTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, key):
                         load(path)
 
+    def test_eeg_alignment_percent_accepts_the_configured_amplitude(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            for value in (0, 5, 20, 100):
+                with self.subTest(value=value):
+                    path.write_text(BLUETOOTH_DATA_SOURCE + f"eeg_alignment_percent = {value}\n", encoding="utf-8")
+                    self.assertEqual(load(path).data_source.eeg_alignment_percent, value)
+            for value in (-1, 101):
+                with self.subTest(value=value):
+                    path.write_text(BLUETOOTH_DATA_SOURCE + f"eeg_alignment_percent = {value}\n", encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "between 0 and 100"):
+                        load(path)
+
     def test_unknown_configuration_fields_are_rejected_before_io(self) -> None:
         for contents, message in (
             ('future = true\n[data_source]\ntype = "serial"\n', "Unknown top-level"),

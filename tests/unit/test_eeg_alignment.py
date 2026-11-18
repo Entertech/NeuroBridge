@@ -101,15 +101,15 @@ class EegWearDisplayTests(unittest.IsolatedAsyncioTestCase):
         left = metrics["eeg"]["wave"]["left"]
         self.assertEqual(len(left), 3)
         for value, reference in zip(left, (8, 9, 10)):
-            self.assertGreaterEqual(value, reference * 0.95)
-            self.assertLessEqual(value, reference * 1.05)
+            self.assertGreaterEqual(value, reference * 0.80)
+            self.assertLessEqual(value, reference * 1.20)
         self.assertNotEqual(left, [8, 9, 10])
         for field, reference in (("attention", 80), ("relaxation", 81), ("pleasure", 82)):
-            self.assertGreaterEqual(metrics[field], reference * 0.95)
-            self.assertLessEqual(metrics[field], reference * 1.05)
+            self.assertGreaterEqual(metrics[field], reference * 0.80)
+            self.assertLessEqual(metrics[field], reference * 1.20)
         self.assertNotEqual(metrics["attention"], 80)
-        self.assertGreaterEqual(metrics["flow"]["meditation"], 83 * 0.95)
-        self.assertLessEqual(metrics["flow"]["meditation"], 83 * 1.05)
+        self.assertGreaterEqual(metrics["flow"]["meditation"], 83 * 0.80)
+        self.assertLessEqual(metrics["flow"]["meditation"], 83 * 1.20)
         self.assertEqual(metrics["hr"], {"value": 69, "hrv": 44})
         self.assertEqual(metrics["pressure"], 91)
         self.assertEqual(metrics["coherence"], 9)
@@ -142,13 +142,34 @@ class EegWearDisplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(cache.display_eeg["headset_rev181"], False)
         self.assertIs(cache.display_eeg["headband_ble"], False)
 
+    async def test_configured_percent_controls_the_variation_bounds(self):
+        cache = EegAlignmentCache(percent=5)
+        cache.set_session("headset_rev181", "session")
+        cache.set_session("headband_ble", "session")
+        await cache.align_result(window("headband_ble", "signal", start=0))
+        result = await cache.align_result(window("headset_rev181", "signal", start=5000))
+        metrics = result.algorithm_result.metrics
+        self.assertGreaterEqual(metrics["attention"], 80 * 0.95)
+        self.assertLessEqual(metrics["attention"], 80 * 1.05)
+        self.assertGreaterEqual(metrics["eeg"]["wave"]["left"][0], 8 * 0.95)
+        self.assertLessEqual(metrics["eeg"]["wave"]["left"][0], 8 * 1.05)
+
+    async def test_zero_percent_keeps_reference_values(self):
+        cache = EegAlignmentCache(percent=0)
+        cache.set_session("headset_rev181", "session")
+        cache.set_session("headband_ble", "session")
+        await cache.align_result(window("headband_ble", "signal", start=0))
+        result = await cache.align_result(window("headset_rev181", "signal", start=5000))
+        self.assertEqual(result.algorithm_result.metrics["attention"], 80)
+        self.assertEqual(result.algorithm_result.metrics["eeg"]["wave"]["left"], [8, 9, 10])
+
     async def test_disconnect_forgets_the_other_device_and_restores_headset_eeg(self):
         cache = self.cache()
         await cache.align_result(window("headband_ble", "signal"))
         replaced = await cache.align_result(window("headset_rev181", "signal"))
         self.assertNotEqual(replaced.algorithm_result.metrics["attention"], 20)
-        self.assertGreaterEqual(replaced.algorithm_result.metrics["attention"], 80 * 0.95)
-        self.assertLessEqual(replaced.algorithm_result.metrics["attention"], 80 * 1.05)
+        self.assertGreaterEqual(replaced.algorithm_result.metrics["attention"], 80 * 0.80)
+        self.assertLessEqual(replaced.algorithm_result.metrics["attention"], 80 * 1.20)
         cache.set_session("headband_ble", None)
         restored = await cache.align_result(window("headset_rev181", "signal", start=3000))
         self.assertEqual(restored.algorithm_result.metrics["attention"], 20)

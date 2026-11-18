@@ -1,7 +1,7 @@
 """Show EEG algorithm output according to headset and headband wear.
 
 When both devices are worn, the headset uses the latest headband EEG immediately.
-Each numeric value then varies inside ±5%. No matching window time is required.
+Each numeric value then varies inside the configured percentage (default ±20%). No matching window time is required.
 Heart metrics stay with each device.
 """
 
@@ -24,7 +24,6 @@ _SCALAR_FIELDS = ("attention", "relaxation", "pleasure")
 _WAVE_CHANNELS = ("left", "right", "single")
 _VITAL_FIELDS = ("hr", "pressure", "coherence", "arousal")
 _LOG_INTERVAL_SECONDS = 10
-_VARIATION = 0.05
 # Headset frames store two 3-byte samples per channel. Headband BLE packets
 # keep a 2-byte sequence number before the same 3-byte samples.
 _HEADSET_EEG_BYTES = 18
@@ -96,10 +95,11 @@ class EegAlignmentCache:
     the EEG waveform and the other EEG algorithm fields move between devices.
     """
 
-    def __init__(self, *, percent: int = 0, window_ms: int = 600, wait_ms: int = 0,
+    def __init__(self, *, percent: int = 20, window_ms: int = 600, wait_ms: int = 0,
                  reference_batches: int = 16, clock_packets: int = 4096,
                  clock_ms: Callable[[], int] | None = None) -> None:
-        del percent, window_ms, wait_ms, reference_batches, clock_packets, clock_ms
+        del window_ms, wait_ms, reference_batches, clock_packets, clock_ms
+        self._variation = min(max(float(percent), 0.0), 100.0) / 100.0
         self._sessions: dict[str, str | None] = {}
         self._worn: dict[str, bool] = {}
         self.display_eeg: dict[str, bool] = {}
@@ -135,7 +135,7 @@ class EegAlignmentCache:
         if self.relay_mode:
             # Event-driven dual-device mode: the headband result is the single
             # EEG source and is fanned out to the headset subscription with
-            # ±5% variation. Own EEG is only kept when the headband reference
+            # configured percentage variation. Own EEG is only kept when the headband reference
             # is unavailable (offline/unworn/no data).
             if self._worn.get("headset_rev181") is False:
                 return self._without_eeg(result)
@@ -153,7 +153,7 @@ class EegAlignmentCache:
         )
 
     def varied_headband_metrics(self) -> dict[str, object]:
-        """Return the newest headband EEG fields with per-value ±5% variation."""
+        """Return the newest headband EEG fields with per-value configured variation."""
         reference = self._latest_eeg or {}
         metrics: dict[str, object] = {}
         for field in _SCALAR_FIELDS:
@@ -209,7 +209,7 @@ class EegAlignmentCache:
         return result
 
     def _vary_latest_headband(self, result: WindowResult) -> WindowResult:
-        """Use the newest headband EEG and vary each value inside ±5%."""
+        """Use the newest headband EEG and vary each value inside the configured percentage."""
         reference = self._latest_eeg or {}
         metrics = dict(result.algorithm_result.metrics)
         for field in _SCALAR_FIELDS:
@@ -254,7 +254,7 @@ class EegAlignmentCache:
     def _vary_number(self, value: object, reference: object) -> float | None:
         if not _is_number(value) or not _is_number(reference) or reference == 0:
             return None
-        offset = self._random.uniform(-_VARIATION, _VARIATION)
+        offset = self._random.uniform(-self._variation, self._variation)
         return reference * (1 + offset)
 
     @staticmethod

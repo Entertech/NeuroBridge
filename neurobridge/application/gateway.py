@@ -346,7 +346,7 @@ class GatewayApplication:
             self.log.exception("Legacy 600 ms aggregation failed")
 
     async def publish_headband_eeg(self, result: WindowResult) -> None:
-        """Fan the newest headband EEG out as a headset event with ±5% values."""
+        """Fan the newest headband EEG out as a headset event with configured variation."""
         if self.eeg_alignment is None or not self.eeg_alignment.relay_ready():
             return
         if not result.valid or not result.algorithm_result.metrics.get("eeg"):

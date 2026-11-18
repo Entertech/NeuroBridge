@@ -44,8 +44,8 @@ class RelayAlignmentTests(unittest.TestCase):
         metrics = cache.varied_headband_metrics()
         self.assertEqual(len(metrics["eeg"]["wave"]["left"]), 3)
         for value, reference in zip(metrics["eeg"]["wave"]["left"], (10, 20, 30)):
-            self.assertGreaterEqual(value, reference * 0.95)
-            self.assertLessEqual(value, reference * 1.05)
+            self.assertGreaterEqual(value, reference * 0.80)
+            self.assertLessEqual(value, reference * 1.20)
 
     def test_headset_result_is_hr_only_while_relay_is_ready(self):
         cache = self.cache()

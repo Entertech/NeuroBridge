@@ -99,12 +99,12 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         root = Path(__file__).resolve().parents[2]
         template = (root / "windows/gateway.toml.example").read_text(encoding="utf-8")
         config_path = Path(self.enterContext(tempfile.TemporaryDirectory())) / "gateway.toml"
-        previous_config = template.replace("eeg_alignment_percent = 5\n",
+        previous_config = template.replace("eeg_alignment_percent = 20\n",
                                            "eeg_alignment_wait_ms = 100\neeg_alignment_raw_timeout_ms = 300\n")
         config_path.write_text(previous_config, encoding="utf-8")
         config = load(config_path)
-        self.assertEqual(config.data_source.eeg_alignment_percent, 5)
-        config_path.write_text(template.replace("eeg_alignment_percent = 5", "eeg_alignment_percent = 0"), encoding="utf-8")
+        self.assertEqual(config.data_source.eeg_alignment_percent, 20)
+        config_path.write_text(template.replace("eeg_alignment_percent = 20", "eeg_alignment_percent = 0"), encoding="utf-8")
         self.assertEqual(load(config_path).data_source.eeg_alignment_percent, 0)
         config = replace(config, recording=replace(config.recording, directory=config_path.parent / "recordings"))
         (headset, headband), _ = build_runtime(config, RuntimePlatform("windows", "x86_64"))
@@ -187,7 +187,7 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headband.application.diagnostics["window_processing_errors"], 0)
         self.assertTrue(any(f"alignment decision: batchId={headset_value.batch_id}" in line
                             and "stage=algorithm_output reason=applied" in line
-                            and "waveTolerancePercent=5 pairedSamples={'left': 3, 'right': 3}" in line
+                            and "waveTolerancePercent=20 pairedSamples={'left': 3, 'right': 3}" in line
                             and "changedSamples={'left': 2, 'right': 2}" in line for line in logs.output))
         self.assertTrue(any(f"algorithm response: source=serial batchId={headset_value.batch_id}" in line
                             and "mappingVersion=2 valid=True" in line for line in logs.output))
