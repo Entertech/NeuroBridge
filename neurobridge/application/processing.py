@@ -16,13 +16,11 @@ from ..ports.algorithm import AlgorithmEngine
 
 class AlgorithmInputMapper:
     MAPPING_VERSION = "1"
-    HEADSET_HR_MAPPING_VERSION = "2"
-    # DeviceInfoFtV1 in the HR SDK expects five heart-rate values per second.
-    HR_SAMPLE_INTERVAL_MS = 200
 
     def __init__(self, *, pace_headset_hr: bool = False) -> None:
-        self._pace_headset_hr = pace_headset_hr
-        self._last_hr_slot: tuple[str, int] | None = None
+        # Kept so existing Windows setup still constructs. Headset heart-rate
+        # samples now enter the algorithm at the same full-window rate as the headband.
+        del pace_headset_hr
 
     def map(self, batch: ParsedSignalBatch, frames: Iterable[DeviceFrame] = ()) -> AlgorithmInput:
         frame_by_id = {frame.frame_id: frame for frame in frames}
@@ -31,36 +29,15 @@ class AlgorithmInputMapper:
         if batch.device_protocol == "headset_rev181":
             ordered = [frame_by_id[ref] for ref in batch.frame_refs if ref in frame_by_id]
             payload["eegRawBase64"] = base64.b64encode(b"".join(frame.raw_bytes[4:24] for frame in ordered)).decode("ascii")
-            if self._pace_headset_hr:
-                selected = self._headset_hr_frames(batch.connection_session_id, ordered)
-                mapping_version = self.HEADSET_HR_MAPPING_VERSION
-            else:
-                selected = ordered
-            payload["hrRawBase64"] = base64.b64encode(b"".join(frame.raw_bytes[24:25] for frame in selected)).decode("ascii")
+            payload["hrRawBase64"] = base64.b64encode(b"".join(frame.raw_bytes[24:25] for frame in ordered)).decode("ascii")
             payload["eegPacketCount"] = len(ordered)
-            payload["hrPacketCount"] = len(selected)
+            payload["hrPacketCount"] = len(ordered)
         else:
             for signal_type in ("eeg", "hr"):
                 chunks = [signal.samples for signal in batch.signals if signal.signal_type == signal_type and isinstance(signal.samples, bytes)]
                 payload[f"{signal_type}RawBase64"] = base64.b64encode(b"".join(chunks)).decode("ascii")
                 payload[f"{signal_type}PacketCount"] = len(chunks)
         return AlgorithmInput(batch.batch_id, payload, mapping_version, batch.device_protocol)
-
-    def _headset_hr_frames(self, session_id: str, frames: list[DeviceFrame]) -> list[DeviceFrame]:
-        last_slot = -1
-        if self._last_hr_slot is not None and self._last_hr_slot[0] == session_id:
-            last_slot = self._last_hr_slot[1]
-        slots: dict[int, DeviceFrame] = {}
-        for frame in frames:
-            slot = frame.received_at_ms // self.HR_SAMPLE_INTERVAL_MS
-            if slot <= last_slot:
-                continue
-            previous = slots.get(slot)
-            if previous is None or frame.received_at_ms >= previous.received_at_ms:
-                slots[slot] = frame
-        if slots:
-            self._last_hr_slot = (session_id, max(slots))
-        return [slots[slot] for slot in sorted(slots)]
 
 
 class WindowResultAggregator:

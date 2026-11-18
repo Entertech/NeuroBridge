@@ -710,6 +710,8 @@ function updateVisuals(data, panel) {
         if (Number.isFinite(previous.at(-1))) panel.channels[channel] = [...previous.slice(1 - waveformCapacity), null];
         continue;
       }
+      // A short window is one more piece of the same trace, not a replacement.
+      // Replacing it made the headset chart jump from 500 points to one window.
       const noSignal = showConnectedDevicesOnly && eeg?.quality === 0 && wave.every((value) => value === 0);
       const markSaturation = showConnectedDevicesOnly && channel !== "single";
       // NaN marks a clipped sample in the display history. Both it and null break the drawn line.

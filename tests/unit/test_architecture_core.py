@@ -137,14 +137,14 @@ class WindowAndSnapshotTests(unittest.TestCase):
             return mapper.map(batch, frames), frames
 
         mapped, frames = map_frames("headset-1", [(610, 60), (610, 61), (790, 62), (805, 0), (1010, 65)])
-        self.assertEqual(base64.b64decode(mapped.payload["hrRawBase64"]), bytes([62, 0, 65]))
-        self.assertEqual(mapped.payload["hrPacketCount"], 3)
+        self.assertEqual(base64.b64decode(mapped.payload["hrRawBase64"]), bytes([60, 61, 62, 0, 65]))
+        self.assertEqual(mapped.payload["hrPacketCount"], 5)
         self.assertEqual(mapped.payload["eegPacketCount"], 5)
         self.assertEqual(base64.b64decode(mapped.payload["eegRawBase64"]),
                          b"".join(item.raw_bytes[4:24] for item in frames))
         self.assertEqual([item.raw_bytes[24] for item in frames], [60, 61, 62, 0, 65])
         late, _ = map_frames("headset-1", [(1100, 66)])
-        self.assertEqual(late.payload["hrPacketCount"], 0)
+        self.assertEqual(base64.b64decode(late.payload["hrRawBase64"]), bytes([66]))
         after_gap, _ = map_frames("headset-1", [(1600, 67)])
         self.assertEqual(base64.b64decode(after_gap.payload["hrRawBase64"]), bytes([67]))
         reconnected, _ = map_frames("headset-2", [(1600, 68)])

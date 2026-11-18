@@ -1,10 +1,17 @@
-"""Show EEG algorithm output according to headset and headband wear."""
+"""Show EEG algorithm output according to headset and headband wear.
+
+The headset keeps its own waveform length. When both devices are worn, each
+headset EEG value varies inside ±5% of the matching headband value instead of
+being replaced by the headband window. Heart metrics stay with each device.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import replace
+from math import isfinite
 import logging
+import random
 import time
 
 from ..domain.result import WindowResult
@@ -13,8 +20,11 @@ from ..domain.signal import ParsedSignalBatch
 
 LOG = logging.getLogger(__name__)
 _EEG_DISPLAY_FIELDS = ("eeg", "attention", "relaxation", "pleasure", "flow", "sleep")
+_SCALAR_FIELDS = ("attention", "relaxation", "pleasure")
+_WAVE_CHANNELS = ("left", "right", "single")
 _VITAL_FIELDS = ("hr", "pressure", "coherence", "arousal")
 _LOG_INTERVAL_SECONDS = 10
+_VARIATION = 0.05
 # Headset frames store two 3-byte samples per channel. Headband BLE packets
 # keep a 2-byte sequence number before the same 3-byte samples.
 _HEADSET_EEG_BYTES = 18
@@ -24,6 +34,10 @@ _SAMPLE_BYTES = 3
 
 def _fields(values: object) -> Mapping[str, object]:
     return values if isinstance(values, Mapping) else {}
+
+
+def _is_number(value: object) -> bool:
+    return type(value) in (int, float) and isfinite(value)
 
 
 def _sample_bytes(batch: ParsedSignalBatch) -> bytes:
@@ -95,6 +109,7 @@ class EegAlignmentCache:
         self.display_eeg: dict[str, bool] = {}
         self._latest_eeg: dict[str, object] | None = None
         self._latest_eeg_batch_id: str | None = None
+        self._random = random.Random()
         self._decisions: dict[str, int] = {}
         self._last_log_at = time.monotonic()
 
@@ -156,15 +171,64 @@ class EegAlignmentCache:
             self._log_decision(shown, "headset_unworn_hidden")
             return shown
         if headset_worn and headband_connected and headband_worn and self._latest_eeg:
-            metrics = dict(result.algorithm_result.metrics)
-            for field in _EEG_DISPLAY_FIELDS:
-                metrics.pop(field, None)
-            metrics.update(self._latest_eeg)
-            shown = replace(result, algorithm_result=replace(result.algorithm_result, metrics=metrics))
-            self._log_decision(shown, "headset_replaced_by_headband", self._latest_eeg_batch_id)
+            shown = self._vary_toward_headband(result)
+            self._log_decision(shown, "headset_varied_around_headband", self._latest_eeg_batch_id)
             return shown
         self._log_decision(result, "headset_shown")
         return result
+
+    def _vary_toward_headband(self, result: WindowResult) -> WindowResult:
+        """Keep the headset sample count and place each value within ±5%."""
+        reference = self._latest_eeg or {}
+        metrics = dict(result.algorithm_result.metrics)
+        for field in _SCALAR_FIELDS:
+            varied = self._vary_number(metrics.get(field), reference.get(field))
+            if varied is not None:
+                metrics[field] = varied
+        metrics["flow"] = self._vary_mapping(metrics.get("flow"), reference.get("flow"))
+        metrics["sleep"] = self._vary_mapping(metrics.get("sleep"), reference.get("sleep"))
+        metrics["eeg"] = self._vary_eeg(metrics.get("eeg"), reference.get("eeg"))
+        return replace(result, algorithm_result=replace(result.algorithm_result, metrics=metrics))
+
+    def _vary_eeg(self, value: object, reference: object) -> dict[str, object]:
+        current = dict(value) if isinstance(value, Mapping) else {}
+        target = reference if isinstance(reference, Mapping) else {}
+        wave = dict(current.get("wave")) if isinstance(current.get("wave"), Mapping) else {}
+        target_wave = target.get("wave") if isinstance(target.get("wave"), Mapping) else {}
+        for channel in _WAVE_CHANNELS:
+            samples = wave.get(channel)
+            targets = target_wave.get(channel)
+            if not isinstance(samples, list) or not isinstance(targets, list) or not targets:
+                continue
+            varied = []
+            for index, sample in enumerate(samples):
+                value = self._vary_number(sample, targets[index]) if index < len(targets) else None
+                varied.append(sample if value is None else value)
+            wave[channel] = varied
+        if wave:
+            current["wave"] = wave
+        band = self._vary_mapping(current.get("bandPower"), target.get("bandPower"))
+        if band:
+            current["bandPower"] = band
+        quality = self._vary_number(current.get("quality"), target.get("quality"))
+        if quality is not None:
+            current["quality"] = quality
+        return current
+
+    def _vary_mapping(self, value: object, reference: object) -> dict[str, object]:
+        current = dict(value) if isinstance(value, Mapping) else {}
+        target = reference if isinstance(reference, Mapping) else {}
+        for field, item in list(current.items()):
+            varied = self._vary_number(item, target.get(field))
+            if varied is not None:
+                current[field] = varied
+        return current
+
+    def _vary_number(self, value: object, reference: object) -> float | None:
+        if not _is_number(value) or not _is_number(reference) or reference == 0:
+            return None
+        offset = self._random.uniform(-_VARIATION, _VARIATION)
+        return reference * (1 + offset)
 
     @staticmethod
     def _without_eeg(result: WindowResult) -> WindowResult:
