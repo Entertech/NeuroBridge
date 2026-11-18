@@ -267,10 +267,11 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
 
     observe_batch = None
     windows_headset = profile.profile_id == "windows_headset_local"
+    if windows_headset or profile.profile_id == "windows_headband_local":
+        LOG.info("Windows HR algorithm input: profile=%s maxPerSecond=%s mappingVersion=%s",
+                 profile.profile_id, AlgorithmInputMapper.HR_MAX_PER_SECOND, AlgorithmInputMapper.MAPPING_VERSION)
     if windows_headset:
         observe_batch = HeadsetEegDiagnostics().observe
-        LOG.info("Windows headset HR algorithm input: pace=full-window mappingVersion=%s",
-                 AlgorithmInputMapper.MAPPING_VERSION)
 
     application = ApplicationService(
         device_protocol=profile.device_protocol,
@@ -371,11 +372,8 @@ def build_runtime(
     )
 
     alignment = None
-    LOG.info("Windows EEG alignment configuration: enabled=%s adjustmentPercent=%s stage=algorithm_output "
-             "pairing=estimated_sample_time waitMs=%s referenceBatches=%s clockPacketsPerSource=%s",
-             bool(config.data_source.eeg_alignment_percent), config.data_source.eeg_alignment_percent,
-             config.data_source.eeg_alignment_output_wait_ms, config.data_source.eeg_alignment_reference_batches,
-             config.data_source.eeg_alignment_clock_packets)
+    LOG.info("Windows EEG alignment configuration: enabled=%s stage=algorithm_output pairing=latest_headband",
+             bool(config.data_source.eeg_alignment_percent))
     if config.data_source.eeg_alignment_percent:
         alignment = EegAlignmentCache(percent=config.data_source.eeg_alignment_percent,
                                       window_ms=config.data_source.window_interval_ms,

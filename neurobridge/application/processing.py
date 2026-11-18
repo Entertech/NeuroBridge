@@ -16,11 +16,14 @@ from ..ports.algorithm import AlgorithmEngine
 
 class AlgorithmInputMapper:
     MAPPING_VERSION = "1"
+    HR_MAX_PER_SECOND = 5
 
-    def __init__(self, *, pace_headset_hr: bool = False) -> None:
-        # Kept so existing Windows setup still constructs. Headset heart-rate
-        # samples now enter the algorithm at the same full-window rate as the headband.
+    def __init__(self, *, pace_headset_hr: bool = False, hr_max_per_second: int = HR_MAX_PER_SECOND) -> None:
+        # pace_headset_hr is ignored. Both devices share the same heart-rate cap.
         del pace_headset_hr
+        if hr_max_per_second <= 0:
+            raise ValueError("hr_max_per_second must be positive")
+        self.hr_max_per_second = hr_max_per_second
 
     def map(self, batch: ParsedSignalBatch, frames: Iterable[DeviceFrame] = ()) -> AlgorithmInput:
         frame_by_id = {frame.frame_id: frame for frame in frames}
@@ -28,16 +31,43 @@ class AlgorithmInputMapper:
         mapping_version = self.MAPPING_VERSION
         if batch.device_protocol == "headset_rev181":
             ordered = [frame_by_id[ref] for ref in batch.frame_refs if ref in frame_by_id]
+            hr = bytes(frame.raw_bytes[24] for frame in ordered)
             payload["eegRawBase64"] = base64.b64encode(b"".join(frame.raw_bytes[4:24] for frame in ordered)).decode("ascii")
-            payload["hrRawBase64"] = base64.b64encode(b"".join(frame.raw_bytes[24:25] for frame in ordered)).decode("ascii")
             payload["eegPacketCount"] = len(ordered)
-            payload["hrPacketCount"] = len(ordered)
         else:
-            for signal_type in ("eeg", "hr"):
+            for signal_type in ("eeg",):
                 chunks = [signal.samples for signal in batch.signals if signal.signal_type == signal_type and isinstance(signal.samples, bytes)]
                 payload[f"{signal_type}RawBase64"] = base64.b64encode(b"".join(chunks)).decode("ascii")
                 payload[f"{signal_type}PacketCount"] = len(chunks)
+            hr = b"".join(
+                signal.samples for signal in batch.signals
+                if signal.signal_type == "hr" and isinstance(signal.samples, bytes)
+            )
+        kept = self._limit_hr(hr, batch.window_start_ms, batch.window_end_ms)
+        payload["hrRawBase64"] = base64.b64encode(kept).decode("ascii")
+        payload["hrPacketCount"] = len(kept)
         return AlgorithmInput(batch.batch_id, payload, mapping_version, batch.device_protocol)
+
+    def _limit_hr(self, samples: bytes, start_ms: int, end_ms: int) -> bytes:
+        """Keep at most five heart-rate values per second of this window.
+
+        The window length only decides how many values fit. It does not decide
+        which device clock the values belong to.
+        """
+        count = len(samples)
+        if count == 0:
+            return samples
+        duration_ms = max(end_ms - start_ms, 1)
+        allowed = max(1, (duration_ms * self.hr_max_per_second + 999) // 1000)
+        if count <= allowed:
+            return samples
+        if allowed == 1:
+            return samples[-1:]
+        picked = []
+        for index in range(allowed):
+            source = round(index * (count - 1) / (allowed - 1))
+            picked.append(samples[source])
+        return bytes(picked)
 
 
 class WindowResultAggregator:

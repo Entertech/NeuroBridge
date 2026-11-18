@@ -137,8 +137,9 @@ class WindowAndSnapshotTests(unittest.TestCase):
             return mapper.map(batch, frames), frames
 
         mapped, frames = map_frames("headset-1", [(610, 60), (610, 61), (790, 62), (805, 0), (1010, 65)])
-        self.assertEqual(base64.b64decode(mapped.payload["hrRawBase64"]), bytes([60, 61, 62, 0, 65]))
-        self.assertEqual(mapped.payload["hrPacketCount"], 5)
+        self.assertEqual(base64.b64decode(mapped.payload["hrRawBase64"]), bytes([60, 62, 65]))
+        self.assertEqual(mapped.payload["hrPacketCount"], 3)
+        self.assertLessEqual(mapped.payload["hrPacketCount"], 5)
         self.assertEqual(mapped.payload["eegPacketCount"], 5)
         self.assertEqual(base64.b64decode(mapped.payload["eegRawBase64"]),
                          b"".join(item.raw_bytes[4:24] for item in frames))
@@ -149,6 +150,29 @@ class WindowAndSnapshotTests(unittest.TestCase):
         self.assertEqual(base64.b64decode(after_gap.payload["hrRawBase64"]), bytes([67]))
         reconnected, _ = map_frames("headset-2", [(1600, 68)])
         self.assertEqual(base64.b64decode(reconnected.payload["hrRawBase64"]), bytes([68]))
+
+    def test_both_devices_keep_at_most_five_heart_rates_per_second(self) -> None:
+        from neurobridge.domain.signal import ParsedSignal, ParsedSignalBatch
+
+        readings = bytes(range(50, 70))
+
+        def batch(protocol, samples):
+            signal = ParsedSignal("hr", samples, "bytes", None, {}, (), 0)
+            return ParsedSignalBatch("batch", protocol, "session", "recording", 0, 600, (signal,), ())
+
+        headband = AlgorithmInputMapper().map(batch("headband_ble", readings))
+        kept = base64.b64decode(headband.payload["hrRawBase64"])
+        self.assertEqual(len(kept), 3)
+        self.assertEqual(kept[0], readings[0])
+        self.assertEqual(kept[-1], readings[-1])
+        one_second = ParsedSignalBatch(
+            "batch", "headband_ble", "session", "recording", 0, 1000,
+            (ParsedSignal("hr", readings[:12], "bytes", None, {}, (), 0),), (),
+        )
+        kept_second = base64.b64decode(AlgorithmInputMapper().map(one_second).payload["hrRawBase64"])
+        self.assertEqual(len(kept_second), 5)
+        self.assertEqual(kept_second[0], readings[0])
+        self.assertEqual(kept_second[-1], readings[11])
 
     def test_snapshot_replace_is_one_batch_transaction(self) -> None:
         store = InMemoryLatestSnapshotStore()

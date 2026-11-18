@@ -91,24 +91,18 @@ class EegWearDisplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.algorithm_result.metrics["hr"], {"value": 69, "hrv": 44})
         self.assertIs(cache.display_eeg["headset_rev181"], True)
 
-    async def test_both_worn_varies_headset_eeg_around_headband_without_changing_length(self):
+    async def test_both_worn_uses_the_latest_headband_eeg_without_waiting_for_its_window(self):
         cache = self.cache()
-        cache._random.seed(7)
-        await cache.align_result(window("headband_ble", "signal"))
-        headset = window("headset_rev181", "signal")
-        headset.algorithm_result.metrics["eeg"]["wave"]["left"] = [1, 2, 3, 4, 5]
+        await cache.align_result(window("headband_ble", "signal", start=0))
+        headset = window("headset_rev181", "signal", start=5000)
         result = await cache.align_result(headset)
         metrics = result.algorithm_result.metrics
-        left = metrics["eeg"]["wave"]["left"]
-        self.assertEqual(len(left), 5)
-        self.assertTrue(all(8 * 0.95 <= value <= 8 * 1.05 or 9 * 0.95 <= value <= 9 * 1.05 or 10 * 0.95 <= value <= 10 * 1.05 for value in left[:3]))
-        self.assertEqual(left[3:], [4, 5])
-        for field, reference in (("attention", 80), ("relaxation", 81), ("pleasure", 82)):
-            self.assertGreaterEqual(metrics[field], reference * 0.95)
-            self.assertLessEqual(metrics[field], reference * 1.05)
-        self.assertNotEqual(metrics["attention"], 80)
-        self.assertGreaterEqual(metrics["flow"]["meditation"], 83 * 0.95)
-        self.assertLessEqual(metrics["flow"]["meditation"], 83 * 1.05)
+        self.assertEqual(metrics["eeg"]["wave"]["left"], [8, 9, 10])
+        self.assertEqual(metrics["attention"], 80)
+        self.assertEqual(metrics["relaxation"], 81)
+        self.assertEqual(metrics["pleasure"], 82)
+        self.assertEqual(metrics["flow"], {"meditation": 83})
+        self.assertEqual(metrics["sleep"], {"state": 2})
         self.assertEqual(metrics["hr"], {"value": 69, "hrv": 44})
         self.assertEqual(metrics["pressure"], 91)
         self.assertEqual(metrics["coherence"], 9)
@@ -145,8 +139,8 @@ class EegWearDisplayTests(unittest.IsolatedAsyncioTestCase):
         cache = self.cache()
         await cache.align_result(window("headband_ble", "signal"))
         replaced = await cache.align_result(window("headset_rev181", "signal"))
-        self.assertNotEqual(replaced.algorithm_result.metrics["attention"], 20)
-        self.assertEqual(len(replaced.algorithm_result.metrics["eeg"]["wave"]["left"]), 3)
+        self.assertEqual(replaced.algorithm_result.metrics["attention"], 80)
+        self.assertEqual(replaced.algorithm_result.metrics["eeg"]["wave"]["left"], [8, 9, 10])
         cache.set_session("headband_ble", None)
         restored = await cache.align_result(window("headset_rev181", "signal", start=3000))
         self.assertEqual(restored.algorithm_result.metrics["attention"], 20)
