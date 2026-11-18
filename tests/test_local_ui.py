@@ -20,6 +20,8 @@ from neurobridge.config import (
 )
 from neurobridge.northbound.local_ui import create_local_ui_server
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 def unused_port() -> int:
     with socket.socket() as probe:
@@ -117,3 +119,20 @@ class LocalUiIntegrationTests(unittest.IsolatedAsyncioTestCase):
         headers, body = response.split(b"\r\n\r\n", 1)
         self.assertIn(b"HTTP/1.1 200 OK", headers)
         self.assertEqual(body, b"")
+
+
+class WaveformRenderingSourceTests(unittest.TestCase):
+    def test_clipped_samples_stay_in_the_waveform_polyline(self) -> None:
+        source = (ROOT / "web" / "b-client-test" / "app.js").read_text(encoding="utf-8")
+        # A clipped sample is still a sample: null is reserved for a window with
+        # no data, and the trace must not turn the algorithm limit into a gap.
+        self.assertIn(
+            "const incoming = wave.slice(-waveformCapacity).map((value) => (noSignal ? null : value));",
+            source,
+        )
+        self.assertNotIn("return NaN", source)
+        self.assertIn(
+            "values.filter((value) => Number.isFinite(value) && Math.abs(value) >= sdkDualWaveLimit)",
+            source,
+        )
+        self.assertIn("ctx.fillRect(x - 1, scale(value) - 1, 2, 2);", source)

@@ -647,6 +647,16 @@ function drawWaveform(canvas, channels) {
       previousValid = true;
     });
     ctx.stroke();
+    if (channel !== "single") {
+      // Mark clipped samples without breaking the polyline: they are valid
+      // values at the algorithm's display limit, not missing samples.
+      ctx.fillStyle = "#ff6b6b";
+      samples.forEach((value, index) => {
+        if (!Number.isFinite(value) || Math.abs(value) < sdkDualWaveLimit) return;
+        const x = right - (samples.length - 1 - index) * step;
+        ctx.fillRect(x - 1, scale(value) - 1, 2, 2);
+      });
+    }
   }
   ctx.fillStyle = "#aebbd0";
   ctx.textAlign = "left";
@@ -710,14 +720,10 @@ function updateVisuals(data, panel) {
       // A short window is one more piece of the same trace, not a replacement.
       // Replacing it made the headset chart jump from 500 points to one window.
       const noSignal = showConnectedDevicesOnly && eeg?.quality === 0 && wave.every((value) => value === 0);
-      const markSaturation = showConnectedDevicesOnly && channel !== "single";
-      // NaN marks a clipped sample in the display history. Both it and null break the drawn line.
-      const incoming = wave.slice(-waveformCapacity).map((value) => {
-        if (noSignal) return null;
-        if (markSaturation && Number.isFinite(value) && Math.abs(value) === sdkDualWaveLimit) return NaN;
-        return value;
-      });
-      if (previous.length || noSignal || incoming.some((value) => Number.isFinite(value) || Number.isNaN(value))) {
+      // A clipped sample is still a sample. Keep it in the trace and mark it in
+      // drawWaveform; null is reserved for a window that really has no data.
+      const incoming = wave.slice(-waveformCapacity).map((value) => (noSignal ? null : value));
+      if (previous.length || noSignal || incoming.some(Number.isFinite)) {
         panel.channels[channel] = previous.concat(incoming).slice(-waveformCapacity);
       }
     }
@@ -726,9 +732,12 @@ function updateVisuals(data, panel) {
     const label = document.createElement("span");
     label.className = `channel-${channel}`;
     const count = values.filter(Number.isFinite).length;
-    const clipped = values.filter(Number.isNaN).length;
+    const clipped = showConnectedDevicesOnly && channel !== "single"
+      ? values.filter((value) => Number.isFinite(value) && Math.abs(value) >= sdkDualWaveLimit).length
+      : 0;
     label.textContent = `${channelStyles[channel].label} · ${count ? `${count} 点` : "无有效样本"}`
       + (clipped ? ` · ${clipped} 点饱和` : "");
+    if (clipped) label.title = "红色点为算法 ±2000 饱和点，折线保持连续";
     return label;
   }));
   if (!panel.fields.waveformMeta.childElementCount) panel.fields.waveformMeta.textContent = invalid ? "无效窗口" : "未提供波形";

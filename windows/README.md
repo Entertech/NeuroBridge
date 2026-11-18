@@ -90,7 +90,7 @@ Windows 双设备模式默认开启 EEG 输出校准。耳机和头环各用原�
 
 头环参考缓存最多保留 `eeg_alignment_reference_batches` 个批次，默认 16。每路采样时间模型最多保留 `eeg_alignment_clock_packets` 条包观测记录，默认 4096，并淘汰超过 7.2 秒的观测记录。容量写满时淘汰最旧条目。
 
-Windows 联调页把命中 ±2000 限幅的双通道样本画成断点，并在对应通道标出饱和点数。脑电质量为 0 时，全零通道显示为断点，全零频段显示为暂无有效频段能量。
+Windows 联调页保留命中 ±2000 限幅的双通道样本并连续绘制折线，同时用红色点标出饱和点并在对应通道标出饱和点数；只有无数据窗口才用空值断线。脑电质量为 0 时，全零通道显示为断点，全零频段显示为暂无有效频段能量。
 
 在 `neurobridge.log` 搜索 `Windows EEG alignment configuration` 核对校准和等待上限。`Headset EEG alignment decision` 记录实际等待时间、回退原因、各通道配对、修改和舍弃点数。`waveformReferenceBatchIds` 记录实际参与波形配对的头环批次，`referenceBatchId` 记录 EEG 指标的参考批次。原始 EEG 包全为 `FF` 时，跳过原因会标记为 `headset_raw_eeg_all_ff` 或 `headband_raw_eeg_all_ff`。默认 `INFO` 每约 10 秒记录各原因的窗口数，并为每种原因保留一条窗口详情。联调时可将 `[logging].level` 设为 `DEBUG`，对照两路 `EEG algorithm response` 的成功状态、错误原因和算法耗时。这些日志只记录诊断元数据。
 

@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.4.2"
+version = "0.4.3"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -59,6 +59,13 @@ to_version = "0.4.2"
 impact = "patch"
 compatibility = "No northbound or configuration change. Complete the serial streaming read-size change so headset data arrives in sub-600 ms chunks instead of 4096-byte reads."
 evidence = "The previous change only replaced the probe read call; the streaming loop still requested 4096 bytes and produced one 600 ms pipeline batch every ~1.8 s. Replace the streaming read as well and re-verify target waveform cadence."
+
+[[application_release_changes]]
+from_version = "0.4.2"
+to_version = "0.4.3"
+impact = "patch"
+compatibility = "No northbound or configuration change. The local Windows page keeps ±2000 clipped samples in the waveform polyline and marks them separately instead of converting them to NaN gaps."
+evidence = "Target 101.8 headset-only observation showed 84.6% of wave samples at ±2000; the page converted them to NaN and broke the trace. Keep the values, mark clipped points in red, and keep null only for windows without data. Target UI re-verification pending."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
