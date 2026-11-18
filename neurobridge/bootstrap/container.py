@@ -269,8 +269,8 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     windows_headset = profile.profile_id == "windows_headset_local"
     if windows_headset:
         observe_batch = HeadsetEegDiagnostics().observe
-        LOG.info("Windows headset HR algorithm input: sampleIntervalMs=%s mappingVersion=%s",
-                 AlgorithmInputMapper.HR_SAMPLE_INTERVAL_MS, AlgorithmInputMapper.HEADSET_HR_MAPPING_VERSION)
+        LOG.info("Windows headset HR algorithm input: pace=full-window mappingVersion=%s",
+                 AlgorithmInputMapper.MAPPING_VERSION)
 
     application = ApplicationService(
         device_protocol=profile.device_protocol,
