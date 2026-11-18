@@ -114,7 +114,7 @@ class WindowAndSnapshotTests(unittest.TestCase):
         mapped = AlgorithmInputMapper().map(batch, parsed.frames)
         self.assertEqual(base64.b64decode(mapped.payload["eegRawBase64"]), frame(0x1234)[4:24])
         self.assertEqual(mapped.payload["eegPacketCount"], 1)
-        self.assertEqual(mapped.payload["hrPacketCount"], 1)
+        self.assertLessEqual(mapped.payload["hrPacketCount"], 5)
 
     def test_windows_headset_hr_sampling_uses_real_values_once_per_slot_and_session(self) -> None:
         mapper = AlgorithmInputMapper(pace_headset_hr=True)
@@ -137,7 +137,7 @@ class WindowAndSnapshotTests(unittest.TestCase):
             return mapper.map(batch, frames), frames
 
         mapped, frames = map_frames("headset-1", [(610, 60), (610, 61), (790, 62), (805, 0), (1010, 65)])
-        self.assertEqual(base64.b64decode(mapped.payload["hrRawBase64"]), bytes([60, 62, 65]))
+        self.assertEqual(base64.b64decode(mapped.payload["hrRawBase64"]), bytes([62, 0, 65]))
         self.assertEqual(mapped.payload["hrPacketCount"], 3)
         self.assertLessEqual(mapped.payload["hrPacketCount"], 5)
         self.assertEqual(mapped.payload["eegPacketCount"], 5)
@@ -145,7 +145,7 @@ class WindowAndSnapshotTests(unittest.TestCase):
                          b"".join(item.raw_bytes[4:24] for item in frames))
         self.assertEqual([item.raw_bytes[24] for item in frames], [60, 61, 62, 0, 65])
         late, _ = map_frames("headset-1", [(1100, 66)])
-        self.assertEqual(base64.b64decode(late.payload["hrRawBase64"]), bytes([66]))
+        self.assertEqual(base64.b64decode(late.payload["hrRawBase64"]), b"")
         after_gap, _ = map_frames("headset-1", [(1600, 67)])
         self.assertEqual(base64.b64decode(after_gap.payload["hrRawBase64"]), bytes([67]))
         reconnected, _ = map_frames("headset-2", [(1600, 68)])
@@ -163,16 +163,37 @@ class WindowAndSnapshotTests(unittest.TestCase):
         headband = AlgorithmInputMapper().map(batch("headband_ble", readings))
         kept = base64.b64decode(headband.payload["hrRawBase64"])
         self.assertEqual(len(kept), 3)
-        self.assertEqual(kept[0], readings[0])
-        self.assertEqual(kept[-1], readings[-1])
+        self.assertTrue(all(value == readings[-1] for value in kept))
         one_second = ParsedSignalBatch(
             "batch", "headband_ble", "session", "recording", 0, 1000,
             (ParsedSignal("hr", readings[:12], "bytes", None, {}, (), 0),), (),
         )
         kept_second = base64.b64decode(AlgorithmInputMapper().map(one_second).payload["hrRawBase64"])
         self.assertEqual(len(kept_second), 5)
-        self.assertEqual(kept_second[0], readings[0])
-        self.assertEqual(kept_second[-1], readings[11])
+        self.assertTrue(all(value == readings[11] for value in kept_second))
+
+    def test_hr_normalizer_emits_one_latest_value_per_slot(self):
+        from neurobridge.application.processing import HrRateNormalizer
+
+        normalizer = HrRateNormalizer()
+        self.assertEqual(normalizer.push([(50, 60), (120, 61), (250, 62), (390, 63)], 400), bytes([61, 63]))
+        self.assertEqual(normalizer.push([(410, 64), (610, 65)], 800), bytes([64, 65]))
+
+    def test_hr_normalizer_emits_five_values_for_one_second(self):
+        from neurobridge.application.processing import HrRateNormalizer
+
+        normalizer = HrRateNormalizer()
+        emitted = bytearray()
+        for window_end in range(200, 1001, 200):
+            emitted.extend(normalizer.push([(window_end - 100, 60)], window_end))
+        self.assertEqual(bytes(emitted), bytes([60] * 5))
+
+    def test_hr_normalizer_does_not_hold_across_a_data_gap(self):
+        from neurobridge.application.processing import HrRateNormalizer
+
+        normalizer = HrRateNormalizer()
+        self.assertEqual(normalizer.push([(50, 60), (250, 61)], 400), bytes([60, 61]))
+        self.assertEqual(normalizer.push([(1000, 70)], 1200), bytes([70]))
 
     def test_snapshot_replace_is_one_batch_transaction(self) -> None:
         store = InMemoryLatestSnapshotStore()

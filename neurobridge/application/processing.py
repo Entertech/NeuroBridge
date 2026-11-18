@@ -14,8 +14,66 @@ from ..domain.signal import ParsedSignalBatch
 from ..ports.algorithm import AlgorithmEngine
 
 
+class HrRateNormalizer:
+    """Convert fast, repeated HR readings into a stable 5 Hz sample stream.
+
+    HR hardware reports the current BPM on every frame (tens of times per
+    second), mostly repeating the same value. The SDK expects 5 Hz, so each
+    200 ms slot emits the latest value observed in that slot; missing slots are
+    zero-order held only while the stream is continuous. Values may repeat when
+    the measured BPM really is constant; they are not synthetic duplicates.
+    """
+
+    def __init__(self, rate_hz: int = 5) -> None:
+        if rate_hz <= 0:
+            raise ValueError("HR rate must be positive")
+        self.rate_hz = rate_hz
+        self.slot_ms = max(1, round(1000 / rate_hz))
+        self._latest_by_slot: dict[int, int] = {}
+        self._last_emitted_slot: int | None = None
+        self._last_value: int | None = None
+
+    def reset(self) -> None:
+        self._latest_by_slot.clear()
+        self._last_emitted_slot = None
+        self._last_value = None
+
+    def push(self, samples: Iterable[tuple[int, int]], window_end_ms: int) -> bytes:
+        readings = list(samples)
+        if not readings:
+            return b""
+        earliest_slot = min(timestamp_ms // self.slot_ms for timestamp_ms, _ in readings)
+        if self._last_emitted_slot is not None and earliest_slot - self._last_emitted_slot > 1:
+            # A real data gap must not be padded with stale HR values.
+            self.reset()
+        if self._last_emitted_slot is None:
+            self._last_emitted_slot = earliest_slot - 1
+        for timestamp_ms, value in readings:
+            slot = timestamp_ms // self.slot_ms
+            if slot > self._last_emitted_slot:
+                self._latest_by_slot[slot] = value
+        closed_slot = window_end_ms // self.slot_ms - 1
+        if closed_slot <= self._last_emitted_slot:
+            return b""
+        emitted: list[int] = []
+        for slot in range(self._last_emitted_slot + 1, closed_slot + 1):
+            value = self._latest_by_slot.pop(slot, None)
+            if value is None:
+                if self._last_value is None:
+                    continue
+                value = self._last_value
+            else:
+                self._last_value = value
+            emitted.append(value)
+            self._last_emitted_slot = slot
+        if self._last_emitted_slot < closed_slot:
+            # No previous value existed for the skipped leading slots.
+            self._last_emitted_slot = closed_slot
+        return bytes(emitted)
+
+
 class AlgorithmInputMapper:
-    MAPPING_VERSION = "1"
+    MAPPING_VERSION = "2"
     HR_MAX_PER_SECOND = 5
 
     def __init__(self, *, pace_headset_hr: bool = False, hr_max_per_second: int = HR_MAX_PER_SECOND) -> None:
@@ -24,14 +82,17 @@ class AlgorithmInputMapper:
         if hr_max_per_second <= 0:
             raise ValueError("hr_max_per_second must be positive")
         self.hr_max_per_second = hr_max_per_second
+        self._hr_normalizer = HrRateNormalizer(hr_max_per_second)
+        self._hr_session_id: str | None = None
 
     def map(self, batch: ParsedSignalBatch, frames: Iterable[DeviceFrame] = ()) -> AlgorithmInput:
         frame_by_id = {frame.frame_id: frame for frame in frames}
         payload: dict[str, object] = {"windowStartMs": batch.window_start_ms, "windowEndMs": batch.window_end_ms}
         mapping_version = self.MAPPING_VERSION
+        hr_samples: list[tuple[int, int]] = []
         if batch.device_protocol == "headset_rev181":
             ordered = [frame_by_id[ref] for ref in batch.frame_refs if ref in frame_by_id]
-            hr = bytes(frame.raw_bytes[24] for frame in ordered)
+            hr_samples = [(frame.received_at_ms, frame.raw_bytes[24]) for frame in ordered]
             payload["eegRawBase64"] = base64.b64encode(b"".join(frame.raw_bytes[4:24] for frame in ordered)).decode("ascii")
             payload["eegPacketCount"] = len(ordered)
         else:
@@ -39,35 +100,16 @@ class AlgorithmInputMapper:
                 chunks = [signal.samples for signal in batch.signals if signal.signal_type == signal_type and isinstance(signal.samples, bytes)]
                 payload[f"{signal_type}RawBase64"] = base64.b64encode(b"".join(chunks)).decode("ascii")
                 payload[f"{signal_type}PacketCount"] = len(chunks)
-            hr = b"".join(
-                signal.samples for signal in batch.signals
-                if signal.signal_type == "hr" and isinstance(signal.samples, bytes)
-            )
-        kept = self._limit_hr(hr, batch.window_start_ms, batch.window_end_ms)
+            for signal in batch.signals:
+                if signal.signal_type == "hr" and isinstance(signal.samples, bytes):
+                    hr_samples.extend((signal.received_at_ms, value) for value in signal.samples)
+        if batch.connection_session_id != self._hr_session_id:
+            self._hr_normalizer.reset()
+            self._hr_session_id = batch.connection_session_id
+        kept = self._hr_normalizer.push(hr_samples, batch.window_end_ms)
         payload["hrRawBase64"] = base64.b64encode(kept).decode("ascii")
         payload["hrPacketCount"] = len(kept)
         return AlgorithmInput(batch.batch_id, payload, mapping_version, batch.device_protocol)
-
-    def _limit_hr(self, samples: bytes, start_ms: int, end_ms: int) -> bytes:
-        """Keep at most five heart-rate values per second of this window.
-
-        The window length only decides how many values fit. It does not decide
-        which device clock the values belong to.
-        """
-        count = len(samples)
-        if count == 0:
-            return samples
-        duration_ms = max(end_ms - start_ms, 1)
-        allowed = max(1, (duration_ms * self.hr_max_per_second + 999) // 1000)
-        if count <= allowed:
-            return samples
-        if allowed == 1:
-            return samples[-1:]
-        picked = []
-        for index in range(allowed):
-            source = round(index * (count - 1) / (allowed - 1))
-            picked.append(samples[source])
-        return bytes(picked)
 
 
 class WindowResultAggregator:

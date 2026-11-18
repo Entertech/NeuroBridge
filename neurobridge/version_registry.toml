@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.4.5"
+version = "0.4.6"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -80,6 +80,13 @@ to_version = "0.4.5"
 impact = "patch"
 compatibility = "No wire protocol or configuration change. Algorithm bridge cleanup timeouts are best-effort and no longer propagate out of device-disconnect/shutdown paths; legacy 600 ms aggregation always supplies a valid invalid-result reason."
 evidence = "Windows 101.8 logs showed an uncaught algorithm bridge TimeoutError during wake/disconnect cleanup and repeated legacy aggregation ValueError logs. Guard runner/gateway/service cleanup, restart failed acquisition tasks, and add regression tests. Target re-verification pending."
+
+[[application_release_changes]]
+from_version = "0.4.5"
+to_version = "0.4.6"
+impact = "patch"
+compatibility = "Algorithm input only: HR is resampled per device to exactly 5 Hz by taking the latest received BPM in each 200 ms slot. Northbound protocol, persisted raw/algorithm records and configuration stay unchanged; mappingVersion becomes 2. Repeated BPM across slots is expected when heart rate is steady."
+evidence = "Target capture showed 18-19 repeated HR bytes per ~220 ms serial chunk and occasional 60->59 BPM transitions, while the SDK fixes hrFs=5. Replace per-window even sampling with a rolling 200 ms latest-value resampler; unit tests cover slot rate, latest value, gap handling and session reset. Target-machine algorithm comparison pending; no package built yet."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.

@@ -82,7 +82,7 @@ Windows 双设备新安装默认 `[pipeline] batch_mode = "as_available"`，以�
 - 600 ms 窗口由 `SignalWindowAssembler` 按 `received_at_ms` 切桶；定时器在窗口结束时间触发刷出，跨桶信号也会触发上一个窗口结束。窗口批次写 `parsed.signal_batch`。
 - 算法输入映射：
   - EEG：每帧取 `raw[4:6]`（序号）+ `raw[6:24]`（18 B EEG），拼接后 Base64；
-  - HR：每帧取 `raw[24]`，按窗口时长限制为每秒最多 5 个值；
+  - HR：每帧取 `raw[24]`，按每设备 200 ms 槽保留槽内最新值，形成固定 5 Hz 算法输入；心率稳定时同一值会重复出现（SDK `hrFs=5`，这是零阶保持，不是重复采样错误）；
   - 输入保留原始字节序，不做重采样。
 - 算法桥是独立子进程；同一路同一时刻最多一个活跃桥，串口每轮重连会先预热一个临时桥再 adopt，每次新设备会话 `initialize` 都会 stop/start 重建。桥使用行分隔 JSON 协议、只允许一个在途请求，默认 2 s 超时；失败/超时/积压分别产出 `ALGORITHM_ERROR`、`ALGORITHM_TIMEOUT`、`ALGORITHM_BACKLOG` 的无效窗口，迟到结果只写 `algorithm.late_result`，不重发。
 - 校准：双设备且 `eeg_alignment_percent > 0` 时，耳机窗口先经过 `EegAlignmentCache`；校准后的结果同时用于 `algorithm.result` 落盘和北向发布。原始帧与解析批次永远保留校准前的设备原值。
