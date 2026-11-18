@@ -1,0 +1,26 @@
+sequenceDiagram
+    autonumber
+    participant S as 设备源（串口 / BLE）
+    participant Q as RawChunk 队列
+    participant P as ApplicationService<br/>parser + 窗口组装
+    participant DB as 录制仓库（异步写）
+    participant AL as 算法桥子进程
+    participant C as EegAlignmentCache
+    participant G as GatewayApplication
+    participant WS as WebSocket 订阅
+
+    S->>Q: 读/通知 → RawChunk(received_at_ms)
+    Q->>P: process(chunk)（校验会话与来源）
+    P->>P: parser.feed → 原始帧 + 信号
+    P->>DB: raw.device_frame（原始字节不变）
+    P->>P: 600 ms 桶；窗口到点（定时器或跨桶信号）
+    P->>DB: parsed.signal_batch
+    P->>AL: 算法输入（EEG/HR Base64，保留原始字节序）
+    AL-->>P: 算法指标，或超时/错误原因
+    P->>C: align_result（仅双设备且开启校准）
+    C-->>P: 校准/隐藏后的 WindowResult
+    P->>DB: algorithm.result
+    P->>G: northbound.publish(window)
+    G->>G: latestSnapshot.replace + 订阅 fanout
+    G-->>WS: 每个订阅一条 data 事件（600 ms 批量）
+    Note over P: 发布后 1.8 s 内没有新窗口 → 数据状态 STALE；<br/>只影响日志/指标，不改变 WS 连接

@@ -1,0 +1,24 @@
+sequenceDiagram
+    autonumber
+    participant B as 浏览器 / B 端
+    participant W as WebSocket 入口
+    participant R as SourceRouter
+    participant A as GatewayApplication A（headset）
+    participant H as GatewayApplication B（headband）
+
+    B->>W: 连接 ws://127.0.0.1:8765/neurobridge/v1/ws<br/>Sec-WebSocket-Protocol: neurobridge.v1，校验 Origin
+    W->>R: router.connection()
+    R->>A: 创建并登记 headset 的 ClientSession
+    R->>H: 创建并登记 headband 的 ClientSession
+    B->>R: getStatus v1.1 {source: "headset"}
+    R->>A: 路由请求（params 中移除 source）
+    A-->>B: 200，data.source = headset（该路自己的 gatewayBootId）
+    B->>R: subscribe {source: "headband", streams: ["eeg"]}
+    R->>H: 订阅只登记在头环会话
+    H-->>B: 200，data.source = headband + subscriptionId
+    A-->>B: 600 ms 窗口事件，data.source = headset
+    H-->>B: 600 ms 窗口事件，data.source = headband
+    B->>R: unsubscribe {source: "headband", subscriptionId}
+    R->>H: 只取消头环订阅
+    Note over B,R: v1.0 请求或 v1.1 省略 source → 默认 headset；<br/>非法 source → 400 INVALID_REQUEST（data.source = headset）
+    Note over B,W: 不使用 Ping/Pong 或 JSON 心跳；断线后重新连接，<br/>先 getStatus 再 subscribe，旧 subscriptionId 不再复用

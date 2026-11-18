@@ -1,0 +1,35 @@
+flowchart TB
+    subgraph CONN["① 连接与验证（每次重连都完整执行）"]
+        H1["枚举并打开 COM<br/>115200 8-N-1，先设 DTR/RTS 再 open，观察已有流"]
+        H2["并行：启动临时算法进程（预热）"]
+        H3["无合法帧：等预热算法 ready → 写 E1<br/>不等待 ACK，等首个完整 28 字节帧 ≤ 5 s"]
+        H4["validated：生成 connectionSessionId，adopt 预热算法<br/>接管串口控制（已有流则不重复 E1）"]
+        H5["验证失败 / 流中断 / 读异常<br/>尽力一次 E0 → 关闭 COM → 3 s 后重连"]
+        H1 --> H2
+        H1 -->|"有合法帧，直接接管"| H4
+        H2 --> H3
+        H3 --> H4
+        H4 --> H5
+    end
+    subgraph READ["② 读取、分帧与原始数据落盘"]
+        R1["读取 4096 B，按读边界打 received_at_ms<br/>RawChunk 入队（容量 64，50 ms 超时计 gap）"]
+        R2["ApplicationService.process<br/>校验 connectionSessionId + 来源 serial"]
+        R3["HeadsetRev181Parser<br/>AA AA AA | 0x1C | 序号 2B | EEG 18B | HR 1B | BB BB BB"]
+        R4["原始帧持久化 raw.device_frame<br/>序号 4:6 大端；丢包/乱序/重同步统计"]
+        R5["ParsedSignal：eeg 18 B + hr 1 B"]
+        R1 --> R2 --> R3
+        R3 --> R4
+        R3 --> R5
+    end
+    subgraph PROC["③ 600 ms 窗口、算法、校准与北向发布"]
+        W1["SignalWindowAssembler 600 ms<br/>窗口到点刷出，持久化 parsed.signal_batch"]
+        W2["算法输入映射 → 算法桥进程 A<br/>EEG = 每帧 2B 序号 + 18B；HR = 每帧 1B，限 5 个/秒；2 s 超时"]
+        W3["WindowResult → EegAlignmentCache<br/>双方均佩戴时用头环最新 EEG ±5% 替换耳机 EEG 类指标"]
+        W4["持久化 algorithm.result → GatewayApplication A<br/>latestSnapshot / getLatest / 订阅 fanout"]
+        W5["WebSocket 600 ms 批量事件<br/>data.source = headset"]
+        W1 --> W2 --> W3 --> W4 --> W5
+    end
+    H4 --> R1
+    R5 --> W1
+    R1 -. "队列满丢字节 → 本窗口 SOURCE_QUEUE_GAP" .-> W1
+    W2 -. "超时只发无效窗口；迟到结果仅落盘不重发" .-> W4

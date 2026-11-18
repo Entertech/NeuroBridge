@@ -21,43 +21,6 @@
 
 ![图 1 · Windows 双设备总体数据流](assets/windows-dual-device/figure-1-overview.png)
 
-<details>
-<summary>图 1 Mermaid 源码</summary>
-
-```mermaid
-flowchart TB
-    subgraph DEV["设备侧"]
-        HS["USB 串口耳机<br/>rev181 28 字节帧"]
-        HB["BLE 头环<br/>FF31 / FF51 / FF32 通知"]
-    end
-    subgraph GW["Windows 网关（单进程、一个 asyncio 事件循环）"]
-        A["耳机流水线 A<br/>串口源 → 解析 → 600 ms 窗口 → 算法桥 A"]
-        B["头环流水线 B<br/>BLE 源 → 解析 → 600 ms 窗口 → 算法桥 B"]
-        CAL["共享 EegAlignmentCache<br/>佩戴判定 + 耳机 EEG 输出 ±5%"]
-        GA["GatewayApplication A<br/>快照 / 订阅 / 录制"]
-        GB["GatewayApplication B<br/>快照 / 订阅 / 录制"]
-        RA["recordings/sessions/&lt;rec-id&gt;/<br/>raw / parsed / algorithm"]
-        RB["recordings/headband/sessions/&lt;rec-id&gt;/<br/>raw / parsed / algorithm"]
-        R["SourceRouter<br/>按 params.source 路由"]
-        W["WebSocket 入口<br/>ws://127.0.0.1:8765/neurobridge/v1/ws"]
-    end
-    C["本机浏览器<br/>耳机面板 + 头环面板"]
-    HS --> A
-    HB --> B
-    A --> CAL
-    B --> CAL
-    CAL --> GA
-    CAL --> GB
-    A --> RA
-    B --> RB
-    GA --> R
-    GB --> R
-    R --> W
-    W -->|"v1.1 JSON / 每 600 ms 批量"| C
-```
-
-</details>
-
 读图要点：
 
 1. 两个容器互不共享连接、算法进程、录制仓库和订阅；同一时刻任一路断开只影响自己。
@@ -68,35 +31,6 @@ flowchart TB
 ## 2. 启动与双流水线组装（图 2）
 
 ![图 2 · 配置加载与双容器组合](assets/windows-dual-device/figure-2-startup.png)
-
-<details>
-<summary>图 2 Mermaid 源码</summary>
-
-```mermaid
-flowchart LR
-    TOML["gateway.toml<br/>profile = windows_headset_local<br/>data_source.type = serial<br/>include_headband = true<br/>ble.enabled = true"] --> LOAD["load_runtime_config<br/>字段校验 + 旧配置迁移"]
-    LOAD --> RESOLVE["resolve_profile（Windows x86_64）<br/>校验 serial + local_browser<br/>双设备还要求 BLE 开关与正数扫描/重连间隔"]
-    RESOLVE --> BUILD["build_runtime"]
-    BUILD --> Q{"include_headband ?"}
-    Q -->|"false"| SINGLE["单容器：仅耳机<br/>不创建 SourceRouter"]
-    Q -->|"true"| DUAL["双容器组合根"]
-    DUAL --> HBCFG["派生头环配置<br/>profile = windows_headband_local<br/>data_source.type = bluetooth<br/>recording.directory = 原目录 / headband"]
-    DUAL --> CALQ{"eeg_alignment_percent > 0 ?"}
-    CALQ -->|"是（默认 5）"| SHARE["创建共享 EegAlignmentCache"]
-    CALQ -->|"否（0）"| NOSHARE["两路完全独立，不做跨设备校准"]
-    DUAL --> A["build_container A<br/>WindowsSerialSource + HeadsetRev181Parser<br/>+ 算法桥 A + GatewayApplication A"]
-    DUAL --> B["build_container B<br/>BluetoothBleakSource + HeadbandBleParser<br/>+ 算法桥 B + GatewayApplication B"]
-    SHARE --> A
-    SHARE --> B
-    A --> RUN["__main__.run 启动<br/>两个 gateway.start()（建立录制仓库）<br/>并发任务：WS 服务 + 两条 device_adapter.run() + 本机 UI + 下载服务"]
-    B --> RUN
-    A --> ROUTER["SourceRouter(Gateway A 控制器, Gateway B 控制器)"]
-    B --> ROUTER
-    NOSHARE --> A
-    NOSHARE --> B
-```
-
-</details>
 
 启动阶段的关键事实：
 
@@ -109,49 +43,6 @@ flowchart LR
 ## 3. 耳机（USB 串口）数据流（图 3）
 
 ![图 3 · 耳机串口链路](assets/windows-dual-device/figure-3-headset.png)
-
-<details>
-<summary>图 3 Mermaid 源码</summary>
-
-```mermaid
-flowchart TB
-    subgraph CONN["① 连接与验证（每次重连都完整执行）"]
-        H1["枚举并打开 COM<br/>115200 8-N-1，先设 DTR/RTS 再 open，观察已有流"]
-        H2["并行：启动临时算法进程（预热）"]
-        H3["无合法帧：等预热算法 ready → 写 E1<br/>不等待 ACK，等首个完整 28 字节帧 ≤ 5 s"]
-        H4["validated：生成 connectionSessionId，adopt 预热算法<br/>接管串口控制（已有流则不重复 E1）"]
-        H5["验证失败 / 流中断 / 读异常<br/>尽力一次 E0 → 关闭 COM → 3 s 后重连"]
-        H1 --> H2
-        H1 -->|"有合法帧，直接接管"| H4
-        H2 --> H3
-        H3 --> H4
-        H4 --> H5
-    end
-    subgraph READ["② 读取、分帧与原始数据落盘"]
-        R1["读取 4096 B，按读边界打 received_at_ms<br/>RawChunk 入队（容量 64，50 ms 超时计 gap）"]
-        R2["ApplicationService.process<br/>校验 connectionSessionId + 来源 serial"]
-        R3["HeadsetRev181Parser<br/>AA AA AA | 0x1C | 序号 2B | EEG 18B | HR 1B | BB BB BB"]
-        R4["原始帧持久化 raw.device_frame<br/>序号 4:6 大端；丢包/乱序/重同步统计"]
-        R5["ParsedSignal：eeg 18 B + hr 1 B"]
-        R1 --> R2 --> R3
-        R3 --> R4
-        R3 --> R5
-    end
-    subgraph PROC["③ 600 ms 窗口、算法、校准与北向发布"]
-        W1["SignalWindowAssembler 600 ms<br/>窗口到点刷出，持久化 parsed.signal_batch"]
-        W2["算法输入映射 → 算法桥进程 A<br/>EEG = 每帧 2B 序号 + 18B；HR = 每帧 1B，限 5 个/秒；2 s 超时"]
-        W3["WindowResult → EegAlignmentCache<br/>双方均佩戴时用头环最新 EEG ±5% 替换耳机 EEG 类指标"]
-        W4["持久化 algorithm.result → GatewayApplication A<br/>latestSnapshot / getLatest / 订阅 fanout"]
-        W5["WebSocket 600 ms 批量事件<br/>data.source = headset"]
-        W1 --> W2 --> W3 --> W4 --> W5
-    end
-    H4 --> R1
-    R5 --> W1
-    R1 -. "队列满丢字节 → 本窗口 SOURCE_QUEUE_GAP" .-> W1
-    W2 -. "超时只发无效窗口；迟到结果仅落盘不重发" .-> W4
-```
-
-</details>
 
 ### 3.1 连接与验证
 
@@ -186,51 +77,6 @@ flowchart TB
 
 ![图 4 · 头环 BLE 链路](assets/windows-dual-device/figure-4-headband.png)
 
-<details>
-<summary>图 4 Mermaid 源码</summary>
-
-```mermaid
-flowchart TB
-    subgraph CONN["① 扫描、连接与采集启停（每次断线重连都执行）"]
-        B1["Bleak 扫描 ≤ 5 s<br/>按广播服务 UUID 过滤；可选广播名 / MAC"]
-        B2["候选选择：Windows 优先上次已连接地址<br/>否则选 RSSI 最强的匹配候选"]
-        B3["连接并订阅 FF31 / FF32 / FF51<br/>（电池特征可选）"]
-        B4["上报 CONNECTED，生成 connectionSessionId<br/>初始化头环算法桥进程 B"]
-        B5["通过 FF21 写 0x05 开始采集 → streaming"]
-        B6["断开回调 / 通知停更（Windows：EEG+HR 均停 ≥10 s）<br/>关闭链路 → 重新扫描"]
-        B1 --> B2 --> B3 --> B4 --> B5
-        B5 --> B6
-        B6 -->|"重连"| B1
-    end
-    subgraph NOTIFY["② 通知回调、解析与原始数据落盘"]
-        N1["FF31：20 B = 2B 序号 + 18B EEG"]
-        N2["FF51：1 B 心率"]
-        N3["FF32：设备状态原始包<br/>佩戴语义待 POC"]
-        N4["RawChunk(channel = ff31 / ff51 / ff32)<br/>入有界队列（容量 64）"]
-        N5["HeadbandBleParser<br/>eeg / hr / device_status 信号"]
-        N6["原始通知持久化 raw.device_frame<br/>按通知到达顺序与到达时间"]
-        N1 --> N4
-        N2 --> N4
-        N3 --> N4
-        N4 --> N5 --> N6
-    end
-    subgraph PROC["③ 600 ms 窗口、算法、校准与北向发布"]
-        M1["SignalWindowAssembler 600 ms<br/>窗口到点刷出，持久化 parsed.signal_batch"]
-        M2["算法输入映射 → 算法桥进程 B<br/>EEG = 20B/包；HR = 1B/包，限 5 个/秒；2 s 超时"]
-        M3["WindowResult → EegAlignmentCache<br/>缓存最新 EEG 供耳机校准；头环未佩戴时隐藏 EEG"]
-        M4["持久化 algorithm.result → GatewayApplication B<br/>data.source = headband"]
-        M5["WebSocket 600 ms 批量事件"]
-        M1 --> M2 --> M3 --> M4 --> M5
-    end
-    B5 --> N1
-    B5 --> N2
-    B5 --> N3
-    N6 --> M1
-    M3 -. "头环输出不使用耳机结果" .-> M4
-```
-
-</details>
-
 ### 4.1 扫描与连接
 
 - Windows 使用 Bleak 的 WinRT 后端扫描；默认 5 s、按广播服务 UUID（`advertisement.service_uuids`，默认 `0000ff10-1212-abcd-1523-785feabcd123`）匹配，可选 `device_name` 和 `device_identifier`（MAC）进一步过滤。
@@ -253,30 +99,6 @@ flowchart TB
 ## 5. 双设备佩戴判定与 EEG 校准（图 5）
 
 ![图 5 · 佩戴判定与耳机 EEG 输出校准](assets/windows-dual-device/figure-5-alignment.png)
-
-<details>
-<summary>图 5 Mermaid 源码</summary>
-
-```mermaid
-flowchart TD
-    A["一路窗口的算法结果"] --> B["原始 EEG 佩戴判定<br/>全部样本 FF FF FF 或任一通道全 00 00 00 → 未佩戴<br/>窗口没有 EEG 样本 → 未知"]
-    B --> C{"deviceProtocol"}
-    C -->|"headband_ble"| H1{"头环未佩戴？"}
-    H1 -->|"是"| H2["隐藏头环 EEG 字段，仅保留心率类指标<br/>清空头环 EEG 参考"]
-    H1 -->|"否"| H3["头环结果原样输出<br/>缓存 eeg / attention / relaxation / pleasure / flow / sleep 与 batchId"]
-    C -->|"headset_rev181"| S1{"耳机未佩戴，或头环已连接且未佩戴<br/>而耳机不是已佩戴？"}
-    S1 -->|"是"| S2["隐藏耳机 EEG 字段，心率/压力等保留"]
-    S1 -->|"否"| S3{"耳机已佩戴 且 头环已连接且已佩戴<br/>且存在头环最新 EEG 参考？"}
-    S3 -->|"是"| S4["EEG 波形/质量/频段、专注、放松、愉悦、Flow、睡眠<br/>= 头环最新值 × (1 ± 5%)<br/>不要求同一时间窗口"]
-    S3 -->|"否"| S5["保留耳机自身算法结果"]
-    H2 --> P["状态通道广播 wearState<br/>eegDisplay 仅内部状态<br/>窗口继续持久化并按订阅推送"]
-    H3 --> P
-    S2 --> P
-    S4 --> P
-    S5 --> P
-```
-
-</details>
 
 ### 5.1 佩戴判定
 
@@ -307,38 +129,6 @@ flowchart TD
 
 ![图 6 · 单 WebSocket 入口的请求路由与双路订阅](assets/windows-dual-device/figure-6-northbound.png)
 
-<details>
-<summary>图 6 Mermaid 源码</summary>
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant B as 浏览器 / B 端
-    participant W as WebSocket 入口
-    participant R as SourceRouter
-    participant A as GatewayApplication A（headset）
-    participant H as GatewayApplication B（headband）
-
-    B->>W: 连接 ws://127.0.0.1:8765/neurobridge/v1/ws<br/>Sec-WebSocket-Protocol: neurobridge.v1，校验 Origin
-    W->>R: router.connection()
-    R->>A: 创建并登记 headset 的 ClientSession
-    R->>H: 创建并登记 headband 的 ClientSession
-    B->>R: getStatus v1.1 {source: "headset"}
-    R->>A: 路由请求（params 中移除 source）
-    A-->>B: 200，data.source = headset（该路自己的 gatewayBootId）
-    B->>R: subscribe {source: "headband", streams: ["eeg"]}
-    R->>H: 订阅只登记在头环会话
-    H-->>B: 200，data.source = headband + subscriptionId
-    A-->>B: 600 ms 窗口事件，data.source = headset
-    H-->>B: 600 ms 窗口事件，data.source = headband
-    B->>R: unsubscribe {source: "headband", subscriptionId}
-    R->>H: 只取消头环订阅
-    Note over B,R: v1.0 请求或 v1.1 省略 source → 默认 headset；<br/>非法 source → 400 INVALID_REQUEST（data.source = headset）
-    Note over B,W: 不使用 Ping/Pong 或 JSON 心跳；断线后重新连接，<br/>先 getStatus 再 subscribe，旧 subscriptionId 不再复用
-```
-
-</details>
-
 - 入口：`WS + UTF-8 JSON`，默认 `ws://127.0.0.1:8765/neurobridge/v1/ws`，要求子协议 `neurobridge.v1`、校验固定 Origin、只监听回环地址；不发送应用层保活。
 - 请求版本：
   - v1.1 请求可用 `params.source` 选择 `headset`/`headband`；省略时默认耳机；`data.source` 出现在每条 v1.1 响应和事件中。
@@ -353,40 +143,6 @@ sequenceDiagram
 ## 7. 单个 600 ms 窗口的处理时序（图 7）
 
 ![图 7 · 单个窗口的持久化与发布时序](assets/windows-dual-device/figure-7-window-timing.png)
-
-<details>
-<summary>图 7 Mermaid 源码</summary>
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant S as 设备源（串口 / BLE）
-    participant Q as RawChunk 队列
-    participant P as ApplicationService<br/>parser + 窗口组装
-    participant DB as 录制仓库（异步写）
-    participant AL as 算法桥子进程
-    participant C as EegAlignmentCache
-    participant G as GatewayApplication
-    participant WS as WebSocket 订阅
-
-    S->>Q: 读/通知 → RawChunk(received_at_ms)
-    Q->>P: process(chunk)（校验会话与来源）
-    P->>P: parser.feed → 原始帧 + 信号
-    P->>DB: raw.device_frame（原始字节不变）
-    P->>P: 600 ms 桶；窗口到点（定时器或跨桶信号）
-    P->>DB: parsed.signal_batch
-    P->>AL: 算法输入（EEG/HR Base64，保留原始字节序）
-    AL-->>P: 算法指标，或超时/错误原因
-    P->>C: align_result（仅双设备且开启校准）
-    C-->>P: 校准/隐藏后的 WindowResult
-    P->>DB: algorithm.result
-    P->>G: northbound.publish(window)
-    G->>G: latestSnapshot.replace + 订阅 fanout
-    G-->>WS: 每个订阅一条 data 事件（600 ms 批量）
-    Note over P: 发布后 1.8 s 内没有新窗口 → 数据状态 STALE；<br/>只影响日志/指标，不改变 WS 连接
-```
-
-</details>
 
 补充规则：
 
@@ -524,4 +280,4 @@ sequenceDiagram
 - 双设备校准集成测试在当前分支 tip 上因上述旧断言失败，属于测试未同步，不是本图论证依据。
 - 未在 Windows 目标机上重新执行真实双设备采集、拔插/重连、服务重启与浏览器断线恢复；这些仍是现场验收项，不能据本文写成“已验收通过”。
 - 本文不涉及银河麒麟串口交付链路、BLE 录播、B 端专网等历史方案；相关边界以版本台账与预发布协议为准。
-- 图 1–7 的嵌入预览使用 PNG（`doc/tech/assets/windows-dual-device/figure-*.png`），同目录保留同名 SVG 矢量版供缩放查看；两者均由各图折叠块中的 Mermaid 源码渲染，修改图后需同时重新渲染。
+- 图 1–7 的嵌入预览使用 PNG（`doc/tech/assets/windows-dual-device/figure-*.png`），同目录保留同名 SVG 矢量版和 `.mmd` Mermaid 源码；修改 `.mmd` 后需重新渲染对应 PNG/SVG。
