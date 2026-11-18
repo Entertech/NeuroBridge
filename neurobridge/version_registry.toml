@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.3.2"
+version = "0.3.3"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -31,6 +31,13 @@ to_version = "0.3.2"
 impact = "patch"
 compatibility = "Retain the current SDK and +/-2000 dual-channel waveform output limits; no wire protocol or configuration schema change."
 evidence = "User explicitly requested application 0.3.2 and Windows/Kylin CI packages. Synchronize generated version consumers and validate the complete recorded version chain when a branch advances through multiple candidate versions."
+
+[[application_release_changes]]
+from_version = "0.3.2"
+to_version = "0.3.3"
+impact = "patch"
+compatibility = "No wire protocol or configuration schema change. UI no longer clears waveform history on a timer; serial streaming reads smaller chunks and duplicate late windows are discarded."
+evidence = "Remove the browser 1800 ms stale clear so only explicit not-worn data clears the 500-point waveform; read serial stream chunks at 512 bytes instead of waiting for 4096-byte buffers; drop residual windows whose end timestamp was already published."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.

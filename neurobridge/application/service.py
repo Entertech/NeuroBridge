@@ -474,6 +474,26 @@ class ApplicationService:
     async def _process_batch(self, batch: ParsedSignalBatch, parsed_receipt: PersistenceReceipt, *, backlog: bool = False) -> WindowResult:
         self.diagnostics["batches"] += 1
         persistence_guaranteed = parsed_receipt.persistence_guaranteed
+        # A timer flush and a late packet can produce a second window with the
+        # same end timestamp (or an older one). Publish each boundary once and
+        # discard the residual window instead of appending a 3/6-point fragment.
+        if self._last_window_end_ms is not None and batch.window_end_ms <= self._last_window_end_ms:
+            self.diagnostics["superseded_windows"] = self.diagnostics.get("superseded_windows", 0) + 1
+            LOG.info(
+                "Late window discarded before evaluation: batchId=%s windowEndMs=%s lastPublishedWindowEndMs=%s",
+                batch.batch_id,
+                batch.window_end_ms,
+                self._last_window_end_ms,
+            )
+            self._discard_batch_frames(batch)
+            timestamp = self.clock_ms()
+            return WindowResult(
+                batch,
+                AlgorithmResult(batch.batch_id, None, timestamp, timestamp, {}, False, ("LATE_WINDOW",)),
+                "live",
+                timestamp,
+                False,
+            )
         if batch.connection_session_id != self._connection_session_id:
             timestamp = self.clock_ms()
             stale_result = WindowResult(

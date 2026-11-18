@@ -11,7 +11,6 @@ const fixedSource = configuredSource === "serial" || configuredSource === "bluet
 const sharedConnection = configuredSource === "dual";
 const localConnection = fixedSource || sharedConnection;
 const showConnectedDevicesOnly = sharedConnection || window.NEUROBRIDGE_B_CLIENT_WINDOWS === true;
-const staleAfterMs = window.NEUROBRIDGE_B_CLIENT_STALE_AFTER_MS;
 const waveformCapacity = 500;
 const sdkDualWaveLimit = 2000;
 const spectrumBands = ["delta", "theta", "alpha", "lowBeta", "highBeta", "beta", "gamma"];
@@ -486,7 +485,7 @@ function eegWindowState(message, wearState, eegDisplay) {
   const result = data?.result || data;
   const eeg = result?.payload?.algorithm?.eeg;
   const channels = Object.values(eeg?.wave || {}).filter((values) => Array.isArray(values) && values.length);
-  const detached = eegDisplay === "hidden" || wearState === "notWorn" || message.message === "未佩戴：脑波数据全为 FF"
+  const detached = eegDisplay === "hidden" || wearState === "notWorn"
     || channels.some((values) => values.every((value) => [255, -1, "FF", "ff"].includes(value)));
   const zeroPlaceholder = eeg?.quality === 0
     && !channels.some((values) => values.some((value) => Number.isFinite(value) && value !== 0));
@@ -527,17 +526,15 @@ function updateEegState(message, panel, { issue, hasWave }) {
   panel.eegStateTimestamp = timestamp;
   clearTimeout(panel.eegStaleTimer);
   panel.eegStaleTimer = null;
-  if (issue || result.valid !== true || !eeg) {
-    showMissingEeg(panel, issue || "无脑波数据", timestamp);
+  // Only explicit not-worn/display-hidden data clears the 500-point history.
+  // Invalid windows and silent gaps keep the previous samples; append logic
+  // draws a break instead of replacing the whole trace.
+  if (issue === "未佩戴") {
+    showMissingEeg(panel, "未佩戴", timestamp);
     return;
   }
-  if (!hasWave) showMissingEeg(panel, "无脑波数据", timestamp, true);
-  if (Number.isFinite(staleAfterMs)) {
-    const remaining = data.action === "getLatest" ? staleAfterMs - Math.max(0, Date.now() - timestamp) : staleAfterMs;
-    panel.eegStaleTimer = setTimeout(() => {
-      panel.eegStaleTimer = null;
-      showMissingEeg(panel, "无脑波数据", timestamp);
-    }, Math.max(0, remaining));
+  if (result.valid !== true || !eeg || !hasWave) {
+    return;
   }
 }
 
