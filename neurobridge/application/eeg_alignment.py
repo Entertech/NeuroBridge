@@ -106,6 +106,7 @@ class EegAlignmentCache:
         self._latest_eeg: dict[str, object] | None = None
         self._latest_eeg_batch_id: str | None = None
         self._random = random.Random()
+        self.relay_mode = False
         self._decisions: dict[str, int] = {}
         self._last_log_at = time.monotonic()
 
@@ -131,7 +132,41 @@ class EegAlignmentCache:
             return self._remember_headband(result)
         if protocol != "headset_rev181":
             return result
+        if self.relay_mode:
+            # Event-driven dual-device mode: the headband result is the single
+            # EEG source and is fanned out to the headset subscription with
+            # ±5% variation. Own EEG is only kept when the headband reference
+            # is unavailable (offline/unworn/no data).
+            if self._worn.get("headset_rev181") is False:
+                return self._without_eeg(result)
+            if self.relay_ready():
+                return self._without_eeg(result)
+            return result
         return self._present_headset(result)
+
+    def relay_ready(self) -> bool:
+        return (
+            self._sessions.get("headband_ble") is not None
+            and self._worn.get("headband_ble") is True
+            and self._worn.get("headset_rev181") is True
+            and self._latest_eeg is not None
+        )
+
+    def varied_headband_metrics(self) -> dict[str, object]:
+        """Return the newest headband EEG fields with per-value ±5% variation."""
+        reference = self._latest_eeg or {}
+        metrics: dict[str, object] = {}
+        for field in _SCALAR_FIELDS:
+            varied = self._vary_number(reference.get(field), reference.get(field))
+            if varied is not None:
+                metrics[field] = varied
+        metrics["flow"] = self._vary_mapping(reference.get("flow"))
+        metrics["sleep"] = self._vary_mapping(reference.get("sleep"))
+        metrics["eeg"] = self._vary_eeg(reference.get("eeg"))
+        for field in _EEG_DISPLAY_FIELDS:
+            if field in reference and field not in metrics:
+                metrics[field] = reference[field]
+        return metrics
 
     def _refresh_display(self, protocol: str) -> None:
         headset_worn = self._worn.get("headset_rev181")

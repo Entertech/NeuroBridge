@@ -49,6 +49,9 @@ class DataSourceConfig:
 
 @dataclass(frozen=True)
 class PipelineConfig:
+    # "window" keeps the released 600 ms batching pipeline; "as_available"
+    # emits one algorithm result per source data-arrival batch.
+    batch_mode: str = "window"
     source_queue_size: int = 64
     source_enqueue_timeout_ms: int = 50
     algorithm_queue_size: int = 8
@@ -461,7 +464,10 @@ def load(
     auto_cleanup_enabled = storage.get("auto_cleanup_enabled", False)
     if not isinstance(auto_cleanup_enabled, bool):
         raise ValueError("storage.auto_cleanup_enabled must be boolean")
-    pipeline_values = raw.get("pipeline", {})
+    pipeline_values = dict(raw.get("pipeline", {}))
+    batch_mode = pipeline_values.pop("batch_mode", "window")
+    if batch_mode not in {"window", "as_available"}:
+        raise ValueError("pipeline.batch_mode must be 'window' or 'as_available'")
     if any(type(value) is not int or value <= 0 for value in pipeline_values.values()):
         raise ValueError("pipeline limits and intervals must be positive integers")
     config = GatewayConfig(
@@ -492,7 +498,7 @@ def load(
                                      eeg_alignment_reference_batches, eeg_alignment_clock_packets),
         serial=serial_config,
         storage=StorageConfig(**storage_values, auto_cleanup_enabled=auto_cleanup_enabled),
-        pipeline=PipelineConfig(**pipeline_values),
+        pipeline=PipelineConfig(batch_mode=batch_mode, **pipeline_values),
         config_schema_version=config_schema_version,
         profile=profile,
     )

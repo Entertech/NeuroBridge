@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from dataclasses import replace
 from collections.abc import Awaitable, Callable
 
@@ -39,6 +40,7 @@ class ApplicationService:
         self,
         *,
         device_protocol: str,
+        batch_mode: str = "window",
         requires_algorithm_to_start: bool = True,
         transport_trace_enabled: bool = False,
         transport_trace_max_bytes: int = 1024 * 1024,
@@ -60,6 +62,10 @@ class ApplicationService:
         input_mapper: AlgorithmInputMapper | None = None,
     ) -> None:
         self.device_protocol = device_protocol
+        if batch_mode not in {"window", "as_available"}:
+            raise ValueError("batch_mode must be 'window' or 'as_available'")
+        self.batch_mode = batch_mode
+        self.event_driven = batch_mode == "as_available"
         self.requires_algorithm_to_start = requires_algorithm_to_start
         self.transport_trace_enabled = transport_trace_enabled
         self.transport_trace_max_bytes = transport_trace_max_bytes
@@ -72,6 +78,7 @@ class ApplicationService:
         self.control = control
         self.observe_batch = observe_batch
         self.eeg_alignment = eeg_alignment
+        self.eeg_forward: Callable[[WindowResult], Awaitable[None]] | None = None
         if min(algorithm_queue_size, persistence_timeout_ms, shutdown_timeout_ms) <= 0:
             raise ValueError("Pipeline limits must be positive")
         self.persistence_timeout_ms = persistence_timeout_ms
@@ -345,18 +352,47 @@ class ApplicationService:
                     },
                 )
             )
-        for signal in outcome.signals:
-            batches = self.assembler.append(
-                signal,
-                device_protocol=self.device_protocol,
-                connection_session_id=chunk.connection_session_id,
-                recording_session_id=self._required_recording_id(),
-                source_type=chunk.source_type,
-            )
-            for batch in batches:
+        if self.event_driven:
+            batch = self._event_batch(outcome.signals, chunk)
+            if batch is not None:
                 await self._submit_batch(batch)
-        self._schedule_flush()
+        else:
+            for signal in outcome.signals:
+                batches = self.assembler.append(
+                    signal,
+                    device_protocol=self.device_protocol,
+                    connection_session_id=chunk.connection_session_id,
+                    recording_session_id=self._required_recording_id(),
+                    source_type=chunk.source_type,
+                )
+                for batch in batches:
+                    await self._submit_batch(batch)
+            self._schedule_flush()
         return outcome
+
+    def _event_batch(self, signals: tuple, chunk: RawChunk) -> ParsedSignalBatch | None:
+        """Build one algorithm batch from the signals parsed out of one source chunk."""
+        if not signals:
+            return None
+        start_ms = min(signal.received_at_ms for signal in signals)
+        end_ms = max(signal.received_at_ms for signal in signals)
+        if end_ms <= start_ms:
+            end_ms = start_ms + 1
+        reasons = tuple(dict.fromkeys(reason for signal in signals for reason in signal.invalid_reasons))
+        frame_refs = tuple(dict.fromkeys(ref for signal in signals for ref in signal.frame_refs))
+        return ParsedSignalBatch(
+            f"batch-{uuid.uuid4().hex}",
+            self.device_protocol,
+            chunk.connection_session_id,
+            self._required_recording_id(),
+            start_ms,
+            end_ms,
+            tuple(signals),
+            frame_refs,
+            not reasons,
+            reasons,
+            chunk.source_type,
+        )
 
     async def flush(self, reason: FlushReason = FlushReason.STOPPED, *, drain: bool = True) -> None:
         await self._cancel_flush()
@@ -364,9 +400,10 @@ class ApplicationService:
         for diagnostic in parser_outcome.diagnostics:
             LOG.warning("Parser flushed: kind=%s discardedBytes=%s reason=%s", diagnostic.kind, parser_outcome.discarded_bytes, reason.value)
         self.diagnostics["discarded_bytes"] += parser_outcome.discarded_bytes
-        batch = self.assembler.flush()
-        if batch is not None:
-            await self._submit_batch(batch)
+        if not self.event_driven:
+            batch = self.assembler.flush()
+            if batch is not None:
+                await self._submit_batch(batch)
         if drain:
             await self.drain()
 
@@ -477,7 +514,7 @@ class ApplicationService:
         # A timer flush and a late packet can produce a second window with the
         # same end timestamp (or an older one). Publish each boundary once and
         # discard the residual window instead of appending a 3/6-point fragment.
-        if self._last_window_end_ms is not None and batch.window_end_ms <= self._last_window_end_ms:
+        if not self.event_driven and self._last_window_end_ms is not None and batch.window_end_ms == self._last_window_end_ms:
             self.diagnostics["superseded_windows"] = self.diagnostics.get("superseded_windows", 0) + 1
             LOG.info(
                 "Late window discarded before evaluation: batchId=%s windowEndMs=%s lastPublishedWindowEndMs=%s",
@@ -618,6 +655,11 @@ class ApplicationService:
             if self.data.snapshot.data_state in {DataState.READY, DataState.STREAMING, DataState.STALE}:
                 self.data.produced(batch.window_end_ms, valid=result.valid)
             await self.northbound.publish(ApplicationEvent("window", result=result, algorithm_state=self._algorithm_state))
+            if self.eeg_forward is not None:
+                try:
+                    await self.eeg_forward(result)
+                except Exception:
+                    LOG.exception("EEG display forward failed: batchId=%s", batch.batch_id)
             self.data.transition(DataState.STREAMING, last_published_at_ms=self.clock_ms())
             self._schedule_stale(batch.window_end_ms)
             self.diagnostics["published"] += 1
@@ -696,6 +738,8 @@ class ApplicationService:
         return self._recording_session_id
 
     def _schedule_flush(self) -> None:
+        if self.event_driven:
+            return
         deadline = self.assembler.window_end_ms
         if deadline is None:
             return

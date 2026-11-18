@@ -121,6 +121,8 @@ auto_cleanup_enabled = false
 
 # 采集、算法与存储队列上限及超时，通常保留默认值。
 [pipeline]
+# as_available: 算法结果就绪即发布；window: 保持 600 ms 批量兼容模式。
+batch_mode = "as_available"
 source_queue_size = 64
 source_enqueue_timeout_ms = 50
 algorithm_queue_size = 8

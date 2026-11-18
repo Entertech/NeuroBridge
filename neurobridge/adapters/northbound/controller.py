@@ -11,6 +11,8 @@ from ...application.gateway import ClientSession, GatewayApplication, ProtocolEr
 from .protocol import envelope
 from ...versioning import LEGACY_NORTHBOUND_PROTOCOL_VERSION, NORTHBOUND_PROTOCOL_VERSION
 
+SOURCE_PROTOCOL_VERSIONS = frozenset({"1.1", NORTHBOUND_PROTOCOL_VERSION})
+
 
 LOG = logging.getLogger(__name__)
 DEVICE_SOURCES = {"bluetooth": "headband", "serial": "headset"}
@@ -18,7 +20,7 @@ DEVICE_SOURCES = {"bluetooth": "headband", "serial": "headset"}
 
 def _versioned_message(message: dict, version: str, source: str) -> dict:
     data = message["data"]
-    if version == NORTHBOUND_PROTOCOL_VERSION:
+    if version in SOURCE_PROTOCOL_VERSIONS:
         data = {**data, "source": source}
     return {**message, "protocolVersion": version, "data": data}
 
@@ -43,7 +45,7 @@ class NorthboundController:
             "params",
         }:
             raise ProtocolError(400, "INVALID_REQUEST", "Request root fields are invalid.")
-        if request["protocolVersion"] not in (NORTHBOUND_PROTOCOL_VERSION, LEGACY_NORTHBOUND_PROTOCOL_VERSION):
+        if request["protocolVersion"] not in (SOURCE_PROTOCOL_VERSIONS | {LEGACY_NORTHBOUND_PROTOCOL_VERSION}):
             raise ProtocolError(505, "UNSUPPORTED_VERSION", "Protocol version is not supported.")
         if (
             request["messageType"] != "request"
@@ -86,7 +88,7 @@ class NorthboundController:
                 result = self.gateway.get_latest(session, params, start_replay=False)
                 start_replay = not self.gateway.live and self.gateway.replay_available
             elif action == "subscribe":
-                self.gateway.validate_params(params, {"streams", "includeInvalid"})
+                self.gateway.validate_params(params, {"streams", "includeInvalid", "mode"})
                 result = await self.gateway.subscribe(session, params, send_versioned, start_replay=False)
                 start_replay = (
                     any(stream != "status" for stream in result["streams"])
@@ -147,7 +149,7 @@ class SourceRouter:
                     return
                 version = request["protocolVersion"]
                 params = request["params"].copy()
-                source = params.pop("source", "headset") if version == NORTHBOUND_PROTOCOL_VERSION else "headset"
+                source = params.pop("source", "headset") if version in SOURCE_PROTOCOL_VERSIONS else "headset"
                 if not isinstance(source, str) or source not in self.controllers:
                     error = ProtocolError(400, "INVALID_REQUEST", "params.source must be headset or headband.")
                     await send(_versioned_message(headset.gateway.error(request["requestId"], error), version, "headset"))

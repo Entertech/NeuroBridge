@@ -275,6 +275,7 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
 
     application = ApplicationService(
         device_protocol=profile.device_protocol,
+        batch_mode=config.pipeline.batch_mode,
         requires_algorithm_to_start=profile.transport == "serial",
         transport_trace_enabled=config.recording.transport_trace_enabled,
         transport_trace_max_bytes=config.recording.transport_trace_max_bytes,
@@ -382,4 +383,9 @@ def build_runtime(
                                       clock_packets=config.data_source.eeg_alignment_clock_packets)
     primary = build_container(config, runtime, eeg_alignment=alignment)
     headband = build_container(headband_config, runtime, eeg_alignment=alignment)
+    if alignment is not None and config.pipeline.batch_mode == "as_available":
+        alignment.relay_mode = True
+        primary.gateway.eeg_alignment = alignment
+        headband.gateway.eeg_alignment = alignment
+        headband.application.eeg_forward = primary.gateway.publish_headband_eeg
     return (primary, headband), SourceRouter(primary.northbound_controller, headband.northbound_controller)

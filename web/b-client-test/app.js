@@ -930,7 +930,7 @@ function createRequestSection(panel) {
   section.querySelector("[data-subscribe]").addEventListener("click", () => {
     const streams = getCheckedValues(section, "subscribeStream");
     if (streams.length === 0) return appendLog("error", "ERROR", "subscribe 至少选择一个流。", panel);
-    sendRequest("subscribe", { streams, includeInvalid: includeInvalid.checked }, panel);
+    sendRequest("subscribe", { streams, includeInvalid: includeInvalid.checked, mode: "as_available" }, panel);
   });
   unsubscribeButton.addEventListener("click", () => {
     const subscriptionId = subscriptionSelect.value;
