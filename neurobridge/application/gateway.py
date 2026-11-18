@@ -102,6 +102,10 @@ class _LegacyWindowAggregator:
             signals = tuple(entry["signals"])
             reasons = tuple(dict.fromkeys(entry["reasons"]))
             batch_id = f"batch-legacy-{uuid.uuid4().hex}"
+            batch_valid = bool(entry["valid"])
+            batch_reasons = tuple(reason for reason in reasons if reason in signals_invalid_reasons(signals))
+            if not batch_valid and not batch_reasons:
+                batch_reasons = ("WINDOW_INVALID",)
             batch = ParsedSignalBatch(
                 batch_id,
                 str(entry["device_protocol"]),
@@ -111,19 +115,25 @@ class _LegacyWindowAggregator:
                 bucket_start + self.interval_ms,
                 signals,
                 tuple(entry["frame_refs"]),
-                bool(entry["valid"]),
-                tuple(reason for reason in reasons if reason in signals_invalid_reasons(signals)),
+                batch_valid,
+                batch_reasons,
                 entry["source_type"],
             )
             metrics = dict(entry["algorithm_metrics"])
+            algorithm_valid = bool(entry["algorithm_valid"]) and bool(metrics)
+            algorithm_reasons = tuple(
+                reason for reason in reasons if reason not in signals_invalid_reasons(signals)
+            )
+            if not algorithm_valid and not algorithm_reasons:
+                algorithm_reasons = ("ALGORITHM_RESULT_UNAVAILABLE",)
             algorithm = AlgorithmResult(
                 batch_id,
                 None,
                 now_ms,
                 now_ms,
                 metrics,
-                bool(entry["algorithm_valid"]) and bool(metrics),
-                tuple(reason for reason in reasons if reason not in signals_invalid_reasons(signals)),
+                algorithm_valid,
+                algorithm_reasons,
             )
             ready.append(WindowResult(batch, algorithm, "live", bucket_start + self.interval_ms, True))
             self._last_flushed_start = bucket_start
@@ -219,7 +229,12 @@ class GatewayApplication:
         for session in tuple(self.sessions):
             await self.close_session(session)
         await self._stop_replay()
-        await self.algorithm.stop()
+        try:
+            await self.algorithm.stop()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.log.exception("Algorithm cleanup failed during gateway stop")
         if not self._capture_final_summary_logged and (
             int(self._capture_stats["eegPackets"] or 0) or int(self._capture_stats["hrPackets"] or 0)
         ):
@@ -255,7 +270,12 @@ class GatewayApplication:
                 recording_id,
             )
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
-            await self.algorithm.stop()
+            try:
+                await self.algorithm.stop()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.log.exception("Algorithm cleanup failed during disconnect; continuing gateway cleanup")
             self.status["algorithmState"] = "unavailable"
             self.status["wearState"] = "unknown"
             self.status["eegDisplay"] = "shown"

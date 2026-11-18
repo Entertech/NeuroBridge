@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.4.4"
+version = "0.4.5"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -73,6 +73,13 @@ to_version = "0.4.4"
 impact = "patch"
 compatibility = "No northbound field or configuration schema change. eeg_alignment_percent now controls the actual EEG variation instead of acting as a fixed ±5% switch; the default is 20 and 0 still disables calibration."
 evidence = "User requested the calibration amplitude limit change from 5% to 20%. EegAlignmentCache applies the configured percentage to waveform and EEG metrics, default 20%, allowed 0-100; configuration, documentation and tests updated. Target re-verification pending."
+
+[[application_release_changes]]
+from_version = "0.4.4"
+to_version = "0.4.5"
+impact = "patch"
+compatibility = "No wire protocol or configuration change. Algorithm bridge cleanup timeouts are best-effort and no longer propagate out of device-disconnect/shutdown paths; legacy 600 ms aggregation always supplies a valid invalid-result reason."
+evidence = "Windows 101.8 logs showed an uncaught algorithm bridge TimeoutError during wake/disconnect cleanup and repeated legacy aggregation ValueError logs. Guard runner/gateway/service cleanup, restart failed acquisition tasks, and add regression tests. Target re-verification pending."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.

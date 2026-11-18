@@ -37,6 +37,19 @@ def _file_sha256(path: str) -> str:
         return f"unavailable:{type(error).__name__}"
 
 
+
+async def _run_pipeline_supervised(pipeline) -> None:
+    """Keep device acquisition failures from terminating the gateway task group."""
+    while True:
+        try:
+            await pipeline.device_adapter.run()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOG.exception("Device pipeline failed; restarting in 5s: profile=%s", pipeline.profile.profile_id)
+        await asyncio.sleep(5)
+
+
 async def run(config_path: str, *, override_path: str | None = None, development: bool = False) -> None:
     started_at = time.monotonic()
     config = load_runtime_config(config_path, override_path=override_path, development=development)
@@ -122,7 +135,7 @@ async def run(config_path: str, *, override_path: str | None = None, development
             async with asyncio.TaskGroup() as group:
                 group.create_task(serve(gateway, container.northbound_controller, router=router))
                 for pipeline in containers:
-                    group.create_task(pipeline.device_adapter.run())
+                    group.create_task(_run_pipeline_supervised(pipeline))
                 if strategy.serves_local_ui(config):
                     group.create_task(serve_local_ui(replace(config, profile=container.profile.profile_id)))
                 if gateway.config.download.enabled:

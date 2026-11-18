@@ -78,22 +78,41 @@ class AlgorithmRunner:
 
     async def stop(self) -> None:
         process, self.process = self.process, None
-        if process and process.returncode is None:
+        if process is None:
+            return
+        if process.returncode is None:
             LOG.info("Stopping algorithm bridge: pid=%s", process.pid)
             try:
                 process.terminate()
             except ProcessLookupError:
                 pass
+            except Exception:
+                LOG.exception("Failed to terminate algorithm bridge pid=%s", process.pid)
             try:
                 await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
+            except asyncio.CancelledError:
+                raise
             except TimeoutError:
                 LOG.error("Algorithm bridge ignored terminate; killing pid=%s", process.pid)
                 try:
                     process.kill()
                 except ProcessLookupError:
                     pass
-                await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
-            LOG.info("Algorithm bridge stopped: returncode=%s", process.returncode)
+                except Exception:
+                    LOG.exception("Failed to kill algorithm bridge pid=%s", process.pid)
+                try:
+                    await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
+                except asyncio.CancelledError:
+                    raise
+                except TimeoutError:
+                    # Cleanup is best effort. A stuck bridge must never crash the
+                    # service from the device-disconnect or shutdown path.
+                    LOG.error("Algorithm bridge did not exit after kill; abandoning pid=%s", process.pid)
+                except Exception:
+                    LOG.exception("Failed while waiting for killed algorithm bridge pid=%s", process.pid)
+            except Exception:
+                LOG.exception("Failed while waiting for algorithm bridge pid=%s", process.pid)
+        LOG.info("Algorithm bridge stopped: returncode=%s", process.returncode)
 
     async def _discard_exchange(self, process: asyncio.subprocess.Process) -> None:
         # There is no request ID in this bridge protocol. Once an exchange is

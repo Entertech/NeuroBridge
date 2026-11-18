@@ -516,7 +516,12 @@ class ApplicationService:
         await self._stop_worker()
         await self.aggregator.close()
         await self._cancel_stale()
-        await self.algorithm.close()
+        try:
+            await self.algorithm.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOG.exception("Algorithm close failed during application shutdown")
         self._closed = True
 
     async def _publish_wear_state(self, batch: ParsedSignalBatch) -> None:

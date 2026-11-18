@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 
 from neurobridge.application.eeg_alignment import EegAlignmentCache
 from neurobridge.application.gateway import _LegacyWindowAggregator
@@ -15,6 +16,32 @@ def result(protocol: str, eeg_wave, metrics, *, end_ms: int, signals=()) -> Wind
     return WindowResult(batch, AlgorithmResult(batch.batch_id, None, end_ms, end_ms, metrics, True, ()), "live", end_ms, True)
 
 
+class StuckProcess:
+    returncode = None
+    pid = 12345
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+    async def wait(self):
+        import asyncio
+        await asyncio.sleep(3600)
+
+
+class AlgorithmStopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_abandons_a_stuck_bridge_without_raising(self):
+        from neurobridge.algorithm.runner import AlgorithmRunner
+        from neurobridge.config import AlgorithmConfig
+
+        runner = AlgorithmRunner(AlgorithmConfig(True, ("unused",), request_timeout_ms=20))
+        runner.process = StuckProcess()
+        await runner.stop()
+        self.assertIsNone(runner.process)
+
+
 class LegacyAggregatorTests(unittest.TestCase):
     def test_merges_eeg_and_hr_metrics_into_one_600ms_batch(self):
         aggregator = _LegacyWindowAggregator(600)
@@ -25,6 +52,14 @@ class LegacyAggregatorTests(unittest.TestCase):
         self.assertEqual(set(ready[0].algorithm_result.metrics), {"hr", "eeg", "attention"})
         self.assertEqual(ready[0].batch.window_end_ms, 1800)
         self.assertEqual(aggregator.pop_ready(2400), [])
+
+    def test_empty_metrics_result_gets_a_reason(self):
+        aggregator = _LegacyWindowAggregator(600)
+        aggregator.add(result("headset_rev181", None, {}, end_ms=1200))
+        ready = aggregator.pop_ready(1800)
+        self.assertEqual(len(ready), 1)
+        self.assertFalse(ready[0].algorithm_result.valid)
+        self.assertEqual(ready[0].algorithm_result.invalid_reasons, ("ALGORITHM_RESULT_UNAVAILABLE",))
 
 
 class RelayAlignmentTests(unittest.TestCase):
