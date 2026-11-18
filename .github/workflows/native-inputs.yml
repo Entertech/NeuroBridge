@@ -293,7 +293,7 @@ jobs:
         if: always()
         with:
           name: neurobridge-input-windows-11-x86_64-exe
-          path: ${{ steps.upgrade-test.outcome == 'failure' && 'artifacts/input/status.txt' || 'artifacts/input/' }}
+          path: artifacts/input/
           if-no-files-found: error
           retention-days: 30
       - uses: actions/upload-artifact@v4
