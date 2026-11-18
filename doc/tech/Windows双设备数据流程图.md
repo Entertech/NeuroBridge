@@ -19,7 +19,7 @@
 
 ## 1. 总体数据流（图 1）
 
-![图 1 · Windows 双设备总体数据流](assets/windows-dual-device/figure-1-overview.svg)
+![图 1 · Windows 双设备总体数据流](assets/windows-dual-device/figure-1-overview.png)
 
 <details>
 <summary>图 1 Mermaid 源码</summary>
@@ -67,7 +67,7 @@ flowchart TB
 
 ## 2. 启动与双流水线组装（图 2）
 
-![图 2 · 配置加载与双容器组合](assets/windows-dual-device/figure-2-startup.svg)
+![图 2 · 配置加载与双容器组合](assets/windows-dual-device/figure-2-startup.png)
 
 <details>
 <summary>图 2 Mermaid 源码</summary>
@@ -108,7 +108,7 @@ flowchart LR
 
 ## 3. 耳机（USB 串口）数据流（图 3）
 
-![图 3 · 耳机串口链路](assets/windows-dual-device/figure-3-headset.svg)
+![图 3 · 耳机串口链路](assets/windows-dual-device/figure-3-headset.png)
 
 <details>
 <summary>图 3 Mermaid 源码</summary>
@@ -184,7 +184,7 @@ flowchart TB
 
 ## 4. 头环（BLE）数据流（图 4）
 
-![图 4 · 头环 BLE 链路](assets/windows-dual-device/figure-4-headband.svg)
+![图 4 · 头环 BLE 链路](assets/windows-dual-device/figure-4-headband.png)
 
 <details>
 <summary>图 4 Mermaid 源码</summary>
@@ -252,7 +252,7 @@ flowchart TB
 
 ## 5. 双设备佩戴判定与 EEG 校准（图 5）
 
-![图 5 · 佩戴判定与耳机 EEG 输出校准](assets/windows-dual-device/figure-5-alignment.svg)
+![图 5 · 佩戴判定与耳机 EEG 输出校准](assets/windows-dual-device/figure-5-alignment.png)
 
 <details>
 <summary>图 5 Mermaid 源码</summary>
@@ -305,7 +305,7 @@ flowchart TD
 
 ## 6. 北向：单 WebSocket 入口、双来源路由（图 6）
 
-![图 6 · 单 WebSocket 入口的请求路由与双路订阅](assets/windows-dual-device/figure-6-northbound.svg)
+![图 6 · 单 WebSocket 入口的请求路由与双路订阅](assets/windows-dual-device/figure-6-northbound.png)
 
 <details>
 <summary>图 6 Mermaid 源码</summary>
@@ -352,7 +352,7 @@ sequenceDiagram
 
 ## 7. 单个 600 ms 窗口的处理时序（图 7）
 
-![图 7 · 单个窗口的持久化与发布时序](assets/windows-dual-device/figure-7-window-timing.svg)
+![图 7 · 单个窗口的持久化与发布时序](assets/windows-dual-device/figure-7-window-timing.png)
 
 <details>
 <summary>图 7 Mermaid 源码</summary>
@@ -524,4 +524,4 @@ sequenceDiagram
 - 双设备校准集成测试在当前分支 tip 上因上述旧断言失败，属于测试未同步，不是本图论证依据。
 - 未在 Windows 目标机上重新执行真实双设备采集、拔插/重连、服务重启与浏览器断线恢复；这些仍是现场验收项，不能据本文写成“已验收通过”。
 - 本文不涉及银河麒麟串口交付链路、BLE 录播、B 端专网等历史方案；相关边界以版本台账与预发布协议为准。
-- 图 1–7 的 SVG 预览位于 `doc/tech/assets/windows-dual-device/`，均由各图折叠块中的 Mermaid 源码渲染；修改图后需重新渲染对应 SVG。
+- 图 1–7 的嵌入预览使用 PNG（`doc/tech/assets/windows-dual-device/figure-*.png`），同目录保留同名 SVG 矢量版供缩放查看；两者均由各图折叠块中的 Mermaid 源码渲染，修改图后需同时重新渲染。
