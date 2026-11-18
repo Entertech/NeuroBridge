@@ -617,7 +617,7 @@ class SerialAdapter:
             if client is None:
                 return
             async with self._io_lock:
-                chunk = bytes(await self._io_call(client.read, 4096))
+                chunk = bytes(await self._io_call(client.read, STREAM_READ_BYTES))
             if chunk:
                 buffer_received_at_ms = wall_clock_ms()
                 if self.raw_chunk is not None:

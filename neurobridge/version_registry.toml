@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.4.1"
+version = "0.4.2"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -52,6 +52,13 @@ to_version = "0.4.1"
 impact = "patch"
 compatibility = "No northbound field or configuration schema change. Event-mode acquisition coalesces source notifications for at most event_batch_ms (default 50 ms) before one algorithm batch, preventing algorithm backlog on 90 Hz BLE notifications."
 evidence = "Target 101.8 event-mode observation showed 1020 backlogged headband evaluations; add a 50 ms source-block coalescing limit so algorithm calls and UI events follow data arrival without the algorithm queue backing up. Target re-verification pending."
+
+[[application_release_changes]]
+from_version = "0.4.1"
+to_version = "0.4.2"
+impact = "patch"
+compatibility = "No northbound or configuration change. Complete the serial streaming read-size change so headset data arrives in sub-600 ms chunks instead of 4096-byte reads."
+evidence = "The previous change only replaced the probe read call; the streaming loop still requested 4096 bytes and produced one 600 ms pipeline batch every ~1.8 s. Replace the streaming read as well and re-verify target waveform cadence."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
