@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.4.7"
+version = "0.3.2"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -31,69 +31,6 @@ to_version = "0.3.2"
 impact = "patch"
 compatibility = "Retain the current SDK and +/-2000 dual-channel waveform output limits; no wire protocol or configuration schema change."
 evidence = "User explicitly requested application 0.3.2 and Windows/Kylin CI packages. Synchronize generated version consumers and validate the complete recorded version chain when a branch advances through multiple candidate versions."
-
-[[application_release_changes]]
-from_version = "0.3.2"
-to_version = "0.3.3"
-impact = "patch"
-compatibility = "No wire protocol or configuration schema change. UI no longer clears waveform history on a timer; serial streaming reads smaller chunks and duplicate late windows are discarded."
-evidence = "Remove the browser 1800 ms stale clear so only explicit not-worn data clears the 500-point waveform; read serial stream chunks at 512 bytes instead of waiting for 4096-byte buffers; drop residual windows whose end timestamp was already published."
-
-[[application_release_changes]]
-from_version = "0.3.3"
-to_version = "0.4.0"
-impact = "minor"
-compatibility = "Northbound protocol v1.2 adds an as-available event mode; v1.0/v1.1 requests keep the 600 ms aggregated behavior. Raw/parsed recording shape and existing configuration keys remain compatible."
-evidence = "Windows event-driven acquisition emits one algorithm result per source data-arrival batch; headset EEG reuses the headband result with ±5% display variation and falls back to its own EEG when the headband is unavailable. UI clears on explicit not-worn only. Target-machine verification remains pending."
-
-[[application_release_changes]]
-from_version = "0.4.0"
-to_version = "0.4.1"
-impact = "patch"
-compatibility = "No northbound field or configuration schema change. Event-mode acquisition coalesces source notifications for at most event_batch_ms (default 50 ms) before one algorithm batch, preventing algorithm backlog on 90 Hz BLE notifications."
-evidence = "Target 101.8 event-mode observation showed 1020 backlogged headband evaluations; add a 50 ms source-block coalescing limit so algorithm calls and UI events follow data arrival without the algorithm queue backing up. Target re-verification pending."
-
-[[application_release_changes]]
-from_version = "0.4.1"
-to_version = "0.4.2"
-impact = "patch"
-compatibility = "No northbound or configuration change. Complete the serial streaming read-size change so headset data arrives in sub-600 ms chunks instead of 4096-byte reads."
-evidence = "The previous change only replaced the probe read call; the streaming loop still requested 4096 bytes and produced one 600 ms pipeline batch every ~1.8 s. Replace the streaming read as well and re-verify target waveform cadence."
-
-[[application_release_changes]]
-from_version = "0.4.2"
-to_version = "0.4.3"
-impact = "patch"
-compatibility = "No northbound or configuration change. The local Windows page keeps ±2000 clipped samples in the waveform polyline and marks them separately instead of converting them to NaN gaps."
-evidence = "Target 101.8 headset-only observation showed 84.6% of wave samples at ±2000; the page converted them to NaN and broke the trace. Keep the values, mark clipped points in red, and keep null only for windows without data. Target UI re-verification pending."
-
-[[application_release_changes]]
-from_version = "0.4.3"
-to_version = "0.4.4"
-impact = "patch"
-compatibility = "No northbound field or configuration schema change. eeg_alignment_percent now controls the actual EEG variation instead of acting as a fixed ±5% switch; the default is 20 and 0 still disables calibration."
-evidence = "User requested the calibration amplitude limit change from 5% to 20%. EegAlignmentCache applies the configured percentage to waveform and EEG metrics, default 20%, allowed 0-100; configuration, documentation and tests updated. Target re-verification pending."
-
-[[application_release_changes]]
-from_version = "0.4.4"
-to_version = "0.4.5"
-impact = "patch"
-compatibility = "No wire protocol or configuration change. Algorithm bridge cleanup timeouts are best-effort and no longer propagate out of device-disconnect/shutdown paths; legacy 600 ms aggregation always supplies a valid invalid-result reason."
-evidence = "Windows 101.8 logs showed an uncaught algorithm bridge TimeoutError during wake/disconnect cleanup and repeated legacy aggregation ValueError logs. Guard runner/gateway/service cleanup, restart failed acquisition tasks, and add regression tests. Target re-verification pending."
-
-[[application_release_changes]]
-from_version = "0.4.5"
-to_version = "0.4.6"
-impact = "patch"
-compatibility = "Algorithm input only: HR is resampled per device to exactly 5 Hz by taking the latest received BPM in each 200 ms slot. Northbound protocol, persisted raw/algorithm records and configuration stay unchanged; mappingVersion becomes 2. Repeated BPM across slots is expected when heart rate is steady."
-evidence = "Target capture showed 18-19 repeated HR bytes per ~220 ms serial chunk and occasional 60->59 BPM transitions, while the SDK fixes hrFs=5. Replace per-window even sampling with a rolling 200 ms latest-value resampler; unit tests cover slot rate, latest value, gap handling and session reset. Target-machine algorithm comparison pending; no package built yet."
-
-[[application_release_changes]]
-from_version = "0.4.6"
-to_version = "0.4.7"
-impact = "patch"
-compatibility = "No protocol or configuration change. HR resampling now treats a one-slot gap as normal 220 ms serial-batch jitter and zero-order holds it; only gaps longer than one second reset the stream."
-evidence = "Target 0.4.6 showed HR algorithm output missing because ~220 ms serial batches occasionally jumped a 200 ms slot, triggering a reset on every batch. Hold across small slot jitter and add a jitter regression test; target re-verification pending."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.

@@ -870,7 +870,7 @@ class DeploymentTests(unittest.TestCase):
                     status_subscription_handler = script.split('streams.length === 1 && streams[0] === "status"', 1)[1].split(
                         "} else {", 1
                     )[0]
-                    self.assertIn('sendRequest("getStatus", {});', status_subscription_handler)
+                    self.assertIn('sendRequest("getStatus", requestParams(source, {}));', status_subscription_handler)
                     self.assertIn(auto_connect, script)
                 else:
                     self.assertIn('sendRequest("getStatus", {}, item);', open_handler)
@@ -1434,7 +1434,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("stats.outOfOrder", javascript)
         self.assertIn("耳机完整原始帧", html)
         self.assertIn("每行对应一个完整 28 字节串口帧", html)
-        self.assertIn("页面按已确认串口结构还原完整 28 字节帧", html)
+        self.assertIn("耳机按已确认串口结构还原完整 28 字节帧", html)
         self.assertIn("导出完整帧", html)
         self.assertIn("根据收到的 EEG/HR 原始负载按已确认串口结构还原", html)
         self.assertIn('class="data-workspace"', html)
@@ -1477,9 +1477,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('"网关已连接"', javascript)
         self.assertIn("statusSubscriptionId", javascript)
         self.assertIn("dataSubscriptionId", javascript)
-        self.assertIn("耳机状态已开启实时更新", javascript)
-        self.assertIn("耳机状态仍在实时更新", javascript)
-        self.assertIn("网页连接网关后会立即订阅耳机状态并持续实时更新", html)
+        self.assertIn("设备状态已开启实时更新", javascript)
+        self.assertIn("设备状态仍在实时更新", javascript)
+        self.assertIn("网页连接网关后会立即订阅耳机和头环状态并持续实时更新", html)
         styles = (capture_root / "styles.css").read_text(encoding="utf-8")
         self.assertIn("grid-template-columns: minmax(0, 1fr)", styles)
         self.assertNotIn("repeat(auto-fit", styles)

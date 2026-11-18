@@ -99,11 +99,19 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         root = Path(__file__).resolve().parents[2]
         template = (root / "windows/gateway.toml.example").read_text(encoding="utf-8")
         config_path = Path(self.enterContext(tempfile.TemporaryDirectory())) / "gateway.toml"
-        previous_config = template.replace("eeg_alignment_percent = 20\n",
-                                           "eeg_alignment_wait_ms = 100\neeg_alignment_raw_timeout_ms = 300\n")
+        # Legacy alignment keys must still parse. This test pins the 600 ms
+        # window path because it is the path where the headset publishes and
+        # records its own calibrated EEG; the default as_available path relays
+        # the headband EEG instead and is covered by RelayAlignmentTests.
+        previous_config = (
+            template.replace("eeg_alignment_percent = 20\n",
+                             "eeg_alignment_wait_ms = 100\neeg_alignment_raw_timeout_ms = 300\n")
+            .replace('batch_mode = "as_available"', 'batch_mode = "window"')
+        )
         config_path.write_text(previous_config, encoding="utf-8")
         config = load(config_path)
         self.assertEqual(config.data_source.eeg_alignment_percent, 20)
+        self.assertEqual(config.pipeline.batch_mode, "window")
         config_path.write_text(template.replace("eeg_alignment_percent = 20", "eeg_alignment_percent = 0"), encoding="utf-8")
         self.assertEqual(load(config_path).data_source.eeg_alignment_percent, 0)
         config = replace(config, recording=replace(config.recording, directory=config_path.parent / "recordings"))
@@ -158,22 +166,53 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         headset_value, = headset.application.algorithm.inputs
         self.assertEqual(base64.b64decode(headband_value.payload["eegRawBase64"]), reference)
         self.assertEqual(base64.b64decode(headset_value.payload["eegRawBase64"]), original)
-        self.assertEqual(base64.b64decode(headset_value.payload["hrRawBase64"]), b"\x48")
+        # Both devices resample HR to 5 Hz: one frame in a 600 ms window becomes
+        # three 200 ms slots holding the latest received BPM.
+        self.assertEqual(base64.b64decode(headset_value.payload["hrRawBase64"]), b"\x48" * 3)
+        self.assertEqual(headset_value.payload["hrPacketCount"], 3)
         self.assertEqual(headset_value.mapping_version, "2")
-        self.assertEqual(headband_value.mapping_version, "1")
+        self.assertEqual(headband_value.mapping_version, "2")
         self.assertEqual(headset_value.device_protocol, "headset_rev181")
         headset_window, = headset.application.northbound.events
         headband_window, = headband.application.northbound.events
         self.assertEqual(headset_window.result.batch.signals[0].samples, original[2:])
-        expected = {**headset_metrics, "attention": 76.95,
-                    "eeg": {**headset_metrics["eeg"], "bandPower": {"alpha": 36.1},
-                            "wave": {"left": [-570, 0, 570], "right": [-105, 0, 105]}}}
-        self.assertEqual(headset_window.result.algorithm_result.metrics, expected)
         self.assertEqual(headband_window.result.algorithm_result.metrics, headband_metrics)
+
+        published = headset_window.result.algorithm_result.metrics
+        self.assertEqual(set(published), {"eeg", "attention", "hr", "pressure", "flow", "sleep"})
+        self.assertEqual(published["hr"], headset_metrics["hr"])
+        self.assertEqual(published["pressure"], headset_metrics["pressure"])
+        self.assertEqual(published["flow"], {})
+        self.assertEqual(published["sleep"], {})
+
+        variation = config.data_source.eeg_alignment_percent / 100
+
+        def assert_varied(value, reference_value):
+            # EegAlignmentCache varies each non-zero value inside the configured percentage.
+            lower, upper = sorted((reference_value * (1 - variation), reference_value * (1 + variation)))
+            self.assertGreaterEqual(value, lower)
+            self.assertLessEqual(value, upper)
+
+        assert_varied(published["attention"], headband_metrics["attention"])
+        self.assertNotEqual(published["attention"], headset_metrics["attention"])
+        self.assertEqual(set(published["eeg"]), {"wave", "quality", "bandPower"})
+        assert_varied(published["eeg"]["quality"], headband_metrics["eeg"]["quality"])
+        assert_varied(published["eeg"]["bandPower"]["alpha"], headband_metrics["eeg"]["bandPower"]["alpha"])
+        for channel in ("left", "right"):
+            self.assertEqual(len(published["eeg"]["wave"][channel]),
+                             len(headband_metrics["eeg"]["wave"][channel]))
+            for value, reference_value in zip(published["eeg"]["wave"][channel],
+                                              headband_metrics["eeg"]["wave"][channel]):
+                if reference_value == 0:
+                    self.assertEqual(value, 0)
+                else:
+                    assert_varied(value, reference_value)
+
         await GatewayNorthboundSink(headset.gateway).publish(headset_window)
         session = ClientSession()
         self.assertEqual(headset.gateway.get_latest(session, {"streams": ["eeg"]})["payload"]["algorithm"],
-                         {"attention": expected["attention"], "eeg": expected["eeg"]})
+                         {"attention": published["attention"], "eeg": published["eeg"],
+                          "flow": {}, "sleep": {}})
         self.assertEqual(headset.gateway.get_latest(session, {"streams": ["hr"]})["payload"]["algorithm"],
                          {"hr": headset_metrics["hr"], "pressure": headset_metrics["pressure"]})
         self.assertEqual(headset_metrics["eeg"]["wave"]["left"], [-100, 0, 100])
@@ -181,15 +220,15 @@ class ApplicationPipelineIntegrationTests(unittest.IsolatedAsyncioTestCase):
         await headset.gateway.recording_repository.close_session(recording_id)
         recorded, = (result for result in headset.gateway.store.results(recording_id)
                      if result.batch.batch_id == headset_value.batch_id)
-        self.assertEqual(recorded.algorithm_result.metrics, expected)
+        self.assertEqual(recorded.algorithm_result.metrics, published)
         self.assertEqual(recorded.batch.signals[0].samples, original[2:])
         self.assertEqual(headset.application.diagnostics["window_processing_errors"], 0)
         self.assertEqual(headband.application.diagnostics["window_processing_errors"], 0)
-        self.assertTrue(any(f"alignment decision: batchId={headset_value.batch_id}" in line
-                            and "stage=algorithm_output reason=applied" in line
-                            and "waveTolerancePercent=20 pairedSamples={'left': 3, 'right': 3}" in line
-                            and "changedSamples={'left': 2, 'right': 2}" in line for line in logs.output))
-        self.assertTrue(any(f"algorithm response: source=serial batchId={headset_value.batch_id}" in line
+        self.assertTrue(any(f"EEG wear display: batchId={headset_value.batch_id}" in line
+                            and "reason=headset_varies_latest_headband" in line
+                            and f"referenceBatchId={headband_value.batch_id}" in line
+                            for line in logs.output))
+        self.assertTrue(any(f"EEG algorithm response: source=serial batchId={headset_value.batch_id}" in line
                             and "mappingVersion=2 valid=True" in line for line in logs.output))
         self.assertFalse(any(headset_value.payload["eegRawBase64"] in line for line in logs.output))
 
