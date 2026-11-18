@@ -41,6 +41,7 @@ class ApplicationService:
         *,
         device_protocol: str,
         batch_mode: str = "window",
+        event_batch_ms: int = 50,
         requires_algorithm_to_start: bool = True,
         transport_trace_enabled: bool = False,
         transport_trace_max_bytes: int = 1024 * 1024,
@@ -66,6 +67,14 @@ class ApplicationService:
             raise ValueError("batch_mode must be 'window' or 'as_available'")
         self.batch_mode = batch_mode
         self.event_driven = batch_mode == "as_available"
+        if event_batch_ms <= 0:
+            raise ValueError("event_batch_ms must be positive")
+        self.event_batch_ms = event_batch_ms
+        self._event_pending: list[ParsedSignal] = []
+        self._event_pending_start_ms: int | None = None
+        self._event_pending_session_id: str | None = None
+        self._event_pending_source_type: str | None = None
+        self._event_flush_task: asyncio.Task[None] | None = None
         self.requires_algorithm_to_start = requires_algorithm_to_start
         self.transport_trace_enabled = transport_trace_enabled
         self.transport_trace_max_bytes = transport_trace_max_bytes
@@ -353,9 +362,7 @@ class ApplicationService:
                 )
             )
         if self.event_driven:
-            batch = self._event_batch(outcome.signals, chunk)
-            if batch is not None:
-                await self._submit_batch(batch)
+            await self._queue_event_signals(outcome.signals, chunk)
         else:
             for signal in outcome.signals:
                 batches = self.assembler.append(
@@ -370,10 +377,49 @@ class ApplicationService:
             self._schedule_flush()
         return outcome
 
-    def _event_batch(self, signals: tuple, chunk: RawChunk) -> ParsedSignalBatch | None:
-        """Build one algorithm batch from the signals parsed out of one source chunk."""
+    async def _queue_event_signals(self, signals: tuple, chunk: RawChunk) -> None:
+        """Coalesce a small data-arrival block; publish as soon as the block closes."""
         if not signals:
-            return None
+            return
+        if not self._event_pending:
+            self._event_pending_start_ms = min(signal.received_at_ms for signal in signals)
+            self._event_pending_session_id = chunk.connection_session_id
+            self._event_pending_source_type = chunk.source_type
+        self._event_pending.extend(signals)
+        newest = max(signal.received_at_ms for signal in signals)
+        if (newest - (self._event_pending_start_ms or newest) >= self.event_batch_ms
+                or len(self._event_pending) >= 512):
+            await self._flush_event_pending()
+            return
+        if self._event_flush_task is None or self._event_flush_task.done():
+            self._event_flush_task = asyncio.create_task(self._flush_event_after_delay(), name="neurobridge-event-batch")
+
+    async def _flush_event_after_delay(self) -> None:
+        try:
+            await asyncio.sleep(self.event_batch_ms / 1000)
+            await self._flush_event_pending()
+        except asyncio.CancelledError:
+            return
+
+    async def _flush_event_pending(self) -> None:
+        task, self._event_flush_task = self._event_flush_task, None
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        signals = tuple(self._event_pending)
+        session_id = self._event_pending_session_id
+        source_type = self._event_pending_source_type
+        self._event_pending = []
+        self._event_pending_start_ms = None
+        self._event_pending_session_id = None
+        self._event_pending_source_type = None
+        if not signals or session_id is None:
+            return
+        batch = self._batch_from_signals(signals, session_id, source_type)
+        if batch is not None:
+            await self._submit_batch(batch)
+
+    def _batch_from_signals(self, signals: tuple, session_id: str, source_type: str | None) -> ParsedSignalBatch:
         start_ms = min(signal.received_at_ms for signal in signals)
         end_ms = max(signal.received_at_ms for signal in signals)
         if end_ms <= start_ms:
@@ -383,7 +429,7 @@ class ApplicationService:
         return ParsedSignalBatch(
             f"batch-{uuid.uuid4().hex}",
             self.device_protocol,
-            chunk.connection_session_id,
+            session_id,
             self._required_recording_id(),
             start_ms,
             end_ms,
@@ -391,10 +437,12 @@ class ApplicationService:
             frame_refs,
             not reasons,
             reasons,
-            chunk.source_type,
+            source_type,
         )
 
     async def flush(self, reason: FlushReason = FlushReason.STOPPED, *, drain: bool = True) -> None:
+        if self.event_driven:
+            await self._flush_event_pending()
         await self._cancel_flush()
         parser_outcome = self.parser.flush(reason)
         for diagnostic in parser_outcome.diagnostics:

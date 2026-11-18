@@ -52,6 +52,7 @@ class PipelineConfig:
     # "window" keeps the released 600 ms batching pipeline; "as_available"
     # emits one algorithm result per source data-arrival batch.
     batch_mode: str = "window"
+    event_batch_ms: int = 50
     source_queue_size: int = 64
     source_enqueue_timeout_ms: int = 50
     algorithm_queue_size: int = 8

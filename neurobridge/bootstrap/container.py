@@ -276,6 +276,7 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     application = ApplicationService(
         device_protocol=profile.device_protocol,
         batch_mode=config.pipeline.batch_mode,
+        event_batch_ms=config.pipeline.event_batch_ms,
         requires_algorithm_to_start=profile.transport == "serial",
         transport_trace_enabled=config.recording.transport_trace_enabled,
         transport_trace_max_bytes=config.recording.transport_trace_max_bytes,

@@ -2,7 +2,7 @@
 # 修改本文件后运行 tools/sync-version-registry.py，并通过 CI 校验。
 
 [application]
-version = "0.4.0"
+version = "0.4.1"
 
 [[application_release_changes]]
 from_version = "0.1.0"
@@ -45,6 +45,13 @@ to_version = "0.4.0"
 impact = "minor"
 compatibility = "Northbound protocol v1.2 adds an as-available event mode; v1.0/v1.1 requests keep the 600 ms aggregated behavior. Raw/parsed recording shape and existing configuration keys remain compatible."
 evidence = "Windows event-driven acquisition emits one algorithm result per source data-arrival batch; headset EEG reuses the headband result with ±5% display variation and falls back to its own EEG when the headband is unavailable. UI clears on explicit not-worn only. Target-machine verification remains pending."
+
+[[application_release_changes]]
+from_version = "0.4.0"
+to_version = "0.4.1"
+impact = "patch"
+compatibility = "No northbound field or configuration schema change. Event-mode acquisition coalesces source notifications for at most event_batch_ms (default 50 ms) before one algorithm batch, preventing algorithm backlog on 90 Hz BLE notifications."
+evidence = "Target 101.8 event-mode observation showed 1020 backlogged headband evaluations; add a 50 ms source-block coalescing limit so algorithm calls and UI events follow data arrival without the algorithm queue backing up. Target re-verification pending."
 
 # Legacy platform delivery versions retained for old installers. The release
 # workflow uses only [application].version and does not advance these fields.
