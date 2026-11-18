@@ -146,10 +146,10 @@ class WindowAndSnapshotTests(unittest.TestCase):
         self.assertEqual([item.raw_bytes[24] for item in frames], [60, 61, 62, 0, 65])
         late, _ = map_frames("headset-1", [(1100, 66)])
         self.assertEqual(base64.b64decode(late.payload["hrRawBase64"]), b"")
-        after_gap, _ = map_frames("headset-1", [(1600, 67)])
-        self.assertEqual(base64.b64decode(after_gap.payload["hrRawBase64"]), bytes([67]))
-        reconnected, _ = map_frames("headset-2", [(1600, 68)])
-        self.assertEqual(base64.b64decode(reconnected.payload["hrRawBase64"]), bytes([68]))
+        after_gap, _ = map_frames("headset-1", [(2400, 67)])
+        self.assertEqual(base64.b64decode(after_gap.payload["hrRawBase64"]), bytes([67] * 3))
+        reconnected, _ = map_frames("headset-2", [(2400, 68)])
+        self.assertEqual(base64.b64decode(reconnected.payload["hrRawBase64"]), bytes([68] * 3))
 
     def test_both_devices_keep_at_most_five_heart_rates_per_second(self) -> None:
         from neurobridge.domain.signal import ParsedSignal, ParsedSignalBatch
@@ -193,7 +193,19 @@ class WindowAndSnapshotTests(unittest.TestCase):
 
         normalizer = HrRateNormalizer()
         self.assertEqual(normalizer.push([(50, 60), (250, 61)], 400), bytes([60, 61]))
-        self.assertEqual(normalizer.push([(1000, 70)], 1200), bytes([70]))
+        self.assertEqual(normalizer.push([(1600, 70)], 1800), bytes([70]))
+
+    def test_hr_normalizer_tolerates_220ms_batches_and_slot_jitter(self):
+        from neurobridge.application.processing import HrRateNormalizer
+
+        normalizer = HrRateNormalizer()
+        emitted = bytearray()
+        for timestamp, value, end in (
+            (100, 60, 200), (320, 61, 400), (540, 62, 600),
+            (760, 63, 800), (980, 64, 1000), (1200, 65, 1400),
+        ):
+            emitted.extend(normalizer.push([(timestamp, value)], end))
+        self.assertEqual(bytes(emitted), bytes([60, 61, 62, 63, 64, 64, 65]))
 
     def test_snapshot_replace_is_one_batch_transaction(self) -> None:
         store = InMemoryLatestSnapshotStore()

@@ -29,6 +29,10 @@ class HrRateNormalizer:
             raise ValueError("HR rate must be positive")
         self.rate_hz = rate_hz
         self.slot_ms = max(1, round(1000 / rate_hz))
+        # Device batches can straddle a slot boundary (e.g. ~220 ms serial
+        # chunks), so a one-slot hole is normal jitter and is zero-order held.
+        # Only a gap of more than one second means the HR stream really stopped.
+        self.max_hold_slots = max(2, rate_hz)
         self._latest_by_slot: dict[int, int] = {}
         self._last_emitted_slot: int | None = None
         self._last_value: int | None = None
@@ -43,7 +47,7 @@ class HrRateNormalizer:
         if not readings:
             return b""
         earliest_slot = min(timestamp_ms // self.slot_ms for timestamp_ms, _ in readings)
-        if self._last_emitted_slot is not None and earliest_slot - self._last_emitted_slot > 1:
+        if self._last_emitted_slot is not None and earliest_slot - self._last_emitted_slot > self.max_hold_slots:
             # A real data gap must not be padded with stale HR values.
             self.reset()
         if self._last_emitted_slot is None:
