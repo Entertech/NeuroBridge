@@ -876,7 +876,7 @@ class DeploymentTests(unittest.TestCase):
                     self.assertIn('sendRequest("getStatus", {}, item);', open_handler)
                     self.assertIn('if (typeof configuredEndpoint === "string") {\n  connect(localPanel);\n}', script)
 
-    def test_b_side_console_coalesces_live_display_to_600_ms(self) -> None:
+    def test_b_side_console_coalesces_algorithm_data_but_not_waveform(self) -> None:
         script = (ROOT / "web" / "b-client-test" / "app.js").read_text(encoding="utf-8")
         self.assertIn("const liveDisplayIntervalMs = 600;", script)
         self.assertIn("const pendingLiveMessages = new Map();", script)
@@ -888,10 +888,14 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("function flushPendingLiveMessages()", script)
         self.assertIn("window.setTimeout(flushPendingLiveMessages, liveDisplayIntervalMs)", script)
         self.assertIn("handleGatewayMessage(message, panel, { log: false })", script)
+        self.assertIn("function updateLiveWaveform(data, panel)", script)
+        self.assertIn("function appendWaveChannels(panel, eeg, invalid)", script)
+        self.assertIn("function updateWaveformMeta(panel, invalid)", script)
+        self.assertIn("updateLiveWaveform(message.data, target);", script)
         self.assertIn('appendLog("in", "← IN", message, target);', script)
         self.assertIn("flushLiveMessages(target);", script)
         html = (ROOT / "web" / "b-client-test" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("页面每 600 ms 渲染最新一组", html)
+        self.assertIn("实时算法数据每 600 ms 刷新最新一组，脑波波形按窗口即时追加", html)
 
     def test_one_command_update_uses_only_the_existing_checkout(self) -> None:
         script = (ROOT / "linux" / "update-ubuntu.sh").read_text(encoding="utf-8")

@@ -713,25 +713,35 @@ function updateVisuals(data, panel) {
   const spectrumUnavailable = showConnectedDevicesOnly && eeg?.quality === 0
     && reportedBands.length > 0 && reportedBands.every((value) => value === 0);
   panel.bandPower = invalid || spectrumUnavailable ? {} : bandPower;
-  if (newWindow) {
-    for (const channel of Object.keys(channelStyles)) {
-      const previous = panel.channels[channel] || [];
-      const wave = eeg?.wave?.[channel];
-      if (invalid || !Array.isArray(wave) || !wave.length) {
-        if (Number.isFinite(previous.at(-1))) panel.channels[channel] = [...previous.slice(1 - waveformCapacity), null];
-        continue;
-      }
-      // A short window is one more piece of the same trace, not a replacement.
-      // Replacing it made the headset chart jump from 500 points to one window.
-      const noSignal = showConnectedDevicesOnly && eeg?.quality === 0 && wave.every((value) => value === 0);
-      // A clipped sample is still a sample. Keep it in the trace and mark it in
-      // drawWaveform; null is reserved for a window that really has no data.
-      const incoming = wave.slice(-waveformCapacity).map((value) => (noSignal ? null : value));
-      if (previous.length || noSignal || incoming.some(Number.isFinite)) {
-        panel.channels[channel] = previous.concat(incoming).slice(-waveformCapacity);
-      }
+  if (newWindow) appendWaveChannels(panel, eeg, invalid);
+  updateWaveformMeta(panel, invalid);
+  panel.fields.spectrumMeta.textContent = invalid ? "无效窗口"
+    : spectrumUnavailable ? "暂无有效频段能量"
+    : reportedBands.length ? readableTimestamp(result.timestampMs) : "未提供频段能量";
+  drawSourceCharts(panel);
+}
+
+function appendWaveChannels(panel, eeg, invalid) {
+  for (const channel of Object.keys(channelStyles)) {
+    const previous = panel.channels[channel] || [];
+    const wave = eeg?.wave?.[channel];
+    if (invalid || !Array.isArray(wave) || !wave.length) {
+      if (Number.isFinite(previous.at(-1))) panel.channels[channel] = [...previous.slice(1 - waveformCapacity), null];
+      continue;
+    }
+    // A short window is one more piece of the same trace, not a replacement.
+    // Replacing it made the headset chart jump from 500 points to one window.
+    const noSignal = showConnectedDevicesOnly && eeg?.quality === 0 && wave.every((value) => value === 0);
+    // A clipped sample is still a sample. Keep it in the trace and mark it in
+    // drawWaveform; null is reserved for a window that really has no data.
+    const incoming = wave.slice(-waveformCapacity).map((value) => (noSignal ? null : value));
+    if (previous.length || noSignal || incoming.some(Number.isFinite)) {
+      panel.channels[channel] = previous.concat(incoming).slice(-waveformCapacity);
     }
   }
+}
+
+function updateWaveformMeta(panel, invalid) {
   panel.fields.waveformMeta.replaceChildren(...Object.entries(panel.channels).map(([channel, values]) => {
     const label = document.createElement("span");
     label.className = `channel-${channel}`;
@@ -745,10 +755,29 @@ function updateVisuals(data, panel) {
     return label;
   }));
   if (!panel.fields.waveformMeta.childElementCount) panel.fields.waveformMeta.textContent = invalid ? "无效窗口" : "未提供波形";
-  panel.fields.spectrumMeta.textContent = invalid ? "无效窗口"
-    : spectrumUnavailable ? "暂无有效频段能量"
-    : reportedBands.length ? readableTimestamp(result.timestampMs) : "未提供频段能量";
-  drawSourceCharts(panel);
+}
+
+function updateLiveWaveform(data, panel) {
+  const result = data?.result || data;
+  if (!Number.isFinite(result?.timestampMs) || data?.event !== "data") return;
+  const connection = result.payload?.status?.connectionState ?? result.connectionState;
+  if (connection && connection !== "connected") return;
+  const eeg = result?.payload?.algorithm?.eeg;
+  const invalid = result?.valid === false;
+  const eegSubscribed = panel.subscriptions.get(data?.subscriptionId)?.includes("eeg");
+  if (!eeg && !(invalid && eegSubscribed && result.payload?.algorithm)) return;
+  const status = result.payload?.status || result;
+  if ((status?.wearState ?? panel.wearState) === "notWorn" || panel.eegDisplay === "hidden") return;
+  if (sharedConnection && panel.eegStateTimestamp !== null
+    && result.timestampMs < panel.eegStateTimestamp) return;
+  if (panel.eegTimestamp !== null && result.timestampMs < panel.eegTimestamp) return;
+  if (result.timestampMs === panel.eegTimestamp) return;
+  if (!invalid && Object.values(eeg?.wave || {}).some((wave) => Array.isArray(wave) && wave.some(Number.isFinite))) {
+    panel.eegTimestamp = result.timestampMs;
+  }
+  appendWaveChannels(panel, eeg, invalid);
+  updateWaveformMeta(panel, invalid);
+  if (!panel.section.hidden) drawWaveform(panel.fields.waveform, panel.channels);
 }
 
 function isLiveDataMessage(message, panel) {
@@ -945,6 +974,9 @@ function connect(panel) {
       const target = sharedConnection && source ? panels[source] : panel;
       if (isLiveDataMessage(message, target)) {
         appendLog("in", "← IN", message, target);
+        const display = message.data?.payload?.display?.eeg;
+        if (display === "shown" || display === "hidden") target.eegDisplay = display;
+        updateLiveWaveform(message.data, target);
         queueLiveMessage(message, target);
       } else {
         flushLiveMessages(target);
