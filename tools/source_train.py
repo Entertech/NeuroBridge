@@ -42,12 +42,14 @@ def names(config: dict, version: str) -> dict[str, str]:
             for key, value in config['branches'].items() if key.endswith('_template')}
 
 
-def run(*args: str, cwd: Path = ROOT, data: str | None = None) -> str:
-    env = os.environ.copy()
-    env.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
+def run(*args: str, cwd: Path = ROOT, data: str | None = None, env: dict | None = None) -> str:
+    merged = os.environ.copy()
+    merged.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull)
+    if env:
+        merged.update(env)
     # Git plumbing consumes a byte protocol. Text-mode stdin translates LF to
     # CRLF on Windows, making mktree store a literal CR in "attempt.json\r".
-    result = subprocess.run(args, cwd=cwd, input=data.encode('utf-8') if data is not None else None, env=env,
+    result = subprocess.run(args, cwd=cwd, input=data.encode('utf-8') if data is not None else None, env=merged,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result.returncode:
         raise RuntimeError(f"{args[0]} {args[1]} failed: {result.stderr.decode('utf-8', errors='replace').strip()}")
@@ -61,6 +63,20 @@ def api(path: str, payload: dict | None = None, method: str | None = None):
     if payload is not None:
         args += ['--input', '-']
     raw = run(*args, data=json.dumps(payload) if payload is not None else None)
+    return json.loads(raw) if raw else None
+
+
+def privileged_api(path: str):
+    """Read an endpoint that needs Administration read the workflow token lacks.
+
+    TRAIN_PROTECTION_TOKEN is an optional fine-grained token with Administration
+    read. Without it the workflow token is used and the caller reports the
+    limitation instead of failing.
+    """
+    token = os.environ.get('TRAIN_PROTECTION_TOKEN')
+    if not token:
+        return api(path)
+    raw = run('gh', 'api', path, env={'GH_TOKEN': token})
     return json.loads(raw) if raw else None
 
 
@@ -309,7 +325,7 @@ class Train:
         # Classic protection and Rulesets may coexist. Query effective rules too;
         # callers must never silently install or weaken protection.
         try:
-            rules = api(f'repos/{self.repository}/rules/branches/{branch}')
+            rules = privileged_api(f'repos/{self.repository}/rules/branches/{branch}')
         except RuntimeError as error:
             if self.unreadable(error):
                 return self.protection_unverified(branch)
@@ -322,7 +338,7 @@ class Train:
                 raise ValueError("linear-only protection cannot preserve a tagged candidate by merge commit")
             return {'branch': branch, 'status': 'passed'}
         try:
-            policy = api(f'repos/{self.repository}/branches/{branch}/protection')
+            policy = privileged_api(f'repos/{self.repository}/branches/{branch}/protection')
         except RuntimeError as error:
             if self.unreadable(error):
                 return self.protection_unverified(branch)

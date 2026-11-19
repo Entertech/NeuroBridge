@@ -70,6 +70,27 @@ class ContractTests(unittest.TestCase):
         self.assertFalse(train.checks_pending([running | {'status': 'completed', 'conclusion': 'failure'}], ['test']))
         self.assertFalse(train.checks_pending([{'name': 'other', 'status': 'in_progress', 'conclusion': None}], ['test']))
 
+    def test_optional_protection_token_reads_rules_with_its_own_identity(self):
+        obj = train.Train('1.2.3')
+        policy = {'required_pull_request_reviews': {'required_approving_review_count': 1}, 'enforce_admins': {'enabled': True}}
+        calls = []
+
+        def fake_run(*args, **kwargs):
+            calls.append(kwargs.get('env'))
+            return '[]' if str(args[-1]).endswith('/rules/branches/master') else json.dumps(policy)
+
+        with mock.patch.dict(os.environ, {'TRAIN_PROTECTION_TOKEN': 'admin-read'}, clear=False), \
+             mock.patch.object(train, 'run', side_effect=fake_run), \
+             mock.patch.object(train, 'api') as fallback:
+            self.assertEqual(obj.protection('master')['status'], 'passed')
+        fallback.assert_not_called()
+        self.assertTrue(calls)
+        self.assertTrue(all(env == {'GH_TOKEN': 'admin-read'} for env in calls))
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(train, 'api', side_effect=[[], policy]) as fallback:
+            self.assertEqual(obj.protection('master')['status'], 'passed')
+        self.assertEqual(fallback.call_count, 2)
+
     def test_unreadable_protection_is_unverified_but_insufficient_rules_still_block(self):
         obj = train.Train('1.2.3')
         denied = RuntimeError('gh api failed: gh: Resource not accessible by integration (HTTP 403)')

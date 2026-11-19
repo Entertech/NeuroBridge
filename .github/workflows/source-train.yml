@@ -57,6 +57,7 @@ jobs:
       - name: Preview version, packages, documents and train gates
         env:
           GH_TOKEN: ${{ github.token }}
+          TRAIN_PROTECTION_TOKEN: ${{ secrets.TRAIN_PROTECTION_TOKEN }}
           TRAIN_VERSION: ${{ inputs.version }}
           PLAN_SOURCE: ${{ inputs.plan_source || github.sha }}
           TRAIN_SYSTEMS: ${{ inputs.systems }}
@@ -128,6 +129,7 @@ jobs:
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
+          TRAIN_PROTECTION_TOKEN: ${{ secrets.TRAIN_PROTECTION_TOKEN }}
           TRAIN_RELEASE_IDENTITY: workflow
           TRAIN_PR_AUTHOR: github-actions[bot]
           TRAIN_OPERATION: ${{ steps.route.outputs.operation }}
@@ -245,6 +247,7 @@ jobs:
         id: finish
         env:
           GH_TOKEN: ${{ github.token }}
+          TRAIN_PROTECTION_TOKEN: ${{ secrets.TRAIN_PROTECTION_TOKEN }}
           TRAIN_RELEASE_IDENTITY: workflow
           TRAIN_PR_AUTHOR: github-actions[bot]
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
@@ -321,6 +324,7 @@ jobs:
         id: finalize
         env:
           GH_TOKEN: ${{ github.token }}
+          TRAIN_PROTECTION_TOKEN: ${{ secrets.TRAIN_PROTECTION_TOKEN }}
           TRAIN_RELEASE_IDENTITY: workflow
           TRAIN_PR_AUTHOR: github-actions[bot]
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
