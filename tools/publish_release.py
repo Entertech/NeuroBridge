@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import zipfile
 
-from tools.release_pipeline import CONFIG, ROOT, log, require_digest, save_json, sha256, version_tuple
+from tools.release_pipeline import ROOT, log, matrix, require_digest, save_json, select_targets, sha256, software_tag, software_version_at, validate_target_coverage, version_tuple
 
 ARCHIVE_CHECKPOINT = "<!-- neurobridge-verified-archive\n"
 
@@ -33,7 +33,6 @@ def command(*args: str, allow_missing: bool = False) -> str | None:
 
 def ensure_tag(tag: str, commit: str) -> None:
     """Require the immutable source tag created by source_train, never create it."""
-    version_tuple(tag.removeprefix('v'))
     remote = command('git', 'ls-remote', '--refs', 'origin', f'refs/tags/{tag}')
     if not remote:
         raise ValueError('source tag must exist before GitHub Release publication')
@@ -44,7 +43,7 @@ def ensure_tag(tag: str, commit: str) -> None:
 
 
 def release_info(tag: str) -> dict | None:
-    raw = command("gh", "release", "view", tag, "--json", "url,isDraft,assets,body", allow_missing=True)
+    raw = command("gh", "release", "view", tag, "--json", "url,isDraft,isPrerelease,assets,body", allow_missing=True)
     return json.loads(raw) if raw else None
 
 
@@ -81,8 +80,9 @@ def verify_nested_archives(archive: Path, manifest: dict) -> None:
             verify_release_bundle(archive, json.loads(outer.read("metadata/bundle-manifest.json")))
             return
     archives = manifest["platformArchives"]
-    if {item["platform"] for item in archives} != {"windows", "kylin"}:
-        raise ValueError("release must contain exactly one ZIP per platform")
+    expected_platforms = set(manifest["coverage"]) - {"requireAllMatrixTargets"}
+    if len(archives) != len(expected_platforms) or {item["platform"] for item in archives} != expected_platforms:
+        raise ValueError("release must contain exactly one ZIP per selected platform")
     with zipfile.ZipFile(archive) as outer, tempfile.TemporaryDirectory(prefix="neurobridge-release-verify-") as temporary:
         expected_outer = {"build-manifest.json", "release-logs.jsonl", *(item["fileName"] for item in archives)}
         if set(outer.namelist()) != expected_outer or outer.testzip() is not None:
@@ -262,7 +262,7 @@ def reuse_release_bundle(archive: Path) -> bool:
     return True
 
 
-def publish(directory: Path, expected_sha256: str) -> dict:
+def publish(directory: Path, expected_sha256: str, *, systems: str = "", system: str = "") -> dict:
     require_digest(expected_sha256, "uploaded aggregate ZIP digest")
     manifest_path = directory / "release-manifest.json"
     bundle_mode = not manifest_path.is_file()
@@ -276,16 +276,22 @@ def publish(directory: Path, expected_sha256: str) -> dict:
         archive = directory / manifest["aggregateArchive"]["fileName"]
     version = manifest["applicationVersion"]
     version_tuple(version)
-    tag = f"v{version}"
     commit = command("git", "rev-parse", "HEAD")
+    package_version = software_version_at(commit, system) if system else version
+    tag = software_tag(system, package_version) if system else f"v{version}"
     if manifest["git"]["commit"] != commit or manifest["releaseStatus"] != "candidate" or manifest["trigger"] != "push_master":
         raise ValueError("manifest commit, release state or trigger does not match this checkout")
     if manifest["git"]["dirty"] or command("git", "status", "--porcelain", "--untracked-files=no"):
         raise ValueError("release checkout is dirty")
-    expected_counts = {"windows": CONFIG["windows"]["expected_package_count"], "kylin": CONFIG["kylin"]["expected_package_count"]}
-    if any(len(manifest["coverage"][platform]["targetResults"]) != count for platform, count in expected_counts.items()):
-        raise ValueError("manifest lacks results for every release target")
-    if any(manifest["coverage"][platform]["builtPackageCount"] < 1 for platform in ("windows", "kylin")):
+    if system and (not bundle_mode or systems or manifest["bundleManifest"].get("softwareSystem") != system):
+        raise ValueError("software release requires a verified bundle for exactly one system")
+    if system and (archive.name != f"neurobridge-{system}-v{package_version}.zip"
+                   or manifest["bundleManifest"].get("softwareVersion", version) != package_version):
+        raise ValueError("software archive name differs from the system tag")
+    targets = select_targets(matrix(), system or systems)
+    results = validate_target_coverage(manifest["coverage"], targets)
+    platforms = {target["platform"] for target in targets}
+    if any(manifest["coverage"][platform]["builtPackageCount"] < 1 for platform in platforms):
         raise ValueError("minimum per-platform package gate failed")
     if not archive.is_file() or sha256(archive) != manifest["aggregateArchive"]["sha256"]:
         raise ValueError("aggregate ZIP missing or SHA-256 mismatch")
@@ -298,8 +304,11 @@ def publish(directory: Path, expected_sha256: str) -> dict:
         if checksums.read_text(encoding="utf-8") != f"{sha256(archive)}  {archive.name}\n":
             raise ValueError("checksum sidecar differs from aggregate ZIP")
     notes = directory / "release-notes.md"
-    gaps = [item for platform in ("windows", "kylin") for item in manifest["coverage"][platform]["targetResults"] if item["status"] != "candidate"]
-    notes.write_text(f"NeuroBridge {tag}\n\nSource commit: `{commit}`. Unsigned packages; physical verification is pending.\n\n" + "Incomplete targets:\n" + ("\n".join(f"- `{item['targetId']}`: {item['status']} — {item['reason']}" for item in gaps) or "- None") + "\n", encoding="utf-8")
+    gaps = [item for item in results.values() if item["status"] != "candidate"]
+    if (system or systems) and gaps:
+        raise ValueError("every selected installer must pass before publication")
+    scope_note = f"\n\nSelected systems: {systems}." if systems else ""
+    notes.write_text(f"NeuroBridge {tag}\n\nSource commit: `{commit}`. Unsigned packages; physical verification is pending.{scope_note}\n\n" + "Incomplete targets:\n" + ("\n".join(f"- `{item['targetId']}`: {item['status']} — {item['reason']}" for item in gaps) or "- None") + "\n", encoding="utf-8")
     with notes.open("a", encoding="utf-8") as output:
         output.write("\n" + ARCHIVE_CHECKPOINT + json.dumps(archive_checkpoint(archive, version, commit), sort_keys=True) + "\n-->\n")
     if bundle_mode:
@@ -308,13 +317,28 @@ def publish(directory: Path, expected_sha256: str) -> dict:
     else:
         release_log = directory / "release-logs.jsonl"
         release_log_text = release_log.read_text(encoding="utf-8") if release_log.is_file() else ""
-    if len(release_log_text.splitlines()) != sum(expected_counts.values()):
+    if len(release_log_text.splitlines()) != len(results):
         raise ValueError("release logs missing or incomplete")
     logged = {entry["target"]["id"]: entry["status"] for entry in (json.loads(line) for line in release_log_text.splitlines())}
-    expected_logged = {item["targetId"]: item["status"] for platform in ("windows", "kylin") for item in manifest["coverage"][platform]["targetResults"]}
+    expected_logged = {target_id: item["status"] for target_id, item in results.items()}
     if logged != expected_logged:
         raise ValueError("release logs do not match target coverage")
     assets = [archive] if bundle_mode else [archive, manifest_path, directory / f"{archive.name}.sha256", directory / "release-logs.jsonl"]
+    if system:
+        platform = targets[0]["platform"]
+        with zipfile.ZipFile(archive) as bundle:
+            documents = json.loads(bundle.read("docs/external/release-manifest.json"))["documents"]
+        software_receipt = directory / "software-receipt.json"
+        save_json(software_receipt, {
+            "schemaVersion": 1, "tag": tag, "system": system, "sourceCommit": commit,
+            "archive": {"fileName": archive.name, "sha256": expected_sha256.lower()},
+            "bundledDocuments": [
+                {key: doc[key] for key in ("key", "version", "pdfSha256", "documentTag") if key in doc}
+                for doc in documents if doc["delivery"] == "always" or platform in doc["platforms"]
+            ],
+            "documentObligations": manifest["bundleManifest"]["documentObligations"],
+        })
+        assets.append(software_receipt)
     expected_names = {item.name for item in assets}
     ensure_tag(tag, commit)
     info = ensure_release(tag, notes)
@@ -324,7 +348,7 @@ def publish(directory: Path, expected_sha256: str) -> dict:
     for asset in assets:
         verify_asset(tag, asset, asset.name in remote_assets)
     if info["isDraft"]:
-        command("gh", "release", "edit", tag, "--draft=false")
+        command("gh", "release", "edit", tag, "--draft=false", *(("--latest=false",) if system else ()))
     final = release_info(tag)
     if final is None or final["isDraft"] or {item["name"] for item in final.get("assets", [])} != expected_names:
         raise ValueError("public Release or asset list could not be verified")
@@ -340,6 +364,8 @@ def main() -> int:
     action.add_argument("--dir", type=Path)
     action.add_argument("--reuse-bundle", type=Path, help="recover an existing verified Release ZIP without GitHub writes")
     parser.add_argument("--expected-sha256", help="ZIP digest computed before Actions Artifact upload")
+    parser.add_argument("--systems", default="")
+    parser.add_argument("--system", default="", help="publish under the tag of a single verified system")
     args = parser.parse_args()
     if args.dir is not None and args.expected_sha256 is None:
         parser.error("--expected-sha256 is required for publication")
@@ -347,7 +373,7 @@ def main() -> int:
         if args.reuse_bundle is not None:
             reuse_release_bundle(args.reuse_bundle)
         else:
-            publish(args.dir, args.expected_sha256)
+            publish(args.dir, args.expected_sha256, systems=args.systems, system=args.system)
     except (OSError, ValueError, KeyError, json.JSONDecodeError, zipfile.BadZipFile) as error:
         log("publication_failed", reason=str(error))
         return 1

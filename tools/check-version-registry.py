@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from hashlib import sha256
 from pathlib import Path
 import re
 import subprocess
@@ -14,6 +13,7 @@ from external_protocol_registry import (
     ROOT,
     external_protocol_catalog,
     load_registry,
+    markdown_digest,
     select_external_protocol,
     select_prerelease_protocol,
 )
@@ -38,10 +38,6 @@ def fail(message: str) -> None:
     raise SystemExit(f"version-registry check failed: {message}")
 
 
-def digest(path: Path) -> str:
-    return sha256(path.read_bytes()).hexdigest()
-
-
 DELIVERY_MODES = {"always", "platform_bound", "review_only"}
 
 
@@ -63,7 +59,7 @@ def validate_published_operations_document(registry: dict, locks: dict, document
     required_fields = ("published_date", "markdown_sha256", "publication_record", "pdf_artifact_name")
     if any(field not in document for field in required_fields):
         fail(f"published {label} document requires publication metadata")
-    if not markdown.is_file() or digest(markdown) != document["markdown_sha256"]:
+    if not markdown.is_file() or markdown_digest(markdown) != document["markdown_sha256"]:
         fail(f"published {label} Markdown hash is invalid")
     records = [record for record in registry["change_records"] if record["id"] == document["publication_record"]]
     if len(records) != 1 or records[0]["external_document_action"] != "explicit_user_authorized" or records[0]["change_state"] != "locked":
@@ -87,7 +83,9 @@ def main() -> None:
     lifecycle = registry["protocol_lifecycle"]
     external_catalog = external_protocol_catalog(registry)
     external = select_external_protocol(registry)
-    prerelease = select_prerelease_protocol(registry)
+    prerelease = select_prerelease_protocol(registry) if "prerelease_version" in lifecycle else None
+    if bool(prerelease) != ("internal_prerelease" in registry["documents"]):
+        fail("prerelease version and Markdown registration must exist together")
     integration = registry["documents"]["integration_plan"]
     capture_package = registry["documents"].get("external_capture_package")
     ssh_operations = registry["documents"].get("external_ssh_operations")
@@ -96,6 +94,17 @@ def main() -> None:
     kylin_operations = registry["documents"].get("external_kylin_operations")
     wire_version = registry["northbound_wire_protocol"]["version"]
     application_version = registry["application"]["version"]
+    for key, draft in registry.get("document_prereleases", {}).items():
+        doc = registry["documents"].get(f"external_{key}")
+        path = Path(draft["markdown_path"])
+        if key == "northbound" or not doc or path.is_absolute() or ".." in path.parts or path.parts[:2] != ("doc", "tech"):
+            fail(f"invalid prerelease registration for {key}")
+        if str(path).startswith("doc/tech/对外/") or draft.get("status") != "prerelease" or not (ROOT / path).is_file():
+            fail(f"internal prerelease Markdown is missing or invalid for {key}")
+        def parts(version):
+            return tuple(map(int, version.split(".")))
+        if draft["based_on_released_version"] != doc["version"] or parts(draft["version"]) <= parts(doc["version"]):
+            fail(f"prerelease version must follow the current published {key} version")
 
     if policy["external_documents_require_explicit_user_request"] is not True:
         fail("external document updates must require an explicit user request")
@@ -114,9 +123,9 @@ def main() -> None:
         fail("external_northbound must be a B-side document catalog")
     if external_catalog["current_version"] != lifecycle["released_version"]:
         fail("internal and external protocol lifecycle must share the released version")
-    if prerelease["version"] != lifecycle["prerelease_version"]:
+    if prerelease and prerelease["version"] != lifecycle["prerelease_version"]:
         fail("internal and external protocol lifecycle must share the prerelease version")
-    if prerelease["based_on_released_version"] != lifecycle["released_version"]:
+    if prerelease and prerelease["based_on_released_version"] != lifecycle["released_version"]:
         fail("prerelease must be based on the current released version")
     known_versions = [protocol["version"] for protocol in external_catalog["versions"]]
     if len(known_versions) != len(set(known_versions)):
@@ -146,7 +155,7 @@ def main() -> None:
         markdown = ROOT / versioned_protocol["markdown_path"]
         if not markdown.is_file():
             fail("every published external Markdown must exist")
-        if digest(markdown) != versioned_protocol["markdown_sha256"]:
+        if markdown_digest(markdown) != versioned_protocol["markdown_sha256"]:
             fail("external document changed without a persisted version-registry update")
         if Path(versioned_protocol["pdf_artifact_name"]).name != versioned_protocol["pdf_artifact_name"]:
             fail("external PDFs must be uploaded as flat CI artifact filenames")
@@ -167,7 +176,7 @@ def main() -> None:
                 fail("unlocked changes must not modify external documents")
             if record["base_locked_release"] != external["version"]:
                 fail("unlocked changes must be anchored to the current locked release")
-            if record["target_external_release"] != prerelease["version"]:
+            if prerelease and record["target_external_release"] != prerelease["version"]:
                 fail("unlocked changes must target the unified prerelease version")
         else:
             fail("change records must be locked or unlocked")
@@ -178,7 +187,7 @@ def main() -> None:
         capture_markdown = ROOT / capture_package["markdown_path"]
         if not capture_markdown.is_file():
             fail("external capture package Markdown must exist")
-        if digest(capture_markdown) != capture_package["markdown_sha256"]:
+        if markdown_digest(capture_markdown) != capture_package["markdown_sha256"]:
             fail("external capture package changed without a persisted version-registry update")
         capture_text = capture_markdown.read_text(encoding="utf-8")
         if capture_text.splitlines()[0] != f'# {capture_package["title"]} v{capture_package["version"]}':
@@ -239,17 +248,18 @@ def main() -> None:
     if tracked_pdfs:
         fail("protocol PDFs must be CI artifacts, not repository files")
 
-    prerelease_markdown = ROOT / prerelease["markdown_path"]
-    if not prerelease_markdown.is_file():
-        fail("the active prerelease Markdown must exist")
-    prerelease_text = prerelease_markdown.read_text(encoding="utf-8")
-    expected_prerelease_title = f'# {external_catalog["title"]} 预发布 v{prerelease["version"]}'
-    if prerelease_text.splitlines()[0] != expected_prerelease_title:
-        fail("prerelease Markdown title does not match the unified protocol lifecycle")
-    if f'版本：v{prerelease["version"]}（预发布）' not in prerelease_text:
-        fail("prerelease Markdown version does not match the unified protocol lifecycle")
-    if "仅供内部评审，尚未对 B 端发布" not in prerelease_text:
-        fail("prerelease Markdown must remain internal until promotion")
+    if prerelease:
+        prerelease_markdown = ROOT / prerelease["markdown_path"]
+        if not prerelease_markdown.is_file():
+            fail("the active prerelease Markdown must exist")
+        prerelease_text = prerelease_markdown.read_text(encoding="utf-8")
+        expected_prerelease_title = f'# {external_catalog["title"]} 预发布 v{prerelease["version"]}'
+        if prerelease_text.splitlines()[0] != expected_prerelease_title:
+            fail("prerelease Markdown title does not match the unified protocol lifecycle")
+        if f'版本：v{prerelease["version"]}（预发布）' not in prerelease_text:
+            fail("prerelease Markdown version does not match the unified protocol lifecycle")
+        if "仅供内部评审，尚未对 B 端发布" not in prerelease_text:
+            fail("prerelease Markdown must remain internal until promotion")
     legacy_internal_protocol = ROOT / "doc/tech/头环蓝牙网关北向网络协议_v0.1.md"
     if legacy_internal_protocol.exists():
         fail("only the latest internal prerelease protocol document may be retained")

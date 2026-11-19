@@ -20,9 +20,12 @@ class WorkflowContractTests(unittest.TestCase):
     def test_version_gate_passes_event_context_for_push_baseline_recovery(self):
         steps = self.workflows['ci.yml']['jobs']['version-gate']['steps']
         gate = next(step for step in steps if step.get('id') == 'gate')
-        self.assertEqual(gate['env']['SOURCE_EVENT'], '${{ github.event_name }}')
+        self.assertEqual(gate['env']['SOURCE_EVENT'], "${{ github.event_name == 'workflow_dispatch' && 'push' || github.event_name }}")
         self.assertEqual(gate['env']['BASE_SHA'], '${{ github.event.pull_request.base.sha || github.event.before }}')
         self.assertIn('--event "$SOURCE_EVENT"', gate['run'])
+        job = self.workflows['ci.yml']['jobs']['version-gate']
+        self.assertIn('workflow_dispatch', job['if'])
+        self.assertIn('github.ref_name != github.event.repository.default_branch', job['if'])
 
     def test_yaml_on_key_and_real_booleans_are_preserved(self):
         value = yaml.load('on: [push]\nflag: false\n', Loader=policy.WorkflowLoader)
@@ -40,6 +43,20 @@ class WorkflowContractTests(unittest.TestCase):
                     workflows['release.yml']['jobs']['release-cleanup']['permissions']['deployments'] = 'write'
                 with self.assertRaisesRegex(ValueError, 'cannot grant'):
                     policy.validate(self.config, workflows)
+
+    def test_workflow_token_reads_checks_and_dispatches_bot_branch_runs(self):
+        plan = self.workflows['source-train.yml']['jobs']['plan']
+        self.assertEqual(plan['permissions']['checks'], 'read')
+        source = self.workflows['source-train.yml']['jobs']['source']
+        self.assertEqual(source['permissions']['checks'], 'read')
+        self.assertIn('Dispatch required checks for the candidate branch',
+                      [step.get('name') for step in source['steps']])
+        finish = self.workflows['source-train.yml']['jobs']['finish-systems']
+        self.assertEqual(finish['permissions']['actions'], 'write')
+        self.assertIn('Dispatch required checks for the finalization branch',
+                      [step.get('name') for step in finish['steps']])
+        self.assertEqual(self.workflows['release.yml']['permissions']['contents'], 'read')
+        self.assertEqual(self.workflows['release.yml']['jobs']['publish-system']['permissions']['contents'], 'write')
 
     def test_missing_renamed_or_skipped_required_check_is_rejected(self):
         for mutation in ('missing', 'renamed', 'skipped', 'false', 'version-gate-skipped'):

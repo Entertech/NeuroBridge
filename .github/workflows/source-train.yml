@@ -6,7 +6,7 @@ on:
       operation:
         type: choice
         required: true
-        options: [initialize, select, promote, prepare, review, release, merge, verify]
+        options: [plan, initialize, select, promote, prepare, review, release, merge, verify]
       version:
         description: "明确选择 major.minor.patch；不默认创建版本"
         type: string
@@ -20,6 +20,12 @@ on:
       candidate:
         description: "review：人工审核通过的完整候选 SHA"
         type: string
+      plan_source:
+        description: "plan：要预览的完整 SHA 或 origin/分支；留空使用当前工作流提交"
+        type: string
+      systems:
+        description: "plan/release：可选，逗号分隔 windows-10、windows-11、kylin-v10；留空读取发布配置并自动判断受影响系统"
+        type: string
   pull_request:
     types: [closed]
     branches: ['publish_*', master]
@@ -29,40 +35,65 @@ permissions:
   actions: read
 
 concurrency:
-  # Repository-wide serialization also covers automatic prepare/verify events.
-  group: source-train-${{ github.repository }}
+  # Serialize mutations repository-wide. Read-only previews never queue with them.
+  group: source-train-${{ github.repository }}${{ inputs.operation == 'plan' && format('-plan-{0}', github.run_id) || '' }}
   cancel-in-progress: false
 
 jobs:
-  source:
-    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged && github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'dev_') || startsWith(github.head_ref, 'finalize_')))
+  plan:
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'plan'
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Preview version, packages, documents and train gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRAIN_PROTECTION_TOKEN: ${{ secrets.TRAIN_PROTECTION_TOKEN }}
+          TRAIN_VERSION: ${{ inputs.version }}
+          PLAN_SOURCE: ${{ inputs.plan_source || github.sha }}
+          TRAIN_SYSTEMS: ${{ inputs.systems }}
+        run: |
+          python -m tools.source_train plan --version "$TRAIN_VERSION" --head "$PLAN_SOURCE" --systems "$TRAIN_SYSTEMS" --summary "$GITHUB_STEP_SUMMARY"
+
+  source:
+    if: (github.event_name == 'workflow_dispatch' && inputs.operation != 'plan') || (github.event.pull_request.merged && github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'dev_') || startsWith(github.head_ref, 'finalize_')))
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      checks: read
     outputs:
       complete: ${{ steps.source.outputs.complete }}
       operation: ${{ steps.route.outputs.operation }}
       version: ${{ steps.route.outputs.version }}
       candidate: ${{ steps.source.outputs.candidate }}
       candidate_branch: ${{ steps.source.outputs.candidate_branch }}
+      skip_release: ${{ steps.source.outputs.skip_release }}
       should_package: ${{ steps.source.outputs.should_package }}
       artifact_id: ${{ steps.source.outputs.artifact_id }}
       package_run_id: ${{ steps.source.outputs.package_run_id }}
+      systems: ${{ steps.source.outputs.systems }}
+      system_releases: ${{ steps.source.outputs.system_releases }}
+      parallel_systems: ${{ steps.source.outputs.parallel_systems }}
+      system_matrix: ${{ steps.source.outputs.system_matrix }}
+      recovery_runs: ${{ steps.source.outputs.recovery_runs }}
+      software_result: ${{ steps.source.outputs.software_result }}
     steps:
-      - name: Require the automation identity
-        env:
-          APP_ID: ${{ secrets.RELEASE_BOT_APP_ID }}
-          APP_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
-        run: |
-          test -n "$APP_ID" && test -n "$APP_KEY" || { echo 'Configure the repository release GitHub App before enabling source mutations.' >&2; exit 1; }
-      - uses: actions/create-github-app-token@v2
-        id: app
-        with:
-          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
-          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ github.token }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -97,53 +128,188 @@ jobs:
       - name: Run source orchestration
         id: source
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          TRAIN_APP_TOKEN_USED: 'true'
-          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          GH_TOKEN: ${{ github.token }}
+          TRAIN_PROTECTION_TOKEN: ${{ secrets.TRAIN_PROTECTION_TOKEN }}
+          TRAIN_RELEASE_IDENTITY: workflow
+          TRAIN_PR_AUTHOR: github-actions[bot]
           TRAIN_OPERATION: ${{ steps.route.outputs.operation }}
           TRAIN_VERSION: ${{ steps.route.outputs.version }}
           TRAIN_REQUIREMENTS: ${{ inputs.requirements }}
           TRAIN_PROMOTION: ${{ inputs.promotion_pr || github.event.pull_request.number }}
           TRAIN_CANDIDATE: ${{ inputs.candidate }}
+          TRAIN_SYSTEMS: ${{ inputs.systems }}
+          TRAIN_CHECK_TIMEOUT_SECONDS: '1800'
         run: |
           args=("$TRAIN_OPERATION" --version "$TRAIN_VERSION" --execute)
           case "$TRAIN_OPERATION" in
             initialize|select) args+=(--requirements "$TRAIN_REQUIREMENTS") ;;
             prepare) args+=(--promotion "$TRAIN_PROMOTION") ;;
             review) args+=(--candidate "$TRAIN_CANDIDATE") ;;
-            release) args=(begin-release --version "$TRAIN_VERSION" --execute) ;;
+            release) args=(begin-release --version "$TRAIN_VERSION" --systems "$TRAIN_SYSTEMS" --execute) ;;
           esac
           python -m tools.source_train "${args[@]}"
+      - name: Dispatch required checks for the candidate branch
+        if: steps.route.outputs.operation == 'prepare' && steps.source.outputs.candidate_branch != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_BRANCH: ${{ steps.source.outputs.candidate_branch }}
+        run: |
+          # The workflow token's push does not trigger CI, so the rebased
+          # candidate would never receive the checks that review and release
+          # require. Dispatch them on the exact branch head instead.
+          gh workflow run ci.yml --ref "$CANDIDATE_BRANCH"
+          for _ in $(seq 1 30); do
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$CANDIDATE_BRANCH" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+            if [ -n "$run_id" ]; then
+              echo "Dispatched candidate checks: $run_id"
+              break
+            fi
+            sleep 5
+          done
+          test -n "$run_id"
+      - name: Continue the merged train explicitly
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          TRAIN_OPERATION: ${{ steps.route.outputs.operation }}
+          TRAIN_VERSION: ${{ steps.route.outputs.version }}
+          TRAIN_PROMOTION: ${{ github.event.pull_request.number }}
+        with:
+          script: |
+            const operation = process.env.TRAIN_OPERATION;
+            const inputs = { operation, version: process.env.TRAIN_VERSION };
+            if (operation === 'prepare') inputs.promotion_pr = process.env.TRAIN_PROMOTION;
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo,
+              workflow_id: 'source-train.yml',
+              ref: context.payload.repository.default_branch,
+              inputs,
+            });
 
   packages:
     # The reusable workflow cleans intermediate Artifacts with this token.
     # Called workflows cannot elevate the caller job's permissions.
     permissions:
-      contents: read
+      contents: write
       actions: write
     needs: [source]
-    if: needs.source.outputs.operation == 'release' && needs.source.outputs.should_package == 'true'
+    if: needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.should_package == 'true' && needs.source.outputs.parallel_systems != 'true'
     uses: ./.github/workflows/release.yml
     with:
       source_sha: ${{ needs.source.outputs.candidate }}
       source_branch: ${{ needs.source.outputs.candidate_branch }}
       source_train: true
+      system_releases: ${{ needs.source.outputs.system_releases == 'true' }}
+      systems: ${{ needs.source.outputs.systems }}
     secrets: inherit
 
-  finalize:
-    needs: [source, packages]
-    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.complete != 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
+  system-packages:
+    permissions:
+      contents: write
+      actions: write
+    needs: [source]
+    if: needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems == 'true' && needs.source.outputs.software_result != 'success' && needs.source.outputs.complete != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        system: ${{ fromJSON(needs.source.outputs.system_matrix) }}
+    uses: ./.github/workflows/release.yml
+    with:
+      source_sha: ${{ needs.source.outputs.candidate }}
+      source_branch: ${{ needs.source.outputs.candidate_branch }}
+      source_train: true
+      system_releases: true
+      publish_system: true
+      systems: ${{ matrix.system }}
+      recovery_runs: ${{ needs.source.outputs.recovery_runs }}
+      train_version: ${{ needs.source.outputs.version }}
+    secrets: inherit
+
+  finish-systems:
+    needs: [source, system-packages]
+    if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems == 'true' && needs.source.outputs.complete != 'true' }}
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: write
+    outputs:
+      software_result: ${{ steps.finish.outputs.software_result }}
     steps:
-      - uses: actions/create-github-app-token@v2
-        id: app
-        with:
-          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
-          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ github.token }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Record public software releases
+        id: finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRAIN_PROTECTION_TOKEN: ${{ secrets.TRAIN_PROTECTION_TOKEN }}
+          TRAIN_RELEASE_IDENTITY: workflow
+          TRAIN_PR_AUTHOR: github-actions[bot]
+          TRAIN_VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          git config user.name 'NeuroBridge release automation'
+          git config user.email 'release-automation@users.noreply.github.com'
+          python -m tools.source_train finish-systems --version "$TRAIN_VERSION" --execute
+      - name: Dispatch required checks for the finalization branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINALIZATION_BRANCH: ${{ steps.finish.outputs.finalization_branch }}
+        run: |
+          # The finalization PR is opened with the workflow token, so its branch
+          # also needs an explicit check dispatch before it can be merged.
+          test -n "$FINALIZATION_BRANCH"
+          gh workflow run ci.yml --ref "$FINALIZATION_BRANCH"
+
+  publish-delivery:
+    needs: [source, finish-systems]
+    if: ${{ !cancelled() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems == 'true' && (needs.finish-systems.outputs.software_result == 'success' || needs.source.outputs.software_result == 'success') }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ github.token }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-ci.lock
+      - name: Publish the verified delivery ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRAIN_RELEASE_IDENTITY: workflow
+          TRAIN_PR_AUTHOR: github-actions[bot]
+          TRAIN_VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          python -m tools.source_train publish-delivery --version "$TRAIN_VERSION" --execute
+          printf '## Delivery ZIP published\n\n`delivery/v%s`\n' "$TRAIN_VERSION" >> "$GITHUB_STEP_SUMMARY"
+      - name: Record delivery publication failure
+        if: failure()
+        run: |
+          echo '::warning::Delivery ZIP was not published. Retry the same version to use the recorded software Releases.'
+          printf '## Delivery ZIP publication failed\n\nRetry the same version to use the recorded software Releases.\n' >> "$GITHUB_STEP_SUMMARY"
+
+  finalize:
+    needs: [source, packages]
+    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && needs.source.outputs.parallel_systems != 'true' && needs.source.outputs.complete != 'true' && (needs.packages.result == 'success' || needs.packages.result == 'skipped')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ github.token }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
@@ -152,13 +318,15 @@ jobs:
         with:
           artifact-ids: ${{ needs.packages.outputs.artifact_id || needs.source.outputs.artifact_id }}
           run-id: ${{ needs.source.outputs.package_run_id }}
-          github-token: ${{ steps.app.outputs.token }}
+          github-token: ${{ github.token }}
           path: artifacts/source-train
       - name: Record verified Artifact, tag exact source, and open finalization PR
+        id: finalize
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          TRAIN_APP_TOKEN_USED: 'true'
-          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          GH_TOKEN: ${{ github.token }}
+          TRAIN_PROTECTION_TOKEN: ${{ secrets.TRAIN_PROTECTION_TOKEN }}
+          TRAIN_RELEASE_IDENTITY: workflow
+          TRAIN_PR_AUTHOR: github-actions[bot]
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
           TRAIN_ARTIFACT: ${{ needs.packages.outputs.artifact_id || needs.source.outputs.artifact_id }}
         run: |
@@ -166,30 +334,35 @@ jobs:
           git config user.email 'release-automation@users.noreply.github.com'
           python -m tools.source_train record-artifact --version "$TRAIN_VERSION" --artifact-id "$TRAIN_ARTIFACT" --directory artifacts/source-train --execute
           python -m tools.source_train finalize --version "$TRAIN_VERSION" --directory artifacts/source-train --execute
+      - name: Dispatch required checks for the finalization branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINALIZATION_BRANCH: ${{ steps.finalize.outputs.finalization_branch }}
+        run: |
+          test -n "$FINALIZATION_BRANCH"
+          gh workflow run ci.yml --ref "$FINALIZATION_BRANCH"
 
   retain-failed-attempt:
-    needs: [source, packages, finalize]
-    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && (needs.packages.result == 'failure' || needs.packages.result == 'cancelled' || needs.finalize.result == 'failure' || needs.finalize.result == 'cancelled')
+    needs: [source, packages, finalize, system-packages, finish-systems]
+    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && (needs.packages.result == 'failure' || needs.packages.result == 'cancelled' || needs.finalize.result == 'failure' || needs.finalize.result == 'cancelled' || needs.system-packages.result == 'failure' || needs.system-packages.result == 'cancelled' || needs.finish-systems.result == 'failure' || needs.finish-systems.result == 'cancelled')
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
     steps:
-      - uses: actions/create-github-app-token@v2
-        id: app
-        with:
-          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
-          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.repository.default_branch }}
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ github.token }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Keep retry checkpoint and preserve every tagged candidate
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          TRAIN_APP_TOKEN_USED: 'true'
-          TRAIN_APP_LOGIN: ${{ steps.app.outputs.app-slug }}[bot]
+          GH_TOKEN: ${{ github.token }}
+          TRAIN_RELEASE_IDENTITY: workflow
+          TRAIN_PR_AUTHOR: github-actions[bot]
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
         run: |
           git config user.name 'NeuroBridge release automation'

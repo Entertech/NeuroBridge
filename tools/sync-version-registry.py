@@ -17,7 +17,7 @@ KYLIN_RUNTIME_MANIFEST_PATH = ROOT / "config" / "kylin-runtime-manifest.toml"
 
 def render_change_log(registry: dict) -> str:
     external = registry["documents"]["external_northbound"]
-    prerelease = registry["documents"]["internal_prerelease"]
+    prerelease = registry["documents"].get("internal_prerelease")
     locks = registry["release_locks"]
     records = registry["change_records"]
     lines = [
@@ -41,7 +41,8 @@ def render_change_log(registry: dict) -> str:
                 "",
             ]
         )
-    lines.extend(
+    if prerelease:
+        lines.extend(
         [
             "## 当前内部预发布版本",
             "",
@@ -50,7 +51,9 @@ def render_change_log(registry: dict) -> str:
             "- 升格规则：收到明确发布指令后，将该文档转换为独立的对外版本 Markdown，更新台账和锁定记录；CI 成功生成该版本 PDF Artifact 后方可合入发布。",
             "",
         ]
-    )
+        )
+    else:
+        lines.extend(["## 当前内部预发布版本", "", "当前没有预发布稿。", ""])
     lines.extend(["## 未锁定变更", ""])
     unlocked = [record for record in records if record["change_state"] == "unlocked"]
     if not unlocked:

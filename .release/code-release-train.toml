@@ -5,8 +5,7 @@ schema_version = 1
 [repository]
 name = "Entertech/NeuroBridge"
 default_branch = "master"
-app_id_secret = "RELEASE_BOT_APP_ID"
-private_key_secret = "RELEASE_BOT_PRIVATE_KEY"
+release_identity = "workflow"
 
 [branches]
 requirement_prefixes = ["feature/", "bugfix/", "codex/"]
@@ -15,7 +14,6 @@ publish_template = "publish_{version}"
 finalization_template = "finalize_{version}"
 release_candidate_template = "release-candidate/{version}/{attempt}"
 state_template = "release-state/{version}"
-tag_prefix = "v"
 
 [source]
 version_source = "neurobridge/version_registry.toml"
@@ -37,7 +35,7 @@ package_workflow = ".github/workflows/release.yml"
 package_matrix = "release/release_matrix.toml"
 require_all_defined_packages = true
 publish_destinations = ["github-actions-artifacts"]
-publish_success_policy = "all"
+publish_success_policy = "any_system"
 github_release_after_tag = true
 merge_method = "merge"
 require_finalization_pr = true

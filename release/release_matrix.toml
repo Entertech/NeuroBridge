@@ -30,11 +30,35 @@ expected_package_count = 5
 platform_archives = ["windows", "kylin"]
 file_name_pattern = "neurobridge-v<applicationVersion>-<buildDate>.zip"
 
+[selection]
+# Empty means compare business changes with the last delivered source per system.
+# A run's explicit systems override this list. Valid values are windows-10,
+# windows-11 and kylin-v10. Each system includes every format defined above.
+default_systems = []
+windows_paths = [
+  "windows/**", "packaging/windows/**", "neurobridge/profiles/windows_*.py",
+  "neurobridge/adapters/sources/serial_windows.py", "neurobridge/ble/windows_hci.py",
+  "tools/prepare-windows-candidate-runtime.ps1",
+]
+kylin_paths = [
+  "packaging/kylin/**", "config/kylin-*", "config/gateway.toml.example",
+  "linux/*kylin*", "linux/lib/kylin*", "linux/systemd/neurobridge.service",
+  "linux/logrotate/neurobridge", "linux/build-algorithm-bridge.sh",
+  "tools/*kylin*", "neurobridge/profiles/kylin_*.py", "neurobridge/adapters/sources/serial_posix.py",
+]
+shared_paths = [
+  "requirements.lock", "sdk.lock", "pyproject.toml", "neurobridge/version_registry.toml",
+  "mac/algorithm_bridge/CMakeLists.txt", "mac/algorithm_bridge/*.cmake",
+  "third_party/AffectiveCloud-Algorithm-SDK/cpp/package/CMakeLists.txt",
+  "third_party/AffectiveCloud-Algorithm-SDK/cpp/package/cmake/*.cmake",
+  "third_party/NumCpp/CMakeLists.txt", "third_party/NumCpp/cmake/*.cmake",
+]
+
 [release]
 # push_master remains the internal strict-coverage manifest enum for compatibility.
 # Live source publication is orchestrated by .release/code-release-train.toml.
 trigger = "source_train"
-tag_pattern = "v<applicationVersion>"
+tag_pattern = "<system>/v<applicationVersion>"
 github_release_required = true
 github_release_starts_as_draft = true
 release_receipt_schema = "schemas/release-receipt.schema.json"
