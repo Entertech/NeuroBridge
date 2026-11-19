@@ -47,24 +47,37 @@ class DocumentReleaseTests(unittest.TestCase):
                 tag.assert_called_with(SOFTWARE, SOURCE)
 
     def test_verification_closes_only_for_matching_formal_tag_and_pdf_digest(self):
+        markdown = b"# northbound v0.3\n"
+        doc = {"markdown_path": "doc/tech/northbound.md", "markdown_sha256": release.hash_bytes(markdown).hexdigest()}
         with tempfile.TemporaryDirectory() as temporary:
             folder = Path(temporary)
             pdf = folder / "northbound-v0.3.pdf"
             pdf.write_bytes(b"%PDF-1.4 fixture")
             pdf_digest = release.sha256(pdf)
             receipt = {"schemaVersion": 1, "tag": DOCUMENT, "document": "northbound", "version": "0.3", "sourceCommit": SOURCE,
-                       "software": {SOFTWARE: [CHANGE]}, "pdf": {"fileName": pdf.name, "sha256": pdf_digest}}
+                       "markdownSha256": doc["markdown_sha256"], "software": {SOFTWARE: [CHANGE]},
+                       "pdf": {"fileName": pdf.name, "sha256": pdf_digest}}
             (folder / release.RECEIPT).write_text(json.dumps(receipt))
             info = {"isDraft": False, "assets": [{"name": name} for name in (release.RECEIPT, pdf.name)],
                     "body": body(release.CHECKPOINT, receipt)}
             with patch.object(release, "release_info", return_value=info), patch.object(release, "ensure_tag") as tag, \
                  patch.object(release, "download", side_effect=lambda ref, name, directory: folder / name), \
+                 patch.object(release, "registered_document", return_value=doc), \
+                 patch.object(release.subprocess, "check_output", return_value=markdown), \
                  patch.object(release, "software_obligations", return_value=receipt["software"]) as obligations:
                 self.assertEqual(release.verify("northbound", "0.3", folder), receipt)
                 tag.assert_called_once_with(DOCUMENT, SOURCE)
                 obligations.assert_called_once_with([SOFTWARE], "northbound", "0.3", folder / "software")
                 pdf.write_bytes(b"%PDF-1.4 different")
                 with self.assertRaisesRegex(ValueError, "PDF SHA-256"):
+                    release.verify("northbound", "0.3", folder)
+            with patch.object(release, "release_info", return_value=info), \
+                 patch.object(release, "ensure_tag"), \
+                 patch.object(release, "download", side_effect=lambda ref, name, directory: folder / name), \
+                 patch.object(release, "registered_document", return_value=doc), \
+                 patch.object(release.subprocess, "check_output", return_value=b"# moved tag\n"), \
+                 patch.object(release, "software_obligations", return_value=receipt["software"]):
+                with self.assertRaisesRegex(ValueError, "tagged Markdown"):
                     release.verify("northbound", "0.3", folder)
 
     def test_upload_retry_reuses_pdf_bound_to_existing_document_tag(self):

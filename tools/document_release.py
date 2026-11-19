@@ -137,7 +137,17 @@ def verify(key: str, version: str, directory: Path) -> dict:
     if (receipt.get("schemaVersion") != 1 or receipt != checkpoint(info)
             or (receipt["tag"], receipt["document"], receipt["version"]) != (tag, key, version)):
         raise ValueError("public document receipt differs from the tag or PDF checkpoint")
-    ensure_tag(tag, require_sha(receipt["sourceCommit"]))
+    source = require_sha(receipt["sourceCommit"])
+    ensure_tag(tag, source)
+    # The receipt binds the PDF to a Markdown digest; re-read the tagged
+    # Markdown so a moved tag cannot serve a PDF for different source text.
+    require_digest(receipt["markdownSha256"], "published Markdown SHA-256")
+    doc = registered_document(key, version)
+    markdown = subprocess.check_output(
+        ["git", "--no-replace-objects", "show", f"{source}:{doc['markdown_path']}"], cwd=ROOT,
+    )
+    if hash_bytes(markdown).hexdigest() != receipt["markdownSha256"]:
+        raise ValueError("tagged Markdown differs from the published document receipt")
     filename = receipt["pdf"]["fileName"]
     if Path(filename).name != filename or not filename.endswith(".pdf"):
         raise ValueError("invalid PDF asset name")
