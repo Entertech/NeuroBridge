@@ -26,6 +26,7 @@ class AlgorithmInput:
     batch_id: str
     payload: Mapping[str, object]
     mapping_version: str
+    device_protocol: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "payload", dict(self.payload))

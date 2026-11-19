@@ -1,20 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
+import re
 import socket
 import tempfile
 import unittest
+from urllib.parse import urljoin
 
 from neurobridge.config import (
     AlgorithmConfig,
     BleConfig,
+    DataSourceConfig,
     GatewayConfig,
     LocalUiConfig,
     RecordingConfig,
     ServerConfig,
 )
 from neurobridge.northbound.local_ui import create_local_ui_server
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def unused_port() -> int:
@@ -73,13 +79,34 @@ class LocalUiIntegrationTests(unittest.IsolatedAsyncioTestCase):
             f'window.NEUROBRIDGE_B_CLIENT_ENDPOINT = "ws://127.0.0.1:{self.websocket_port}/neurobridge/v1/ws";'.encode("ascii"),
             response,
         )
+        self.assertIn(b'window.NEUROBRIDGE_B_CLIENT_SOURCE = "bluetooth";', response)
+        self.assertIn(b"window.NEUROBRIDGE_B_CLIENT_WINDOWS = false;", response)
+        self.assertIn(f"window.NEUROBRIDGE_B_CLIENT_STALE_AFTER_MS = {self.config.data_source.stale_after_ms};".encode("ascii"), response)
+
+    async def test_windows_headband_serves_the_capture_view(self) -> None:
+        self.server.close()
+        await self.server.wait_closed()
+        config = replace(self.config, profile="windows_headband_local", data_source=DataSourceConfig("bluetooth"))
+        self.server = await create_local_ui_server(config)
+        self.assertIn(b"window.NEUROBRIDGE_B_CLIENT_WINDOWS = true;", await self.request("/runtime-config.js"))
+        for path in ("/capture", "/capture/", "/capture/index.html"):
+            with self.subTest(path=path):
+                response = await self.request(path)
+                self.assertIn(b"HTTP/1.1 200 OK", response)
+                self.assertTrue(response.endswith(b"capture:index.html\n"))
 
     async def test_serves_capture_viewer_from_the_same_gateway(self) -> None:
-        page = await self.request("/capture/")
-        script = await self.request("/capture/app.js")
-        self.assertIn(b"HTTP/1.1 200 OK", page)
-        self.assertTrue(page.endswith(b"capture:index.html\n"))
-        self.assertTrue(script.endswith(b"capture:app.js\n"))
+        bundled_page = Path(__file__).resolve().parents[1] / "web" / "capture" / "index.html"
+        (Path(self.directory.name) / "capture" / "index.html").write_bytes(bundled_page.read_bytes())
+        for path in ("/capture", "/capture/", "/capture/index.html"):
+            with self.subTest(path=path):
+                page = await self.request(path)
+                headers, body = page.split(b"\r\n\r\n", 1)
+                self.assertIn(b"HTTP/1.1 200 OK", headers)
+                assets = [urljoin(path, asset) for asset in re.findall(r'<(?:link|script)\b[^>]*\b(?:href|src)="([^"]+)"', body.decode("utf-8"))]
+                self.assertEqual(assets, ["/capture/styles.css", "/version.js", "/runtime-config.js", "/capture/app.js"])
+                for asset in ("/capture/styles.css", "/capture/app.js"):
+                    self.assertTrue((await self.request(asset)).endswith(f"capture:{Path(asset).name}\n".encode()))
 
     async def test_rejects_unapproved_host_and_unknown_paths(self) -> None:
         bad_host = await self.request("/", host="example.com")
@@ -92,3 +119,20 @@ class LocalUiIntegrationTests(unittest.IsolatedAsyncioTestCase):
         headers, body = response.split(b"\r\n\r\n", 1)
         self.assertIn(b"HTTP/1.1 200 OK", headers)
         self.assertEqual(body, b"")
+
+
+class WaveformRenderingSourceTests(unittest.TestCase):
+    def test_clipped_samples_stay_in_the_waveform_polyline(self) -> None:
+        source = (ROOT / "web" / "b-client-test" / "app.js").read_text(encoding="utf-8")
+        # A clipped sample is still a sample: null is reserved for a window with
+        # no data, and the trace must not turn the algorithm limit into a gap.
+        self.assertIn(
+            "const incoming = wave.slice(-waveformCapacity).map((value) => (noSignal ? null : value));",
+            source,
+        )
+        self.assertNotIn("return NaN", source)
+        self.assertIn(
+            "values.filter((value) => Number.isFinite(value) && Math.abs(value) >= sdkDualWaveLimit)",
+            source,
+        )
+        self.assertIn("ctx.fillRect(x - 1, scale(value) - 1, 2, 2);", source)

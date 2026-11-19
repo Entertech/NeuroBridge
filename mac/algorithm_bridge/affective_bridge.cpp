@@ -132,14 +132,26 @@ void enable_requested_algorithms(AffectiveAlgorithm& algorithm) {
     algorithm.setArousalEnable(true);
 }
 
-std::string evaluate(AffectiveAlgorithm& algorithm, const std::string& request) {
+std::string evaluate(AffectiveAlgorithm& algorithm, std::string& active_protocol, const std::string& request) {
+    const auto requested_protocol = json_string_field(request, "deviceProtocol");
+    const auto protocol = requested_protocol.empty() ? "headband_ble" : requested_protocol;
+    const bool is_ear = protocol == "headset_rev181";
+    if (!is_ear && protocol != "headband_ble") {
+        throw std::runtime_error("unsupported device protocol");
+    }
+    if (!active_protocol.empty() && active_protocol != protocol) {
+        throw std::runtime_error("device protocol cannot change within an algorithm process");
+    }
     const auto eeg = base64_decode(json_string_field(request, "eegRawBase64"));
     const auto hr = base64_decode(json_string_field(request, "hrRawBase64"));
+    active_protocol = protocol;
     std::ostringstream result;
     result << "{\"algorithm\":{";
     bool first = true;
+    FlowDiagnostic flow_diagnostic;
     if (!eeg.empty()) {
-        const auto values = algorithm.appendEEG(eeg);
+        const auto values = algorithm.appendEEG(eeg, is_ear);
+        flow_diagnostic = values.flow.diagnostic;
         if (!first) result << ',';
         first = false;
         result << "\"eeg\":{\"wave\":{";
@@ -194,7 +206,23 @@ std::string evaluate(AffectiveAlgorithm& algorithm, const std::string& request) 
         json_number(result, "coherence", values.coherence, first);
         json_number(result, "arousal", values.arousal, first);
     }
-    result << "}}";
+    result << '}';
+    if (is_ear && flow_diagnostic.requiredSamples > 0) {
+        result << ",\"flowDiagnostic\":{";
+        bool first_diagnostic = true;
+        json_integer(result, "eegQuality", flow_diagnostic.eegQuality, first_diagnostic);
+        json_boolean(result, "historyReset", flow_diagnostic.historyReset, first_diagnostic);
+        json_integer(result, "bufferedSamples", flow_diagnostic.bufferedSamples, first_diagnostic);
+        json_integer(result, "requiredSamples", flow_diagnostic.requiredSamples, first_diagnostic);
+        json_boolean(result, "modelsEvaluated", flow_diagnostic.modelsEvaluated, first_diagnostic);
+        if (flow_diagnostic.modelsEvaluated) {
+            json_number(result, "expertScore", flow_diagnostic.expertScore, first_diagnostic);
+            json_number(result, "aiScore", flow_diagnostic.aiScore, first_diagnostic);
+        }
+        result << '}';
+    }
+    if (!requested_protocol.empty()) result << ",\"deviceProtocol\":\"" << protocol << '"';
+    result << '}';
     return result.str();
 }
 
@@ -205,9 +233,10 @@ int main() {
     enable_requested_algorithms(algorithm);
 
     std::string request;
+    std::string active_protocol;
     while (std::getline(std::cin, request)) {
         try {
-            std::cout << evaluate(algorithm, request) << std::endl;
+            std::cout << evaluate(algorithm, active_protocol, request) << std::endl;
         } catch (const std::exception& error) {
             std::cout << "{\"algorithm\":{},\"bridgeError\":\"" << escape_json(error.what()) << "\"}" << std::endl;
         }

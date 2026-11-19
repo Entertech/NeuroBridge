@@ -1,0 +1,37 @@
+flowchart TB
+    subgraph CONN["① 扫描、连接与采集启停（每次断线重连都执行）"]
+        B1["Bleak 扫描 ≤ 5 s<br/>按广播服务 UUID 过滤；可选广播名 / MAC"]
+        B2["候选选择：Windows 优先上次已连接地址<br/>否则选 RSSI 最强的匹配候选"]
+        B3["连接并订阅 FF31 / FF32 / FF51<br/>（电池特征可选）"]
+        B4["上报 CONNECTED，生成 connectionSessionId<br/>初始化头环算法桥进程 B"]
+        B5["通过 FF21 写 0x05 开始采集 → streaming"]
+        B6["断开回调 / 通知停更（Windows：EEG+HR 均停 ≥10 s）<br/>关闭链路 → 重新扫描"]
+        B1 --> B2 --> B3 --> B4 --> B5
+        B5 --> B6
+        B6 -->|"重连"| B1
+    end
+    subgraph NOTIFY["② 通知回调、解析与原始数据落盘"]
+        N1["FF31：20 B = 2B 序号 + 18B EEG"]
+        N2["FF51：1 B 心率"]
+        N3["FF32：设备状态原始包<br/>佩戴语义待 POC"]
+        N4["RawChunk(channel = ff31 / ff51 / ff32)<br/>入有界队列（容量 64）"]
+        N5["HeadbandBleParser<br/>eeg / hr / device_status 信号"]
+        N6["原始通知持久化 raw.device_frame<br/>按通知到达顺序与到达时间"]
+        N1 --> N4
+        N2 --> N4
+        N3 --> N4
+        N4 --> N5 --> N6
+    end
+    subgraph PROC["③ 600 ms 窗口、算法、校准与北向发布"]
+        M1["SignalWindowAssembler 600 ms<br/>窗口到点刷出，持久化 parsed.signal_batch"]
+        M2["算法输入映射 → 算法桥进程 B<br/>EEG = 20B/包；HR = 1B/包，限 5 个/秒；2 s 超时"]
+        M3["WindowResult → EegAlignmentCache<br/>缓存最新 EEG 供耳机校准；头环未佩戴时隐藏 EEG"]
+        M4["持久化 algorithm.result → GatewayApplication B<br/>data.source = headband"]
+        M5["WebSocket 600 ms 批量事件"]
+        M1 --> M2 --> M3 --> M4 --> M5
+    end
+    B5 --> N1
+    B5 --> N2
+    B5 --> N3
+    N6 --> M1
+    M3 -. "头环输出不使用耳机结果" .-> M4

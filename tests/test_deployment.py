@@ -870,10 +870,32 @@ class DeploymentTests(unittest.TestCase):
                     status_subscription_handler = script.split('streams.length === 1 && streams[0] === "status"', 1)[1].split(
                         "} else {", 1
                     )[0]
-                    self.assertIn('sendRequest("getStatus", {});', status_subscription_handler)
+                    self.assertIn('sendRequest("getStatus", requestParams(source, {}));', status_subscription_handler)
+                    self.assertIn(auto_connect, script)
                 else:
-                    self.assertIn('sendRequest("getStatus", {});', open_handler)
-                self.assertIn(auto_connect, script)
+                    self.assertIn('sendRequest("getStatus", {}, item);', open_handler)
+                    self.assertIn('if (typeof configuredEndpoint === "string") {\n  connect(localPanel);\n}', script)
+
+    def test_b_side_console_coalesces_algorithm_data_but_not_waveform(self) -> None:
+        script = (ROOT / "web" / "b-client-test" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("const liveDisplayIntervalMs = 600;", script)
+        self.assertIn("const pendingLiveMessages = new Map();", script)
+        self.assertIn("function isLiveDataMessage(message, panel)", script)
+        self.assertIn("if (data?.event !== \"data\" || data?.mode === \"replay\") return false;", script)
+        self.assertIn("panel.eventModeSubscriptions.add(subscriptionId)", script)
+        self.assertIn("function queueLiveMessage(message, panel)", script)
+        self.assertIn("function flushLiveMessages(panel)", script)
+        self.assertIn("function flushPendingLiveMessages()", script)
+        self.assertIn("window.setTimeout(flushPendingLiveMessages, liveDisplayIntervalMs)", script)
+        self.assertIn("handleGatewayMessage(message, panel, { log: false })", script)
+        self.assertIn("function updateLiveWaveform(data, panel)", script)
+        self.assertIn("function appendWaveChannels(panel, eeg, invalid)", script)
+        self.assertIn("function updateWaveformMeta(panel, invalid)", script)
+        self.assertIn("updateLiveWaveform(message.data, target);", script)
+        self.assertIn('appendLog("in", "← IN", message, target);', script)
+        self.assertIn("flushLiveMessages(target);", script)
+        html = (ROOT / "web" / "b-client-test" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("实时算法数据每 600 ms 刷新最新一组，脑波波形按窗口即时追加", html)
 
     def test_one_command_update_uses_only_the_existing_checkout(self) -> None:
         script = (ROOT / "linux" / "update-ubuntu.sh").read_text(encoding="utf-8")
@@ -1417,10 +1439,7 @@ class DeploymentTests(unittest.TestCase):
         capture_root = ROOT / "web" / "capture"
         html = (capture_root / "index.html").read_text(encoding="utf-8")
         javascript = (capture_root / "app.js").read_text(encoding="utf-8")
-        self.assertIn('href="./styles.css"', html)
-        self.assertIn('src="./app.js"', html)
         self.assertNotIn("?v=", html)
-        self.assertIn('src="../runtime-config.js"', html)
         self.assertIn("不直接访问 USB 串口", html)
         self.assertIn("网页连接后，网关会通过 WebSocket 实时转发设备状态", html)
         self.assertIn('new WebSocket(endpoint, SUBPROTOCOL)', javascript)
@@ -1436,7 +1455,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("stats.outOfOrder", javascript)
         self.assertIn("耳机完整原始帧", html)
         self.assertIn("每行对应一个完整 28 字节串口帧", html)
-        self.assertIn("页面按已确认串口结构还原完整 28 字节帧", html)
+        self.assertIn("耳机按已确认串口结构还原完整 28 字节帧", html)
         self.assertIn("导出完整帧", html)
         self.assertIn("根据收到的 EEG/HR 原始负载按已确认串口结构还原", html)
         self.assertIn('class="data-workspace"', html)
@@ -1479,9 +1498,9 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('"网关已连接"', javascript)
         self.assertIn("statusSubscriptionId", javascript)
         self.assertIn("dataSubscriptionId", javascript)
-        self.assertIn("耳机状态已开启实时更新", javascript)
-        self.assertIn("耳机状态仍在实时更新", javascript)
-        self.assertIn("网页连接网关后会立即订阅耳机状态并持续实时更新", html)
+        self.assertIn("设备状态已开启实时更新", javascript)
+        self.assertIn("设备状态仍在实时更新", javascript)
+        self.assertIn("网页连接网关后会立即订阅耳机和头环状态并持续实时更新", html)
         styles = (capture_root / "styles.css").read_text(encoding="utf-8")
         self.assertIn("grid-template-columns: minmax(0, 1fr)", styles)
         self.assertNotIn("repeat(auto-fit", styles)

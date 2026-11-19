@@ -342,6 +342,7 @@ public:
             auto flow = flowAC.trigger(cache, eeglSplit, eegrSplit);
             flowRes.meditation = flow.meditation;
             flowRes.meditationTips = flow.meditationTips;
+            flowRes.diagnostic = flow.diagnostic;
         }
 #endif
 

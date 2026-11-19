@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import json
 import time
 
 from ..adapters.algorithms import AffectiveSdkAlgorithmEngine
+from ..adapters.headset_eeg_diagnostics import HeadsetEegDiagnostics
 from ..adapters.northbound.codec import GatewayWireCodec
 from ..adapters.northbound import GatewayNorthboundSink, NorthboundController
+from ..adapters.northbound.controller import SourceRouter
 from ..adapters.parsers import HeadbandBleParser, HeadsetRev181Parser
 from ..adapters.sources import BluetoothBleakSource, PosixSerialSource, WindowsSerialSource
 from ..application.service import ApplicationService
+from ..application.eeg_alignment import EegAlignmentCache
 from ..application.gateway import GatewayApplication as Gateway
+from ..application.processing import AlgorithmInputMapper
 from ..application.snapshots import InMemoryLatestSnapshotStore
 from ..adapters.northbound.protocol import project_window
 from ..adapters.storage.filesystem import SegmentedRecordingRepository
@@ -107,6 +111,7 @@ class _ApplicationPipelineAdapter:
             "connectionSessionId": source.connection_session_id,
             "recordingSessionId": self.gateway.store.recording_id,
             "connectionState": source.state.value,
+            "gatewayConnectionState": self.gateway.status["connectionState"],
             "dataState": data.data_state.value, "storageState": storage.state.value,
             "persistenceGuaranteed": storage.persistence_guaranteed,
             "availableBytes": storage.available_bytes, "persistenceGaps": storage.gap_count,
@@ -234,7 +239,8 @@ class _ApplicationPipelineAdapter:
             )
 
 
-def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = None) -> ApplicationContainer:
+def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = None, *,
+                    eeg_alignment: EegAlignmentCache | None = None) -> ApplicationContainer:
     profile = resolve_profile(config, runtime)
     engine = AffectiveSdkAlgorithmEngine(config.algorithm)
     def recording_factory():
@@ -259,8 +265,18 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     else:
         raise ValueError(f"No parser is registered for {profile.device_protocol}")
 
+    observe_batch = None
+    windows_headset = profile.profile_id == "windows_headset_local"
+    if windows_headset or profile.profile_id == "windows_headband_local":
+        LOG.info("Windows HR algorithm input: profile=%s maxPerSecond=%s mappingVersion=%s",
+                 profile.profile_id, AlgorithmInputMapper.HR_MAX_PER_SECOND, AlgorithmInputMapper.MAPPING_VERSION)
+    if windows_headset:
+        observe_batch = HeadsetEegDiagnostics().observe
+
     application = ApplicationService(
         device_protocol=profile.device_protocol,
+        batch_mode=config.pipeline.batch_mode,
+        event_batch_ms=config.pipeline.event_batch_ms,
         requires_algorithm_to_start=profile.transport == "serial",
         transport_trace_enabled=config.recording.transport_trace_enabled,
         transport_trace_max_bytes=config.recording.transport_trace_max_bytes,
@@ -274,6 +290,9 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
         algorithm_queue_size=config.pipeline.algorithm_queue_size,
         persistence_timeout_ms=config.pipeline.persistence_timeout_ms,
         shutdown_timeout_ms=config.pipeline.shutdown_timeout_ms,
+        observe_batch=observe_batch,
+        eeg_alignment=eeg_alignment,
+        input_mapper=AlgorithmInputMapper(pace_headset_hr=windows_headset),
     )
     bridge_ref: dict[str, _ApplicationPipelineAdapter] = {}
 
@@ -315,7 +334,7 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
             activate_algorithm=activate_algorithm if profile.transport == "serial" else None,
         )
 
-    if profile.os_family in {"kylin", "windows"}:
+    if profile.transport == "serial":
         source_type = PosixSerialSource if profile.os_family == "kylin" else WindowsSerialSource
         source: RawDataSource = source_type(
             config.serial,
@@ -331,9 +350,43 @@ def build_container(config: GatewayConfig, runtime: RuntimePlatform | None = Non
     else:
         source = BluetoothBleakSource(config.ble, device_ready, gateway.update_connection_error,
                                       queue_size=config.pipeline.source_queue_size,
-                                      enqueue_timeout_ms=config.pipeline.source_enqueue_timeout_ms)
+                                      enqueue_timeout_ms=config.pipeline.source_enqueue_timeout_ms,
+                                      shutdown_timeout_ms=config.pipeline.shutdown_timeout_ms)
     adapter = _ApplicationPipelineAdapter(source, application, gateway, profile)
     application.control = getattr(source, "control", None)
     bridge_ref["bridge"] = adapter
     controller = NorthboundController(gateway)
     return ApplicationContainer(config, profile, gateway, adapter, source, parser, application, controller)
+
+
+def build_runtime(
+    config: GatewayConfig, runtime: RuntimePlatform | None = None,
+) -> tuple[tuple[ApplicationContainer, ...], SourceRouter | None]:
+    """Compose the acquisition pipelines behind one northbound listener."""
+    if not config.data_source.include_headband:
+        return (build_container(config, runtime),), None
+
+    headband_config = replace(
+        config,
+        profile="windows_headband_local",
+        data_source=replace(config.data_source, type="bluetooth", include_headband=False),
+        recording=replace(config.recording, directory=config.recording.directory / "headband"),
+    )
+
+    alignment = None
+    LOG.info("Windows EEG alignment configuration: enabled=%s stage=algorithm_output pairing=latest_headband",
+             bool(config.data_source.eeg_alignment_percent))
+    if config.data_source.eeg_alignment_percent:
+        alignment = EegAlignmentCache(percent=config.data_source.eeg_alignment_percent,
+                                      window_ms=config.data_source.window_interval_ms,
+                                      wait_ms=config.data_source.eeg_alignment_output_wait_ms,
+                                      reference_batches=config.data_source.eeg_alignment_reference_batches,
+                                      clock_packets=config.data_source.eeg_alignment_clock_packets)
+    primary = build_container(config, runtime, eeg_alignment=alignment)
+    headband = build_container(headband_config, runtime, eeg_alignment=alignment)
+    if alignment is not None and config.pipeline.batch_mode == "as_available":
+        alignment.relay_mode = True
+        primary.gateway.eeg_alignment = alignment
+        headband.gateway.eeg_alignment = alignment
+        headband.application.eeg_forward = primary.gateway.publish_headband_eeg
+    return (primary, headband), SourceRouter(primary.northbound_controller, headband.northbound_controller)

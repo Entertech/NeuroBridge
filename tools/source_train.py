@@ -717,6 +717,11 @@ def source_check(branch: str, base: str, head: str = 'HEAD', event: str | None =
     config = tomllib.loads(CONFIG_PATH.read_text())
     current = version_at('HEAD')
     numeric(current)
+    requirement = branch.startswith(tuple(config['branches']['requirement_prefixes']))
+    # The previous push is on the requirement branch itself. It cannot
+    # establish the fork version, including when it contains an invalid bump.
+    if event == 'push' and requirement:
+        base = None
     # A force push can remove the before object from the fetched history, or
     # leave it on an unrelated line. Only push events may replace that baseline;
     # a missing PR target or an explicitly supplied CLI base remains an error.
@@ -742,7 +747,7 @@ def source_check(branch: str, base: str, head: str = 'HEAD', event: str | None =
         print(f'comparison baseline resolved to {base} from {default}', file=sys.stderr)
     require_sha(base)
     from tools.release_pipeline import gate
-    if branch.startswith(tuple(config['branches']['requirement_prefixes'])):
+    if requirement:
         fork = run('git', 'merge-base', base, head)
         if version_at(head) != version_at(fork):
             raise ValueError('requirements must not initialize release versions')

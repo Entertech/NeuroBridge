@@ -438,19 +438,24 @@ class SerialProductionStartupTests(unittest.IsolatedAsyncioTestCase):
 class PreparedSdkTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_real_engine_transfer_does_not_close_or_reinitialize_warmed_runner(self):
         from neurobridge.config import AlgorithmConfig
+        from neurobridge.domain.algorithm import AlgorithmSession
         class Runner:
             available = True
             def __init__(self):
                 self.stops = 0
+            async def initialize(self, device_protocol):
+                self.device_protocol = device_protocol
             async def stop(self):
                 self.stops += 1
         active = AffectiveSdkAlgorithmEngine(AlgorithmConfig(enabled=False, command=()))
         prepared = AffectiveSdkAlgorithmEngine(AlgorithmConfig(enabled=False, command=()))
         old, warmed = Runner(), Runner()
         active._runner, prepared._runner = old, warmed
+        await prepared.initialize(AlgorithmSession("prepared", "none", "headset_rev181"))
         await active.adopt_prepared(prepared)
         await prepared.close()
         self.assertIs(active._runner, warmed)
+        self.assertEqual(active._device_protocol, "headset_rev181")
         self.assertEqual(warmed.stops, 0)
         await active.close()
         self.assertEqual(warmed.stops, 1)

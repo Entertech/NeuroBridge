@@ -4,10 +4,16 @@
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha256
+import json
+import os
 from pathlib import Path
 import shutil
 import sys
+from tempfile import NamedTemporaryFile
 import threading
+import tomllib
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -16,8 +22,11 @@ from neurobridge.__main__ import run
 
 
 DEFAULT_CONFIG = Path(r"C:\ProgramData\NeuroBridge\gateway.toml")
-CONFIG_TEMPLATE = ROOT / "gateway.toml.example"
+CONFIG_TEMPLATE = Path(__file__).with_name("gateway.toml.example")
 DATA_DIRECTORIES = ("logs", "recordings")
+# The published v0.3.2 Windows template, before it supported the headband.
+LEGACY_DEFAULT_SHA256 = "a9ee184f7325b0fb2e18dc862bad159687986bee2cbb474509a7374143c6a7cc"
+LEGACY_DEFAULT_VALUES_SHA256 = "dec49bd8d974a0c051984b74542eb3f7ef277f99c8bdeb8f3712cea76eb9bd36"
 
 
 def provision_data_layout(config_path: Path = DEFAULT_CONFIG, template: Path = CONFIG_TEMPLATE) -> bool:
@@ -25,9 +34,7 @@ def provision_data_layout(config_path: Path = DEFAULT_CONFIG, template: Path = C
 
     The MSI registers the service but owns nothing under ProgramData, while this
     host reads a fixed configuration path.  Create the directories the shipped
-    template points at, then copy the template once.  An existing configuration
-    is never replaced, so operator settings and recorded data survive both a
-    reinstall and an uninstall.
+    template points at, then copy the template once if configuration is missing.
 
     Returns True only when a new configuration file was written.
     """
@@ -45,10 +52,56 @@ def provision_data_layout(config_path: Path = DEFAULT_CONFIG, template: Path = C
     return True
 
 
+def upgrade_legacy_default(config_path: Path, template: Path) -> Path | None:
+    """Upgrade the v0.3.2 factory settings and keep a backup of the old file."""
+    original = config_path.read_bytes()
+    if sha256(original.replace(b"\r\n", b"\n")).hexdigest() != LEGACY_DEFAULT_SHA256:
+        # Schema migration can remove comments. Accept that form only if all
+        # values match, and leave files containing operator comments alone.
+        if b"#" in original:
+            return None
+        try:
+            values = tomllib.loads(original.decode("utf-8"))
+            serialized = json.dumps(values, sort_keys=True).encode("utf-8")
+        except (ValueError, TypeError):
+            return None
+        if sha256(serialized).hexdigest() != LEGACY_DEFAULT_VALUES_SHA256:
+            return None
+
+    updated = template.read_bytes()
+    try:
+        data_source = tomllib.loads(updated.decode("utf-8")).get("data_source", {})
+    except ValueError as error:
+        raise OSError("The shipped Windows configuration template is invalid") from error
+    if not isinstance(data_source, dict) or data_source.get("include_headband") is not True:
+        raise OSError("The shipped Windows template is missing the dual-source default")
+
+    backup_directory = config_path.parent / "config-backups"
+    backup_directory.mkdir(exist_ok=True)
+    backup = backup_directory / f"{config_path.name}.before-dual-source.{uuid4().hex}.bak"
+    with backup.open("xb") as backup_file:
+        backup_file.write(original)
+        backup_file.flush()
+        os.fsync(backup_file.fileno())
+    temporary = None
+    try:
+        with NamedTemporaryFile(dir=config_path.parent, prefix=".gateway-", suffix=".tmp", delete=False) as staged:
+            temporary = Path(staged.name)
+            staged.write(updated)
+            staged.flush()
+            os.fsync(staged.fileno())
+        if config_path.read_bytes() != original:
+            return None
+        os.replace(temporary, config_path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return backup
+
+
 def _service_main() -> None:
     try:
         import servicemanager
-        import win32event
         import win32service
         import win32serviceutil
     except ImportError as error:
@@ -61,18 +114,29 @@ def _service_main() -> None:
 
         def __init__(self, args) -> None:
             super().__init__(args)
-            self.stop_event = win32event.CreateEvent(None, 0, 0, None)
+            self.stop_requested = threading.Event()
             self.loop: asyncio.AbstractEventLoop | None = None
             self.task: asyncio.Task[None] | None = None
 
         def SvcStop(self) -> None:
-            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-            win32event.SetEvent(self.stop_event)
-            if self.loop is not None:
-                self.loop.call_soon_threadsafe(self._cancel)
+            if self.stop_requested.is_set():
+                return
+            self.stop_requested.set()
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING, waitHint=30000)
+            servicemanager.LogInfoMsg("NeuroBridge service stop requested")
+            loop = self.loop
+            if loop is not None:
+                try:
+                    loop.call_soon_threadsafe(self._cancel)
+                except RuntimeError:
+                    if not loop.is_closed():
+                        raise
+
+        def SvcShutdown(self) -> None:
+            self.SvcStop()
 
         def _cancel(self) -> None:
-            if self.task is not None:
+            if self.task is not None and not self.task.done() and not self.task.cancelling():
                 self.task.cancel()
 
         def SvcDoRun(self) -> None:
@@ -89,10 +153,20 @@ def _service_main() -> None:
                 "NeuroBridge data layout ready"
                 + (" (created the initial configuration)" if created else " (existing configuration preserved)")
             )
+            if not created:
+                try:
+                    backup = upgrade_legacy_default(DEFAULT_CONFIG, CONFIG_TEMPLATE)
+                    if backup is not None:
+                        servicemanager.LogInfoMsg(f"Upgraded the old Windows defaults to dual-source capture; backup: {backup}")
+                except OSError as error:
+                    servicemanager.LogErrorMsg(f"Windows default configuration upgrade failed: {error}")
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
             self.task = self.loop.create_task(run(str(DEFAULT_CONFIG)))
             try:
+                # A stop can arrive before provisioning finishes or before the task exists.
+                if self.stop_requested.is_set():
+                    self._cancel()
                 self.loop.run_until_complete(self.task)
             except asyncio.CancelledError:
                 pass

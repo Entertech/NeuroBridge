@@ -24,7 +24,7 @@
 
 离线运行使用 `-Offline`：已有环境不再安装依赖；缺失环境须预先提供完整 Python 3.11 x64（含 venv/pip，可放 `python-runtime\windows\`）及 `wheelhouse\windows\` 下的匹配 wheel。算法未构建时还需在 `algorithm-packages\windows\` 放入 `sdk.lock` 中四个原名 ZIP；已验证的缓存可直接复用。离线参数禁止 winget、网络 pip 安装及算法依赖下载，缺少材料时显示具体文件名。双击入口使用进程级 ExecutionPolicy Bypass；若组织策略禁止脚本，按组织批准方式运行，不修改机器策略。
 
-需要排障菜单时运行 `.\windows\neurobridge-windows-bootstrap.cmd -Action menu`。菜单支持 `1` 一键准备启动、`2` 直接启动、`4` COM 枚举、`5` 创建/校验配置、`6` 算法准备/修复、`7` 诊断摘要、`8` 最近日志、`9` 自启状态、`10` 启用自启并启动、`11` 关闭自启并停止服务、`12` 一键退出（移除服务注册与源码）、`13` 导出运行日志、`0` 退出。也可用 `-Action start|check|config|algorithm|diagnostics|logs|export-logs|uninstall|purge` 执行对应动作；`uninstall` 和 `purge` 是破坏性动作，非交互执行需显式加 `-Yes`。除 `prepare` 外不安装运行时，缺少环境时重新双击入口即可准备。没有 COM 时网关仍可启动并等待插入设备；算法不可用、已有进程占用端口或配置错误时不会启动第二个网关。
+需要排障菜单时运行 `.\windows\neurobridge-windows-bootstrap.cmd -Action menu`。菜单支持 `1` 一键准备启动、`2` 直接启动、`4` 检查采集来源、`5` 创建/校验配置、`6` 算法准备/修复、`7` 诊断摘要、`8` 最近日志、`9` 自启状态、`10` 启用自启并启动、`11` 关闭自启并停止服务、`12` 一键退出（移除服务注册与源码）、`13` 导出运行日志、`14` 打开原始数据查看页、`0` 退出。也可用 `-Action start|check|config|algorithm|diagnostics|logs|export-logs|capture|uninstall|purge` 执行对应动作；`capture` 打开 `http://127.0.0.1:<端口>/capture/`，不改变正在运行的网关。安装包部署可用 `neurobridge web capture` 打开同一页面，`neurobridge web` 仍打开联调首页。`uninstall` 和 `purge` 是破坏性动作，非交互执行需显式加 `-Yes`。除 `prepare` 外不安装运行时，缺少环境时重新双击入口即可准备。没有 COM 时网关仍可启动并等待插入设备；算法不可用、已有进程占用端口或配置错误时不会启动第二个网关。
 
 自动化测试覆盖配置保留、路径转义、录播/监听策略拒绝、端口冲突、算法失败与诊断脱敏；Windows CI 另外运行 PowerShell 5.1 语法、进程锁和离线一键流程检查。CI 不替代真实设备或目标机验收。
 
@@ -33,6 +33,72 @@ PowerShell 环境准备、COM 检查、配置、前台启动、日志排障与�
 仓库已提供 Windows USB 虚拟串口的源码扩展：`WindowsSerialSource` 使用 pyserial 的 COM 枚举/打开能力，只选择 USB 派生 COM 端口，并复用 `HeadsetRev181Parser`、统一 ApplicationService、本机回环 WebSocket 与串口耳机禁用录播规则。
 
 录制兼容性：Windows 录制索引使用可写句柄写入、刷新和同步后原子替换，避免旧版每 10 分钟切段时的 `Bad file descriptor`。切段失败会隔离已关闭句柄，保留可恢复文件，真实写入失败仍记录持久化缺口；未完成的分段不会标记为完整会话。升级前正常停止网关并保留录制目录，升级后检查跨越至少两次分段周期的日志。历史已丢失的数据不能自动补回；本次修复已加入本地故障注入回归和 Windows 原生 CI，现场复测仍待完成。
+
+## 使用蓝牙头环
+
+Windows 10/11 x64 首次生成的配置默认同时启用 USB 串口耳机和 Flowtime BLE 头环。打开 Windows 蓝牙与头环电源后，网关自动扫描和重连。可以只接其中一种设备，联调页按实际连接情况显示。
+
+Windows 安装包内置 Bleak 0.19.5，用于修复 Python 3.11 下头环连接时的 WinRT 服务发现异常。
+
+从 v0.3.2 覆盖安装时，网关首次启动会识别原厂默认配置，将其备份至 `%ProgramData%\NeuroBridge\config-backups`，再换成带中文注释的双设备配置。修改过的配置和已明确设置头环开关的配置继续沿用。可在 Windows 事件查看器的应用程序日志中确认迁移结果。
+
+已有配置需要开启头环或补注释时，参照带中文注释的 [Windows 配置模板](gateway.toml.example)。源码部署的配置是 `.runtime\config\windows-gateway.toml`，安装包部署是 `%ProgramData%\NeuroBridge\gateway.toml`。修改前停止网关。源码部署使用菜单 `11` 停止项目服务，前台运行时按 `Ctrl+C`。安装包部署在管理员 PowerShell 中执行 `Stop-Service NeuroBridge`。
+
+- 同时采集时，使用 `profile = "windows_headset_local"`，在 `[data_source]` 设置 `type = "serial"` 与 `include_headband = true`。
+- 只采集头环时，使用 `profile = "windows_headband_local"`，在 `[data_source]` 设置 `type = "bluetooth"` 与 `include_headband = false`。
+- 双设备或仅头环模式须将 `[ble].enabled` 设为 `true`，扫描超时和重连间隔都要大于 0 秒。默认分别为 5 秒和 3 秒。旧配置没有 `[ble]` 时，从模板复制该段。网关按广播型号 UUID 匹配头环。可将 `device_name` 设为实际广播名称或留空。附近有多个同型号头环时，可在 `[ble].device_identifier` 填入目标头环的蓝牙 MAC 地址，未填写时选择信号最强的匹配设备。
+
+排查头环连接时，在 `neurobridge.log` 搜索 `Flowtime scan completed`。若 `discovered=0`，优先检查蓝牙适配器、驱动和附近设备是否在广播。若 `discovered>0` 且 `modelMatches=0`，检查头环是否在广播及型号 UUID 是否正确。若 `modelMatches>0` 且 `matched=0`，检查名称和设备标识配置。
+
+已连接的头环掉线后，Windows 立即开始第一次扫描。程序会记住本次运行中最后一个完成连接和采集初始化的头环地址，收到该地址的新广播后就尝试重连，并重新验证 GATT 特征和采集初始化。此时日志的 `previousDeviceSeen=True` 可以解释为什么名称或型号字段尚未收到就开始连接。如果在扫描窗口内没有遇到该地址，继续按原有名称、型号和设备标识配置筛选。如果首选设备连接或初始化失败，下次恢复完整扫描，并优先尝试本轮尚未失败的匹配设备。所有匹配设备都已尝试后，从信号最强的设备重新开始。扫描或连接失败后的重复尝试仍按 `reconnect_delay_seconds` 间隔进行。
+
+`Flowtime EEG notifications` 和 `Flowtime EEG session ended` 记录头环 EEG 包的累计分类计数。全零和全 FF 只检查采样字节，跳过两字节序号。计数与原始数据来自同一通知回调，便于区分采样字节全零和通知停止。
+
+Windows 在启动采集后持续监测 EEG 和心率通知。如果两路都停满 `[ble].notification_timeout_seconds`（默认 10 秒），网关结束旧会话并重新扫描，即使 Windows 仍报告蓝牙已连接。日志 `notificationTimedOut=True` 表示此次重连由通知停更触发。仍有一路在发送通知时继续采集。若本次连接从未收到任一路通知，按 `reconnect_delay_seconds` 等待后完整扫描，优先尝试其他匹配候选。旧配置缺少该字段时使用默认值。
+
+头环断开时，`Flowtime streaming ended` 记录连接持续时间，以及最后一条 EEG 和心率通知距断开的毫秒数。值为 `None` 表示该连接尚未收到对应通知。`scanRssi` 是建立连接前的扫描信号强度。`Flowtime capture restarted` 的 `outageMs` 表示从蓝牙断开到网关重新启动采集的时间。可按日志时间与 `Data stream became stale` 对照。
+
+Windows 头环建立连接后，`Flowtime WinRT GATT session status changed` 会记录 Windows 报告的会话状态及蓝牙错误（名称和数值）。可用 `attempt` 与同一连接的断开回调、`stopping` 标志及采集日志对照。`status=CLOSED(0) bluetoothError=SUCCESS(0)` 表示会话已关闭，Windows 未报告 GATT 错误。判断由哪一端发起断开需要蓝牙控制器层的证据。若 WinRT 会话事件无法订阅，日志会显示 `Flowtime WinRT GATT session diagnostics unavailable`。
+
+Windows 网关会启动实时 HCI 跟踪，日志出现 `Windows Bluetooth HCI trace active` 后即可采集。使用 `Windows Bluetooth HCI` 搜索控制器事件，并按 `eventUtc`、`attempt` 和 `handle` 对照 WinRT 日志。日志记录 HCI 断开命令、断开完成事件、已匹配头环的连接参数及更新结果。只有通过连接完成事件关联到当前目标的句柄会标记 `association=headband`；`unmatched` 需与应用日志时间对照。跟踪使用内存会话，日志只写事件摘要、原因码和参数，不保存 ETL、蓝牙地址或 EEG／心率载荷。驱动或权限不支持时记录 `Windows Bluetooth HCI trace unavailable`，采集继续运行。
+
+若 `disconnection_complete` 记录 `reason=0x3B`，按同一 `handle` 查找此前的 `le_remote_parameter_request`、正面／负面应答、`le_connection_update_command` 和控制器返回的状态。若走 LE L2CAP 信令，使用 `identifier` 将 `l2cap_parameter_update_request` 配对到 `l2cap_parameter_update_response`。请求会记录连接间隔范围、外设延迟和监督超时，`parameterIssues` 标出基础范围或超时裕量违规。只有整组拒绝码时，仍需对照头环固件或空口日志才能定位具体字段。修复后在 Windows 10 上连续采集，覆盖多个原掉线周期，再检查是否出现 `0x3B`。
+
+源码部署双击启动器重新启动，安装包部署执行 `Start-Service NeuroBridge`。打开 `http://127.0.0.1:8080/`（自定义端口以配置为准），等待「头环蓝牙」区显示设备已连接。点击 `getLatest` 查看最新算法结果，或点击 `subscribe` 接收连续窗口。需要确认原始字节时，源码部署用菜单 `14` 或 `-Action capture`，安装包部署用 `neurobridge web capture`，打开 `/capture/`。该页同时展示耳机 28 字节串口帧和头环蓝牙通知原始包；仅头环模式不再跳回联调页。
+
+双设备模式用同一个 WebSocket 地址和连接收两路数据，默认地址为 `ws://127.0.0.1:8765/neurobridge/v1/ws`。两路均为实时采集，响应和事件带有 `data.source`，协议请求在 `params.source` 指定设备。联调页每栏自动填写对应来源。双设备模式下头环录制保存在录制目录的 `headband` 子目录，两路均可从原下载地址导出。切回仅采集耳机时，在串口耳机配置中将 `include_headband` 设为 `false` 并重启。
+
+双设备的数据流、窗口处理、北向路由与当前 EEG 校准实现见 [Windows 双设备数据流程图](../doc/tech/Windows双设备数据流程图.md)（内部文档，按当前分支源码口径）。
+### 事件流模式（0.4.2 起）
+
+Windows 双设备新安装默认在 `[pipeline]` 写入 `batch_mode = "as_available"`：算法结果就绪即推送，不再固定等待 600 ms 窗口；BLE 通知按最近到达的源数据块合并，默认最多 50 ms（`pipeline.event_batch_ms` 预留配置，未写入时取默认值）。北向报文 v1.2 的 `subscribe` 可传 `params.mode="as_available"`，响应不再返回固定 `intervalMs`；旧 v1.0/v1.1 请求仍按 600 ms 聚合，兼容 B 端。
+
+双设备且头环可用时，耳机 EEG 使用头环同一结果（同一时间戳、同一数组长度），每个数值做 ±20% 波动；头环未连接或未佩戴时耳机回退自身 EEG。联调页只在明确未佩戴时清空波形历史，不做超时清屏。
+
+
+双设备联调页分别显示 EEG 与心率状态。设备仍连接时，脑电质量为 `0` 且波形没有有效振幅的窗口显示「无有效脑波」。波形停更超过 `[data_source].stale_after_ms` 时显示「无脑波数据」，收到未佩戴状态或全 FF 波形提示时显示「脱落」。算法返回 `0 bpm` 时，心率及其相关指标显示「无心率数据」。设备断开后隐藏对应栏。
+
+Windows 双设备模式默认开启 EEG 输出校准。耳机和头环各用原始数据独立计算。网关分别用两路的包序号和到达时间估算采样时间，允许从邻近接收窗口选取时间重叠的头环样本。每个头环样本在对应通道中只配对一次。耳机样本超出头环对应样本绝对值的默认 20% 偏差时取最近边界，波形继续遵守 SDK 的 ±2000 输出范围。两路时间模型和该通道参考均可用时，耳机输出只保留配对点，波形数组可能缩短或为空。两路的放松度、注意力、愉悦度、Flow 分数和频段能量均为有效非零值时，用同一接收窗口的头环结果校准，默认限制在参考值的 ±20% 内。校准后的结果同时用于实时输出和录制。脑电质量、心率、HRV、压力、和谐度、激活度、冥想提示和睡眠状态保持各自算法结果。可在 `[data_source]` 设置 `eeg_alignment_percent = 0` 并重启网关关闭。
+
+耳机 EEG 质量大于 0 且波形已成功配对时，耳机 Flow 无论是否为 0，都使用参与配对的头环窗口的有效正值校准，优先取同一接收窗口。采用现有偏差范围，例如头环 Flow 为 30 时，耳机 Flow 为 0 会校准为 28.5，已在范围内的非 0 值保持不变。日志的 `reason=flow_fallback` 和 `flowFallbackReferenceBatchId` 用于核对参考窗口。
+
+联调页按设备保留上次有效的实时算法读数。收到 0、缺失值或无效窗口时继续显示上次读数，首次收到有效值前显示「—」，断开时清除读数。详情中的脑电质量、冥想提示和睡眠状态保留各自的枚举语义。脑波和频段图表仍按当前 EEG 窗口刷新。
+
+排查耳机 Flow 持续为 0 时，在 `neurobridge.log` 搜索 `Headset Flow diagnostic`。日志列出 EEG 质量、历史是否重置、当前和所需样本数，以及专家模型和 AI 模型的返回分数。同一诊断原因每 10 秒最多输出一条 INFO 日志。
+
+耳机从接收窗口结束算起，最多等待 `eeg_alignment_output_wait_ms`，默认 800 ms，支持 0 至 1200 ms。设为 0 即刻使用已完成结果。头环参考覆盖耳机窗尾时立即结束等待，只有心率或无可用波形的头环结果会继续等待。断开会清除对应连接的序号时间模型，头环断开时同时清除头环参考并立即释放等待。时间估算需要至少三个接收窗口跨度的到达记录，模型或通道参考不可用时保留耳机波形。含任一原始 EEG 全 `FF` 包的窗口跳过校准。检查只读 EEG 样本字节，头环序号及两路心率均不参与判定。缺失指标、零值占位和无信号波形保持原值。旧配置里的 `eeg_alignment_wait_ms` 和 `eeg_alignment_raw_timeout_ms` 可保留。
+
+头环参考缓存最多保留 `eeg_alignment_reference_batches` 个批次，默认 16。每路采样时间模型最多保留 `eeg_alignment_clock_packets` 条包观测记录，默认 4096，并淘汰超过 7.2 秒的观测记录。容量写满时淘汰最旧条目。
+
+Windows 联调页保留命中 ±2000 限幅的双通道样本并连续绘制折线，同时用红色点标出饱和点并在对应通道标出饱和点数；只有无数据窗口才用空值断线。脑电质量为 0 时，全零通道显示为断点，全零频段显示为暂无有效频段能量。
+
+在 `neurobridge.log` 搜索 `Windows EEG alignment configuration` 核对校准和等待上限。`Headset EEG alignment decision` 记录实际等待时间、回退原因、各通道配对、修改和舍弃点数。`waveformReferenceBatchIds` 记录实际参与波形配对的头环批次，`referenceBatchId` 记录 EEG 指标的参考批次。原始 EEG 包全为 `FF` 时，跳过原因会标记为 `headset_raw_eeg_all_ff` 或 `headband_raw_eeg_all_ff`。默认 `INFO` 每约 10 秒记录各原因的窗口数，并为每种原因保留一条窗口详情。联调时可将 `[logging].level` 设为 `DEBUG`，对照两路 `EEG algorithm response` 的成功状态、错误原因和算法耗时。这些日志只记录诊断元数据。
+
+`Headset raw EEG` 在算法和校准之前记录 Windows 耳机的原始 EEG 异常窗口，关掉校准也能看到。记录区分 `all_zero`、`all_ff`、`near_adc_rail`，以及异常后样本回到 ADC 范围内的 `within_adc_range`。每条包括 `batchId`、连接会话、窗口时间、EEG 和心率包数、左右通道的零值与边界样本计数。每种状态在同一连接会话内最多每 10 秒记录一次。压力值走独立心率算法，EEG 异常时仍可能有值。
+
+耳机串口与头环蓝牙各用独立的算法会话，结果随设备来源分别录制和显示。Windows 耳机送入 SDK 的心率按每 200 ms 一个接收时段取样，每个时段最多取一个实收值，优先取该次组包中最新到达的值。空时段不补值，同一时段拆成多批时只向 SDK 提交一次。这个 5 Hz 输入节奏与 SDK 预期一致，原始心率订阅、原始帧录制和 EEG 算法输入保留全部实收数据。启动日志的 `Windows headset HR algorithm input` 记录取样间隔和输入映射版本。升级后请重新构建或替换算法桥。源码部署可先停止网关，再用启动器菜单 `6` 重建。耳机模式启动前会检查算法桥是否支持 SDK 耳道 EEG 模式。
+
+此功能为源码候选。Windows 蓝牙适配器、前台／服务账户下的真实扫描、采集、重连和重启仍待目标机验证。
 
 ## 停止后恢复串口
 
@@ -121,7 +187,35 @@ powershell -ExecutionPolicy Bypass -File 'C:\Program Files\NeuroBridge\windows\e
 
 网关自带的 HTTP 导出（`http://127.0.0.1:8766/downloads/logs/neurobridge-logs.zip`）只在网关运行且下载服务启用时可用，且按设计不含事件日志与 COM 端口信息；排障时优先用上面的命令。
 
+## 局域网 SSH 排障
+
+安装后，在 Windows 桌面运行 `neurobridge web`，即可用默认浏览器打开 B 端联调页。命令每次查询正在运行的网关所监听的端口。`neurobridge web --url` 只输出网页地址，方便脚本使用。
+
+在 SSH 会话里运行 `neurobridge web`，再把输出的 SSH 转发命令粘贴到看网页的电脑上的新终端。保持转发连接打开，并用浏览器访问命令显示的地址。转发同时覆盖网页和 WebSocket。
+
+在 Windows 10/11 完成 MSI / EXE 安装后，从开始菜单新开 PowerShell，即可在任意目录运行以下命令。如果一直开着 Windows Terminal，请关闭整个应用再打开，以加载安装时注册的系统 PATH。ZIP 候选包可将示例中的 `neurobridge` 换成 `& "$env:ProgramFiles\NeuroBridge\windows\cli\neurobridge.cmd"`。
+
+```powershell
+neurobridge ssh install
+neurobridge ssh enable
+neurobridge ssh enable "C:\Program Files\OpenSSH\sshd.exe"
+neurobridge ssh status
+neurobridge ssh disable
+```
+
+Windows MSI / EXE 和 ZIP 候选包安装时跳过 SSH。升级保留本机现有的 SSH 服务和防火墙规则。安装后可以直接运行 `neurobridge web` 打开本机联调页。
+
+`install` 按需通过 Windows 安装 OpenSSH Server 并启用，可能需要访问 Windows Update。遇到系统重启提示时，重启后运行 `neurobridge ssh enable`。
+
+`enable` 使用本机已注册的 `sshd` 服务并设为开机自启，将标准 TCP 22 入站规则限制在本地子网。可选路径须指向该服务实际使用的 `sshd.exe`，有空格时请加引号。找不到服务或可执行文件、路径不匹配时，命令报错并以非零状态退出。可用 `neurobridge ssh status` 查询服务状态、可执行文件路径和可用的连接地址。
+
+`disable` 停止系统的 OpenSSH Server，将服务设为手动启动，并禁用标准 SSH 防火墙规则。这会断开现有 SSH 连接。从同一子网连接时使用自己的 Windows 账号。运行命令时按提示同意 Windows 管理员授权。NeuroBridge 服务可以处于停止状态，但必须已安装。
+
+也可以双击 `windows\remote-support.cmd` 使用交互菜单，选 `1` 启用、`2` 关闭、`3` 查询、`4` 安装并启用。源码部署从项目目录打开，安装包部署从安装目录打开。
+
 ## MSI / EXE 安装包部署
+
+覆盖安装会更新 EXE 和其中的 MSI，重新安装命令入口并注册系统 PATH。已安装的网关配置和录制数据保存在 ProgramData。升级完成后可在新开的 PowerShell 中运行 `neurobridge ssh status`。
 
 源码部署与安装包部署是两套独立形态，服务名和数据位置都不同，不要混用：
 
@@ -133,17 +227,26 @@ powershell -ExecutionPolicy Bypass -File 'C:\Program Files\NeuroBridge\windows\e
 | 日志 | `<checkout>\.runtime\logs` | `C:\ProgramData\NeuroBridge\logs` |
 | 卸载 | 本文件「一键退出」章节 | 「应用和功能」或 `msiexec /x` |
 
-卸载时服务正在运行不会冲突：WiX 的 `ServiceControl Stop="both" Wait="yes" Remove="uninstall"` 会先停止 `NeuroBridge`、等待其进入 Stopped，再删除文件，最后删除服务注册。服务进程持有 `C:\Program Files\NeuroBridge` 下的文件也不会阻断删除。
+安装器升级或卸载时会请求停止 `NeuroBridge`，等服务退出后再处理程序文件。若旧服务未能退出，安装器可能报错 1921 并回滚。已使用 EXE 部署时，直接用新版 EXE 覆盖安装。使用 `install-with-logs.ps1 -Installer <安装包>` 可以保存日志。脚本发现网关已处于 `STOP_PENDING` 时最多等待 15 秒，仍未停止就结束本次尝试并提示检查服务。
 
-服务首次启动时会自建数据目录：创建 `C:\ProgramData\NeuroBridge` 下的 `logs` 和 `recordings`，并在 `gateway.toml` 不存在时从随包模板复制一份。已存在的配置不会被覆盖，重装和卸载都不会丢现场数据。`C:\ProgramData\NeuroBridge` 不归 MSI 所有，卸载后保留，需要彻底清除时手动删除。
+服务首次启动时会自建数据目录：创建 `C:\ProgramData\NeuroBridge` 下的 `logs` 和 `recordings`，并在 `gateway.toml` 不存在时从随包模板复制一份。配置升级规则见上面的「使用蓝牙头环」。`C:\ProgramData\NeuroBridge` 不归 MSI 所有，卸载后保留。
 
 安装包部署不要用启动器菜单里的服务动作：那些动作针对源码形态的 `NeuroBridgeProject`。菜单 `13` 与 `export-logs.ps1` 是例外——它按布局自动识别，两种形态都正确。
 
 `packaging\windows\` 下的 `install.ps1` / `uninstall.ps1` 供候选包（`tools/build-product-candidate.py`）使用，**不随 MSI 分发**：MSI 的载荷根目录只有 `windows\`。
 
+### 安装失败 1921、1618 或出现同名条目
+
+1. 如果报 `0x80070652`（1618），关闭失败窗口，等正在进行的安装、卸载或回滚结束。用事件查看器的「Windows 日志 → 应用程序」筛选 `MsiInstaller`。事件 1040、1042 分别记录事务开始和结束，可用客户端 PID 和包名配对。先看失败时段是否有事件 11921（MSI 错误 1921）。外层可能只报告 1603。
+2. 如果 1921 指向 `NeuroBridge Gateway`，在管理员 PowerShell 运行 `sc.exe queryex NeuroBridge`。如果是 `RUNNING`，运行 `sc.exe stop NeuroBridge`，然后复查。确认安装事务已结束、服务为 `STOPPED` 后，只运行一次新版 EXE。
+3. 如果等了 30 秒仍是 `STOP_PENDING`，且检查点一直不变，在允许中断采集时可只结束卡住的网关进程。重新运行 `sc.exe queryex NeuroBridge`，核对 `WIN32_OWN_PROCESS` 和当前非零 PID，再用 `Stop-Process -Id <当前网关PID> -Force -ErrorAction Stop`。它可能丢失尚未写盘的数据。确认 `STOPPED` 后再安装。事件里的安装事务客户端 PID 属于安装方，请使用服务查询返回的 PID。
+4. 如果仍失败，保留安装窗口的 `log file`、同一时间段的 `MsiInstaller` 事件和 `sc.exe queryex NeuroBridge` 输出。避免强制结束 `msiexec.exe` 或手动删除安装缓存、注册表条目和 `%ProgramData%\NeuroBridge`。
+
+新版 EXE 的临时条目显示为 `NeuroBridge Setup (in progress)`。安装结束后，「应用和功能」应只显示一个 NeuroBridge 条目。如果仍有同名条目，保留安装日志和条目截图。
+
 本目录包含：
 
-- `gateway.toml.example`：`windows_headset_local`、COM 耳机和 `127.0.0.1` 本机页面配置；安装包会把它作为 `C:\ProgramData\NeuroBridge\gateway.toml` 的模板；
+- `gateway.toml.example`：带中文注释的 Windows 双设备配置模板；安装包用它首次生成 `C:\ProgramData\NeuroBridge\gateway.toml`；
 - `neurobridge-windows-bootstrap.cmd` / `setup-windows-gateway.ps1`：双击入口和数字菜单；
 - `export-logs.ps1`：导出运行日志，自动识别源码与安装包布局；
 - `diagnose-service.ps1`：只针对源码形态的服务诊断；

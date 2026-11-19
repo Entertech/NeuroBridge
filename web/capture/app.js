@@ -21,16 +21,20 @@ const elements = {
   clear: document.querySelector("#clearButton"),
   export: document.querySelector("#exportButton"),
   exportRaw: document.querySelector("#exportRawButton"),
+  exportHeadband: document.querySelector("#exportHeadbandButton"),
   gatewayState: document.querySelector("#gatewayState"),
   gatewayMessage: document.querySelector("#gatewayMessage"),
   mode: document.querySelector("#modeValue"),
   deviceState: document.querySelector("#deviceState"),
+  headbandState: document.querySelector("#headbandState"),
   sourceNotice: document.querySelector("#sourceNotice"),
   algorithmState: document.querySelector("#algorithmState"),
   subscriptionState: document.querySelector("#subscriptionState"),
   eventCount: document.querySelector("#eventCount"),
   eegCount: document.querySelector("#eegCount"),
   hrCount: document.querySelector("#hrCount"),
+  headbandEegCount: document.querySelector("#headbandEegCount"),
+  headbandHrCount: document.querySelector("#headbandHrCount"),
   sequence: document.querySelector("#sequenceValue"),
   lostPackets: document.querySelector("#lostPackets"),
   lossRate: document.querySelector("#lossRate"),
@@ -38,6 +42,8 @@ const elements = {
   decimalFormat: document.querySelector("#decimalFormatButton"),
   rawData: document.querySelector("#rawData"),
   decodedData: document.querySelector("#decodedData"),
+  headbandRawData: document.querySelector("#headbandRawData"),
+  headbandDecodedData: document.querySelector("#headbandDecodedData"),
   protocolLog: document.querySelector("#protocolLog"),
 };
 
@@ -45,13 +51,20 @@ let socket = null;
 let statusSubscriptionId = null;
 let initialStatusRequestId = null;
 let dataSubscriptionId = null;
+const dataSubscriptions = { headset: null, headband: null };
 let dataRecords = [];
 let rawRecords = [];
+let headbandRecords = [];
+let headbandRawRecords = [];
 let protocolLines = [];
 let stats = createStats();
 let displayFormat = "hex";
 let deviceConnectionState = null;
+let headbandConnectionState = null;
 let dataMode = null;
+const activeSources = window.NEUROBRIDGE_B_CLIENT_SOURCE === "dual"
+  ? ["headset", "headband"]
+  : [window.NEUROBRIDGE_B_CLIENT_SOURCE === "bluetooth" ? "headband" : "headset"];
 
 const DEVICE_STATE_LABELS = {
   connecting: "连接中",
@@ -105,6 +118,10 @@ function createStats() {
     eegBytes: 0,
     hrPackets: 0,
     hrBytes: 0,
+    headbandEegPackets: 0,
+    headbandEegBytes: 0,
+    headbandHrPackets: 0,
+    headbandHrBytes: 0,
     lost: 0,
     receivedUnique: 0,
     lastSequence: null,
@@ -154,11 +171,13 @@ function refreshControls() {
   elements.connect.disabled = connected || socket?.readyState === WebSocket.CONNECTING;
   elements.disconnect.disabled = !connected;
   elements.status.disabled = !connected;
-  elements.start.disabled = !connected || !statusSubscriptionId || Boolean(dataSubscriptionId);
-  elements.stop.disabled = !connected || !dataSubscriptionId;
+  const receiving = Boolean(dataSubscriptions.headset || dataSubscriptions.headband);
+  elements.start.disabled = !connected || !statusSubscriptionId || receiving;
+  elements.stop.disabled = !connected || !receiving;
   elements.exportRaw.disabled = rawRecords.length === 0;
-  elements.subscriptionState.textContent = dataSubscriptionId
-    ? `数据接收中 · ${dataSubscriptionId}`
+  elements.exportHeadband.disabled = headbandRawRecords.length === 0;
+  elements.subscriptionState.textContent = receiving
+    ? `数据接收中 · 耳机 ${dataSubscriptions.headset || "未订阅"} · 头环 ${dataSubscriptions.headband || "未订阅"}`
     : (statusSubscriptionId ? "状态实时更新 · 数据未订阅" : "未订阅");
 }
 
@@ -169,15 +188,15 @@ function appendLine(lines, target, line, maximum) {
   target.scrollTop = target.scrollHeight;
 }
 
-function appendDataRecord(record) {
+function appendDataRecord(record, target = dataRecords) {
   const timestampMs = Number.isFinite(Number(record.timestampMs)) ? Number(record.timestampMs) : Date.now();
-  dataRecords.push({ ...record, timestampMs });
-  if (dataRecords.length > MAX_DATA_LINES) dataRecords.splice(0, dataRecords.length - MAX_DATA_LINES);
+  target.push({ ...record, timestampMs });
+  if (target.length > MAX_DATA_LINES) target.splice(0, target.length - MAX_DATA_LINES);
 }
 
-function appendRawRecord(bytes, timestampMs) {
-  rawRecords.push({ bytes: Uint8Array.from(bytes), timestampMs: Number.isFinite(Number(timestampMs)) ? Number(timestampMs) : Date.now() });
-  if (rawRecords.length > MAX_DATA_LINES) rawRecords.splice(0, rawRecords.length - MAX_DATA_LINES);
+function appendRawRecord(bytes, timestampMs, target = rawRecords) {
+  target.push({ bytes: Uint8Array.from(bytes), timestampMs: Number.isFinite(Number(timestampMs)) ? Number(timestampMs) : Date.now() });
+  if (target.length > MAX_DATA_LINES) target.splice(0, target.length - MAX_DATA_LINES);
 }
 
 function appendProtocol(direction, value) {
@@ -332,6 +351,39 @@ function restoreSerialFrame(eegPacket, hrPacket) {
   return frame;
 }
 
+function printHeadbandPayload(payload) {
+  const eeg = decodeRawPackets("头环 EEG", payload.eegRaw, 20);
+  const hr = decodeRawPackets("头环 HR", payload.hrRaw, 1);
+  if (eeg) {
+    stats.headbandEegPackets += Number.isInteger(eeg.packetCount) ? eeg.packetCount : eeg.packets.length;
+    stats.headbandEegBytes += eeg.bytes.length;
+    eeg.packets.forEach((packet) => appendRawRecord(packet, eeg.windowEndMs, headbandRawRecords));
+  }
+  if (hr) {
+    stats.headbandHrPackets += Number.isInteger(hr.packetCount) ? hr.packetCount : hr.packets.length;
+    stats.headbandHrBytes += hr.bytes.length;
+    hr.packets.forEach((packet) => appendRawRecord(packet, hr.windowEndMs, headbandRawRecords));
+  }
+  if (!eeg && !hr) return;
+
+  const recordCount = Math.max(eeg?.packets.length ?? 0, hr?.packets.length ?? 0);
+  for (let index = 0; index < recordCount; index += 1) {
+    const packetIndex = index + 1;
+    const eegPacket = eeg?.packets[index];
+    const hrPacket = hr?.packets[index];
+    const eegRecord = eegPacket ? parseEegPacket(eegPacket, eeg.windowStartMs, eeg.windowEndMs, packetIndex) : null;
+    if (eegRecord && hrPacket) headbandRecords.push({ ...eegRecord, type: "frame", hrBytes: hrPacket, hrValue: hrPacket[0] });
+    else if (eegRecord) headbandRecords.push(eegRecord);
+    else if (hrPacket) {
+      headbandRecords.push({
+        type: "hr", bytes: hrPacket, value: hrPacket[0], windowStartMs: hr.windowStartMs,
+        windowEndMs: hr.windowEndMs, timestampMs: hr.windowEndMs, packetIndex,
+      });
+    }
+  }
+  if (headbandRecords.length > MAX_DATA_LINES) headbandRecords.splice(0, headbandRecords.length - MAX_DATA_LINES);
+}
+
 function printRawPayload(payload) {
   const eeg = decodeRawPackets("EEG", payload.eegRaw, 20);
   const hr = decodeRawPackets("HR", payload.hrRaw, 1);
@@ -404,9 +456,14 @@ function decodedRecordText(record) {
 function renderData() {
   elements.rawData.textContent = rawRecords.length ? rawRecords.map(rawRecordText).join("\n") : "等待网关数据……";
   elements.decodedData.textContent = dataRecords.length ? dataRecords.map(decodedRecordText).join("\n") : "等待网关数据……";
+  elements.headbandRawData.textContent = headbandRawRecords.length ? headbandRawRecords.map(rawRecordText).join("\n") : "等待网关数据……";
+  elements.headbandDecodedData.textContent = headbandRecords.length ? headbandRecords.map(decodedRecordText).join("\n") : "等待网关数据……";
   elements.exportRaw.disabled = rawRecords.length === 0;
+  elements.exportHeadband.disabled = headbandRawRecords.length === 0;
   elements.rawData.scrollTop = elements.rawData.scrollHeight;
   elements.decodedData.scrollTop = elements.decodedData.scrollHeight;
+  elements.headbandRawData.scrollTop = elements.headbandRawData.scrollHeight;
+  elements.headbandDecodedData.scrollTop = elements.headbandDecodedData.scrollHeight;
 }
 
 function setDisplayFormat(format) {
@@ -423,28 +480,43 @@ function updateMetrics() {
   elements.eventCount.textContent = String(stats.events);
   elements.eegCount.textContent = `${stats.eegPackets} / ${stats.eegBytes}`;
   elements.hrCount.textContent = `${stats.hrPackets} / ${stats.hrBytes}`;
+  elements.headbandEegCount.textContent = `${stats.headbandEegPackets} / ${stats.headbandEegBytes}`;
+  elements.headbandHrCount.textContent = `${stats.headbandHrPackets} / ${stats.headbandHrBytes}`;
   elements.sequence.textContent = stats.lastSequence === null ? "—" : String(stats.lastSequence);
   elements.lostPackets.textContent = String(stats.lost);
   const expected = stats.receivedUnique + stats.lost;
   elements.lossRate.textContent = `${(expected ? (stats.lost / expected) * 100 : 0).toFixed(6)}%`;
 }
 
+function connectionLabel(state) {
+  if (state === null) return "—";
+  return `${DEVICE_STATE_LABELS[state] || state} · ${state}`;
+}
+
 function updateStatus(data) {
   const result = data?.result && typeof data.result === "object" ? data.result : data;
   if (!result || typeof result !== "object") return;
-  if (result.mode !== undefined) dataMode = String(result.mode);
+  const source = data?.source === "headband" || result.source === "headband" ? "headband" : "headset";
+  if (source === "headset" && result.mode !== undefined) dataMode = String(result.mode);
   const status = result.status || result.payload?.status || result;
   if (status.connectionState !== undefined) {
     const nextState = String(status.connectionState);
-    const changed = nextState !== deviceConnectionState;
-    deviceConnectionState = nextState;
-    if (changed) {
-      appendDataRecord({ type: "note", text: `设备状态：${DEVICE_STATE_LABELS[nextState] || nextState}（${nextState}）` });
-      if (DEVICE_STATE_MESSAGES[nextState]) elements.gatewayMessage.textContent = DEVICE_STATE_MESSAGES[nextState];
+    if (source === "headband") {
+      const changed = nextState !== headbandConnectionState;
+      headbandConnectionState = nextState;
+      if (changed) appendDataRecord({ type: "note", text: `头环状态：${DEVICE_STATE_LABELS[nextState] || nextState}（${nextState}）` }, headbandRecords);
+    } else {
+      const changed = nextState !== deviceConnectionState;
+      deviceConnectionState = nextState;
+      if (changed) {
+        appendDataRecord({ type: "note", text: `耳机状态：${DEVICE_STATE_LABELS[nextState] || nextState}（${nextState}）` });
+        if (DEVICE_STATE_MESSAGES[nextState]) elements.gatewayMessage.textContent = DEVICE_STATE_MESSAGES[nextState];
+      }
     }
   }
+  elements.headbandState.textContent = connectionLabel(headbandConnectionState);
   renderSourceState();
-  if (status.algorithmState !== undefined) elements.algorithmState.textContent = String(status.algorithmState);
+  if (source === "headset" && status.algorithmState !== undefined) elements.algorithmState.textContent = String(status.algorithmState);
 }
 
 function handleMessage(message) {
@@ -461,38 +533,47 @@ function handleMessage(message) {
   updateStatus(data);
   if (data.action === "getStatus" && data.requestId === initialStatusRequestId) {
     initialStatusRequestId = null;
-    sendRequest("subscribe", { streams: ["status"], includeInvalid: true });
+    activeSources.forEach((source) => sendRequest("subscribe", requestParams(source, { streams: ["status"], includeInvalid: true })));
   }
   if (data.action === "subscribe" && data.result?.subscriptionId) {
     const streams = Array.isArray(data.result.streams) ? data.result.streams : [];
+    const source = data.source === "headband" ? "headband" : "headset";
     if (streams.length === 1 && streams[0] === "status") {
       statusSubscriptionId = data.result.subscriptionId;
-      setState("ok", "网关已连接", "耳机状态已开启实时更新；开始接收按钮只控制 EEG/心率数据。");
+      setState("ok", "网关已连接", "设备状态已开启实时更新；开始接收按钮只控制 EEG/心率原始数据。");
       refreshControls();
-      sendRequest("getStatus", {});
+      sendRequest("getStatus", requestParams(source, {}));
     } else {
+      dataSubscriptions[source] = data.result.subscriptionId;
       dataSubscriptionId = data.result.subscriptionId;
-      setState("ok", "接收中", "数据订阅成功，正在等待网关转发耳机数据；耳机状态会独立实时更新。");
+      setState("ok", "接收中", "原始数据订阅成功，正在等待网关转发耳机和头环数据；设备状态会独立实时更新。");
       refreshControls();
     }
   } else if (data.action === "unsubscribe") {
     const removedSubscriptionId = data.result?.subscriptionId;
-    if (removedSubscriptionId === dataSubscriptionId) {
-      dataSubscriptionId = null;
-      setState("ok", "网关已连接", "已停止 EEG/心率数据推送；耳机状态仍在实时更新。再次点击“开始接收”即可恢复数据。");
+    const source = Object.keys(dataSubscriptions).find((name) => dataSubscriptions[name] === removedSubscriptionId);
+    if (source) {
+      dataSubscriptions[source] = null;
+      dataSubscriptionId = dataSubscriptions.headset || dataSubscriptions.headband;
+      if (!dataSubscriptionId) setState("ok", "网关已连接", "已停止 EEG/心率原始数据推送；设备状态仍在实时更新。再次点击“开始接收”即可恢复数据。");
     } else if (removedSubscriptionId === statusSubscriptionId) {
       statusSubscriptionId = null;
-      setState("warn", "状态订阅已停止", "耳机状态不再实时更新，请重新连接网页。");
+      setState("warn", "状态订阅已停止", "设备状态不再实时更新，请重新连接网页。");
     }
     refreshControls();
   }
   if (data.event === "data" || data.event === "status") {
     stats.events += 1;
     const payload = data.payload || {};
-    printRawPayload(payload);
+    if (data.source === "headband") printHeadbandPayload(payload);
+    else printRawPayload(payload);
     renderData();
     updateMetrics();
   }
+}
+
+function requestParams(source, params) {
+  return activeSources.length > 1 ? { ...params, source } : params;
 }
 
 function sendRequest(action, params) {
@@ -543,6 +624,8 @@ function connect() {
     statusSubscriptionId = null;
     initialStatusRequestId = null;
     dataSubscriptionId = null;
+    dataSubscriptions.headset = null;
+    dataSubscriptions.headband = null;
     setState("idle", "网关已断开", "网页与网关的连接已断开；网关进程和 USB 串口不会因此停止。");
     refreshControls();
   });
@@ -551,13 +634,32 @@ function connect() {
 function clearDisplay() {
   dataRecords = [];
   rawRecords = [];
+  headbandRecords = [];
+  headbandRawRecords = [];
   protocolLines = [];
   stats = createStats();
   elements.rawData.textContent = "等待网关数据……";
   elements.decodedData.textContent = "等待网关数据……";
+  elements.headbandRawData.textContent = "等待网关数据……";
+  elements.headbandDecodedData.textContent = "等待网关数据……";
   elements.protocolLog.textContent = isConnected() ? "显示已清空，网关仍保持连接。" : "等待连接网关……";
   updateMetrics();
   refreshControls();
+}
+
+function downloadText(name, records) {
+  const generatedAt = new Date();
+  const blob = new Blob([`${records.map(rawRecordText).join("\n")}\n`], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `neurobridge-${name}-${generatedAt.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}.txt`;
+  const filename = link.download;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  return filename;
 }
 
 function exportRawData() {
@@ -565,18 +667,17 @@ function exportRawData() {
     elements.gatewayMessage.textContent = "暂无可导出的原始数据。请先开始接收并等待耳机数据到达。";
     return;
   }
-  const generatedAt = new Date();
-  const blob = new Blob([`${rawRecords.map(rawRecordText).join("\n")}\n`], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `neurobridge-raw-data-${generatedAt.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}.txt`;
-  const filename = link.download;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
-  elements.gatewayMessage.textContent = `原始数据已导出：${filename}；共 ${rawRecords.length} 行，格式为毫秒时间戳加完整 28 字节串口帧。`;
+  const filename = downloadText("raw-data", rawRecords);
+  elements.gatewayMessage.textContent = `耳机原始数据已导出：${filename}；共 ${rawRecords.length} 行，格式为毫秒时间戳加完整 28 字节串口帧。`;
+}
+
+function exportHeadbandData() {
+  if (!headbandRawRecords.length) {
+    elements.gatewayMessage.textContent = "暂无可导出的头环原始数据。请先开始接收并等待头环数据到达。";
+    return;
+  }
+  const filename = downloadText("headband-raw-data", headbandRawRecords);
+  elements.gatewayMessage.textContent = `头环原始数据已导出：${filename}；共 ${headbandRawRecords.length} 行，格式为毫秒时间戳加蓝牙通知原始字节。`;
 }
 
 function exportDiagnosticLog() {
@@ -602,6 +703,11 @@ function exportDiagnosticLog() {
     `eegBytes=${stats.eegBytes}`,
     `hrPackets=${stats.hrPackets}`,
     `hrBytes=${stats.hrBytes}`,
+    `headbandConnectionState=${headbandConnectionState ?? "unknown"}`,
+    `headbandEegPackets=${stats.headbandEegPackets}`,
+    `headbandEegBytes=${stats.headbandEegBytes}`,
+    `headbandHrPackets=${stats.headbandHrPackets}`,
+    `headbandHrBytes=${stats.headbandHrBytes}`,
     `latestSequence=${stats.lastSequence ?? "none"}`,
     `estimatedLostPackets=${stats.lost}`,
     `receivedUniquePackets=${stats.receivedUnique}`,
@@ -630,14 +736,46 @@ function exportDiagnosticLog() {
   elements.gatewayMessage.textContent = `诊断日志已导出：${filename}；完整 EEG/心率原始数据未写入文件。`;
 }
 
-elements.connect.addEventListener("click", connect);
+elements.connect.addEventListener("click", () => {
+  if (window.NEUROBRIDGE_B_CLIENT_SOURCE === "bluetooth" || window.NEUROBRIDGE_B_CLIENT_SOURCE === "dual") {
+    connect();
+    return;
+  }
+  // A gateway restart may have selected the BLE profile while this page was open.
+  elements.connect.disabled = true;
+  const config = document.createElement("script");
+  config.src = "/runtime-config.js";
+  config.onload = () => {
+    config.remove();
+    if (window.NEUROBRIDGE_B_CLIENT_SOURCE === "bluetooth") window.location.assign("/");
+    else {
+      refreshControls();
+      connect();
+    }
+  };
+  config.onerror = () => {
+    config.remove();
+    setState("error", "连接失败", "无法读取网关配置，请确认网关已启动。");
+    refreshControls();
+  };
+  document.head.append(config);
+});
 elements.disconnect.addEventListener("click", () => socket?.close(1000, "capture page disconnect"));
 elements.status.addEventListener("click", () => sendRequest("getStatus", {}));
-elements.start.addEventListener("click", () => sendRequest("subscribe", { streams: ["eeg.raw", "hr.raw"], includeInvalid: true }));
-elements.stop.addEventListener("click", () => dataSubscriptionId && sendRequest("unsubscribe", { subscriptionId: dataSubscriptionId }));
+elements.start.addEventListener("click", () => {
+  activeSources.forEach((source) => {
+    if (!dataSubscriptions[source]) sendRequest("subscribe", requestParams(source, { streams: ["eeg.raw", "hr.raw"], includeInvalid: true }));
+  });
+});
+elements.stop.addEventListener("click", () => {
+  activeSources.forEach((source) => {
+    if (dataSubscriptions[source]) sendRequest("unsubscribe", requestParams(source, { subscriptionId: dataSubscriptions[source] }));
+  });
+});
 elements.clear.addEventListener("click", clearDisplay);
 elements.export.addEventListener("click", exportDiagnosticLog);
 elements.exportRaw.addEventListener("click", exportRawData);
+elements.exportHeadband.addEventListener("click", exportHeadbandData);
 elements.hexFormat.addEventListener("click", () => setDisplayFormat("hex"));
 elements.decimalFormat.addEventListener("click", () => setDisplayFormat("decimal"));
 

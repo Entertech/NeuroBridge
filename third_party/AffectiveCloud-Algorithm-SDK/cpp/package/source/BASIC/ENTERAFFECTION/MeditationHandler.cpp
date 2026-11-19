@@ -62,7 +62,7 @@ namespace basic
 
                 // 冥想度计算
                 auto curMeditationDegree = model::meditationDegreeCal(1-modelRes);
-                MeditationHandlerResult result;
+                MeditationHandlerResult result{};
                 result.meditationState = meditationState;
                 if (curMeditationDegree >= 0)
                 {

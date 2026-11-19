@@ -35,6 +35,11 @@ class CandidatePackageTests(unittest.TestCase):
                         names = bundle.namelist()
                         manifest_name = next(name for name in names if name.endswith("metadata/manifest.json"))
                         manifest = json.loads(bundle.read(manifest_name))
+                        prefix = manifest_name.removesuffix("metadata/manifest.json")
+                        template = bundle.read(prefix + "gateway.toml.example").decode("utf-8")
+                        defaults = bundle.read(prefix + "payload/defaults.toml").decode("utf-8")
+                        self.assertTrue(tomllib.loads(template)["data_source"]["include_headband"])
+                        self.assertNotIn("include_headband", tomllib.loads(defaults)["data_source"])
                 else:
                     with tarfile.open(archive) as bundle:
                         names = bundle.getnames()
@@ -135,6 +140,8 @@ class CandidatePackageTests(unittest.TestCase):
             self.assertTrue(manifest["runtimeBundled"])
             self.assertTrue(any(name.endswith("payload/runtime/python.exe") for name in names))
             self.assertIn('runtime\\python.exe', install)
+            self.assertNotIn('remote-support.ps1', install)
+            self.assertTrue(any(name.endswith("payload/windows/remote-support.ps1") for name in names))
             self.assertTrue(config["algorithm"]["command"][0].endswith(r"runtime\neurobridge_affective_bridge.exe"))
 
     def test_kylin_rollback_restores_all_state_and_retains_replaced_files(self):

@@ -74,7 +74,9 @@ class GatewayWireCodec:
 
     def offline_data_error(self, gateway) -> ProtocolError:
         if not gateway.supports_replay:
-            if gateway.status["connectionState"] == "validation_failed":
+            if gateway.config.data_source.type == "bluetooth":
+                message = "Bluetooth headband is not connected; live data is unavailable and replay is not supported."
+            elif gateway.status["connectionState"] == "validation_failed":
                 message = "Serial device validation failed: no complete valid data frame was received after starting acquisition."
             else:
                 message = "Serial data source is not connected; live data is unavailable and replay is not supported."

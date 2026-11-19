@@ -24,3 +24,4 @@ $gatewayConfig = Join-Path $data "gateway.toml"
   --history-path (Join-Path $data "config-migration-history.jsonl")
 & $python (Join-Path $install "windows\service.py") --startup auto install
 & $python (Join-Path $install "windows\service.py") start
+if ($LASTEXITCODE -ne 0) { throw "Starting NeuroBridge failed with exit code $LASTEXITCODE." }

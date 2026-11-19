@@ -23,8 +23,12 @@ set_target_properties(neurobridge_affective_bridge PROPERTIES
 option(NEUROBRIDGE_BUILD_SDK_TESTS "Build synthetic SDK behavior regression tests" OFF)
 if(NEUROBRIDGE_BUILD_SDK_TESTS)
   enable_testing()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_executable(neurobridge_sdk_eeg_output_test ../../tests/native/test_sdk_eeg_output.cpp)
   target_include_directories(neurobridge_sdk_eeg_output_test PRIVATE "${AFFECTIVE_SDK_SOURCE_DIR}/cpp/package/include")
   target_link_libraries(neurobridge_sdk_eeg_output_test PRIVATE AffectiveAlgorithm)
   add_test(NAME sdk_eeg_output COMMAND neurobridge_sdk_eeg_output_test)
+  add_test(NAME bridge_device_modes COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/native/test_bridge_device_modes.py"
+    "$<TARGET_FILE:neurobridge_affective_bridge>")
 endif()

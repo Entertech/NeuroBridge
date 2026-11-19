@@ -10,6 +10,9 @@ import tomllib
 from .configuration.migration import migrate
 
 DEFAULT_ALGORITHM_COMMAND = ("/usr/local/lib/neurobridge/neurobridge_affective_bridge",)
+DEFAULT_EEG_ALIGNMENT_PERCENT = 20
+DEFAULT_EEG_ALIGNMENT_OUTPUT_WAIT_MS = 800
+DEFAULT_BLE_NOTIFICATION_TIMEOUT_SECONDS = 10
 
 
 @dataclass(frozen=True)
@@ -26,19 +29,30 @@ class BleConfig:
     model_nbr_uuid: str
     scan_timeout_seconds: int
     reconnect_delay_seconds: int
+    device_identifier: str | None = None
+    notification_timeout_seconds: int = DEFAULT_BLE_NOTIFICATION_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
 class DataSourceConfig:
-    """Select exactly one device-side transport strategy."""
+    """Select the primary transport and optional Windows headband acquisition."""
 
     type: str = "bluetooth"
     window_interval_ms: int = 600
     stale_after_ms: int = 1800
+    include_headband: bool = False
+    eeg_alignment_percent: int = DEFAULT_EEG_ALIGNMENT_PERCENT
+    eeg_alignment_output_wait_ms: int = DEFAULT_EEG_ALIGNMENT_OUTPUT_WAIT_MS
+    eeg_alignment_reference_batches: int = 16
+    eeg_alignment_clock_packets: int = 4096
 
 
 @dataclass(frozen=True)
 class PipelineConfig:
+    # "window" keeps the released 600 ms batching pipeline; "as_available"
+    # emits one algorithm result per source data-arrival batch.
+    batch_mode: str = "window"
+    event_batch_ms: int = 50
     source_queue_size: int = 64
     source_enqueue_timeout_ms: int = 50
     algorithm_queue_size: int = 8
@@ -181,7 +195,7 @@ def load(
     raw = migrate(raw)
     section_fields = {
         "server": {"host", "port", "path"},
-        "ble": {"enabled", "device_name", "model_nbr_uuid", "scan_timeout_seconds", "reconnect_delay_seconds"},
+        "ble": set(BleConfig.__dataclass_fields__),
         "recording": {"directory", "subject_id", "replay_recording_id", "replay_speed", "transport_trace_enabled", "transport_trace_max_bytes"},
         "algorithm": {"enabled", "command", "request_timeout_ms"},
         "download": {"enabled", "host", "port", "path"},
@@ -189,7 +203,8 @@ def load(
         "network": {"mode", "interface", "subnet_cidr", "dhcp_range_start", "dhcp_range_end", "dhcp_lease_time"},
         "access": {"mode"},
         "local_ui": {"enabled", "host", "port", "directory"},
-        "data_source": {"type", "window_interval_ms", "stale_after_ms"},
+        # Preserve existing TOML files that still have input-calibration timeout keys.
+        "data_source": set(DataSourceConfig.__dataclass_fields__) | {"eeg_alignment_wait_ms", "eeg_alignment_raw_timeout_ms"},
         "serial": {"device", "candidate_types", "baud_rate", "handshake_timeout_ms", "command_response_timeout_ms", "data_timeout_seconds", "reconnect_delay_seconds", "stats_interval_seconds", "max_buffer_bytes", "dtr", "rts"},
         "storage": {"warning_threshold_bytes", "critical_threshold_bytes", "segment_duration_seconds", "segment_max_bytes", "writer_queue_size", "recovery_margin_bytes", "recovery_checks", "fsync_interval_records", "session_retention_days", "auto_cleanup_enabled"},
         "pipeline": set(PipelineConfig.__dataclass_fields__),
@@ -235,6 +250,7 @@ def load(
             "ubuntu_headband_wired",
             "kylin_headset_local",
             "windows_headset_local",
+            "windows_headband_local",
         }
     ):
         raise ValueError("profile is not a supported deployment profile")
@@ -327,6 +343,9 @@ def load(
     data_source_type = str(data_source["type"])
     if data_source_type not in {"bluetooth", "serial", "usb"}:
         raise ValueError("data_source.type must be bluetooth, serial, or usb")
+    include_headband = data_source.get("include_headband", False)
+    if include_headband and (profile != "windows_headset_local" or data_source_type != "serial"):
+        raise ValueError("data_source.include_headband requires the Windows serial headset profile")
     window_interval_ms = data_source.get("window_interval_ms", 600)
     stale_after_ms = data_source.get("stale_after_ms", 1800)
     if not isinstance(window_interval_ms, int) or isinstance(window_interval_ms, bool) or window_interval_ms <= 0:
@@ -335,6 +354,20 @@ def load(
         raise ValueError("data_source.window_interval_ms must be 600 for the current northbound contract")
     if not isinstance(stale_after_ms, int) or isinstance(stale_after_ms, bool) or stale_after_ms <= window_interval_ms:
         raise ValueError("data_source.stale_after_ms must be an integer greater than window_interval_ms")
+    eeg_alignment_percent = data_source.get(
+        "eeg_alignment_percent", DEFAULT_EEG_ALIGNMENT_PERCENT if include_headband else 0,
+    )
+    if not 0 <= eeg_alignment_percent <= 100:
+        raise ValueError("data_source.eeg_alignment_percent must be between 0 and 100")
+    eeg_alignment_output_wait_ms = data_source.get("eeg_alignment_output_wait_ms", DEFAULT_EEG_ALIGNMENT_OUTPUT_WAIT_MS)
+    if not 0 <= eeg_alignment_output_wait_ms <= 2 * window_interval_ms:
+        raise ValueError("data_source.eeg_alignment_output_wait_ms must be between 0 and twice window_interval_ms")
+    eeg_alignment_reference_batches = data_source.get("eeg_alignment_reference_batches", 16)
+    if not 1 <= eeg_alignment_reference_batches <= 16:
+        raise ValueError("data_source.eeg_alignment_reference_batches must be between 1 and 16")
+    eeg_alignment_clock_packets = data_source.get("eeg_alignment_clock_packets", 4096)
+    if not 4 <= eeg_alignment_clock_packets <= 4096:
+        raise ValueError("data_source.eeg_alignment_clock_packets must be between 4 and 4096")
     replay_recording_id = recording.get("replay_recording_id") or None
     if data_source_type == "serial" and replay_recording_id:
         raise ValueError("recording.replay_recording_id is not supported when data_source.type is serial")
@@ -344,13 +377,18 @@ def load(
     # loading their drivers or being blocked by parameters that are not active.
     recording_directory = Path(recording.get("directory", "./recordings"))
     ble_config = BleConfig(False, None, "0000ff10-1212-abcd-1523-785feabcd123", 5, 3)
-    if data_source_type == "bluetooth":
+    if data_source_type == "bluetooth" or include_headband:
+        notification_timeout = ble.get("notification_timeout_seconds", DEFAULT_BLE_NOTIFICATION_TIMEOUT_SECONDS)
+        if notification_timeout <= 0:
+            raise ValueError("ble.notification_timeout_seconds must be positive")
         ble_config = BleConfig(
             bool(ble.get("enabled", False)),
             ble.get("device_name") or None,
             str(ble.get("model_nbr_uuid", "0000ff10-1212-abcd-1523-785feabcd123")).lower(),
             int(ble.get("scan_timeout_seconds", 5)),
             int(ble.get("reconnect_delay_seconds", 3)),
+            ble.get("device_identifier", "").strip() or None,
+            notification_timeout_seconds=notification_timeout,
         )
     serial_config = SerialConfig()
     if data_source_type == "serial":
@@ -427,7 +465,10 @@ def load(
     auto_cleanup_enabled = storage.get("auto_cleanup_enabled", False)
     if not isinstance(auto_cleanup_enabled, bool):
         raise ValueError("storage.auto_cleanup_enabled must be boolean")
-    pipeline_values = raw.get("pipeline", {})
+    pipeline_values = dict(raw.get("pipeline", {}))
+    batch_mode = pipeline_values.pop("batch_mode", "window")
+    if batch_mode not in {"window", "as_available"}:
+        raise ValueError("pipeline.batch_mode must be 'window' or 'as_available'")
     if any(type(value) is not int or value <= 0 for value in pipeline_values.values()):
         raise ValueError("pipeline limits and intervals must be positive integers")
     config = GatewayConfig(
@@ -453,10 +494,12 @@ def load(
             local_ui_port,
             local_ui_directory,
         ),
-        data_source=DataSourceConfig(data_source_type, window_interval_ms, stale_after_ms),
+        data_source=DataSourceConfig(data_source_type, window_interval_ms, stale_after_ms, include_headband,
+                                     eeg_alignment_percent, eeg_alignment_output_wait_ms,
+                                     eeg_alignment_reference_batches, eeg_alignment_clock_packets),
         serial=serial_config,
         storage=StorageConfig(**storage_values, auto_cleanup_enabled=auto_cleanup_enabled),
-        pipeline=PipelineConfig(**pipeline_values),
+        pipeline=PipelineConfig(batch_mode=batch_mode, **pipeline_values),
         config_schema_version=config_schema_version,
         profile=profile,
     )
@@ -483,21 +526,28 @@ def _validate_types(raw: dict) -> None:
     Inactive device sections keep their legacy ignore semantics; no dormant
     transport parameters are consumed or used to load drivers.
     """
-    boolean = {"ble.enabled", "algorithm.enabled", "download.enabled", "local_ui.enabled",
+    boolean = {"ble.enabled", "algorithm.enabled", "download.enabled", "local_ui.enabled", "data_source.include_headband",
                "serial.dtr", "serial.rts", "storage.auto_cleanup_enabled", "recording.transport_trace_enabled"}
-    integer = {"server.port", "download.port", "local_ui.port", "ble.scan_timeout_seconds",
+    integer = {"server.port", "download.port", "local_ui.port", "ble.scan_timeout_seconds", "ble.notification_timeout_seconds",
                "ble.reconnect_delay_seconds", "serial.baud_rate", "serial.handshake_timeout_ms",
                "serial.command_response_timeout_ms", "serial.max_buffer_bytes",
                "algorithm.request_timeout_ms", "data_source.window_interval_ms", "data_source.stale_after_ms",
+               "data_source.eeg_alignment_percent", "data_source.eeg_alignment_output_wait_ms",
+               "data_source.eeg_alignment_reference_batches", "data_source.eeg_alignment_clock_packets",
+               # Accept legacy timeout keys when keeping an existing gateway.toml.
+               "data_source.eeg_alignment_wait_ms",
+               "data_source.eeg_alignment_raw_timeout_ms",
                "logging.max_bytes", "logging.backup_count", "recording.transport_trace_max_bytes"}
     number = {"serial.data_timeout_seconds", "serial.reconnect_delay_seconds", "serial.stats_interval_seconds",
               "recording.replay_speed"}
     arrays = {"algorithm.command", "serial.candidate_types"}
+    data_source = raw.get("data_source", {})
+    selected = data_source.get("type")
+    validate_ble = selected == "bluetooth" or data_source.get("include_headband") is True
     for section, fields in raw.items():
         if not isinstance(fields, dict):
             continue
-        selected = raw.get("data_source", {}).get("type")
-        if (section == "ble" and selected != "bluetooth") or (section == "serial" and selected != "serial"):
+        if (section == "ble" and not validate_ble) or (section == "serial" and selected != "serial"):
             continue
         for field, value in fields.items():
             key = f"{section}.{field}"

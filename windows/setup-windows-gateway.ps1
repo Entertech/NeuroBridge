@@ -3,7 +3,7 @@
 param(
     [ValidateSet('menu', 'prepare', 'start', 'check', 'config', 'algorithm', 'logs', 'diagnostics',
                  'autostart-enable', 'autostart-disable', 'autostart-status',
-                 'export-logs', 'uninstall', 'purge', 'purge-internal')]
+                 'export-logs', 'uninstall', 'purge', 'purge-internal', 'capture')]
     [string]$Action = 'prepare',
     [switch]$Offline,
     [switch]$Yes,
@@ -61,7 +61,7 @@ function Find-Python {
 
 function Test-Dependencies {
     try {
-        & $projectPython -c "import serial, websockets, bleak, win32service; from importlib.metadata import version; assert version('pyserial') == '3.5' and version('websockets') == '12.0' and version('bleak') == '0.19.0' and version('pywin32') == '306'" *> $null
+        & $projectPython -c "import serial, websockets, bleak, win32service, etw; from importlib.metadata import version; assert version('pyserial') == '3.5' and version('websockets') == '12.0' and version('bleak') == '0.19.5' and version('pywin32') == '306' and version('pywintrace') == '0.2.0'" *> $null
         return ($LASTEXITCODE -eq 0)
     } catch { return $false }
 }
@@ -136,8 +136,15 @@ function Invoke-ServiceControl {
 }
 
 function Show-GatewayPage {
+    param([string]$Path = '')
     $url = & $projectPython $helper 'url'
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read the configured browser URL.' }
+    if ($Path) {
+        $parsed = [Uri]$url.Trim()
+        $builder = New-Object System.UriBuilder($parsed)
+        $builder.Path = $Path
+        $url = $builder.Uri.AbsoluteUri
+    }
     Write-Host "Gateway is running in the background: $url"
     try { Start-Process -FilePath $url | Out-Null }
     catch { Write-Host "Open this URL in your browser: $url" }
@@ -403,6 +410,9 @@ try {
             Invoke-Purge | Out-Null
         } elseif ($Action -eq 'export-logs') {
             Invoke-LogExport -Root $projectRoot
+        } elseif ($Action -eq 'capture') {
+            Require-Runtime
+            Show-GatewayPage -Path '/capture/'
         } else {
             Invoke-Action $Action
         }
@@ -411,7 +421,7 @@ try {
             Write-Host ''
             Write-Host '1. 一键准备并启动（默认开机自启）'
             Write-Host '2. 直接启动网关'
-            Write-Host '4. 检查当前 USB / COM 串口'
+            Write-Host '4. 检查当前采集来源（耳机串口 / 头环蓝牙）'
             Write-Host '5. 创建或校验项目配置（保留已有设置）'
             Write-Host '6. 准备 / 修复 Windows 算法程序'
             Write-Host '7. 导出诊断摘要（不含原始数据和日志正文）'
@@ -421,6 +431,7 @@ try {
             Write-Host '11. 关闭开机自启并停止服务'
             Write-Host '12. 一键退出（移除服务注册与源码）'
             Write-Host '13. 导出运行日志（源码/安装包通用）'
+            Write-Host '14. 打开原始数据查看页（耳机串口帧与头环原始包）'
             Write-Host '0. 退出'
             $selection = Read-Host '请输入数字'
             if ($selection -eq '0') { break }
@@ -429,6 +440,14 @@ try {
                 catch {
                     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
                     Write-Host 'No configuration or recording file was modified.'
+                }
+                continue
+            }
+            if ($selection -eq '14') {
+                try { Show-GatewayPage -Path '/capture/' }
+                catch {
+                    Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+                    Write-Host 'The gateway was not changed. Start it, then retry.'
                 }
                 continue
             }
