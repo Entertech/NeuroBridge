@@ -13,6 +13,9 @@ const localConnection = fixedSource || sharedConnection;
 const showConnectedDevicesOnly = sharedConnection || window.NEUROBRIDGE_B_CLIENT_WINDOWS === true;
 const waveformCapacity = 500;
 const sdkDualWaveLimit = 2000;
+const liveDisplayIntervalMs = 600;
+const pendingLiveMessages = new Map();
+let liveDisplayTimer = null;
 const spectrumBands = ["delta", "theta", "alpha", "lowBeta", "highBeta", "beta", "gamma"];
 const algorithmMetrics = {
   eeg: [
@@ -114,7 +117,7 @@ function createSourcePanel(source) {
   return {
     source, section, fields, algorithmGroups, overview: createOverview(source),
     socket: null, initialStatusRequestId: null, statusSubscriptionRequestId: null, statusSubscriptionId: null,
-    deviceStatusTimestamp: null,
+    eventModeSubscriptions: new Set(), deviceStatusTimestamp: null,
     eegStateTimestamp: null, eegStaleTimer: null, wearState: "unknown", eegDisplay: "shown",
     subscriptions: new Map(), channels: {}, bandPower: {}, identity: {}, eegTimestamp: null,
   };
@@ -416,6 +419,7 @@ function showDevice(panel, visible) {
 }
 
 function resetSource(panel, status, waiting) {
+  clearPendingLiveMessages(panel);
   panel.deviceStatusTimestamp = null;
   clearEegState(panel);
   showDevice(panel, false);
@@ -747,7 +751,56 @@ function updateVisuals(data, panel) {
   drawSourceCharts(panel);
 }
 
-function handleGatewayMessage(message, panel) {
+function isLiveDataMessage(message, panel) {
+  const data = message?.data;
+  if (data?.event !== "data" || data?.mode === "replay") return false;
+  const subscriptionId = data.subscriptionId;
+  // Window-mode subscriptions already arrive every 600 ms; only as_available
+  // subscriptions need display coalescing.
+  if (subscriptionId && panel?.subscriptions.has(subscriptionId)
+    && !panel.eventModeSubscriptions.has(subscriptionId)) return false;
+  return true;
+}
+
+function queueLiveMessage(message, panel) {
+  let pending = pendingLiveMessages.get(panel.source);
+  if (!pending) {
+    pending = new Map();
+    pendingLiveMessages.set(panel.source, pending);
+  }
+  // Keep only the newest window per subscription and drop superseded ones.
+  const key = message.data?.subscriptionId || "live";
+  pending.delete(key);
+  pending.set(key, message);
+  if (liveDisplayTimer === null) {
+    liveDisplayTimer = window.setTimeout(flushPendingLiveMessages, liveDisplayIntervalMs);
+  }
+}
+
+function flushLiveMessages(panel) {
+  const pending = pendingLiveMessages.get(panel.source);
+  if (!pending) return;
+  pendingLiveMessages.delete(panel.source);
+  const messages = [...pending.values()].sort(
+    (left, right) => (left.data?.timestampMs ?? 0) - (right.data?.timestampMs ?? 0),
+  );
+  for (const message of messages) handleGatewayMessage(message, panel, { log: false });
+}
+
+function flushPendingLiveMessages() {
+  liveDisplayTimer = null;
+  for (const panel of Object.values(panels)) flushLiveMessages(panel);
+}
+
+function clearPendingLiveMessages(panel) {
+  pendingLiveMessages.delete(panel.source);
+  if (pendingLiveMessages.size === 0 && liveDisplayTimer !== null) {
+    window.clearTimeout(liveDisplayTimer);
+    liveDisplayTimer = null;
+  }
+}
+
+function handleGatewayMessage(message, panel, { log = true } = {}) {
   if (!message || typeof message !== "object") return;
   const data = message.data;
   if (message.protocolVersion === PROTOCOL_VERSION) {
@@ -788,6 +841,8 @@ function handleGatewayMessage(message, panel) {
   const subscriptionId = data?.result?.subscriptionId;
   if (data?.action === "subscribe" && subscriptionId) {
     panel.subscriptions.set(subscriptionId, data.result.streams || []);
+    if (data.result.eventMode === "as_available") panel.eventModeSubscriptions.add(subscriptionId);
+    else panel.eventModeSubscriptions.delete(subscriptionId);
     if (data.requestId === panel.statusSubscriptionRequestId) {
       panel.statusSubscriptionRequestId = null;
       panel.statusSubscriptionId = subscriptionId;
@@ -797,13 +852,14 @@ function handleGatewayMessage(message, panel) {
   }
   if (data?.action === "unsubscribe" && subscriptionId) {
     panel.subscriptions.delete(subscriptionId);
+    panel.eventModeSubscriptions.delete(subscriptionId);
     if (subscriptionId === panel.statusSubscriptionId) {
       panel.statusSubscriptionId = null;
       subscribeToStatus(panel);
     }
   }
   if (subscriptionId) refreshSubscriptionSelect(panel);
-  appendLog("in", "← IN", message, panel);
+  if (log) appendLog("in", "← IN", message, panel);
   if (panel.initialStatusRequestId && data?.requestId === panel.initialStatusRequestId) {
     panel.initialStatusRequestId = null;
     subscribeToStatus(panel);
@@ -886,7 +942,14 @@ function connect(panel) {
     try {
       const message = JSON.parse(event.data);
       const source = sourceByDevice.get(message?.data?.source);
-      handleGatewayMessage(message, sharedConnection && source ? panels[source] : panel);
+      const target = sharedConnection && source ? panels[source] : panel;
+      if (isLiveDataMessage(message, target)) {
+        appendLog("in", "← IN", message, target);
+        queueLiveMessage(message, target);
+      } else {
+        flushLiveMessages(target);
+        handleGatewayMessage(message, target);
+      }
     } catch {
       appendLog("error", "ERROR", `无法读取网关消息（${event.data.length} 字符）。`, panel);
     }
@@ -901,6 +964,7 @@ function connect(panel) {
       item.statusSubscriptionRequestId = null;
       item.statusSubscriptionId = null;
       item.subscriptions.clear();
+      item.eventModeSubscriptions.clear();
       resetSource(item, "已断开", "等待连接网关");
       refreshSubscriptionSelect(item);
       appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`, item);

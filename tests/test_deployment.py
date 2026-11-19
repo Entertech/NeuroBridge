@@ -876,6 +876,23 @@ class DeploymentTests(unittest.TestCase):
                     self.assertIn('sendRequest("getStatus", {}, item);', open_handler)
                     self.assertIn('if (typeof configuredEndpoint === "string") {\n  connect(localPanel);\n}', script)
 
+    def test_b_side_console_coalesces_live_display_to_600_ms(self) -> None:
+        script = (ROOT / "web" / "b-client-test" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("const liveDisplayIntervalMs = 600;", script)
+        self.assertIn("const pendingLiveMessages = new Map();", script)
+        self.assertIn("function isLiveDataMessage(message, panel)", script)
+        self.assertIn("if (data?.event !== \"data\" || data?.mode === \"replay\") return false;", script)
+        self.assertIn("panel.eventModeSubscriptions.add(subscriptionId)", script)
+        self.assertIn("function queueLiveMessage(message, panel)", script)
+        self.assertIn("function flushLiveMessages(panel)", script)
+        self.assertIn("function flushPendingLiveMessages()", script)
+        self.assertIn("window.setTimeout(flushPendingLiveMessages, liveDisplayIntervalMs)", script)
+        self.assertIn("handleGatewayMessage(message, panel, { log: false })", script)
+        self.assertIn('appendLog("in", "← IN", message, target);', script)
+        self.assertIn("flushLiveMessages(target);", script)
+        html = (ROOT / "web" / "b-client-test" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("页面每 600 ms 渲染最新一组", html)
+
     def test_one_command_update_uses_only_the_existing_checkout(self) -> None:
         script = (ROOT / "linux" / "update-ubuntu.sh").read_text(encoding="utf-8")
         self.assertIn('exec sudo --preserve-env=PATH bash "$0"', script)
