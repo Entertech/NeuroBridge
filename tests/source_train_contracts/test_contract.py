@@ -52,6 +52,40 @@ class ContractTests(unittest.TestCase):
             with self.subTest(checks=checks):
                 with self.assertRaises(ValueError): train.check_results(checks, ['test'])
 
+    def test_workflow_identity_expects_the_actions_bot_as_pr_author(self):
+        with mock.patch.dict(os.environ, {'TRAIN_RELEASE_IDENTITY': 'workflow'}, clear=False):
+            os.environ.pop('TRAIN_PR_AUTHOR', None)
+            self.assertEqual(train.expected_pr_author(), 'github-actions[bot]')
+        with mock.patch.dict(os.environ, {'TRAIN_PR_AUTHOR': 'custom[bot]'}, clear=False):
+            self.assertEqual(train.expected_pr_author(), 'custom[bot]')
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(train, 'run', return_value='alice'):
+            self.assertEqual(train.expected_pr_author(), 'alice')
+
+    def test_checks_pending_waits_only_for_running_required_checks(self):
+        running = {'name': 'test', 'status': 'in_progress', 'conclusion': None}
+        good = {'name': 'test', 'status': 'completed', 'conclusion': 'success'}
+        self.assertTrue(train.checks_pending([running], ['test']))
+        self.assertFalse(train.checks_pending([good], ['test']))
+        self.assertFalse(train.checks_pending([], ['test']))
+        self.assertFalse(train.checks_pending([running | {'status': 'completed', 'conclusion': 'failure'}], ['test']))
+        self.assertFalse(train.checks_pending([{'name': 'other', 'status': 'in_progress', 'conclusion': None}], ['test']))
+
+    def test_unreadable_protection_is_unverified_but_insufficient_rules_still_block(self):
+        obj = train.Train('1.2.3')
+        denied = RuntimeError('gh api failed: gh: Resource not accessible by integration (HTTP 403)')
+        with mock.patch.object(train, 'api', side_effect=denied):
+            result = obj.protection('master')
+        self.assertEqual(result['status'], 'unverified')
+        self.assertIn('Administration read unavailable', result['reason'])
+        rules = [{'type': 'pull_request', 'parameters': {'allowed_merge_methods': ['merge'], 'required_approving_review_count': 1}}]
+        with mock.patch.object(train, 'api', return_value=rules):
+            self.assertEqual(obj.protection('master')['status'], 'passed')
+        weak = [{'type': 'pull_request', 'parameters': {'allowed_merge_methods': ['merge'], 'required_approving_review_count': 0}}]
+        policy = {'required_pull_request_reviews': {'required_approving_review_count': 0}}
+        with mock.patch.object(train, 'api', side_effect=[weak, policy]):
+            with self.assertRaisesRegex(ValueError, 'approving review'):
+                obj.protection('master')
+
     def test_review_required_and_latest_review_revokes_approval(self):
         pr = {'state': 'OPEN', 'isDraft': False, 'headRefName': 'feature/a', 'baseRefName': 'dev_1.2.3',
               'reviewDecision': 'APPROVED', 'reviews': [{'author': {'login': 'alice'}, 'state': 'APPROVED'}]}
@@ -91,7 +125,8 @@ class ContractTests(unittest.TestCase):
     def test_plan_with_read_only_repository_metadata_still_reports_other_gates(self):
         obj = train.Train('1.2.3')
         with mock.patch.object(train, 'api', return_value={'default_branch': 'master'}), \
-             mock.patch.object(obj, 'fetch', return_value=OTHER), mock.patch.object(obj, 'protection'), \
+             mock.patch.object(obj, 'fetch', return_value=OTHER), \
+             mock.patch.object(obj, 'protection', return_value={'status': 'passed'}), \
              mock.patch.object(obj, 'plan_actions_identity', return_value={'status': 'workflow'}), \
              mock.patch.object(obj, 'load', return_value=None), \
              mock.patch.object(obj, 'package_scope', return_value={'mode': 'affected', 'systems': []}), \

@@ -80,7 +80,8 @@ class ReleaseTriggerTests(unittest.TestCase):
         self.assertIn('needs: [source, finish-systems]', delivery)
         self.assertIn("needs.finish-systems.outputs.software_result == 'success'", delivery)
         self.assertIn('tools.source_train publish-delivery', delivery)
-        self.assertIn('continue-on-error: true', delivery)
+        self.assertNotIn('continue-on-error: true', delivery)
+        self.assertIn('Record delivery publication failure', delivery)
         self.assertNotIn('document-release', delivery)
 
     def test_delivery_receipt_and_upload_use_the_zip_outside_the_build_directory(self):

@@ -43,6 +43,10 @@ jobs:
   plan:
     if: github.event_name == 'workflow_dispatch' && inputs.operation == 'plan'
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      actions: read
+      checks: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,6 +70,7 @@ jobs:
       contents: write
       pull-requests: write
       actions: write
+      checks: read
     outputs:
       complete: ${{ steps.source.outputs.complete }}
       operation: ${{ steps.route.outputs.operation }}
@@ -124,13 +129,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TRAIN_RELEASE_IDENTITY: workflow
-          TRAIN_APP_LOGIN: ${{ github.actor }}
+          TRAIN_PR_AUTHOR: github-actions[bot]
           TRAIN_OPERATION: ${{ steps.route.outputs.operation }}
           TRAIN_VERSION: ${{ steps.route.outputs.version }}
           TRAIN_REQUIREMENTS: ${{ inputs.requirements }}
           TRAIN_PROMOTION: ${{ inputs.promotion_pr || github.event.pull_request.number }}
           TRAIN_CANDIDATE: ${{ inputs.candidate }}
           TRAIN_SYSTEMS: ${{ inputs.systems }}
+          TRAIN_CHECK_TIMEOUT_SECONDS: '1800'
         run: |
           args=("$TRAIN_OPERATION" --version "$TRAIN_VERSION" --execute)
           case "$TRAIN_OPERATION" in
@@ -140,6 +146,25 @@ jobs:
             release) args=(begin-release --version "$TRAIN_VERSION" --systems "$TRAIN_SYSTEMS" --execute) ;;
           esac
           python -m tools.source_train "${args[@]}"
+      - name: Dispatch required checks for the candidate branch
+        if: steps.route.outputs.operation == 'prepare' && steps.source.outputs.candidate_branch != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_BRANCH: ${{ steps.source.outputs.candidate_branch }}
+        run: |
+          # The workflow token's push does not trigger CI, so the rebased
+          # candidate would never receive the checks that review and release
+          # require. Dispatch them on the exact branch head instead.
+          gh workflow run ci.yml --ref "$CANDIDATE_BRANCH"
+          for _ in $(seq 1 30); do
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch "$CANDIDATE_BRANCH" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+            if [ -n "$run_id" ]; then
+              echo "Dispatched candidate checks: $run_id"
+              break
+            fi
+            sleep 5
+          done
+          test -n "$run_id"
       - name: Continue the merged train explicitly
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
@@ -204,7 +229,7 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
-      actions: read
+      actions: write
     outputs:
       software_result: ${{ steps.finish.outputs.software_result }}
     steps:
@@ -221,12 +246,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TRAIN_RELEASE_IDENTITY: workflow
-          TRAIN_APP_LOGIN: ${{ github.actor }}
+          TRAIN_PR_AUTHOR: github-actions[bot]
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
         run: |
           git config user.name 'NeuroBridge release automation'
           git config user.email 'release-automation@users.noreply.github.com'
           python -m tools.source_train finish-systems --version "$TRAIN_VERSION" --execute
+      - name: Dispatch required checks for the finalization branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINALIZATION_BRANCH: ${{ steps.finish.outputs.finalization_branch }}
+        run: |
+          # The finalization PR is opened with the workflow token, so its branch
+          # also needs an explicit check dispatch before it can be merged.
+          test -n "$FINALIZATION_BRANCH"
+          gh workflow run ci.yml --ref "$FINALIZATION_BRANCH"
 
   publish-delivery:
     needs: [source, finish-systems]
@@ -235,7 +269,6 @@ jobs:
     permissions:
       contents: write
       actions: read
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -250,7 +283,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TRAIN_RELEASE_IDENTITY: workflow
-          TRAIN_APP_LOGIN: ${{ github.actor }}
+          TRAIN_PR_AUTHOR: github-actions[bot]
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
         run: |
           python -m tools.source_train publish-delivery --version "$TRAIN_VERSION" --execute
@@ -268,7 +301,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: read
+      actions: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -285,10 +318,11 @@ jobs:
           github-token: ${{ github.token }}
           path: artifacts/source-train
       - name: Record verified Artifact, tag exact source, and open finalization PR
+        id: finalize
         env:
           GH_TOKEN: ${{ github.token }}
           TRAIN_RELEASE_IDENTITY: workflow
-          TRAIN_APP_LOGIN: ${{ github.actor }}
+          TRAIN_PR_AUTHOR: github-actions[bot]
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
           TRAIN_ARTIFACT: ${{ needs.packages.outputs.artifact_id || needs.source.outputs.artifact_id }}
         run: |
@@ -296,10 +330,17 @@ jobs:
           git config user.email 'release-automation@users.noreply.github.com'
           python -m tools.source_train record-artifact --version "$TRAIN_VERSION" --artifact-id "$TRAIN_ARTIFACT" --directory artifacts/source-train --execute
           python -m tools.source_train finalize --version "$TRAIN_VERSION" --directory artifacts/source-train --execute
+      - name: Dispatch required checks for the finalization branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINALIZATION_BRANCH: ${{ steps.finalize.outputs.finalization_branch }}
+        run: |
+          test -n "$FINALIZATION_BRANCH"
+          gh workflow run ci.yml --ref "$FINALIZATION_BRANCH"
 
   retain-failed-attempt:
-    needs: [source, packages, finalize]
-    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && (needs.packages.result == 'failure' || needs.packages.result == 'cancelled' || needs.finalize.result == 'failure' || needs.finalize.result == 'cancelled')
+    needs: [source, packages, finalize, system-packages, finish-systems]
+    if: always() && needs.source.result == 'success' && needs.source.outputs.operation == 'release' && needs.source.outputs.skip_release != 'true' && (needs.packages.result == 'failure' || needs.packages.result == 'cancelled' || needs.finalize.result == 'failure' || needs.finalize.result == 'cancelled' || needs.system-packages.result == 'failure' || needs.system-packages.result == 'cancelled' || needs.finish-systems.result == 'failure' || needs.finish-systems.result == 'cancelled')
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -317,7 +358,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TRAIN_RELEASE_IDENTITY: workflow
-          TRAIN_APP_LOGIN: ${{ github.actor }}
+          TRAIN_PR_AUTHOR: github-actions[bot]
           TRAIN_VERSION: ${{ needs.source.outputs.version }}
         run: |
           git config user.name 'NeuroBridge release automation'

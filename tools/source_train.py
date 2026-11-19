@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Source release orchestration. Packaging is delegated to release.yml.
 
-No command writes without --execute. Remote writes use the configured App in
-Actions. Checkpoints use fast-forward-only state refs whose parents retain the
-candidate Git objects after a failed untagged candidate branch is removed.
+No command writes without --execute. Actions runs write with the triggering
+workflow token; the workflow dispatches code checks explicitly because that
+token's push and pull-request events do not start new workflow runs. Checkpoints
+use fast-forward-only state refs whose parents retain the candidate Git objects
+after a failed untagged candidate branch is removed.
 """
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 import zipfile
 from urllib.parse import urlsplit
@@ -77,6 +80,35 @@ def check_results(checks: list[dict], required: list[str]) -> None:
         matches = [item for item in checks if item['name'] == name]
         if not matches or any(item.get('conclusion') != 'success' or item.get('status') != 'completed' for item in matches):
             raise ValueError(f"required code check is not successful: {name}")
+
+
+def checks_pending(checks: list[dict], required: list[str]) -> bool:
+    """True while listed checks are still running and none has failed."""
+    pending = False
+    for name in required:
+        matches = [item for item in checks if item['name'] == name]
+        if not matches:
+            continue
+        for item in matches:
+            if item.get('status') != 'completed':
+                pending = True
+            elif item.get('conclusion') != 'success':
+                return False
+    return pending
+
+
+WORKFLOW_PR_AUTHOR = 'github-actions[bot]'
+CHECK_POLL_SECONDS = 30
+
+
+def expected_pr_author() -> str:
+    """Return the account that must author train-created pull requests."""
+    override = os.environ.get('TRAIN_PR_AUTHOR')
+    if override:
+        return override
+    if os.environ.get('TRAIN_RELEASE_IDENTITY') == 'workflow':
+        return WORKFLOW_PR_AUTHOR
+    return run('gh', 'api', 'user', '--jq', '.login')
 
 
 def require_approvals(pr: dict, approvals: int):
@@ -273,20 +305,27 @@ class Train:
         if parsed.hostname != 'github.com' or parsed.path.strip('/').removesuffix('.git').casefold() != self.repository.casefold():
             raise ValueError('origin differs from the configured GitHub repository')
 
-    def protection(self, branch: str):
+    def protection(self, branch: str) -> dict:
         # Classic protection and Rulesets may coexist. Query effective rules too;
         # callers must never silently install or weaken protection.
-        rules = api(f'repos/{self.repository}/rules/branches/{branch}')
+        try:
+            rules = api(f'repos/{self.repository}/rules/branches/{branch}')
+        except RuntimeError as error:
+            if self.unreadable(error):
+                return self.protection_unverified(branch)
+            raise
         pull = [r['parameters'] for r in rules if r['type'] == 'pull_request']
         if any(p.get('allowed_merge_methods') and 'merge' not in p['allowed_merge_methods'] for p in pull):
             raise ValueError('branch protection permits only rewriting merge methods')
         if pull and all(p.get('required_approving_review_count', 0) >= self.config['code_gates']['required_reviewers'] for p in pull):
             if any(r['type'] == 'required_linear_history' for r in rules):
                 raise ValueError("linear-only protection cannot preserve a tagged candidate by merge commit")
-            return
+            return {'branch': branch, 'status': 'passed'}
         try:
             policy = api(f'repos/{self.repository}/branches/{branch}/protection')
         except RuntimeError as error:
+            if self.unreadable(error):
+                return self.protection_unverified(branch)
             raise ValueError(f"reviewed PR protection must be configured for {branch}") from error
         reviews = policy.get('required_pull_request_reviews') or {}
         if reviews.get('required_approving_review_count', 0) < self.config['code_gates']['required_reviewers']:
@@ -295,6 +334,21 @@ class Train:
             raise ValueError('branch review protection must also apply to administrators')
         if policy.get('required_linear_history', {}).get('enabled'):
             raise ValueError("linear-only protection cannot preserve candidate ancestry")
+        return {'branch': branch, 'status': 'passed'}
+
+    @staticmethod
+    def unreadable(error: Exception) -> bool:
+        message = str(error)
+        return any(marker in message for marker in ('HTTP 403', 'Resource not accessible', 'not accessible by integration'))
+
+    def protection_unverified(self, branch: str) -> dict:
+        # Actions installation tokens cannot hold the Administration read that
+        # Rulesets and classic branch protection require. GitHub still enforces
+        # the protection at merge time; record the limitation instead of failing
+        # every train operation on an API call the token may never satisfy.
+        reason = 'workflow token cannot read Rulesets or branch protection (Administration read unavailable)'
+        print(json.dumps({'event': 'branch_protection_unverified', 'branch': branch, 'reason': reason}, ensure_ascii=False), file=sys.stderr)
+        return {'branch': branch, 'status': 'unverified', 'reason': reason}
 
     def plan_actions_identity(self) -> dict:
         identity = self.config['repository'].get('release_identity')
@@ -352,12 +406,11 @@ class Train:
         protections = {}
         for branch in (default, self.names['integration'], self.names['publish']):
             try:
-                self.protection(branch)
-            except (RuntimeError, ValueError) as error:
-                status = 'unverified' if isinstance(error, RuntimeError) or error.__cause__ else 'blocked'
-                protections[branch] = {'status': status, 'reason': str(error)}
-            else:
-                protections[branch] = {'status': 'passed'}
+                protections[branch] = self.protection(branch)
+            except ValueError as error:
+                protections[branch] = {'status': 'blocked', 'reason': str(error)}
+            except RuntimeError as error:
+                protections[branch] = {'status': 'unverified', 'reason': str(error)}
         candidate_gates = {'status': 'pending', 'reason': 'No release candidate recorded.'}
         if record is not None:
             candidate = require_sha(record['candidate'])
@@ -479,8 +532,17 @@ class Train:
         return record
 
     def checks(self, sha: str):
-        pages = json.loads(run('gh', 'api', '--paginate', '--slurp', f'repos/{self.repository}/commits/{sha}/check-runs?per_page=100'))
-        check_results([check for page in pages for check in page['check_runs']], self.config['code_gates']['checks'])
+        required = self.config['code_gates']['checks']
+        timeout = float(os.environ.get('TRAIN_CHECK_TIMEOUT_SECONDS') or 0)
+        deadline = time.monotonic() + timeout
+        while True:
+            pages = json.loads(run('gh', 'api', '--paginate', '--slurp', f'repos/{self.repository}/commits/{sha}/check-runs?per_page=100'))
+            checks = [check for page in pages for check in page['check_runs']]
+            # Wait only for runs that already exist; an undispatched check fails now.
+            if not checks_pending(checks, required) or time.monotonic() >= deadline:
+                check_results(checks, required)
+                return
+            time.sleep(CHECK_POLL_SECONDS)
 
     def pr(self, number: int) -> dict:
         return json.loads(run('gh', 'pr', 'view', str(number), '--repo', self.repository, '--json',
@@ -498,7 +560,7 @@ class Train:
         number = int(url.rsplit('/', 1)[1])
         actual = json.loads(run('gh', 'pr', 'view', str(number), '--repo', self.repository,
                                 '--json', 'author,baseRefName,headRefName,state,isDraft'))
-        expected = os.environ.get('TRAIN_APP_LOGIN') or run('gh', 'api', 'user', '--jq', '.login')
+        expected = expected_pr_author()
         if actual['author']['login'] != expected or actual['baseRefName'] != base or actual['headRefName'] != head or actual['state'] != 'OPEN' or actual['isDraft']:
             raise ValueError('created PR actor or source/target verification failed; stop further writes')
         return number
@@ -888,6 +950,7 @@ class Train:
                     output.write(f"- `{system}` · `{result['tag']}` · {result['status']}{reason}\n")
         if record["softwareResult"] != "success":
             raise ValueError("all selected systems failed to publish")
+        record["finalizationBranch"] = self.names["finalization"]
         if not record.get("finalizationPR"):
             try:
                 default, _ = self.default()
@@ -902,8 +965,12 @@ class Train:
                 record["finalizationPR"] = self.open_pr(self.names["finalization"], default, f"Finalize verified {self.version}")
                 self.save(record)
             except errors as error:
+                # Software is already published, but the protected finalization PR
+                # is the only route to master. Persist the reason and fail the job
+                # so a green run never hides a release that cannot be merged.
                 record["finalizationError"] = str(error)
-                print(f"Software published; finalization PR needs follow-up: {error}", file=sys.stderr)
+                self.save(record)
+                raise ValueError(f"software published but the finalization PR was not created: {error}") from error
         return record
 
     def publish_delivery(self) -> dict:
@@ -968,6 +1035,7 @@ class Train:
             default_tip = self.fetch('refs/heads/'+default)
             preserving_updates(record['candidate'], final, default_tip)
         record['finalizationPR'] = self.open_pr(self.names['finalization'], default, f'Finalize verified {self.version}')
+        record['finalizationBranch'] = self.names['finalization']
         self.save(record)
         return record
 
@@ -1169,6 +1237,7 @@ def main():
                 target.write('recovery_runs='+','.join(result.get("recoveryRunIds", []))+'\n')
                 target.write('software_result='+str(result.get("softwareResult", ""))+'\n')
                 target.write('complete='+str(result.get('phase') == 'complete').lower()+'\n')
+                target.write('finalization_branch='+str(result.get('finalizationBranch', ''))+'\n')
     except (ValueError, RuntimeError, KeyError, TypeError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile) as error:
         print(f'source train blocked: {error}', file=sys.stderr)
         return 1

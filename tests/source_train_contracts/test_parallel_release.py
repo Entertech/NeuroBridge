@@ -62,16 +62,21 @@ class ParallelReleaseTests(unittest.TestCase):
         save.assert_called_once_with(record)
         finalization.assert_not_called()
 
-    def test_failure_to_open_finalization_pr_does_not_revoke_published_software(self):
+    def test_failed_finalization_pr_is_recorded_and_fails_the_job(self):
         obj = train.Train("1.2.3", True)
         record = attempt()
         evidence = {"sourceCommit": SHA, "archive": {"sha256": DIGEST}}
         with patch.object(obj, "mutable"), patch.object(obj, "required_record", return_value=record), \
-             patch.object(obj, "save"), patch.object(obj, "default", side_effect=RuntimeError("temporary unavailable")), \
+             patch.object(obj, "save") as save, \
+             patch.object(obj, "default", side_effect=RuntimeError("temporary unavailable")), \
              patch("tools.document_release.verified_software_receipt", return_value=evidence):
-            result = obj.finish_systems()
-        self.assertEqual(result["softwareResult"], "success")
-        self.assertIn("temporary unavailable", result["finalizationError"])
+            with self.assertRaisesRegex(ValueError, "finalization PR was not created"):
+                obj.finish_systems()
+        # Published software stays published, but the missing protected PR must
+        # fail the job and stay durable for the retry.
+        self.assertEqual(record["softwareResult"], "success")
+        self.assertIn("temporary unavailable", record["finalizationError"])
+        self.assertIn("temporary unavailable", save.call_args.args[0]["finalizationError"])
 
     def test_worker_only_uses_its_own_tag_and_recovered_receipt(self):
         obj = train.Train("1.2.3", True)
