@@ -90,10 +90,13 @@ def validate(config: dict, workflows: dict):
         if check not in defined:
             raise ValueError(f'required code check has no CI job: {check}')
         if 'if' in defined[check]:
-            # The version gate may skip manual Test runs, but must run on every
-            # source push/PR. Other required jobs have no conditional skip.
-            permitted = "github.event_name == 'pull_request' || github.event_name == 'push'"
-            if check != 'Application version gate' or defined[check]['if'] != permitted:
+            # The version gate must run on every source push/PR. It may also run
+            # for manual Test dispatches on non-default branches, which back the
+            # explicit check runs for train-created branches. Other required jobs
+            # have no conditional skip.
+            baseline = "github.event_name == 'pull_request' || github.event_name == 'push'"
+            extended = baseline + " || (github.event_name == 'workflow_dispatch' && github.ref_name != github.event.repository.default_branch)"
+            if check != 'Application version gate' or defined[check]['if'] not in (baseline, extended):
                 raise ValueError(f'required code check can be skipped: {check}')
     branches = config['branches']
     examples = [config['repository']['default_branch']]

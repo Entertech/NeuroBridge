@@ -31,7 +31,9 @@ jobs:
 
   version-gate:
     name: Application version gate
-    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    # workflow_dispatch also backs the explicit check runs for train-created
+    # candidate and finalization branches; the default branch keeps push semantics.
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref_name != github.event.repository.default_branch)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -48,7 +50,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
           SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          SOURCE_EVENT: ${{ github.event_name }}
+          SOURCE_EVENT: ${{ github.event_name == 'workflow_dispatch' && 'push' || github.event_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
           python -m tools.source_train check --event "$SOURCE_EVENT" --branch "$SOURCE_BRANCH" --base "$BASE_SHA" --head "$SOURCE_HEAD" > "$RUNNER_TEMP/release-gate.json"
