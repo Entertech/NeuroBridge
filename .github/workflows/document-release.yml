@@ -1,0 +1,56 @@
+name: External document release
+
+on:
+  workflow_dispatch:
+    inputs:
+      document:
+        description: "台账文档键，例如 northbound"
+        required: true
+        type: string
+      version:
+        description: "已审核并登记的文档版本，例如 0.3"
+        required: true
+        type: string
+      software_tags:
+        description: "已正式发布的系统软件 tag，逗号分隔"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: document-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: sudo apt-get update && sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
+      - name: Publish approved PDF after software and verify delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRAIN_RELEASE_IDENTITY: workflow
+          DOCUMENT_KEY: ${{ inputs.document }}
+          DOCUMENT_VERSION: ${{ inputs.version }}
+          SOFTWARE_TAGS: ${{ inputs.software_tags }}
+        run: |
+          git config user.name 'NeuroBridge release automation'
+          git config user.email 'release-automation@users.noreply.github.com'
+          python -m tools.document_release publish --document "$DOCUMENT_KEY" --version "$DOCUMENT_VERSION" \
+            --software-tags "$SOFTWARE_TAGS" --preview-dir artifacts/document-release --execute
+      - uses: actions/upload-artifact@v4
+        with:
+          name: document-release-preview
+          path: artifacts/document-release/
+          if-no-files-found: error

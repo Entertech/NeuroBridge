@@ -52,6 +52,61 @@ class ContractTests(unittest.TestCase):
             with self.subTest(checks=checks):
                 with self.assertRaises(ValueError): train.check_results(checks, ['test'])
 
+    def test_workflow_identity_expects_the_actions_bot_as_pr_author(self):
+        with mock.patch.dict(os.environ, {'TRAIN_RELEASE_IDENTITY': 'workflow'}, clear=False):
+            os.environ.pop('TRAIN_PR_AUTHOR', None)
+            self.assertEqual(train.expected_pr_author(), 'github-actions[bot]')
+        with mock.patch.dict(os.environ, {'TRAIN_PR_AUTHOR': 'custom[bot]'}, clear=False):
+            self.assertEqual(train.expected_pr_author(), 'custom[bot]')
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(train, 'run', return_value='alice'):
+            self.assertEqual(train.expected_pr_author(), 'alice')
+
+    def test_checks_pending_waits_only_for_running_required_checks(self):
+        running = {'name': 'test', 'status': 'in_progress', 'conclusion': None}
+        good = {'name': 'test', 'status': 'completed', 'conclusion': 'success'}
+        self.assertTrue(train.checks_pending([running], ['test']))
+        self.assertFalse(train.checks_pending([good], ['test']))
+        self.assertFalse(train.checks_pending([], ['test']))
+        self.assertFalse(train.checks_pending([running | {'status': 'completed', 'conclusion': 'failure'}], ['test']))
+        self.assertFalse(train.checks_pending([{'name': 'other', 'status': 'in_progress', 'conclusion': None}], ['test']))
+
+    def test_optional_protection_token_reads_rules_with_its_own_identity(self):
+        obj = train.Train('1.2.3')
+        policy = {'required_pull_request_reviews': {'required_approving_review_count': 1}, 'enforce_admins': {'enabled': True}}
+        calls = []
+
+        def fake_run(*args, **kwargs):
+            calls.append(kwargs.get('env'))
+            return '[]' if str(args[-1]).endswith('/rules/branches/master') else json.dumps(policy)
+
+        with mock.patch.dict(os.environ, {'TRAIN_PROTECTION_TOKEN': 'admin-read'}, clear=False), \
+             mock.patch.object(train, 'run', side_effect=fake_run), \
+             mock.patch.object(train, 'api') as fallback:
+            self.assertEqual(obj.protection('master')['status'], 'passed')
+        fallback.assert_not_called()
+        self.assertTrue(calls)
+        self.assertTrue(all(env == {'GH_TOKEN': 'admin-read'} for env in calls))
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(train, 'api', side_effect=[[], policy]) as fallback:
+            self.assertEqual(obj.protection('master')['status'], 'passed')
+        self.assertEqual(fallback.call_count, 2)
+
+    def test_unreadable_protection_is_unverified_but_insufficient_rules_still_block(self):
+        obj = train.Train('1.2.3')
+        denied = RuntimeError('gh api failed: gh: Resource not accessible by integration (HTTP 403)')
+        with mock.patch.object(train, 'api', side_effect=denied):
+            result = obj.protection('master')
+        self.assertEqual(result['status'], 'unverified')
+        self.assertIn('Administration read unavailable', result['reason'])
+        rules = [{'type': 'pull_request', 'parameters': {'allowed_merge_methods': ['merge'], 'required_approving_review_count': 1}}]
+        with mock.patch.object(train, 'api', return_value=rules):
+            self.assertEqual(obj.protection('master')['status'], 'passed')
+        weak = [{'type': 'pull_request', 'parameters': {'allowed_merge_methods': ['merge'], 'required_approving_review_count': 0}}]
+        policy = {'required_pull_request_reviews': {'required_approving_review_count': 0}}
+        with mock.patch.object(train, 'api', side_effect=[weak, policy]):
+            with self.assertRaisesRegex(ValueError, 'approving review'):
+                obj.protection('master')
+
     def test_review_required_and_latest_review_revokes_approval(self):
         pr = {'state': 'OPEN', 'isDraft': False, 'headRefName': 'feature/a', 'baseRefName': 'dev_1.2.3',
               'reviewDecision': 'APPROVED', 'reviews': [{'author': {'login': 'alice'}, 'state': 'APPROVED'}]}
@@ -65,8 +120,14 @@ class ContractTests(unittest.TestCase):
         obj = train.Train('1.2.3')
         with self.assertRaisesRegex(ValueError, '--execute'): obj.mutable()
         obj.execute = True
-        with mock.patch.object(train, 'run', return_value=''), mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'TRAIN_APP_TOKEN_USED': 'false'}):
-            with self.assertRaisesRegex(ValueError, 'GitHub App'): obj.mutable()
+        with mock.patch.object(train, 'run', return_value=''), mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}, clear=False):
+            os.environ.pop('TRAIN_RELEASE_IDENTITY', None)
+            with self.assertRaisesRegex(ValueError, 'triggering workflow identity'): obj.mutable()
+        def git_result(*args, **kwargs):
+            return '' if args[:2] == ('git', 'status') else 'https://github.com/Entertech/NeuroBridge.git'
+        with mock.patch.object(train, 'run', side_effect=git_result), \
+             mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'TRAIN_RELEASE_IDENTITY': 'workflow'}):
+            obj.mutable()
         with mock.patch.object(train, 'run', return_value=' M user-file'):
             with self.assertRaisesRegex(ValueError, 'clean worktree'): obj.mutable()
 
@@ -81,6 +142,21 @@ class ContractTests(unittest.TestCase):
              mock.patch.object(train, 'api', return_value={'default_branch': 'master', 'allow_merge_commit': True, 'delete_branch_on_merge': True}):
             with self.assertRaisesRegex(ValueError, 'deferred train cleanup'):
                 obj.default()
+
+    def test_plan_with_read_only_repository_metadata_still_reports_other_gates(self):
+        obj = train.Train('1.2.3')
+        with mock.patch.object(train, 'api', return_value={'default_branch': 'master'}), \
+             mock.patch.object(obj, 'fetch', return_value=OTHER), \
+             mock.patch.object(obj, 'protection', return_value={'status': 'passed'}), \
+             mock.patch.object(obj, 'plan_actions_identity', return_value={'status': 'workflow'}), \
+             mock.patch.object(obj, 'load', return_value=None), \
+             mock.patch.object(obj, 'package_scope', return_value={'mode': 'affected', 'systems': []}), \
+             mock.patch('tools.release_preflight.release_plan', return_value={'applicationVersion': '1.2.3', 'sourceCommit': GOOD, 'documentBlockers': []}):
+            result = obj.plan(GOOD)
+        self.assertFalse(result['writes'])
+        self.assertEqual(result['gates']['mergePolicy']['status'], 'unverified')
+        self.assertEqual(result['gates']['branchProtection']['master']['status'], 'passed')
+        self.assertEqual(result['gates']['releaseIdentity']['status'], 'workflow')
 
     def test_existing_tag_without_record_never_starts_a_candidate(self):
         obj = train.Train('1.2.3', True)
@@ -138,7 +214,7 @@ suite = loader.discover(str(root/'tests'), pattern='test_contract.py')
 assert not loader.errors, loader.errors
 assert suite.countTestCases() > 0
 """
-        subprocess.run([sys.executable, '-c', script], cwd=root, check=True, capture_output=True, text=True)
+        subprocess.run([sys.executable, '-c', script], cwd=root, check=True, capture_output=True, text=True, encoding='utf-8')
 
     def test_cleanup_uses_atomic_expected_tips_without_forcing(self):
         obj = train.Train('1.2.3', True)
@@ -225,6 +301,83 @@ assert suite.countTestCases() > 0
             with self.assertRaisesRegex(ValueError, 'required code check failed'): obj.begin_release()
             save.assert_not_called(); api.assert_not_called()
 
+    def test_unpublished_candidate_documents_prevent_packaging_checkpoint(self):
+        obj = train.Train('1.2.3', True)
+        record = {'candidate': GOOD, 'review': {'sha': GOOD}}
+        with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'default', return_value=('master', OTHER)), \
+             mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'required_record', return_value=record), \
+             mock.patch.object(obj, 'checks'), mock.patch.object(obj, 'tag', return_value=None), \
+             mock.patch.object(obj, 'fetch', return_value=OTHER), mock.patch.object(train, 'version_at', return_value='1.2.2'), \
+             mock.patch.object(obj, 'package_scope', return_value={'systems': ['windows-11'], 'baseCommits': {}}), \
+             mock.patch('tools.release_preflight.release_plan', return_value={'documentBlockers': ['Windows guide is still unpublished.']}) as plan, \
+             mock.patch.object(obj, 'save') as save, mock.patch.object(obj, 'ensure_candidate') as ensure_candidate:
+            with self.assertRaisesRegex(ValueError, 'Windows guide is still unpublished'):
+                obj.begin_release()
+            plan.assert_called_once_with(GOOD, OTHER, software=True)
+            save.assert_not_called()
+            ensure_candidate.assert_not_called()
+
+    def test_release_retry_refuses_a_different_system_selection(self):
+        from tools.release_pipeline import CONFIG as release_config
+        obj = train.Train('1.2.3', True)
+        record = {'candidate': GOOD, 'review': {'sha': GOOD}, 'packageRunId': '12',
+                  'packageScope': {'systems': ['windows-11']}}
+        with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'default', return_value=('master', OTHER)), \
+             mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'required_record', return_value=record), \
+             mock.patch('tools.release_pipeline.release_config_at', return_value=release_config), \
+             mock.patch.object(obj, 'save') as save:
+            with self.assertRaisesRegex(ValueError, 'differ from the recorded package scope'):
+                obj.begin_release('windows-10')
+        save.assert_not_called()
+
+    def test_release_retry_accepts_original_selection_when_a_system_was_filtered_out(self):
+        from tools.release_pipeline import CONFIG as release_config, matrix
+
+        obj = train.Train('1.2.3', True)
+        record = {'candidate': GOOD, 'review': {'sha': GOOD}}
+        selected = 'windows-10,windows-11'
+        scope = {'mode': 'explicit', 'systems': ['windows-11'], 'baseCommits': {}}
+        plan = {'packages': matrix(release_config), 'documentBlockers': []}
+        with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'default', return_value=('master', OTHER)), \
+             mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'required_record', return_value=record), \
+             mock.patch.object(obj, 'checks'), mock.patch.object(obj, 'delivery_tag', return_value=None), \
+             mock.patch.object(obj, 'fetch', return_value=OTHER), mock.patch.object(train, 'version_at', return_value='1.2.2'), \
+             mock.patch.object(obj, 'package_scope', return_value=scope) as package_scope, \
+             mock.patch('tools.release_pipeline.release_config_at', return_value=release_config), \
+             mock.patch('tools.release_preflight.release_plan', side_effect=lambda *args, **kwargs: plan.copy()), \
+             mock.patch.object(obj, 'save'), mock.patch.object(obj, 'ensure_candidate'), \
+             mock.patch.dict(os.environ, {'GITHUB_RUN_ID': '17'}):
+            obj.begin_release(selected)
+            self.assertEqual(record['packageScope']['requestedSystems'], selected)
+            with mock.patch.object(train, 'api', return_value={'status': 'completed', 'conclusion': 'failure'}), \
+                 mock.patch.dict(os.environ, {'GITHUB_RUN_ID': '18'}):
+                obj.begin_release('windows-11, WINDOWS-10')
+                with self.assertRaisesRegex(ValueError, 'differ from the recorded package scope'):
+                    obj.begin_release('kylin-v10')
+            self.assertEqual(record['packageScope']['systems'], ['windows-11'])
+            self.assertEqual(record['packageRunId'], '18')
+            package_scope.assert_called_once_with(GOOD, selected)
+
+    def test_package_scope_carries_forward_undelivered_system_baselines(self):
+        from tools.release_pipeline import CONFIG as release_config
+        obj = train.Train('1.2.3')
+        older = '3' * 40
+        previous = {'candidate': GOOD, 'repository': obj.repository,
+                    'packageScope': {'systems': ['windows-10'],
+                                     'baseCommits': {'windows-10': older, 'windows-11': older, 'kylin-v10': older}}}
+        with mock.patch('tools.release_pipeline.release_base', return_value=GOOD), \
+             mock.patch('tools.release_pipeline.system_release_bases', return_value={'windows-10': OTHER}), \
+             mock.patch('tools.release_pipeline.release_config_at', return_value=release_config), \
+             mock.patch.object(train, 'version_at', return_value='1.2.2'), \
+             mock.patch.object(obj, 'ref', return_value=GOOD), mock.patch.object(obj, 'fetch', return_value=GOOD), \
+             mock.patch.object(train, 'run', return_value=json.dumps(previous)), \
+             mock.patch('tools.release_scope.scope_for') as scope:
+            obj.package_scope(OTHER, 'kylin-v10')
+        scope.assert_called_once_with(
+            OTHER, {'windows-10': OTHER, 'windows-11': older, 'kylin-v10': older},
+            'kylin-v10', config=release_config,
+        )
+
     def test_merge_uses_preserving_method_and_expected_head_without_bypass(self):
         obj = train.Train('1.2.3', True)
         pr = {'number': 10, 'state': 'OPEN', 'isDraft': False, 'headRefName': 'finalize_1.2.3',
@@ -262,12 +415,14 @@ class GitSourceTests(unittest.TestCase):
         original = train.run
         self.p = mock.patch.object(train, 'run', side_effect=lambda *a, **k: original(*a, **({'cwd': self.root} | k)))
         self.p.start(); self.addCleanup(self.p.stop)
+        pipeline_root = mock.patch('tools.release_pipeline.ROOT', self.root)
+        pipeline_root.start(); self.addCleanup(pipeline_root.stop)
         self.git('init', '-q'); self.git('config', 'user.name', 'Fixture'); self.git('config', 'user.email', 'fixture@example.invalid')
         (self.root/'neurobridge').mkdir(); (self.root/'.release').mkdir()
         self.registry('0.3.2'); self.commit('baseline'); self.baseline = self.git('rev-parse', 'HEAD')
 
     def git(self, *a):
-        return subprocess.check_output(['git', *a], cwd=self.root, text=True).strip()
+        return subprocess.check_output(['git', *a], cwd=self.root, text=True, encoding='utf-8').strip()
 
     def registry(self, version):
         (self.root/'neurobridge/version_registry.toml').write_text('[application]\nversion="'+version+'"\n')
@@ -390,13 +545,14 @@ class GitSourceTests(unittest.TestCase):
 
 
 class ArtifactTests(unittest.TestCase):
-    def bundle(self, root: Path, missing: str | None = None, magic: bool = True):
+    def bundle(self, root: Path, missing: str | None = None, magic: bool = True, systems: str = ''):
         import importlib.util
         import zipfile
         from neurobridge.versioning import APPLICATION_VERSION
         from tools import release_pipeline as pipeline
         commit = pipeline.run('git', 'rev-parse', 'HEAD')
-        for target in pipeline.matrix():
+        targets = pipeline.select_targets(pipeline.matrix(), systems)
+        for target in targets:
             folder = root/'targets'/target['id']; folder.mkdir(parents=True)
             result = {'target': target, 'sourceCommit': commit, 'status': 'blocked', 'reason': 'fixture'}
             if target['id'] != missing:
@@ -405,7 +561,7 @@ class ArtifactTests(unittest.TestCase):
                 (folder/'validation.log').write_text('fixture')
                 result.update(status='candidate', fileName=package.name, sha256=pipeline.sha256(package), validationLog='validation.log', sourceReferences=[])
             pipeline.save_json(folder/'result.json', result)
-        directory = root/'release'; manifest = pipeline.assemble(root/'targets', directory, 'push_master')
+        directory = root/'release'; manifest = pipeline.assemble(root/'targets', directory, 'push_master', systems=systems)
         manifest['git']['dirty'] = False
         pipeline.save_json(directory/'release-manifest.json', manifest)
         documents = root/'documents'; documents.mkdir()
@@ -413,10 +569,80 @@ class ArtifactTests(unittest.TestCase):
             f.writestr('release-manifest.json', json.dumps({'documents': []}))
         spec = importlib.util.spec_from_file_location('fixture_bundle', pipeline.ROOT/'tools/build-release-bundle.py')
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-        archive = root/'downloaded'/'bundle.zip'
+        archive = root/'delivery'/f'neurobridge-v{APPLICATION_VERSION}.zip'
         with mock.patch.object(module, 'render_directory_pdf', return_value=b'%PDF-1.4 fixture'):
             module.build_bundle(directory, documents, archive)
-        return archive, APPLICATION_VERSION, commit, pipeline.matrix()
+        return archive, APPLICATION_VERSION, commit, targets
+
+    def test_windows_11_release_contains_only_its_exe_and_msi(self):
+        from tools.release_pipeline import matrix
+        from tools.publish_release import load_bundle_manifest
+        with tempfile.TemporaryDirectory() as directory:
+            archive, version, commit, targets = self.bundle(Path(directory), systems='windows-11')
+            receipt = train.artifact_receipt(archive, version, commit, targets)
+            self.assertEqual(receipt['targets'], ['windows-11-x86_64-exe', 'windows-11-x86_64-msi'])
+            with self.assertRaisesRegex(ValueError, 'every defined target'):
+                train.artifact_receipt(archive, version, commit, matrix())
+            _, manifest = load_bundle_manifest(archive.parent)
+            systems = manifest['bundleManifest']['systemArchives']
+            self.assertEqual([(system['platform'], [variant['name'] for variant in system['variants']])
+                              for system in systems], [('windows', ['windows-11'])])
+
+    def test_receipt_cli_reads_delivery_zip_with_intermediate_archives_present(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive, version, commit, _ = self.bundle(root, systems='windows-11')
+            self.assertEqual(len(list((root / 'release').glob('*.zip'))), 2)
+            result = subprocess.run(
+                [sys.executable, '-m', 'tools.source_train', 'verify-package',
+                 '--version', version, '--candidate', commit, '--systems', 'windows-11',
+                 '--directory', str(archive.parent)],
+                cwd=train.ROOT, capture_output=True, text=True, encoding='utf-8', check=True,
+            )
+            self.assertEqual(json.loads(result.stdout)['targets'], ['windows-11-x86_64-exe', 'windows-11-x86_64-msi'])
+
+    def test_scoped_release_requires_every_selected_installer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, 'every selected installer'):
+                self.bundle(Path(directory), missing='windows-11-x86_64-msi', systems='windows-11')
+
+    def test_kylin_only_scoped_release_has_no_windows_archive(self):
+        from tools.publish_release import load_bundle_manifest
+        with tempfile.TemporaryDirectory() as directory:
+            archive, version, commit, targets = self.bundle(Path(directory), systems='kylin-v10')
+            self.assertEqual(train.artifact_receipt(archive, version, commit, targets)['targets'], ['kylin-v10-all-deb'])
+            _, manifest = load_bundle_manifest(archive.parent)
+            self.assertEqual([system['platform'] for system in manifest['bundleManifest']['systemArchives']], ['kylin'])
+
+    def test_combined_review_artifact_has_independent_system_release_receipts(self):
+        import importlib.util
+        from tools import release_pipeline as pipeline
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive, version, commit, targets = self.bundle(root, systems='windows-10,windows-11')
+            import zipfile
+            documents = root / 'documents'
+            with zipfile.ZipFile(documents / 'neurobridge-external-documents.zip', 'w') as package:
+                package.writestr('release-manifest.json', json.dumps({'documents': [], 'packageMode': 'publish'}))
+            spec = importlib.util.spec_from_file_location('fixture_bundle', pipeline.ROOT / 'tools/build-release-bundle.py')
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            preflight = {'sourceCommit': commit, 'applicationVersion': version, 'documentMode': 'publish',
+                         'formalDocumentBlockers': [], 'documents': [], 'packages': targets, 'documentImpacts': [{
+                             'changeId': 'replay-loop', 'document': 'northbound', 'requiredVersion': '0.3',
+                             'pullRequest': 12, 'platforms': ['windows'], 'satisfied': False,
+                         }]}
+            with mock.patch.object(module, 'render_directory_pdf', return_value=b'%PDF-1.4 fixture'), \
+                 mock.patch.dict(sys.modules, {'release_pipeline': pipeline}):
+                module.build_system_bundles(root / 'targets', documents, archive.parent, preflight)
+            receipts = train.delivery_receipt(archive, version, commit, targets, per_system=True)['systems']
+            self.assertEqual(set(receipts), {'windows-10', 'windows-11'})
+            for system, receipt in receipts.items():
+                self.assertEqual(receipt['tag'], f'{system}/v{version}')
+                self.assertEqual(receipt['targets'], [f'{system}-x86_64-exe', f'{system}-x86_64-msi'])
+                with zipfile.ZipFile(archive.parent / 'systems' / system / receipt['fileName']) as bundle:
+                    contents = json.loads(bundle.read('metadata/bundle-manifest.json'))
+                self.assertEqual(contents['documentObligations'][0]['pullRequest'], 12)
 
     def test_every_defined_installer_and_exact_sha_required(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -456,10 +682,12 @@ class ArtifactTests(unittest.TestCase):
 
 
     def test_downloaded_artifact_must_match_the_pre_upload_receipt(self):
-        from tools.release_pipeline import matrix
+        from tools import release_pipeline
         with tempfile.TemporaryDirectory() as directory:
             archive, version, candidate, targets = self.bundle(Path(directory))
             original = train.artifact_receipt(archive, version, candidate, targets)
+            working_config = copy.deepcopy(release_pipeline.CONFIG)
+            working_config['build']['windows_coordinator'] = 'windows-latest'
             obj = train.Train(version, True)
             record = {'candidate': candidate, 'packageRunId': '17', 'phase': 'packaging'}
             def api(path):
@@ -473,6 +701,7 @@ class ArtifactTests(unittest.TestCase):
                     return ''
                 with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'required_record', return_value=copy.deepcopy(record)), \
                      mock.patch.object(train, 'api', side_effect=api), mock.patch.object(train, 'run', side_effect=download), \
+                     mock.patch.object(release_pipeline, 'CONFIG', working_config), \
                      mock.patch.object(obj, 'save') as save:
                     if tamper:
                         with self.assertRaisesRegex(ValueError, 'pre-upload'):
@@ -487,6 +716,55 @@ class ArtifactTests(unittest.TestCase):
 
 class RemoteAncestryTests(GitSourceTests):
     # Exercise real local Git remotes; no hosting writes or real packages.
+    def test_plan_and_release_lock_use_candidate_configuration(self):
+        from tools import release_pipeline
+        matrix_file = self.root / release_pipeline.MATRIX_PATH
+        matrix_file.parent.mkdir()
+        matrix_file.write_text((Path(release_pipeline.__file__).resolve().parents[1] / release_pipeline.MATRIX_PATH).read_text(encoding='utf-8'), encoding='utf-8')
+        self.commit('default policy')
+        default = self.git('rev-parse', 'HEAD')
+        self.git('branch', 'default-policy')
+        matrix_file.write_text(matrix_file.read_text(encoding='utf-8')
+                               .replace('default_systems = []', 'default_systems = ["windows-11"]')
+                               .replace('windows_coordinator = "windows-2022"', 'windows_coordinator = "windows-2025"'),
+                               encoding='utf-8')
+        self.registry('0.3.3')
+        self.commit('candidate policy')
+        candidate = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-q', 'default-policy')
+        # Only the remote and document gates are stubbed. Both paths read the
+        # candidate's real Git matrix while checked out on the default branch.
+        obj = train.Train('0.3.3', True)
+        record = {'candidate': candidate, 'review': {'sha': candidate}}
+        release_plan = {'applicationVersion': '0.3.3', 'sourceCommit': candidate, 'documentBlockers': [],
+                        'packages': release_pipeline.matrix(tomllib.loads(self.git('show', f'{candidate}:{release_pipeline.MATRIX_PATH}')))}
+        with mock.patch.object(release_pipeline, 'ROOT', self.root), \
+             mock.patch.object(release_pipeline, 'release_base', return_value=default), \
+             mock.patch.object(release_pipeline, 'system_release_bases', return_value={}), \
+             mock.patch('tools.release_preflight.release_plan', return_value=release_plan), \
+             mock.patch.object(obj, 'default_repository', return_value=('master', {})), \
+             mock.patch.object(obj, 'default', return_value=('master', default)), \
+             mock.patch.object(obj, 'fetch', return_value=default), mock.patch.object(obj, 'ref', return_value=None), \
+             mock.patch.object(obj, 'load', return_value=None), mock.patch.object(obj, 'protection'), \
+             mock.patch.object(obj, 'plan_actions_identity', return_value={'status': 'workflow'}), \
+             mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'required_record', return_value=record), \
+             mock.patch.object(obj, 'checks'), mock.patch.object(obj, 'tag', return_value=None), \
+             mock.patch.object(obj, 'save'), mock.patch.object(obj, 'ensure_candidate'), \
+             mock.patch.dict(os.environ, {'GITHUB_RUN_ID': '17'}):
+            preview = obj.plan(candidate)
+            release_plan['documentImpacts'] = [{
+                'changeId': 'replay-loop', 'title': 'Northbound', 'requiredVersion': '0.3',
+                'plannedVersion': '0.2', 'status': 'published', 'satisfied': False,
+                'platforms': ['windows'], 'pullRequest': 12,
+            }]
+            attempt = obj.begin_release()
+        self.assertEqual(preview['packageScope']['systems'], ['windows-11'])
+        self.assertEqual(attempt['packageScope']['systems'], ['windows-11'])
+        self.assertEqual(attempt['systemTags'], {'windows-11': 'windows-11/v0.3.3'})
+        self.assertEqual([target['format'] for target in preview['packages']], ['exe', 'msi'])
+        self.assertEqual({target['runner'] for target in preview['packages']}, {'windows-2025'})
+
+
     def test_fresh_remote_tag_wins_over_cached_local_tag_and_replace_refs(self):
         self.registry('0.3.3'); self.commit('candidate'); candidate = self.git('rev-parse', 'HEAD')
         self.git('branch', 'candidate')

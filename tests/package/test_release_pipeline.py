@@ -164,11 +164,12 @@ class ReleaseVersionGateTests(unittest.TestCase):
     def internal_document(self) -> Path:
         return self.root / "doc/tech/内部/发布工作流技术方案.md"
 
-    def test_a_shipped_file_change_requires_a_version_bump(self) -> None:
+    def test_a_shipped_file_change_without_a_version_bump_does_not_release(self) -> None:
         self.shipped_file().write_text("changed\n", encoding="utf-8")
         self.commit("shipped file change")
-        with self.assertRaisesRegex(ValueError, "without application version bump"):
-            release_pipeline.gate("HEAD~1")
+        result = release_pipeline.gate("HEAD~1")
+        self.assertTrue(result["productChanged"])
+        self.assertFalse(result["shouldRelease"])
 
     def test_a_delivered_document_change_needs_no_application_release(self) -> None:
         self.shipped_document().write_text("updated\n", encoding="utf-8")
@@ -195,7 +196,7 @@ class ReleaseVersionGateTests(unittest.TestCase):
         self.assertFalse(result["shouldRelease"])
         self.assertEqual(result["reason"], "same_version_no_business_code_change")
 
-    def test_runtime_frontend_bridge_and_algorithm_changes_still_require_bumps(self) -> None:
+    def test_runtime_frontend_bridge_and_algorithm_changes_are_detected(self) -> None:
         for name in ("neurobridge/application/service.py", "windows/service.py", "web/capture/app.js",
                      "web/capture/index.html", "web/capture/styles.css", "mac/algorithm_bridge/affective_bridge.cpp",
                      "third_party/AffectiveCloud-Algorithm-SDK/cpp/package/source/DP/EEG.cpp",
@@ -206,16 +207,18 @@ class ReleaseVersionGateTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("business source fixture\n", encoding="utf-8")
                 self.commit("business change")
-                with self.assertRaisesRegex(ValueError, "business code changed without application version bump"):
-                    release_pipeline.gate(base)
+                result = release_pipeline.gate(base)
+                self.assertTrue(result["productChanged"])
+                self.assertFalse(result["shouldRelease"])
 
-    def test_deleting_or_moving_business_code_out_of_runtime_still_requires_a_bump(self) -> None:
+    def test_deleting_or_moving_business_code_out_of_runtime_counts_as_a_change(self) -> None:
         base = self.git("rev-parse", "HEAD")
         destination = self.root / "doc/tech/内部/moved-gateway.py"
         self.shipped_file().rename(destination)
         self.commit("move business source outside the runtime")
-        with self.assertRaisesRegex(ValueError, "without application version bump"):
-            release_pipeline.gate(base)
+        result = release_pipeline.gate(base)
+        self.assertTrue(result["productChanged"])
+        self.assertFalse(result["shouldRelease"])
 
     def test_same_version_ci_merge_skips_release_even_with_an_existing_public_tag(self) -> None:
         version = tomllib.loads(release_pipeline.REGISTRY.read_text(encoding="utf-8"))["application"]["version"]

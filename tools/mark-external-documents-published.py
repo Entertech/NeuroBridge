@@ -181,9 +181,9 @@ def promote_external_documents(release_date: str) -> bool:
         "\n".join(change_records),
         "first change record",
     )
-    registry_path.write_text(registry_text, encoding="utf-8")
+    registry_path.write_text(registry_text, encoding="utf-8", newline="\n")
     for markdown_path, markdown in markdown_updates:
-        markdown_path.write_text(markdown, encoding="utf-8")
+        markdown_path.write_text(markdown, encoding="utf-8", newline="\n")
     subprocess.run(["python3", "tools/sync-version-registry.py"], cwd=ROOT, check=True)
     return True
 

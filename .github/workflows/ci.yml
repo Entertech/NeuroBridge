@@ -7,6 +7,10 @@ on:
   push:
     branches: [master, 'feature/**', 'bugfix/**', 'codex/**', 'dev_*', 'publish_*', 'release-candidate/**', 'finalize_*']
   workflow_dispatch:
+    inputs:
+      protocol_version:
+        description: "可选：生成指定已登记正式协议版本的 PDF"
+        type: string
 
 permissions:
   contents: read
@@ -23,7 +27,7 @@ jobs:
       - name: Lint workflow syntax and expressions
         uses: docker://rhysd/actionlint:1.7.12
         with:
-          args: -color -shellcheck= -pyflakes= .github/workflows/ci.yml .github/workflows/source-train.yml .github/workflows/release.yml .github/workflows/kylin-bootstrap.yml
+          args: -color -shellcheck= -pyflakes= .github/workflows/ci.yml .github/workflows/source-train.yml .github/workflows/release.yml .github/workflows/kylin-bootstrap.yml .github/workflows/document-release.yml
       - name: Check source stages, required jobs and reusable workflow permissions
         run: python -m tools.check_source_train_workflows
       - name: Exercise source recovery and protected finalization
@@ -31,7 +35,9 @@ jobs:
 
   version-gate:
     name: Application version gate
-    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    # workflow_dispatch also backs the explicit check runs for train-created
+    # candidate and finalization branches; the default branch keeps push semantics.
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref_name != github.event.repository.default_branch)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -48,7 +54,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
           SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-          SOURCE_EVENT: ${{ github.event_name }}
+          SOURCE_EVENT: ${{ github.event_name == 'workflow_dispatch' && 'push' || github.event_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
           python -m tools.source_train check --event "$SOURCE_EVENT" --branch "$SOURCE_BRANCH" --base "$BASE_SHA" --head "$SOURCE_HEAD" > "$RUNNER_TEMP/release-gate.json"
@@ -138,6 +144,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -152,6 +160,38 @@ jobs:
       - run: node tests/capture_connection_order.cjs
       - run: python -m compileall -q neurobridge
       - run: bash tools/check-external-protocol.sh
+      - name: Check document history and select the official protocol PDF version
+        id: protocol-pdf
+        if: github.event_name == 'pull_request' || inputs.protocol_version != ''
+        env:
+          PROTOCOL_BASE: ${{ github.event.pull_request.base.sha }}
+          PROTOCOL_VERSION: ${{ inputs.protocol_version }}
+        run: python -m tools.select_protocol_pdf --base "$PROTOCOL_BASE" --version "$PROTOCOL_VERSION" --output "$GITHUB_OUTPUT"
+      - name: Build and render every page of the official protocol PDF
+        if: steps.protocol-pdf.outputs.version != ''
+        env:
+          PROTOCOL_VERSION: ${{ steps.protocol-pdf.outputs.version }}
+          PROTOCOL_FILENAME: ${{ steps.protocol-pdf.outputs.filename }}
+          PROTOCOL_DIR: ${{ runner.temp }}/official-protocol
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
+          python tools/build-external-protocol-artifact.py --version "$PROTOCOL_VERSION" --output-dir "$PROTOCOL_DIR"
+          pdf="$PROTOCOL_DIR/$PROTOCOL_FILENAME"
+          pdfinfo "$pdf" | tee "$PROTOCOL_DIR/pdfinfo.txt"
+          pages=$(awk '$1 == "Pages:" {print $2}' "$PROTOCOL_DIR/pdfinfo.txt")
+          pdffonts "$pdf"
+          mkdir -p "$PROTOCOL_DIR/preview"
+          pdftoppm -png -r 144 "$pdf" "$PROTOCOL_DIR/preview/page"
+          test "$pages" -gt 0
+          test "$(find "$PROTOCOL_DIR/preview" -name 'page-*.png' -size +0c | wc -l)" -eq "$pages"
+      - uses: actions/upload-artifact@v4
+        if: steps.protocol-pdf.outputs.version != ''
+        with:
+          name: ${{ steps.protocol-pdf.outputs.filename }}
+          path: ${{ runner.temp }}/official-protocol/
+          if-no-files-found: error
+          retention-days: 90
       - name: Detect unpublished external documents
         id: external-document-state
         run: |

@@ -22,16 +22,38 @@ class ReleaseTriggerTests(unittest.TestCase):
         self.assertIn("needs.source.outputs.should_package == 'true'", block)
         self.assertIn('source_sha: ${{ needs.source.outputs.candidate }}', block)
         self.assertIn('source_train: true', block)
+        self.assertIn('systems: ${{ needs.source.outputs.systems }}', block)
         source = (WORKFLOWS/'source-train.yml').read_text()
-        self.assertIn('actions/create-github-app-token@v2', source)
-        self.assertIn('secrets.RELEASE_BOT_APP_ID', source)
-        self.assertNotIn('token: ${{ github.token }}', source)
-        self.assertIn('group: source-train-${{ github.repository }}\n', source)
+        self.assertNotIn('actions/create-github-app-token', source)
+        self.assertNotIn('RELEASE_BOT', source)
+        self.assertIn('token: ${{ github.token }}', source)
+        self.assertIn("workflow_id: 'source-train.yml'", source)
+        self.assertIn("group: source-train-${{ github.repository }}${{ inputs.operation == 'plan' && format('-plan-{0}', github.run_id) || '' }}", source)
 
-    def test_packaging_never_creates_tags_or_releases(self):
+    def test_read_only_plan_does_not_use_the_release_app(self):
+        source_path = WORKFLOWS/'source-train.yml'
+        plan = job_block('plan', source_path)
+        self.assertIn("inputs.operation == 'plan'", plan)
+        self.assertIn('tools.source_train plan', plan)
+        self.assertNotIn('create-github-app-token', plan)
+        self.assertNotIn('--execute', plan)
+        self.assertIn("inputs.operation != 'plan'", job_block('source', source_path))
+
+    def test_document_preflight_runs_before_any_release_build(self):
+        release_path = WORKFLOWS/'release.yml'
+        plan = job_block('release-plan', release_path)
+        self.assertIn('tools.release_preflight', plan)
+        self.assertIn('tools/check-external-protocol.sh', plan)
+        self.assertIn('--systems "$RELEASE_SYSTEMS"', plan)
+        for job in ('external-documents', 'product-candidates', 'release-targets'):
+            self.assertRegex(job_block(job, release_path), r'needs: .*release-plan')
+
+    def test_manual_packaging_cannot_reach_publication(self):
         text = (WORKFLOWS/'release.yml').read_text()
-        self.assertNotIn('release-publish:', text)
-        self.assertNotIn('tools.publish_release', text)
+        dispatch_inputs = text.split('  workflow_dispatch:\n', 1)[1].split('\npermissions:', 1)[0]
+        self.assertNotIn('publish_system:', dispatch_inputs)
+        publish = job_block('publish-system', WORKFLOWS/'release.yml')
+        self.assertIn('inputs.publish_system &&', publish)
         self.assertIn('tools.source_train verify-package', text)
         self.assertLess(text.index('train-package-receipt-'), text.index('id: upload'))
         self.assertIn('retention-days: 90', text)
@@ -40,12 +62,54 @@ class ReleaseTriggerTests(unittest.TestCase):
         self.assertNotIn('workflow_run', bootstrap)
         self.assertIn('workflow_dispatch:', bootstrap)
 
+    def test_system_releases_run_in_isolated_matrix_and_document_result_is_independent(self):
+        source = WORKFLOWS/'source-train.yml'
+        packages = job_block('system-packages', source)
+        self.assertIn("needs.source.outputs.operation == 'release'", packages)
+        self.assertIn('fail-fast: false', packages)
+        self.assertIn('systems: ${{ matrix.system }}', packages)
+        worker = job_block('publish-system', WORKFLOWS/'release.yml')
+        self.assertIn('needs: [system-recovery, release-aggregate]', worker)
+        self.assertIn('continue-on-error: true', worker)
+        self.assertIn('tools.source_train publish-system', worker)
+        self.assertIn("needs.system-recovery.outputs.run_id || github.run_id", worker)
+        finish = job_block('finish-systems', source)
+        self.assertIn('needs: [source, system-packages]', finish)
+        self.assertIn('tools.source_train finish-systems', finish)
+        delivery = job_block('publish-delivery', source)
+        self.assertIn('needs: [source, finish-systems]', delivery)
+        self.assertIn("needs.finish-systems.outputs.software_result == 'success'", delivery)
+        self.assertIn('tools.source_train publish-delivery', delivery)
+        self.assertNotIn('continue-on-error: true', delivery)
+        self.assertIn('Record delivery publication failure', delivery)
+        self.assertNotIn('document-release', delivery)
+
+    def test_delivery_receipt_and_upload_use_the_zip_outside_the_build_directory(self):
+        block = job_block('release-aggregate', WORKFLOWS/'release.yml')
+        self.assertIn('DELIVERY_DIR: artifacts/delivery', block)
+        self.assertIn('DELIVERY_ZIP: artifacts/delivery/neurobridge-v', block)
+        self.assertIn('--release-dir artifacts/release', block)
+        self.assertIn('--output "$DELIVERY_ZIP"', block)
+        self.assertIn('name: release-plan-${{ env.SOURCE_SHA }}', block)
+        self.assertIn('--preflight artifacts/preflight/release-preflight.json', block)
+        self.assertIn('--directory "$DELIVERY_DIR"', block)
+        self.assertIn('path: artifacts/delivery/', block)
+        self.assertIn('--system-bundles', block)
+
     def test_failure_path_retains_tagged_source(self):
         text = job_block('retain-failed-attempt', WORKFLOWS/'source-train.yml')
         self.assertIn("needs.packages.result == 'failure'", text)
         self.assertIn("needs.finalize.result == 'failure'", text)
         self.assertIn('tools.source_train fail', text)
         self.assertNotIn('git push', text)
+
+    def test_document_publication_is_a_manual_master_operation_with_software_evidence(self):
+        path = WORKFLOWS/'document-release.yml'
+        self.assertIn('workflow_dispatch:', path.read_text())
+        block = job_block('publish', path)
+        self.assertIn("github.ref == 'refs/heads/master'", block)
+        self.assertIn('tools.document_release publish', block)
+        self.assertIn('--software-tags "$SOFTWARE_TAGS"', block)
 
     def test_cleanup_preserves_both_test_diagnostics_and_train_receipts(self):
         block = job_block('release-cleanup', WORKFLOWS/'release.yml')
@@ -58,4 +122,4 @@ class ReleaseTriggerTests(unittest.TestCase):
         }
 '''
         result = subprocess.run(['bash', '-e', '-c', fake_gh+script], capture_output=True, text=True, check=True)
-        self.assertEqual(result.stdout.splitlines(), ['repos/fixture/actions/artifacts/1', 'repos/fixture/actions/artifacts/2'])
+        self.assertEqual(result.stdout.splitlines(), ['repos/fixture/actions/artifacts/2'])

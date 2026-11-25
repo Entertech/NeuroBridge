@@ -387,8 +387,62 @@ def render_directory_pdf(markdown: str) -> bytes:
         return result
 
 
-def build_bundle(release_directory: Path, documents_root: Path, output: Path) -> dict:
+def verify_bundled_documents(bundle: zipfile.ZipFile, systems: list[dict], preflight: dict) -> None:
+    manifest = json.loads(bundle.read(f"docs/external/{MANIFEST_FILENAME}"))
+    mode = preflight["documentMode"]
+    if manifest["packageMode"] != mode:
+        raise ValueError("document package mode differs from release preflight")
+    planned = {item["key"]: item for item in preflight["documents"]}
+    actual = {item["key"]: item for item in manifest["documents"]}
+    if len(actual) != len(manifest["documents"]) or actual.keys() != planned.keys():
+        raise ValueError("document manifest does not cover the preflight document set")
+    shared, bound = {}, {}
+    for key, expected in planned.items():
+        entry = actual[key]
+        identity = ("version", "status", "pdf_artifact_name", "markdown_path", "delivery", "platforms")
+        if any(entry[field] != expected[field] for field in identity):
+            raise ValueError(f"document {key} differs from preflight (expected v{expected['version']}, got v{entry['version']})")
+        if entry["artifactStatus"] != ("published" if mode == "publish" else "candidate"):
+            raise ValueError(f"document {key} artifact status differs from preflight mode")
+        if expected.get("documentTag") and (
+                entry.get("documentTag") != expected["documentTag"] or entry["pdfSha256"] != expected["pdfSha256"]):
+            raise ValueError(f"document {key} tag or digest differs from preflight")
+        if expected["delivery"] == "review_only":
+            continue
+        name = delivery_pdf_name(expected["pdf_artifact_name"])
+        digest = entry["pdfSha256"]
+        if expected["delivery"] == "always":
+            shared[name] = digest
+        else:
+            for platform in expected["platforms"]:
+                bound.setdefault(platform, {})[name] = digest
+
+    def verify_copies(archive: zipfile.ZipFile, directory: str, expected: dict) -> None:
+        paths = {f"{directory}/{name}": digest for name, digest in expected.items()}
+        actual_paths = [name for name in archive.namelist() if name.startswith(f"{directory}/") and name.endswith(".pdf")]
+        if len(actual_paths) != len(paths) or set(actual_paths) != paths.keys():
+            raise ValueError(f"PDF members differ from preflight in {directory}")
+        for path, digest in paths.items():
+            if digest_bytes(archive.read(path)) != digest:
+                raise ValueError(f"document SHA-256 mismatch: {path}")
+
+    verify_copies(bundle, "docs/external", shared)
+    for system in systems:
+        expected = shared | bound.get(system["platform"], {})
+        with zipfile.ZipFile(io.BytesIO(bundle.read(system["fileName"]))) as platform_zip:
+            for variant in system["variants"]:
+                with zipfile.ZipFile(io.BytesIO(platform_zip.read(variant["fileName"]))) as variant_zip:
+                    verify_copies(variant_zip, "docs", expected)
+
+
+def build_bundle(release_directory: Path, documents_root: Path, output: Path, *, preflight: dict | None = None) -> dict:
     release_manifest = json.loads((release_directory / "release-manifest.json").read_text(encoding="utf-8"))
+    if preflight is not None:
+        if (preflight["sourceCommit"] != release_manifest["git"]["commit"]
+                or preflight["applicationVersion"] != release_manifest["applicationVersion"]):
+            raise ValueError("delivery bundle source or version differs from release preflight")
+        if preflight["documentMode"] == "publish" and preflight["formalDocumentBlockers"]:
+            raise ValueError("cannot assemble a formal delivery ZIP with unresolved document blockers")
     timestamp = zip_timestamp(release_manifest)
     grouped, validation = collect_native_packages(release_directory, release_manifest)
     available_platforms = {platform for platform, _, _ in grouped}
@@ -420,6 +474,18 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
         "validationFiles": sorted(name for name in files if name.startswith("metadata/validation/")),
         "metadataFiles": ["metadata/document-filenames.json"],
     }
+    if preflight is not None and preflight.get("softwareSystem"):
+        platform = preflight["softwareSystem"].split("-", 1)[0]
+        formal = {doc["key"] for doc in preflight["documents"] if doc.get("documentTag")}
+        bundle_manifest["softwareSystem"] = preflight["softwareSystem"]
+        bundle_manifest["softwareVersion"] = preflight.get("softwareVersions", {}).get(
+            preflight["softwareSystem"], preflight["applicationVersion"],
+        )
+        bundle_manifest["documentObligations"] = [
+            {key: impact[key] for key in ("changeId", "document", "requiredVersion", "pullRequest")}
+            for impact in preflight["documentImpacts"]
+            if platform in impact["platforms"] and not (impact["satisfied"] and impact["document"] in formal)
+        ]
     files["metadata/bundle-manifest.json"] = json.dumps(bundle_manifest, ensure_ascii=False, indent=2, sort_keys=True).encode() + b"\n"
     files["metadata/build-manifest.json"] = (release_directory / "build-manifest.json").read_bytes()
     files["metadata/release-logs.jsonl"] = (release_directory / "release-logs.jsonl").read_bytes()
@@ -431,8 +497,26 @@ def build_bundle(release_directory: Path, documents_root: Path, output: Path) ->
     with zipfile.ZipFile(temporary) as bundle:
         if bundle.testzip() is not None or set(bundle.namelist()) != set(files):
             raise ValueError("release bundle validation failed")
+        if preflight is not None:
+            verify_bundled_documents(bundle, system_manifest, preflight)
     temporary.replace(output)
     return {**bundle_manifest, "fileName": output.name, "sha256": digest_file(output), "size": output.stat().st_size}
+
+
+def build_system_bundles(results: Path, documents: Path, output: Path, preflight: dict) -> None:
+    from release_pipeline import assemble, system_version
+
+    systems = sorted({system_version(target) for target in preflight["packages"]})
+    if not systems:
+        raise ValueError("no selected systems for software delivery")
+    with tempfile.TemporaryDirectory(prefix="neurobridge-system-build-") as temporary:
+        for system in systems:
+            staging = Path(temporary) / system
+            assemble(results, staging, systems=system, subset=True)
+            version = preflight.get("softwareVersions", {}).get(system, preflight["applicationVersion"])
+            name = f"neurobridge-{system}-v{version}.zip"
+            build_bundle(staging, documents, output / "systems" / system / name,
+                         preflight=preflight | {"softwareSystem": system})
 
 
 def main() -> int:
@@ -440,9 +524,16 @@ def main() -> int:
     parser.add_argument("--release-dir", required=True, type=Path)
     parser.add_argument("--documents-dir", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--preflight", type=Path)
+    parser.add_argument("--system-results", type=Path)
     args = parser.parse_args()
     try:
-        result = build_bundle(args.release_dir, args.documents_dir, args.output)
+        preflight = json.loads(args.preflight.read_text(encoding="utf-8")) if args.preflight else None
+        result = build_bundle(args.release_dir, args.documents_dir, args.output, preflight=preflight)
+        if args.system_results is not None:
+            if preflight is None or preflight["documentMode"] != "publish":
+                raise ValueError("system deliveries require formal preflight")
+            build_system_bundles(args.system_results, args.documents_dir, args.output.parent, preflight)
     except (OSError, KeyError, ValueError, json.JSONDecodeError, zipfile.BadZipFile, subprocess.CalledProcessError) as error:
         parser.error(str(error))
     print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -186,7 +186,7 @@ Windows 与麒麟的安装/运行导出均须携带独立诊断上下文：Windo
 
 **Windows 支持范围：**Windows 10/11 使用锁定的 Python 3.11 x64 运行时与 WiX Toolset v7 / Burn 构建 MSI/EXE。仅四个受支持目标参与构建；Windows 7 和 32 位目标不运行、不生成空目录或占位归档，清单拒绝过期的矩阵外输入。静默安装、升级、卸载和版本查询仍须验证。安装入口附带 MSI/Burn 日志及安装失败导出能力，尚未创建网关程序或服务时也能取证。
 
-**重试与幂等：**源码写操作使用发布 GitHub App，不修改或绕过分支保护；整个仓库的源码操作串行。打包前检查持久状态与远端 tag；同输入重用同一候选 SHA 和既有 Artifact，绝不重建已打 tag 的源版本。Artifact 发布先有上传前回执，再回下载验证，之后才创建 tag。GitHub Release 发布器只校验现有 source tag，按同提交/同摘要恢复 draft 或不确定发送，已成功目标不重复发送。tag 后任何失败保留全部相关分支；远端 tag 身份与默认分支祖先检查通过后才清理 dev、隐藏候选及 finalize。publication 分支和状态记录保留。
+**重试与幂等：**源码写操作使用当前 workflow 的 `GITHUB_TOKEN`，后续阶段由当前运行显式调度；不修改或绕过分支保护，整个仓库的源码操作串行。打包前检查持久状态与远端 tag；同输入重用同一候选 SHA 和既有 Artifact，绝不重建已打 tag 的源版本。Artifact 发布先有上传前回执，再回下载验证，之后才创建 tag。GitHub Release 发布器只校验现有 source tag，按同提交/同摘要恢复 draft 或不确定发送，已成功目标不重复发送。tag 后任何失败保留全部相关分支；远端 tag 身份与默认分支祖先检查通过后才清理 dev、隐藏候选及 finalize。publication 分支和状态记录保留。
 
 **版本关系：**正式包名、tag、GitHub Release 和清单统一使用台账 `[application].version`。`[platform_releases.windows]` 与 `[platform_releases.kylin]` 是旧流程元数据，本次 Workflow 不读取、不自动递增，也不作为安装器显示版本；后续迁移清理需单独变更台账。仅某个平台的安装器、构建工具或依赖清单变化不强制升级应用版本；业务源码变化才要求按影响级别升级 `[application].version`，全部 5 个目标使用相同应用版本。重跑同一 commit 的 `GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT` 只作为构建追踪号，不改变产品版本。
 

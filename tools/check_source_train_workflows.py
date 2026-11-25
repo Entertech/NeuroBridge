@@ -84,16 +84,24 @@ def matches(branch: str, patterns: list[str]) -> bool:
 
 def validate(config: dict, workflows: dict):
     validate_permissions(workflows)
+    source_train = workflows['source-train.yml']
+    finish = source_train['jobs'].get('finish-systems', {})
+    finish_permissions = permissions(finish.get('permissions'), permissions(source_train.get('permissions')))
+    if finish_permissions.get('pull-requests', finish_permissions.get('*')) != 'write':
+        raise ValueError('finish-systems requires pull-requests: write to create the finalization PR')
     ci = workflows['ci.yml']
     defined = {job.get('name', key): job for key, job in ci['jobs'].items()}
     for check in config['code_gates']['checks']:
         if check not in defined:
             raise ValueError(f'required code check has no CI job: {check}')
         if 'if' in defined[check]:
-            # The version gate may skip manual Test runs, but must run on every
-            # source push/PR. Other required jobs have no conditional skip.
-            permitted = "github.event_name == 'pull_request' || github.event_name == 'push'"
-            if check != 'Application version gate' or defined[check]['if'] != permitted:
+            # The version gate must run on every source push/PR. It may also run
+            # for manual Test dispatches on non-default branches, which back the
+            # explicit check runs for train-created branches. Other required jobs
+            # have no conditional skip.
+            baseline = "github.event_name == 'pull_request' || github.event_name == 'push'"
+            extended = baseline + " || (github.event_name == 'workflow_dispatch' && github.ref_name != github.event.repository.default_branch)"
+            if check != 'Application version gate' or defined[check]['if'] not in (baseline, extended):
                 raise ValueError(f'required code check can be skipped: {check}')
     branches = config['branches']
     examples = [config['repository']['default_branch']]

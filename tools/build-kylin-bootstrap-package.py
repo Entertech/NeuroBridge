@@ -31,6 +31,7 @@ sys.path.insert(0, str(ROOT))
 
 from neurobridge.versioning import APPLICATION_VERSION
 from tools.kylin_inputs import CACHE, catalog, verified_input
+from tools.release_pipeline import installer_version
 
 
 MANIFEST = ROOT / "config" / "kylin-runtime-manifest.toml"
@@ -178,7 +179,7 @@ def stage_offline_inputs(source: Path) -> None:
 def deb_control() -> str:
     return textwrap.dedent(f"""\
         Package: neurobridge-bootstrap
-        Version: {APPLICATION_VERSION}
+        Version: {installer_version("kylin-v10")}
         Section: utils
         Priority: optional
         Architecture: {DEB_ARCH}
@@ -242,7 +243,7 @@ def write_rpm(payload: Path, output: Path, work: Path) -> None:
     spec = topdir / "SPECS/neurobridge-bootstrap.spec"
     spec.write_text(textwrap.dedent(f"""\
         Name: neurobridge-bootstrap
-        Version: {APPLICATION_VERSION}
+        Version: {installer_version("kylin-v10")}
         Release: 1
         Summary: NeuroBridge installer that builds or fetches its runtime
         License: Proprietary
@@ -291,10 +292,10 @@ def build(fmt: str, output_dir: Path) -> Path:
         if not required.is_file():
             raise ValueError(f"missing bootstrap input: {required.relative_to(ROOT)}")
     # The timestamp distinguishes one build from the next.  The version inside
-    # the package stays APPLICATION_VERSION; only the file name carries the
+    # the package stays at the Kylin software version; only the file name carries the
     # build time, so two builds of the same version cannot be confused.
     built_at = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    filename = f"neurobridge-bootstrap-{APPLICATION_VERSION}-{built_at}-kylin-v10-all.{fmt}"
+    filename = f"neurobridge-bootstrap-{installer_version('kylin-v10')}-{built_at}-kylin-v10-all.{fmt}"
     output = output_dir / filename
     with tempfile.TemporaryDirectory(prefix="neurobridge-bootstrap-") as directory:
         work = Path(directory)
