@@ -166,25 +166,7 @@ jobs:
         env:
           PROTOCOL_BASE: ${{ github.event.pull_request.base.sha }}
           PROTOCOL_VERSION: ${{ inputs.protocol_version }}
-        run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import os
-          from tools.external_protocol_registry import select_external_protocol
-          from tools.release_scope import registry_at
-          from tools.release_version_policy import check_document_versions
-
-          registry = registry_at("HEAD")
-          version = os.environ["PROTOCOL_VERSION"]
-          if base := os.environ["PROTOCOL_BASE"]:
-              previous = registry_at(base)
-              check_document_versions(base, "HEAD", previous, registry)
-              version = registry["documents"]["external_northbound"]["current_version"]
-              if version == previous["documents"]["external_northbound"]["current_version"]:
-                  raise SystemExit(0)
-          document = select_external_protocol(registry, version)
-          print(f"version={document['version']}")
-          print(f"filename={document['pdf_artifact_name']}")
-          PY
+        run: python -m tools.select_protocol_pdf --base "$PROTOCOL_BASE" --version "$PROTOCOL_VERSION" --output "$GITHUB_OUTPUT"
       - name: Build and render every page of the official protocol PDF
         if: steps.protocol-pdf.outputs.version != ''
         env:

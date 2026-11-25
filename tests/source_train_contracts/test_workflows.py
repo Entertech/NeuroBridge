@@ -69,6 +69,7 @@ class WorkflowContractTests(unittest.TestCase):
         steps = ci['jobs']['unit-and-websocket']['steps']
         select = next(step for step in steps if step.get('id') == 'protocol-pdf')
         self.assertIn("github.event_name == 'pull_request'", select['if'])
+        self.assertEqual(select['run'].split()[:3], ['python', '-m', 'tools.select_protocol_pdf'])
         build = next(step for step in steps if 'build-external-protocol-artifact.py' in step.get('run', ''))
         self.assertIn('--version "$PROTOCOL_VERSION"', build['run'])
         self.assertIn('pdftoppm', build['run'])

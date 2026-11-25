@@ -1,4 +1,3 @@
-import os
 import pathlib
 import shutil
 import subprocess
@@ -7,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools import check_source_train_workflows, document_release, promote_document, release_pipeline, release_scope, release_version_policy, source_train
+from tools import document_release, promote_document, release_pipeline, release_scope, release_version_policy, source_train
 from tools.external_protocol_registry import markdown_digest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -41,6 +40,17 @@ class IndependentVersionsTests(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-qm", "fixture")
         return self.git("rev-parse", "HEAD")
+
+    def select_protocol_pdf(self, *args):
+        output = self.root / "github-output"
+        output.write_bytes(b"")
+        result = subprocess.run(
+            [sys.executable, "-m", "tools.select_protocol_pdf", "--output", str(output), *args],
+            cwd=self.root, text=True, encoding="utf-8", capture_output=True,
+        )
+        fields = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+        output.unlink()
+        return result, fields
 
     def test_system_version_requires_matching_pr_changes_and_filters_explicit_selection(self):
         text = self.registry.read_text(encoding="utf-8")
@@ -77,6 +87,12 @@ class IndependentVersionsTests(unittest.TestCase):
         for tool in ("sync-version-registry.py", "check-version-registry.py"):
             subprocess.run([sys.executable, f"tools/{tool}"], cwd=self.root, check=True)
         registry = release_scope.registry_at(head)
+        for options, version in ((("--base", self.base), "0.3"), (("--version", "0.2"), "0.2")):
+            with self.subTest(options=options):
+                result, fields = self.select_protocol_pdf(*options)
+                expected_filename = release_version_policy.document_history(registry, "northbound")[version]["pdf_artifact_name"]
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(fields, {"version": version, "filename": expected_filename})
         self.assertIsNone(release_version_policy.draft_document(registry, "northbound"))
         self.assertEqual(list(release_version_policy.document_history(registry, "northbound")), ["0.2", "0.3"])
         with patch.object(document_release, "ROOT", self.root), patch.object(document_release, "load_registry", return_value=registry):
@@ -115,14 +131,9 @@ class IndependentVersionsTests(unittest.TestCase):
                     release_version_policy.check_versions(self.base, self.commit())
 
     def test_required_ci_rejects_same_version_edit_with_matching_digest(self):
-        jobs = check_source_train_workflows.load_workflows()["ci.yml"]["jobs"]
-        step = next(step for step in jobs["unit-and-websocket"]["steps"] if step.get("id") == "protocol-pdf")
-        command = ["bash", "-e", "-c", step["run"]]
-        output = self.root / "github-output"
-        env = os.environ | {"PROTOCOL_BASE": self.base, "PROTOCOL_VERSION": "", "GITHUB_OUTPUT": str(output)}
-        subprocess.run(command, cwd=self.root, env=env, check=True, capture_output=True)
-        self.assertEqual(output.read_bytes(), b"")
-        output.unlink()
+        result, fields = self.select_protocol_pdf("--base", self.base)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(fields, {})
 
         old = release_version_policy.formal_document(release_scope.registry_at(self.base), "northbound")
         path = self.root / old["markdown_path"]
@@ -131,9 +142,10 @@ class IndependentVersionsTests(unittest.TestCase):
         self.registry.write_text(text.replace(old["markdown_sha256"], markdown_digest(path)), encoding="utf-8")
         self.commit()
         subprocess.run([sys.executable, "tools/check-version-registry.py"], cwd=self.root, check=True)
-        result = subprocess.run(command, cwd=self.root, env=env, capture_output=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"published Markdown or metadata changed for v0.2", result.stderr)
+        result, fields = self.select_protocol_pdf("--base", self.base)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("published Markdown or metadata changed for v0.2", result.stderr)
+        self.assertEqual(fields, {})
 
     def test_crlf_checkout_matches_the_published_markdown_digest(self):
         markdown_files = sorted((self.root / "doc").rglob("*.md"))
