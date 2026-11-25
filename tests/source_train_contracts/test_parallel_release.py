@@ -62,6 +62,35 @@ class ParallelReleaseTests(unittest.TestCase):
         save.assert_called_once_with(record)
         finalization.assert_not_called()
 
+    def test_failed_attempt_keeps_candidate_if_any_system_tag_exists(self):
+        obj = train.Train("1.2.3", True)
+        branch = "release-candidate/1.2.3/fixture"
+        branch_ref = f"refs/heads/{branch}"
+        tag_ref = f"refs/tags/{TAGS['windows-11']}"
+
+        for tag_exists in (True, False):
+            with self.subTest(tag_exists=tag_exists):
+                record = attempt() | {
+                    "candidateBranch": branch,
+                    "systemResults": {"windows-11": {"status": "failed"}},
+                }
+                remote = {branch_ref: SHA}
+                if tag_exists:
+                    remote[tag_ref] = SHA
+                with patch.object(obj, "mutable"), patch.object(obj, "required_record", return_value=record), \
+                     patch.object(obj, "ref", side_effect=remote.get), patch.object(obj, "fetch", return_value=SHA) as fetch, \
+                     patch.object(obj, "save") as save, patch.object(obj, "delete_refs") as delete:
+                    obj.fail()
+                    if tag_exists:
+                        fetch.assert_called_once_with(tag_ref)
+                        save.assert_not_called()
+                        delete.assert_not_called()
+                    else:
+                        fetch.assert_not_called()
+                        self.assertEqual(record["phase"], "failed")
+                        save.assert_called_once_with(record)
+                        delete.assert_called_once_with({branch: SHA})
+
     def test_failed_finalization_pr_is_recorded_and_fails_the_job(self):
         obj = train.Train("1.2.3", True)
         record = attempt()

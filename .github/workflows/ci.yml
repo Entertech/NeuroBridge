@@ -7,6 +7,10 @@ on:
   push:
     branches: [master, 'feature/**', 'bugfix/**', 'codex/**', 'dev_*', 'publish_*', 'release-candidate/**', 'finalize_*']
   workflow_dispatch:
+    inputs:
+      protocol_version:
+        description: "可选：生成指定已登记正式协议版本的 PDF"
+        type: string
 
 permissions:
   contents: read
@@ -140,6 +144,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -154,6 +160,56 @@ jobs:
       - run: node tests/capture_connection_order.cjs
       - run: python -m compileall -q neurobridge
       - run: bash tools/check-external-protocol.sh
+      - name: Check document history and select the official protocol PDF version
+        id: protocol-pdf
+        if: github.event_name == 'pull_request' || inputs.protocol_version != ''
+        env:
+          PROTOCOL_BASE: ${{ github.event.pull_request.base.sha }}
+          PROTOCOL_VERSION: ${{ inputs.protocol_version }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          from tools.external_protocol_registry import select_external_protocol
+          from tools.release_scope import registry_at
+          from tools.release_version_policy import check_document_versions
+
+          registry = registry_at("HEAD")
+          version = os.environ["PROTOCOL_VERSION"]
+          if base := os.environ["PROTOCOL_BASE"]:
+              previous = registry_at(base)
+              check_document_versions(base, "HEAD", previous, registry)
+              version = registry["documents"]["external_northbound"]["current_version"]
+              if version == previous["documents"]["external_northbound"]["current_version"]:
+                  raise SystemExit(0)
+          document = select_external_protocol(registry, version)
+          print(f"version={document['version']}")
+          print(f"filename={document['pdf_artifact_name']}")
+          PY
+      - name: Build and render every page of the official protocol PDF
+        if: steps.protocol-pdf.outputs.version != ''
+        env:
+          PROTOCOL_VERSION: ${{ steps.protocol-pdf.outputs.version }}
+          PROTOCOL_FILENAME: ${{ steps.protocol-pdf.outputs.filename }}
+          PROTOCOL_DIR: ${{ runner.temp }}/official-protocol
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc poppler-utils fonts-noto-cjk
+          python tools/build-external-protocol-artifact.py --version "$PROTOCOL_VERSION" --output-dir "$PROTOCOL_DIR"
+          pdf="$PROTOCOL_DIR/$PROTOCOL_FILENAME"
+          pdfinfo "$pdf" | tee "$PROTOCOL_DIR/pdfinfo.txt"
+          pages=$(awk '$1 == "Pages:" {print $2}' "$PROTOCOL_DIR/pdfinfo.txt")
+          pdffonts "$pdf"
+          mkdir -p "$PROTOCOL_DIR/preview"
+          pdftoppm -png -r 144 "$pdf" "$PROTOCOL_DIR/preview/page"
+          test "$pages" -gt 0
+          test "$(find "$PROTOCOL_DIR/preview" -name 'page-*.png' -size +0c | wc -l)" -eq "$pages"
+      - uses: actions/upload-artifact@v4
+        if: steps.protocol-pdf.outputs.version != ''
+        with:
+          name: ${{ steps.protocol-pdf.outputs.filename }}
+          path: ${{ runner.temp }}/official-protocol/
+          if-no-files-found: error
+          retention-days: 90
       - name: Detect unpublished external documents
         id: external-document-state
         run: |

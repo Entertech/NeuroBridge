@@ -84,6 +84,11 @@ def matches(branch: str, patterns: list[str]) -> bool:
 
 def validate(config: dict, workflows: dict):
     validate_permissions(workflows)
+    source_train = workflows['source-train.yml']
+    finish = source_train['jobs'].get('finish-systems', {})
+    finish_permissions = permissions(finish.get('permissions'), permissions(source_train.get('permissions')))
+    if finish_permissions.get('pull-requests', finish_permissions.get('*')) != 'write':
+        raise ValueError('finish-systems requires pull-requests: write to create the finalization PR')
     ci = workflows['ci.yml']
     defined = {job.get('name', key): job for key, job in ci['jobs'].items()}
     for check in config['code_gates']['checks']:

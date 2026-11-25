@@ -58,6 +58,23 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(self.workflows['release.yml']['permissions']['contents'], 'read')
         self.assertEqual(self.workflows['release.yml']['jobs']['publish-system']['permissions']['contents'], 'write')
 
+    def test_finish_systems_permission_regression_is_rejected(self):
+        self.workflows['source-train.yml']['jobs']['finish-systems']['permissions'].pop('pull-requests')
+        with self.assertRaisesRegex(ValueError, 'finish-systems requires pull-requests: write'):
+            policy.validate(self.config, self.workflows)
+
+    def test_protocol_pdf_build_runs_inside_the_required_pr_check(self):
+        ci = self.workflows['ci.yml']
+        self.assertIn('protocol_version', ci['on']['workflow_dispatch']['inputs'])
+        steps = ci['jobs']['unit-and-websocket']['steps']
+        select = next(step for step in steps if step.get('id') == 'protocol-pdf')
+        self.assertIn("github.event_name == 'pull_request'", select['if'])
+        build = next(step for step in steps if 'build-external-protocol-artifact.py' in step.get('run', ''))
+        self.assertIn('--version "$PROTOCOL_VERSION"', build['run'])
+        self.assertIn('pdftoppm', build['run'])
+        upload = next(step for step in steps if step.get('uses') == 'actions/upload-artifact@v4')
+        self.assertEqual(upload['if'], build['if'])
+        self.assertEqual(upload['with']['if-no-files-found'], 'error')
     def test_missing_renamed_or_skipped_required_check_is_rejected(self):
         for mutation in ('missing', 'renamed', 'skipped', 'false', 'version-gate-skipped'):
             with self.subTest(mutation=mutation):

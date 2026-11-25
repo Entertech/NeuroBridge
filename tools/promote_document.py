@@ -11,7 +11,13 @@ from urllib.parse import quote
 
 from tools.release_pipeline import ROOT, run
 from tools.release_preflight import document_version
-from tools.release_version_policy import document_body, draft_document, fixed_path, formal_document
+from tools.release_version_policy import (
+    DOCUMENT_VERSION_FIELDS,
+    document_body,
+    draft_document,
+    formal_document,
+    versioned_path,
+)
 
 
 def create_draft(key: str, version: str) -> str:
@@ -62,9 +68,9 @@ def promote(key: str, version: str, published: str) -> str:
     if not draft or draft["version"] != version or document_version(version) <= document_version(current["version"]):
         raise ValueError("only a newer registered prerelease can be promoted")
     source = ROOT / draft["markdown_path"]
-    destination = ROOT / fixed_path(current)
+    destination = ROOT / versioned_path(current, version)
     old = ROOT / current["markdown_path"]
-    if source == destination or source == old or (destination != old and destination.exists()):
+    if source == destination or source == old or destination.exists():
         raise ValueError("prerelease and formal Markdown must use distinct paths")
     original = source.read_text(encoding="utf-8")
     lines = original.splitlines()
@@ -92,12 +98,9 @@ def promote(key: str, version: str, published: str) -> str:
         "published_date": published, "markdown_sha256": sha256(markdown.encode("utf-8")).hexdigest(),
         "publication_record": record_id,
     }
-    obsolete = {old}
-    obsolete.update(ROOT / item["markdown_path"] for item in section.get("versions", []))
+    history = section.setdefault("versions", tomlkit.aot())
     if key == "northbound":
         section["current_version"] = version
-        section["versions"] = tomlkit.aot()
-        section["versions"].append(entry)
         lifecycle = registry["protocol_lifecycle"]
         lifecycle["released_version"] = version
         del lifecycle["prerelease_version"]
@@ -109,9 +112,12 @@ def promote(key: str, version: str, published: str) -> str:
                 record["change_state"] = "locked"
                 record["release_lock"] = lock_id
     else:
-        section.pop("versions", None)
+        if not any(item["version"] == current["version"] for item in history):
+            history.append({field: current[field] for field in DOCUMENT_VERSION_FIELDS if field in current})
+        section.pop("created_date", None)
         section.update(entry)
         del registry["document_prereleases"][key]
+    history.append(entry)
     registry["release_locks"].append({
         "id": lock_id, "scope": scope, "from_version": current["version"], "to_version": version,
         "status": "locked", "locked_by": record_id, "locked_at": published,
@@ -125,15 +131,14 @@ def promote(key: str, version: str, published: str) -> str:
     readme = ROOT / "README.md"
     updated_readme = readme.read_text(encoding="utf-8")
     replacement = destination.relative_to(ROOT).as_posix()
-    for path in obsolete:
-        prior = path.relative_to(ROOT).as_posix()
-        updated_readme = updated_readme.replace(prior, replacement).replace(quote(prior), quote(replacement))
+    prior = old.relative_to(ROOT).as_posix()
+    updated_readme = updated_readme.replace(prior, replacement).replace(quote(prior), quote(replacement))
     updated_readme = updated_readme.replace(f"{current['title']} v{current['version']}", f"{current['title']} v{version}")
-    destination.write_text(markdown, encoding="utf-8", newline="\n")
+    with destination.open("x", encoding="utf-8", newline="\n") as output:
+        output.write(markdown)
     registry_path.write_text(updated_registry, encoding="utf-8", newline="\n")
     readme.write_text(updated_readme, encoding="utf-8", newline="\n")
-    for path in (obsolete | {source}) - {destination}:
-        path.unlink(missing_ok=True)
+    source.unlink()
     return entry["markdown_path"]
 
 

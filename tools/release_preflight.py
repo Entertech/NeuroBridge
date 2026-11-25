@@ -70,9 +70,9 @@ def formal_document_blockers(plan: dict) -> list[str]:
 
 
 def software_documents(registry: dict, documents: list[ExternalDocument], file_exists) -> tuple[list[ExternalDocument], dict]:
-    from .document_release import document_tag, prior_public_versions, verify
+    from .document_release import document_tag, verify
     from .publish_release import release_info
-    from .release_version_policy import fixed_path, formal_document
+    from .release_version_policy import document_history
 
     legacy_tag = registry.get("document_delivery", {}).get("legacy_software_tag")
     if legacy_tag is None:
@@ -84,12 +84,7 @@ def software_documents(registry: dict, documents: list[ExternalDocument], file_e
     selected, evidence = [], {}
     with tempfile.TemporaryDirectory(prefix="neurobridge-doc-preflight-") as temporary:
         for doc in documents:
-            section = registry["documents"][f"external_{doc.key}"]
-            history = {entry["version"]: entry for entry in section.get("versions", [])}
-            if "version" in section:
-                history[section["version"]] = section
-            if doc.markdown_path == fixed_path(formal_document(registry, doc.key)):
-                history.update(prior_public_versions(doc.key, known=history))
+            history = document_history(registry, doc.key)
             previous = baseline.get(doc.key)
             for version in sorted(history, key=document_version, reverse=True):
                 item = history[version]
@@ -102,8 +97,6 @@ def software_documents(registry: dict, documents: list[ExternalDocument], file_e
                 receipt = verify(doc.key, version, Path(temporary) / doc.key)
                 if receipt["markdownSha256"] != item["markdown_sha256"] or receipt["pdf"]["fileName"] != item["pdf_artifact_name"]:
                     raise ValueError(f"formal document {tag} differs from the approved registry")
-                if "taggedCommit" in item and receipt["sourceCommit"] != item["taggedCommit"]:
-                    raise ValueError(f"formal document {tag} differs from its Git snapshot")
                 selected.append(ExternalDocument(
                     doc.key, doc.title, version, "published", doc.delivery, doc.platforms,
                     item["markdown_path"], item["pdf_artifact_name"],

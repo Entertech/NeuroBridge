@@ -165,6 +165,29 @@ def package_systems(record: dict) -> str:
     return ','.join(systems)
 
 
+def require_package_selection(record: dict, targets: list[dict], systems: str) -> None:
+    from tools.release_pipeline import select_targets
+
+    requested = select_targets(targets, systems)
+    locked = package_systems(record)
+    if requested == select_targets(targets, locked):
+        return
+    scope = record.get('packageScope') or {}
+    original = scope.get('requestedSystems')
+    if original and requested == select_targets(targets, original):
+        return
+    if not original and scope.get('mode') == 'explicit' and scope.get('baseCommits'):
+        # Older checkpoints recorded only the filtered selection and its baselines.
+        from tools.release_pipeline import release_config_at
+        from tools.release_scope import scope_for
+
+        candidate = record['candidate']
+        recovered = scope_for(candidate, scope['baseCommits'], systems, config=release_config_at(candidate))
+        if recovered['systems'] == scope['systems']:
+            return
+    raise ValueError('requested systems differ from the recorded package scope')
+
+
 def artifact_receipt(archive: Path, version: str, candidate: str, matrix: list[dict]) -> dict:
     numeric(version)
     require_sha(candidate)
@@ -405,8 +428,8 @@ class Train:
         scope = record.get('packageScope') if same_source else None
         if scope is None:
             scope = self.package_scope(result['sourceCommit'], systems)
-        elif systems and select_targets(result['packages'], systems) != select_targets(result['packages'], package_systems(record)):
-            raise ValueError('requested systems differ from the recorded package scope')
+        elif systems:
+            require_package_selection(record, result['packages'], systems)
         result['packageScope'] = scope
         result['systemTags'] = {system: software_tag(system, result.get("softwareVersions", {}).get(system, self.version)) for system in scope['systems']}
         result['packages'] = select_targets(result['packages'], ','.join(scope['systems'])) if scope['systems'] else []
@@ -484,7 +507,7 @@ class Train:
             return None
         return self.fetch(ref)
 
-    def delivery_tag(self, record: dict | None, *, complete=False) -> str | None:
+    def delivery_tag(self, record: dict | None, *, complete=False, include_unpublished=False) -> str | None:
         if not record or not record.get("systemTags"):
             return self.tag()
         from tools.release_pipeline import software_tag, software_version_at
@@ -494,7 +517,7 @@ class Train:
                     for system in package_systems(record).split(",")}
         if record["systemTags"] != expected:
             raise ValueError("recorded software tags differ from the locked release scope")
-        if record.get("parallelSystems"):
+        if record.get("parallelSystems") and not include_unpublished:
             expected = {system: tag for system, tag in expected.items()
                         if record.get("systemResults", {}).get(system, {}).get("status") == "published"}
             if complete and not expected:
@@ -538,7 +561,8 @@ class Train:
     def fail(self):
         self.mutable()
         record = self.required_record()
-        if self.delivery_tag(record) is None:
+        # A parallel worker pushes its tag before uploading the Release.
+        if self.delivery_tag(record, include_unpublished=True) is None:
             branch = record['candidateBranch']
             existing = self.ref('refs/heads/'+branch)
             if existing is not None and existing != record['candidate']:
@@ -777,11 +801,8 @@ class Train:
         record = self.required_record()
         from tools.release_pipeline import matrix, release_config_at, select_targets, software_tag
         recorded_scope = record.get('packageScope')
-        recorded_systems = package_systems(record)
         if systems and (recorded_scope or record.get('packageRunId') or record.get('artifact')):
-            targets = matrix(release_config_at(record['candidate']))
-            if select_targets(targets, systems) != select_targets(targets, recorded_systems):
-                raise ValueError('requested systems differ from the recorded package scope')
+            require_package_selection(record, matrix(release_config_at(record['candidate'])), systems)
         if record.get('finalizationPR') and self.delivery_tag(record, complete=True) and self.pr(record['finalizationPR'])['state'] == 'MERGED':
             return self.verify()
         if not record.get('review') or record['review']['sha'] != record['candidate']:
@@ -840,6 +861,8 @@ class Train:
             raise ValueError('formal document preflight failed: ' + ' '.join(blockers))
         if recorded_scope is None and scope:
             record['packageScope'] = {key: scope[key] for key in ('mode', 'systems', 'baseCommits')}
+            if systems:
+                record['packageScope']['requestedSystems'] = systems
         if not previous_run:
             if "softwareVersions" in plan:
                 record["softwareVersions"] = plan["softwareVersions"]

@@ -178,7 +178,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 
 - [B 端联调网页](web/b-client-test/README.md)：零依赖的浏览器测试工具，可连接网关并测试 `getStatus`、`getLatest`、`subscribe`、`unsubscribe`。
 
-文档有独立的台账版本，内部预发布稿可以暂时为空。文档发布 PR 将预发布正文晋升到固定的正式 Markdown 路径，更新台账和锁定记录，再移除该预发布稿。历史正式稿可通过 Git 提交和文档 tag 追溯。软件先发布，其回执列出随附文档和待办。文档 PR 完成审核和锁定后，在 `master` 手动运行 `External document release`，指定文档键、批准版本和已发布的软件 tag。工作流逐页渲染 PDF，发布 `docs/<文档键>/v<版本>` 及回执，并回下载核对 PDF 的 SHA-256。后续软件从正式文档 Release 取用相同 PDF。迁移前的文档沿用历史软件总包基线。详见[版本台账](neurobridge/version_registry.toml)。
+文档有独立的台账版本，内部预发布稿可以暂时为空。文档发布 PR 新增该版本的正式 Markdown 和台账条目，登记锁定记录，再移除该预发布稿。已发布的历史版本保留独立 Markdown 和台账记录，PR 的必需 CI 检查对照目标提交校验这些记录与文件。北向协议晋升时，同一检查生成指定版本的 PDF 与逐页预览。历史协议可用 Test 工作流的 `protocol_version` 输入重新生成 PDF Artifact。软件先发布，其回执列出随附文档和待办。文档 PR 完成审核并合入后，在 `master` 手动运行 `External document release`，指定文档键、批准版本和已发布的软件 tag。工作流逐页渲染 PDF，发布 `docs/<文档键>/v<版本>` 及回执，并回下载核对 PDF 的 SHA-256。后续软件从正式文档 Release 取用相同 PDF。迁移前的文档沿用历史软件总包基线。详见[版本台账](neurobridge/version_registry.toml)。
 
 安装排错：麒麟安装日志保存在 `/var/log/neurobridge-bootstrap`，服务尚未创建时也可运行 `sudo /usr/lib/neurobridge-bootstrap/export-install-logs.sh --output-dir "$HOME/下载"`。Windows 10/11 64 位包随附 `install-with-logs.ps1`，通过 `-Installer` 安装、`-Export` 导出失败日志；Windows 7 和 32 位目标不参与构建与交付。交付 ZIP 的 PDF 副本使用英文文件名，原名称对照保存在 `metadata/document-filenames.json`。上述源码与模拟验证不替代银河麒麟现场验收。
 

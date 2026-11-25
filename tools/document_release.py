@@ -49,26 +49,6 @@ def registered_document(key: str, version: str) -> dict:
     return doc
 
 
-def prior_public_versions(key: str, known: dict) -> dict:
-    from .release_scope import registry_at
-    from .release_version_policy import formal_document
-
-    prefix = document_tag(key, "0.0").removesuffix("0.0")
-    versions = {}
-    for tag in command("git", "tag", "--list", f"{prefix}*").splitlines():
-        version = tag.removeprefix(prefix)
-        if version in known or document_version(version) >= max(map(document_version, known)):
-            continue
-        if release_info(tag) is None:
-            continue
-        commit = command("git", "rev-parse", f"refs/tags/{tag}^{{commit}}")
-        doc = formal_document(registry_at(commit), key)
-        if doc["version"] != version:
-            raise ValueError(f"document tag disagrees with its source registry: {tag}")
-        versions[version] = doc | {"taggedCommit": commit}
-    return versions
-
-
 def public_release(tag: str) -> dict:
     info = release_info(tag)
     if not info or info["isDraft"] or info.get("isPrerelease"):
@@ -146,7 +126,7 @@ def verify(key: str, version: str, directory: Path) -> dict:
     markdown = subprocess.check_output(
         ["git", "--no-replace-objects", "show", f"{source}:{doc['markdown_path']}"], cwd=ROOT,
     )
-    if hash_bytes(markdown).hexdigest() != receipt["markdownSha256"]:
+    if hash_bytes(markdown).hexdigest() != receipt["markdownSha256"] or doc["markdown_sha256"] != receipt["markdownSha256"]:
         raise ValueError("tagged Markdown differs from the published document receipt")
     filename = receipt["pdf"]["fileName"]
     if Path(filename).name != filename or not filename.endswith(".pdf"):
@@ -162,8 +142,6 @@ def verify(key: str, version: str, directory: Path) -> dict:
 
 
 def publish(key: str, version: str, tags: list[str], directory: Path) -> dict:
-    from tools.release_version_policy import fixed_path
-
     tag = document_tag(key, version)
     source = require_sha(command("git", "rev-parse", "HEAD"))
     command("git", "fetch", "--no-tags", "--refmap=", "origin", "refs/heads/master")
@@ -173,8 +151,6 @@ def publish(key: str, version: str, tags: list[str], directory: Path) -> dict:
     doc = registered_document(key, version)
     closed = software_obligations(tags, key, version, directory / "software")
     tagged = command("git", "ls-remote", "--refs", "origin", f"refs/tags/{tag}")
-    if not tagged and doc["markdown_path"] != fixed_path(doc):
-        raise ValueError("new document tags require a promoted version at the fixed Markdown path")
     if tagged:
         command("git", "fetch", "--no-tags", "--refmap=", "origin", f"refs/tags/{tag}")
         source = require_sha(command("git", "rev-parse", "FETCH_HEAD^{commit}"))

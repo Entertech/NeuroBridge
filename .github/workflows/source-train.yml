@@ -232,6 +232,7 @@ jobs:
     permissions:
       contents: write
       actions: write
+      pull-requests: write
     outputs:
       software_result: ${{ steps.finish.outputs.software_result }}
     steps:

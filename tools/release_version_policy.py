@@ -8,9 +8,23 @@ from tools.release_pipeline import matrix, release_config_at, run, system_versio
 from tools.release_scope import advanced_systems, changed_systems, registry_at
 
 
+DOCUMENT_VERSION_FIELDS = (
+    "version", "status", "markdown_path", "markdown_sha256", "pdf_artifact_name",
+    "created_date", "published_date", "publication_record",
+)
+
+
 def formal_document(registry: dict, key: str) -> dict:
     section = registry["documents"][f"external_{key}"]
     return section | select_external_protocol(registry) if key == "northbound" else section
+
+
+def document_history(registry: dict, key: str) -> dict[str, dict]:
+    section = registry["documents"][f"external_{key}"]
+    history = {entry["version"]: entry for entry in section.get("versions", [])}
+    if section.get("status") == "published":
+        history.setdefault(section["version"], section)
+    return history
 
 
 def draft_document(registry: dict, key: str) -> dict | None:
@@ -19,8 +33,8 @@ def draft_document(registry: dict, key: str) -> dict | None:
     return registry.get("document_prereleases", {}).get(key)
 
 
-def fixed_path(doc: dict) -> str:
-    return str(PurePosixPath(doc["markdown_path"]).with_name(f"{doc['title']}.md"))
+def versioned_path(doc: dict, version: str) -> str:
+    return str(PurePosixPath(doc["markdown_path"]).with_name(f"{doc['title']}_v{version}.md"))
 
 
 def document_body(text: str) -> str:
@@ -39,8 +53,6 @@ def document_body(text: str) -> str:
 
 
 def check_versions(base: str, head: str) -> None:
-    from tools.release_preflight import document_version
-
     current, previous = registry_at(head), registry_at(base)
     if "software_versions" in previous and "software_versions" not in current:
         raise ValueError("independent software versions cannot be removed")
@@ -48,36 +60,51 @@ def check_versions(base: str, head: str) -> None:
         config = release_config_at(head)
         baselines = {system_version(target): base for target in matrix(config)}
         advanced_systems(current, baselines, changed_systems(head, baselines, config.get("selection", {})))
+    check_document_versions(base, head, previous, current)
+
+
+def check_document_versions(base: str, head: str, previous: dict, current: dict) -> None:
+    from tools.release_preflight import document_version
 
     paths = set(run("git", "ls-tree", "-r", "--name-only", "-z", head).split("\0"))
     for section in previous.get("documents", {}):
         if not section.startswith("external_"):
             continue
         key = section.removeprefix("external_")
-        old, new = formal_document(previous, key), formal_document(current, key)
-        if old["status"] != "published" or new["status"] != "published":
+        old = formal_document(previous, key)
+        new = formal_document(current, key)
+        history = document_history(current, key)
+        for version, historical in document_history(previous, key).items():
+            if historical["status"] != "published":
+                continue
+            saved = history.get(version)
+            path = historical["markdown_path"]
+            if (saved is None or path not in paths
+                    or any(historical.get(field) != saved.get(field) for field in DOCUMENT_VERSION_FIELDS)
+                    or run("git", "rev-parse", f"{base}:{path}") != run("git", "rev-parse", f"{head}:{path}")):
+                raise ValueError(f"{key} published Markdown or metadata changed for v{version}")
+        if old["status"] != "published":
             continue
+        if new["status"] != "published":
+            raise ValueError(f"{key} published document status cannot be reverted")
         old_ref = f"{base}:{old['markdown_path']}"
         new_ref = f"{head}:{new['markdown_path']}"
         if document_version(new["version"]) < document_version(old["version"]):
             raise ValueError(f"{key} document version regressed")
         if old["version"] == new["version"]:
-            fields = ("markdown_path", "markdown_sha256", "pdf_artifact_name", "published_date", "publication_record")
-            if any(old.get(field) != new.get(field) for field in fields) or run("git", "rev-parse", old_ref) != run("git", "rev-parse", new_ref):
+            if any(old.get(field) != new.get(field) for field in DOCUMENT_VERSION_FIELDS):
                 raise ValueError(f"{key} published Markdown changed without a new document version")
             continue
         before = run("git", "show", old_ref)
         after = run("git", "show", new_ref)
         if document_body(before) == document_body(after):
             raise ValueError(f"{key} document version advanced without a body change")
-        if new["markdown_path"] != fixed_path(old):
-            raise ValueError(f"{key} formal Markdown must use {fixed_path(old)}")
+        expected = versioned_path(old, new["version"])
+        if new["markdown_path"] != expected:
+            raise ValueError(f"{key} formal Markdown must use {expected}")
         draft = draft_document(previous, key)
         current_draft = draft_document(current, key)
         if not draft or draft["version"] != new["version"]:
             raise ValueError(f"{key} release must promote its registered prerelease")
         if current_draft or draft["markdown_path"] in paths:
             raise ValueError(f"{key} release must remove the promoted prerelease")
-        obsolete = {old["markdown_path"], *(item["markdown_path"] for item in old.get("versions", []))}
-        if (obsolete - {new["markdown_path"]}) & paths:
-            raise ValueError(f"{key} release must remove old versioned Markdown")

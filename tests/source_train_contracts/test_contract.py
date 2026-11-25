@@ -330,6 +330,34 @@ assert suite.countTestCases() > 0
                 obj.begin_release('windows-10')
         save.assert_not_called()
 
+    def test_release_retry_accepts_original_selection_when_a_system_was_filtered_out(self):
+        from tools.release_pipeline import CONFIG as release_config, matrix
+
+        obj = train.Train('1.2.3', True)
+        record = {'candidate': GOOD, 'review': {'sha': GOOD}}
+        selected = 'windows-10,windows-11'
+        scope = {'mode': 'explicit', 'systems': ['windows-11'], 'baseCommits': {}}
+        plan = {'packages': matrix(release_config), 'documentBlockers': []}
+        with mock.patch.object(obj, 'mutable'), mock.patch.object(obj, 'default', return_value=('master', OTHER)), \
+             mock.patch.object(obj, 'protection'), mock.patch.object(obj, 'required_record', return_value=record), \
+             mock.patch.object(obj, 'checks'), mock.patch.object(obj, 'delivery_tag', return_value=None), \
+             mock.patch.object(obj, 'fetch', return_value=OTHER), mock.patch.object(train, 'version_at', return_value='1.2.2'), \
+             mock.patch.object(obj, 'package_scope', return_value=scope) as package_scope, \
+             mock.patch('tools.release_pipeline.release_config_at', return_value=release_config), \
+             mock.patch('tools.release_preflight.release_plan', side_effect=lambda *args, **kwargs: plan.copy()), \
+             mock.patch.object(obj, 'save'), mock.patch.object(obj, 'ensure_candidate'), \
+             mock.patch.dict(os.environ, {'GITHUB_RUN_ID': '17'}):
+            obj.begin_release(selected)
+            self.assertEqual(record['packageScope']['requestedSystems'], selected)
+            with mock.patch.object(train, 'api', return_value={'status': 'completed', 'conclusion': 'failure'}), \
+                 mock.patch.dict(os.environ, {'GITHUB_RUN_ID': '18'}):
+                obj.begin_release('windows-11, WINDOWS-10')
+                with self.assertRaisesRegex(ValueError, 'differ from the recorded package scope'):
+                    obj.begin_release('kylin-v10')
+            self.assertEqual(record['packageScope']['systems'], ['windows-11'])
+            self.assertEqual(record['packageRunId'], '18')
+            package_scope.assert_called_once_with(GOOD, selected)
+
     def test_package_scope_carries_forward_undelivered_system_baselines(self):
         from tools.release_pipeline import CONFIG as release_config
         obj = train.Train('1.2.3')
