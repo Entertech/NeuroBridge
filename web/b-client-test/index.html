@@ -27,19 +27,15 @@
             <p>页面会使用子协议 <code>neurobridge.v1</code> 建立 WebSocket 连接；不发送 Ping/Pong 或 JSON 心跳。</p>
           </div>
         </div>
-        <div id="connectionRows"></div>
-      </section>
-
-      <template id="connectionRowTemplate">
-        <div class="connect-row" role="group">
+        <div class="connect-row">
           <label class="field endpoint-field">
-            <span></span>
-            <input type="url" placeholder="ws://127.0.0.1:8765/neurobridge/v1/ws" spellcheck="false" />
+            <span>网关 WebSocket 地址</span>
+            <input id="gatewayEndpoint" type="url" placeholder="ws://127.0.0.1:8765/neurobridge/v1/ws" spellcheck="false" />
           </label>
-          <button class="button button-primary" type="button" data-connect>连接</button>
-          <button class="button button-quiet" type="button" data-disconnect>断开</button>
+          <button id="connectGateway" class="button button-primary" type="button">连接</button>
+          <button id="disconnectGateway" class="button button-quiet" type="button" disabled>断开</button>
         </div>
-      </template>
+      </section>
       <section class="card algorithm-overview" aria-labelledby="algorithmTitle">
         <div class="chart-heading">
           <h2 id="algorithmTitle">实时算法数据</h2>
@@ -64,7 +60,7 @@
             </section>
             <section class="chart-card" aria-label="频段能量">
               <div class="chart-heading"><h4>频段能量</h4><span data-field="spectrumMeta" class="chart-meta">等待连接网关</span></div>
-              <p class="hint">纵轴为各频段的能量原值。</p>
+              <p class="hint">纵轴为各频段的能量原值，单位 dB。</p>
               <canvas data-field="spectrum" role="img" aria-label="脑波频段能量图"></canvas>
             </section>
           </div>

@@ -8,9 +8,11 @@ const sourceByDevice = new Map(Object.entries(deviceBySource).map(([source, devi
 const configuredSource = window.NEUROBRIDGE_B_CLIENT_SOURCE;
 const configuredEndpoint = window.NEUROBRIDGE_B_CLIENT_ENDPOINT;
 const fixedSource = configuredSource === "serial" || configuredSource === "bluetooth";
-const sharedConnection = configuredSource === "dual";
-const localConnection = fixedSource || sharedConnection;
-const showConnectedDevicesOnly = sharedConnection || window.NEUROBRIDGE_B_CLIENT_WINDOWS === true;
+const configuredDual = configuredSource === "dual";
+const localConnection = fixedSource || configuredDual;
+const showConnectedDevicesOnly = configuredDual || window.NEUROBRIDGE_B_CLIENT_WINDOWS === true;
+let sharedConnection = configuredDual;
+let gatewaySocket = null;
 const waveformCapacity = 500;
 const sdkDualWaveLimit = 2000;
 const liveDisplayIntervalMs = 600;
@@ -19,23 +21,38 @@ let liveDisplayTimer = null;
 const spectrumBands = ["delta", "theta", "alpha", "lowBeta", "highBeta", "beta", "gamma"];
 const algorithmMetrics = {
   eeg: [
-    ["eeg.quality", "脑电质量"], ["attention", "注意力"], ["relaxation", "放松度"], ["pleasure", "愉悦度"],
+    ["eeg.quality", "脑电质量"], ["attention", "注意力"], ["relaxation", "放松度"], ["pleasure", "愉悦度（0–100 分）"],
     ...spectrumBands.map((band) => [`eeg.bandPower.${band}`, `${band} 能量`]),
     ["flow.meditation", "冥想"], ["flow.meditationTips", "冥想提示"], ["sleep.updated", "睡眠结果更新"],
     ["sleep.degree", "睡眠程度"], ["sleep.state", "睡眠状态"], ["sleep.stage", "睡眠分期"], ["sleep.spindle", "睡眠纺锤"],
   ],
   hr: [
-    ["hr.value", "心率（bpm）"], ["hr.hrv", "HRV"], ["pressure", "压力"], ["coherence", "和谐度"], ["arousal", "激活度"],
+    ["hr.value", "心率（bpm）"], ["hr.hrv", "HRV（ms）"], ["pressure", "压力"], ["coherence", "和谐度"], ["arousal", "激活度"],
   ],
 };
 const algorithmStreamFields = Object.entries(algorithmMetrics).map(([stream, metrics]) => [
   stream, [...new Set(metrics.map(([key]) => key.split(".")[0]))],
 ]);
 const eegScoresWithZeroPlaceholder = new Set(["attention", "relaxation", "pleasure", "flow.meditation"]);
+const algorithmStatesByValue = {
+  "eeg.quality": ["无质量评分", "质量较差", "质量良好"],
+  "flow.meditationTips": ["无提示", "心流恢复提示", "心流丢失提示"],
+  "sleep.state": ["清醒", "入睡"],
+  "sleep.stage": ["清醒", "NREM1", "NREM2", "NREM3", "REM"],
+};
+const scoreDescriptions = {
+  attention: "高分对应更高的专注度",
+  relaxation: "高分对应更高的放松度",
+  pressure: "高分对应更高的压力评分",
+  arousal: "高分对应更强的激活水平",
+  coherence: "SDK 报表参考线 50 分",
+  "flow.meditation": "SDK 提示分界约 33.33、66.67",
+};
 
 const elements = {
-  connectionRows: document.querySelector("#connectionRows"),
-  connectionRowTemplate: document.querySelector("#connectionRowTemplate"),
+  gatewayEndpoint: document.querySelector("#gatewayEndpoint"),
+  connectGateway: document.querySelector("#connectGateway"),
+  disconnectGateway: document.querySelector("#disconnectGateway"),
   algorithmMetrics: document.querySelector("#algorithmMetrics"),
   algorithmHint: document.querySelector("#algorithmHint"),
   waitingForDevice: document.querySelector("#waitingForDevice"),
@@ -55,12 +72,29 @@ document.querySelector("#protocolVersion").textContent = `v${PROTOCOL_VERSION}`;
 
 const overviewMetrics = [
   ["放松度", "eeg", ["relaxation"]], ["压力值", "hr", ["pressure"]],
-  ["心率", "hr", ["hr", "value"], " bpm"], ["HRV", "hr", ["hr", "hrv"]],
+  ["心率", "hr", ["hr", "value"], " bpm"], ["HRV", "hr", ["hr", "hrv"], " ms"],
   ["注意力", "eeg", ["attention"]], ["Flow", "eeg", ["flow", "meditation"]],
   ["和谐度", "hr", ["coherence"]], ["激活度", "hr", ["arousal"]],
   ...algorithmMetrics.eeg.filter(([key]) => key.startsWith("sleep."))
     .map(([key, title]) => [title, "eeg", key.split(".")]),
 ];
+
+function metricGuide(key, score) {
+  if (key === "hr.value") return "成人静息参考 60–100 bpm";
+  if (key === "hr.hrv") return "在相同测量条件下比较";
+  if (!scoreDescriptions[key]) return "";
+  const scale = "SDK 标尺 0–100";
+  if (!Number.isFinite(score) || score === 0) return `${scale} · ${scoreDescriptions[key]}`;
+  if (score < 0 || score > 100) return `超出 ${scale}`;
+  if (key === "coherence") {
+    return `${scale} · ${score > 50 ? "高于报表参考线" : "未超过报表参考线"} 50`;
+  }
+  if (key === "flow.meditation") {
+    const position = score <= 100 / 3 ? "低分提示区" : score >= 200 / 3 ? "高分提示区" : "两提示分界之间";
+    return `${scale} · ${position}`;
+  }
+  return `${scale} · ${scoreDescriptions[key]}`;
+}
 
 function createOverview(source, sleepGrid) {
   const section = document.createElement("section");
@@ -81,6 +115,7 @@ function createOverview(source, sleepGrid) {
   elements.algorithmMetrics.append(section);
 
   const metrics = overviewMetrics.map(([name, stream, path, unit = ""]) => {
+    const key = path.join(".");
     const card = document.createElement("article");
     const label = document.createElement("h4");
     const output = document.createElement("output");
@@ -91,7 +126,14 @@ function createOverview(source, sleepGrid) {
     card.append(label, output, meta);
     const group = path[0] === "sleep" ? sleepGrid : grid;
     group.append(card);
-    return { stream, path, unit, output, meta, timestamp: null };
+    const description = metricGuide(key);
+    const guide = description ? document.createElement("p") : null;
+    if (guide) {
+      guide.className = "metric-guide";
+      guide.textContent = description;
+      card.append(guide);
+    }
+    return { key, stream, path, unit, output, meta, guide, timestamp: null };
   });
   return { section, state, metrics };
 }
@@ -134,28 +176,6 @@ function createSourcePanel(source) {
 const panels = Object.fromEntries(Object.keys(sourceLabels).map((source) => [source, createSourcePanel(source)]));
 const localPanel = fixedSource ? panels[configuredSource] : panels.serial;
 
-function createConnectionRow(panel) {
-  const row = elements.connectionRowTemplate.content.firstElementChild.cloneNode(true);
-  const title = sharedConnection ? "Windows 网关" : sourceLabels[panel.source];
-  row.setAttribute("aria-label", title);
-  row.querySelector("span").textContent = `${title} WebSocket 地址`;
-  const endpoint = row.querySelector("input");
-  const connectButton = row.querySelector("[data-connect]");
-  const disconnectButton = row.querySelector("[data-disconnect]");
-  if (panel === localPanel && typeof configuredEndpoint === "string") endpoint.value = configuredEndpoint;
-  endpoint.readOnly = localConnection && typeof configuredEndpoint === "string";
-  connectButton.addEventListener("click", () => {
-    if (endpoint.readOnly) window.location.reload();
-    else connect(panel);
-  });
-  disconnectButton.addEventListener("click", () => {
-    panel.socket?.close(1000, "B-side test console disconnect");
-    refreshConnectionControls(panel);
-  });
-  elements.connectionRows.append(row);
-  return { endpoint, connectButton, disconnectButton };
-}
-
 function createRequestId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
     return window.crypto.randomUUID();
@@ -163,19 +183,18 @@ function createRequestId() {
   return `btest-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function refreshConnectionControls(panel) {
-  const { endpoint, connectButton, disconnectButton } = panel.connection;
-  const state = panel.socket?.readyState;
-  connectButton.disabled = Boolean(panel.socket);
-  connectButton.textContent = state === WebSocket.OPEN ? "已连接" : panel.socket ? "连接处理中" : "连接";
-  disconnectButton.disabled = state !== WebSocket.OPEN && state !== WebSocket.CONNECTING;
-  endpoint.disabled = Boolean(panel.socket);
-
+function refreshConnectionControls() {
+  const state = gatewaySocket?.readyState;
+  const open = state === WebSocket.OPEN;
+  elements.connectGateway.disabled = Boolean(gatewaySocket);
+  elements.connectGateway.textContent = open ? "已连接" : gatewaySocket ? "连接处理中" : "连接";
+  elements.disconnectGateway.disabled = !open && state !== WebSocket.CONNECTING;
+  elements.gatewayEndpoint.disabled = Boolean(gatewaySocket);
   const active = Object.values(panels).filter((item) => item.socket?.readyState === WebSocket.OPEN);
-  const pending = Object.values(panels).some((item) => item.socket);
-  const labels = active.length && showConnectedDevicesOnly ? "Windows 网关" : active.map((item) => sourceLabels[item.source]).join("、");
-  elements.connectionLabel.textContent = labels ? `${labels} · 已连接` : pending ? "连接处理中" : "未连接";
-  elements.connectionDot.className = `dot dot-${labels ? "on" : pending ? "wait" : "off"}`;
+  const labels = active.map((item) => sourceLabels[item.source]).join("、");
+  elements.connectionLabel.textContent = labels ? `${labels} · 已连接`
+    : open ? "网关已连接" : gatewaySocket ? "连接处理中" : "未连接";
+  elements.connectionDot.className = `dot dot-${open ? "on" : gatewaySocket ? "wait" : "off"}`;
 }
 
 function setSourceStatus(panel, label) {
@@ -283,6 +302,7 @@ function resetOverview(panel, reason) {
     metric.output.textContent = "—";
     metric.meta.textContent = reason;
     metric.timestamp = null;
+    if (metric.guide) metric.guide.textContent = metricGuide(metric.key);
   }
 }
 
@@ -334,6 +354,9 @@ function updateAlgorithmOverview(data, panel, unavailable, renderedStreams) {
     const missingHeartRate = metric.path[0] === "hr" && metric.path[1] === "value" && value === 0;
     const missingEeg = metric.stream === "eeg" && (unavailable.eeg === "未佩戴"
       || (!isSleep && (value === 0 || unavailable.eeg)));
+    if (metric.guide) {
+      metric.guide.textContent = metricGuide(metric.key, valid && !missingHeartRate && !missingEeg ? value : null);
+    }
     if (mode === "live" && (!valid || missingHeartRate || missingEeg)) {
       if (metric.output.textContent !== "—") metric.meta.textContent = "沿用上次有效值";
       else if (result.valid === false) metric.meta.textContent = "无效窗口";
@@ -342,7 +365,11 @@ function updateAlgorithmOverview(data, panel, unavailable, renderedStreams) {
     }
     if (!valid) metric.output.textContent = "—";
     else if (typeof value === "boolean") metric.output.textContent = value ? "是" : "否";
-    else metric.output.textContent = `${Number(value.toPrecision(8))}${metric.unit}`;
+    else {
+      const state = isSleep && algorithm.sleep?.updated === true && Number.isInteger(value)
+        ? algorithmStatesByValue[metric.key]?.[value] : undefined;
+      metric.output.textContent = `${Number(value.toPrecision(8))}${metric.unit}${state ? ` · ${state}` : ""}`;
+    }
     const status = result.valid === false ? "无效窗口" : !valid ? "算法未提供" : query ? "单次查询" : "连续订阅";
     metric.meta.textContent = `${status} · ${algorithmTimeFormat.format(result.timestampMs)}`;
   }
@@ -364,7 +391,10 @@ function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {
     }
     output.removeAttribute("title");
     if (typeof value === "boolean") output.textContent = value ? "是" : "否";
-    else output.textContent = Number.isFinite(value) ? String(value) : "—";
+    else {
+      const state = Number.isInteger(value) ? algorithmStatesByValue[key]?.[value] : undefined;
+      output.textContent = Number.isFinite(value) ? `${value}${state ? ` · ${state}` : ""}` : "—";
+    }
   }
 }
 
@@ -492,6 +522,7 @@ function showMissingAlgorithmStream(panel, stream, label, timestamp) {
     if (metric.timestamp !== null && timestamp !== null && timestamp < metric.timestamp) continue;
     metric.meta.textContent = metric.output.textContent === "—" ? label : `${label} · 沿用上次有效值`;
     if (timestamp !== null) metric.timestamp = timestamp;
+    if (metric.guide) metric.guide.textContent = metricGuide(metric.key);
   }
   const group = panel.algorithmGroups.find((group) => group.stream === stream);
   if (group.timestamp == null || timestamp === null || timestamp >= group.timestamp) {
@@ -959,7 +990,9 @@ function subscribeToStatus(panel) {
 
 function sendPayload(payload, panel) {
   if (panel.socket?.readyState !== WebSocket.OPEN) {
-    appendLog("error", "ERROR", "请先连接该来源的网关。", panel);
+    const message = gatewaySocket?.readyState === WebSocket.OPEN
+      ? "当前网关尚未确认该设备来源。" : "请先连接网关。";
+    appendLog("error", "ERROR", message, panel);
     return false;
   }
   let request = payload;
@@ -976,59 +1009,111 @@ function sendPayload(payload, panel) {
       request = { ...payload, params: { ...payload.params, source: deviceBySource[panel.source] } };
     }
   }
-  panel.socket.send(JSON.stringify(request));
-  appendLog("out", "OUT →", request, panel);
+  writeRequest(panel.socket, request, panel);
   return true;
 }
 
-function sendRequest(action, params, panel) {
-  const request = {
+function createRequest(action, params) {
+  return {
     protocolVersion: PROTOCOL_VERSION,
     messageType: "request",
     requestId: createRequestId(),
     action,
     params,
   };
+}
+
+function writeRequest(socket, request, panel) {
+  socket.send(JSON.stringify(request));
+  appendLog("out", "OUT →", request, panel);
+}
+
+function sendRequest(action, params, panel) {
+  const request = createRequest(action, params);
   return sendPayload(request, panel) ? request.requestId : null;
 }
 
-function connect(panel) {
-  if (panel.socket) return;
+function connect() {
+  if (gatewaySocket) return;
   let endpoint;
   let socket;
   try {
-    endpoint = new URL(panel.connection.endpoint.value.trim());
+    endpoint = new URL(elements.gatewayEndpoint.value.trim());
     if (!["ws:", "wss:"].includes(endpoint.protocol)) throw new Error("地址必须以 ws:// 或 wss:// 开头。");
-    if (Object.values(panels).some((other) => other.socket?.url === endpoint.href)) {
-      throw new Error("此网关已关联其他来源，请为当前来源填写独立的 WebSocket 地址。");
-    }
     socket = new WebSocket(endpoint.href, SUBPROTOCOL);
   } catch (error) {
-    appendLog("error", "ERROR", error.message, panel);
+    appendLog("error", "ERROR", error.message, localPanel);
     return;
   }
-  const connectedPanels = sharedConnection ? Object.values(panels) : [panel];
-  for (const item of connectedPanels) {
-    item.socket = socket;
-    resetSource(item, "正在连接", "等待算法数据");
-    appendLog("system", "SYSTEM", `连接 ${endpoint.href}（子协议 ${SUBPROTOCOL}）`, item);
+  gatewaySocket = socket;
+  sharedConnection = configuredDual;
+  const connectedPanels = new Set();
+  let primaryPanel = localPanel;
+  let discoveryId = null;
+  let headbandProbeId = null;
+
+  function attachPanel(panel) {
+    connectedPanels.add(panel);
+    panel.socket = socket;
+    resetSource(panel, socket.readyState === WebSocket.OPEN ? "网关已连接" : "正在连接", "等待算法数据");
+    appendLog("system", "SYSTEM", `连接 ${endpoint.href}（子协议 ${SUBPROTOCOL}）`, panel);
   }
-  refreshConnectionControls(panel);
+
+  if (localConnection) {
+    for (const panel of configuredDual ? Object.values(panels) : [localPanel]) attachPanel(panel);
+  }
+  refreshConnectionControls();
 
   socket.addEventListener("open", () => {
-    refreshConnectionControls(panel);
+    refreshConnectionControls();
+    if (!localConnection) {
+      const request = createRequest("getStatus", {});
+      discoveryId = request.requestId;
+      writeRequest(socket, request, primaryPanel);
+      return;
+    }
     for (const item of connectedPanels) {
       setSourceStatus(item, "网关已连接");
       appendLog("system", "SYSTEM", "WebSocket 已建立，正在自动发送 getStatus。", item);
-      const requestId = sendRequest("getStatus", {}, item);
-      if (localConnection) item.initialStatusRequestId = requestId;
+      item.initialStatusRequestId = sendRequest("getStatus", {}, item);
     }
   });
   socket.addEventListener("message", (event) => {
     try {
       const message = JSON.parse(event.data);
-      const source = sourceByDevice.get(message?.data?.source);
-      const target = sharedConnection && source ? panels[source] : panel;
+      const data = message?.data;
+      const source = sourceByDevice.get(data?.source);
+      if (discoveryId && data?.requestId === discoveryId) {
+        discoveryId = null;
+        if (message.code !== 200 || data.action !== "getStatus" || !source) {
+          handleGatewayMessage(message, primaryPanel);
+          return;
+        }
+        primaryPanel = panels[source];
+        attachPanel(primaryPanel);
+        refreshConnectionControls();
+        // A dual gateway defaults to the headset for an unqualified getStatus.
+        if (source === "serial") {
+          const request = createRequest("getStatus", { source: "headband" });
+          headbandProbeId = request.requestId;
+          writeRequest(socket, request, primaryPanel);
+        }
+      } else if (headbandProbeId && data?.requestId === headbandProbeId) {
+        headbandProbeId = null;
+        if (message.code === 200 && data.action === "getStatus" && source === "bluetooth") {
+          sharedConnection = true;
+          attachPanel(panels.bluetooth);
+          refreshConnectionControls();
+        } else {
+          // The single-source controller rejects params.source.
+          if (message.code !== 400 || data.reason !== "INVALID_REQUEST" || !data.details?.params?.includes("source")) {
+            appendLog("in", "← IN", message, primaryPanel);
+          }
+          return;
+        }
+      }
+      const target = source && panels[source].socket === socket ? panels[source] : primaryPanel;
+      if (target.socket !== socket) return;
       if (message?.code === 200 && (message.protocolVersion !== PROTOCOL_VERSION || source === target.source)
         && Number.isFinite(message.data?.timestampMs) && isLiveDataMessage(message, target)) {
         appendLog("in", "← IN", message, target);
@@ -1041,14 +1126,18 @@ function connect(panel) {
         handleGatewayMessage(message, target);
       }
     } catch {
-      appendLog("error", "ERROR", `无法读取网关消息（${event.data.length} 字符）。`, panel);
+      appendLog("error", "ERROR", `无法读取网关消息（${event.data.length} 字符）。`, primaryPanel);
     }
   });
   socket.addEventListener("error", () => {
-    for (const item of connectedPanels) appendLog("error", "ERROR", "WebSocket 发生网络错误或网关拒绝了子协议。", item);
+    for (const item of connectedPanels.size ? connectedPanels : [primaryPanel]) {
+      appendLog("error", "ERROR", "WebSocket 发生网络错误或网关拒绝了子协议。", item);
+    }
   });
   socket.addEventListener("close", (event) => {
-    for (const item of connectedPanels) {
+    gatewaySocket = null;
+    sharedConnection = configuredDual;
+    for (const item of connectedPanels.size ? connectedPanels : [primaryPanel]) {
       item.socket = null;
       item.initialStatusRequestId = null;
       item.statusSubscriptionRequestId = null;
@@ -1059,7 +1148,7 @@ function connect(panel) {
       refreshSubscriptionSelect(item);
       appendLog("system", "SYSTEM", `连接已关闭（code=${event.code}${event.reason ? `，${event.reason}` : ""}）。`, item);
     }
-    refreshConnectionControls(panel);
+    refreshConnectionControls();
   });
 }
 
@@ -1114,15 +1203,19 @@ function createRequestSection(panel) {
 }
 
 for (const panel of Object.values(panels)) {
-  if (!localConnection || panel === localPanel) {
-    panel.connection = createConnectionRow(panel);
-    refreshConnectionControls(panel);
-  }
   if (!fixedSource || panel === localPanel) panel.requests = createRequestSection(panel);
-  resetSource(panel, "未连接", fixedSource && panel.source !== configuredSource ? "等待其他网关接入" : "等待连接网关");
+  resetSource(panel, "未连接", fixedSource && panel.source !== configuredSource ? "当前网关未配置此设备" : "等待连接网关");
 }
+elements.connectGateway.addEventListener("click", connect);
+elements.disconnectGateway.addEventListener("click", () => {
+  gatewaySocket?.close(1000, "B-side test console disconnect");
+  refreshConnectionControls();
+});
 if (typeof configuredEndpoint === "string") {
-  connect(localPanel);
+  elements.gatewayEndpoint.value = configuredEndpoint;
+  elements.gatewayEndpoint.readOnly = localConnection;
+  connect();
 }
+refreshConnectionControls();
 
 window.addEventListener("resize", drawCharts);

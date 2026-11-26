@@ -874,7 +874,16 @@ class DeploymentTests(unittest.TestCase):
                     self.assertIn(auto_connect, script)
                 else:
                     self.assertIn('sendRequest("getStatus", {}, item);', open_handler)
-                    self.assertIn('if (typeof configuredEndpoint === "string") {\n  connect(localPanel);\n}', script)
+                    self.assertIn('createRequest("getStatus", {});', open_handler)
+                    self.assertIn(
+                        'if (typeof configuredEndpoint === "string") {\n'
+                        '  elements.gatewayEndpoint.value = configuredEndpoint;\n'
+                        '  elements.gatewayEndpoint.readOnly = localConnection;\n'
+                        '  connect();\n}',
+                        script,
+                    )
+                    html = (ROOT / "web" / "b-client-test" / "index.html").read_text(encoding="utf-8")
+                    self.assertEqual(html.count('type="url"'), 1)
 
     def test_b_side_console_coalesces_algorithm_data_but_not_waveform(self) -> None:
         script = (ROOT / "web" / "b-client-test" / "app.js").read_text(encoding="utf-8")
