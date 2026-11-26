@@ -27,6 +27,9 @@ SEQUENCE_HALF_RANGE = 1 << 15
 RECENT_SEQUENCE_WINDOW = 4096
 LOG_TEXT_LIMIT = 512
 DISCARDED_BYTES_LOG_INTERVAL = 4096
+# Read smaller chunks so the gateway receives timely read boundaries instead of
+# waiting for a full 4096-byte buffer on Windows USB serial drivers.
+STREAM_READ_BYTES = 512
 
 
 def _safe_log_text(value: object, limit: int = LOG_TEXT_LIMIT) -> str:
@@ -487,7 +490,7 @@ class SerialAdapter:
                 remaining = deadline - time.monotonic()
                 client.timeout = min(0.1, max(0.001, remaining))
                 async with self._io_lock:
-                    chunk = bytes(await self._io_call(client.read, 4096))
+                    chunk = bytes(await self._io_call(client.read, STREAM_READ_BYTES))
                 if not chunk:
                     await asyncio.sleep(min(0.01, max(0.0, remaining)))
                     continue
@@ -614,7 +617,7 @@ class SerialAdapter:
             if client is None:
                 return
             async with self._io_lock:
-                chunk = bytes(await self._io_call(client.read, 4096))
+                chunk = bytes(await self._io_call(client.read, STREAM_READ_BYTES))
             if chunk:
                 buffer_received_at_ms = wall_clock_ms()
                 if self.raw_chunk is not None:

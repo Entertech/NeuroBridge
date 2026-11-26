@@ -197,17 +197,22 @@ def wix_directory_tree(root: Path, source_root: Path, install_id: str) -> tuple[
                 file_id = wix_id("F_", relative)
                 if relative == "windows/service.py":
                     file_id = "SERVICE_SCRIPT"
-                service = ""
+                registration = ""
                 if relative.replace("/", "\\") == r"runtime\python.exe":
-                    service = (
+                    registration = (
                         '<ServiceInstall Name="NeuroBridge" DisplayName="NeuroBridge Gateway" '
                         'Description="USB serial gateway to loopback WebSocket" Type="ownProcess" '
                         'Start="auto" ErrorControl="normal" Arguments="&quot;[#SERVICE_SCRIPT]&quot;" />'
                         '<ServiceControl Name="NeuroBridge" Start="install" Stop="both" Remove="uninstall" Wait="yes" />'
                     )
+                elif relative == "windows/cli/neurobridge.cmd":
+                    registration = (
+                        '<Environment Id="NeuroBridgeCliPath" Name="PATH" Action="set" '
+                        f'Part="last" System="yes" Permanent="no" Value="[{parent_id}]" />'
+                    )
                 components.append(
                     f'<Component Id="{component_id}" Guid="*" Directory="{parent_id}">'
-                    f'<File Id="{file_id}" Source="{xml_escape(str(item))}" KeyPath="yes" />{service}</Component>'
+                    f'<File Id="{file_id}" Source="{xml_escape(str(item))}" KeyPath="yes" />{registration}</Component>'
                 )
 
     visit(source_root, install_id)
@@ -225,9 +230,10 @@ def write_wix_msi(stage: Path, target: dict[str, str], output: Path, log: Path) 
     wix = textwrap.dedent(
         f'''\
         <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-          <Package Name="NeuroBridge" Manufacturer="Entertech" Version="{APPLICATION_VERSION}" UpgradeCode="{upgrade_code}">
+          <Package Name="NeuroBridge" Manufacturer="Entertech" Version="{APPLICATION_VERSION}" UpgradeCode="{upgrade_code}" Scope="perMachine">
             <SummaryInformation Description="NeuroBridge gateway" />
-            <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer NeuroBridge version is already installed." />
+            <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                          DowngradeErrorMessage="A newer NeuroBridge version is already installed." />
             <MediaTemplate EmbedCab="yes" />
             <Feature Id="MainFeature" Title="NeuroBridge" Level="1">
               <ComponentGroupRef Id="ApplicationFiles" />
@@ -256,13 +262,14 @@ def write_wix_bundle(msi: Path, output: Path, log: Path) -> None:
     upgrade_code = str(uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Entertech/NeuroBridge/bundle"))
     bundle.write_text(textwrap.dedent(f'''\
       <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
-        <Bundle Name="NeuroBridge" Version="{APPLICATION_VERSION}" Manufacturer="Entertech" UpgradeCode="{upgrade_code}">
+        <Bundle Name="NeuroBridge" InProgressName="NeuroBridge Setup (in progress)"
+                Version="{APPLICATION_VERSION}" Manufacturer="Entertech" UpgradeCode="{upgrade_code}">
           <RelatedBundle Action="Upgrade" Id="{upgrade_code}" />
           <BootstrapperApplication>
             <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl="https://github.com/Entertech/NeuroBridge" />
           </BootstrapperApplication>
           <Chain>
-            <MsiPackage SourceFile="{xml_escape(str(msi))}" />
+            <MsiPackage SourceFile="{xml_escape(str(msi))}" Visible="no" />
           </Chain>
         </Bundle>
       </Wix>

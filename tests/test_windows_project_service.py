@@ -145,7 +145,7 @@ class NativeServiceTests(unittest.TestCase):
             python = Path(sys._base_executable)
             url = subprocess.check_output([str(venv_python), str(root / 'windows/gateway_helper.py'), 'url'],
                                           text=True, timeout=10).strip()
-            self.assertEqual(url, 'http://127.0.0.1:8080/capture/')
+            self.assertEqual(url, 'http://127.0.0.1:8080/')
             processes = []
 
             def remember_process(handle):

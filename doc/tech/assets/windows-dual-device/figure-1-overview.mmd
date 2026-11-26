@@ -1,0 +1,29 @@
+flowchart TB
+    subgraph DEV["设备侧"]
+        HS["USB 串口耳机<br/>rev181 28 字节帧"]
+        HB["BLE 头环<br/>FF31 / FF51 / FF32 通知"]
+    end
+    subgraph GW["Windows 网关（单进程、一个 asyncio 事件循环）"]
+        A["耳机流水线 A<br/>串口源 → 解析 → 600 ms 窗口 → 算法桥 A"]
+        B["头环流水线 B<br/>BLE 源 → 解析 → 600 ms 窗口 → 算法桥 B"]
+        CAL["共享 EegAlignmentCache<br/>佩戴判定 + 耳机 EEG 输出 ±5%"]
+        GA["GatewayApplication A<br/>快照 / 订阅 / 录制"]
+        GB["GatewayApplication B<br/>快照 / 订阅 / 录制"]
+        RA["recordings/sessions/&lt;rec-id&gt;/<br/>raw / parsed / algorithm"]
+        RB["recordings/headband/sessions/&lt;rec-id&gt;/<br/>raw / parsed / algorithm"]
+        R["SourceRouter<br/>按 params.source 路由"]
+        W["WebSocket 入口<br/>ws://127.0.0.1:8765/neurobridge/v1/ws"]
+    end
+    C["本机浏览器<br/>耳机面板 + 头环面板"]
+    HS --> A
+    HB --> B
+    A --> CAL
+    B --> CAL
+    CAL --> GA
+    CAL --> GB
+    A --> RA
+    B --> RB
+    GA --> R
+    GB --> R
+    R --> W
+    W -->|"v1.1 JSON / 每 600 ms 批量"| C

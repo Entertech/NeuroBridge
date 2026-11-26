@@ -28,6 +28,54 @@ try {
     if ($context.diagnosticScope -ne 'installation' -or $context.packageApplicationVersion -eq 'unknown' -or
         $context.osBuild -eq 'unknown' -or -not $context.nativeArchitecture) { throw 'Installation context incomplete.' }
 
+    # Simulate a gateway that will not stop without touching a real service or MSI.
+    $stuckScript = Join-Path $work 'stuck-service.ps1'
+    @'
+param([string]$InstallScript, [string]$Installer)
+$ErrorActionPreference = 'Stop'
+# Match a real ServiceController method call and its CLR exception.
+Add-Type -AssemblyName System.ServiceProcess
+$serviceAssembly = [System.ServiceProcess.ServiceController].Assembly.Location
+Add-Type -ReferencedAssemblies $serviceAssembly -TypeDefinition @"
+using System;
+using System.ServiceProcess;
+
+public sealed class StuckGatewayService
+{
+    public ServiceControllerStatus Status { get { return ServiceControllerStatus.StopPending; } }
+
+    public void WaitForStatus(ServiceControllerStatus status, TimeSpan timeout)
+    {
+        throw new System.ServiceProcess.TimeoutException("Simulated service timeout");
+    }
+}
+"@
+function Get-Service {
+    param([string]$Name, [object]$ErrorAction)
+    return [StuckGatewayService]::new()
+}
+function Start-Process { throw 'Native installer must not start while the gateway is still stopping.' }
+& $InstallScript -Installer $Installer
+exit $LASTEXITCODE
+'@ | Set-Content -LiteralPath $stuckScript -Encoding UTF8
+    $fakeMsi = Join-Path $work 'test.msi'
+    New-Item -ItemType File -Path $fakeMsi | Out-Null
+    $stuckArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -InstallScript "{1}" -Installer "{2}"' -f $stuckScript, $script, $fakeMsi
+    $stuckStdout = Join-Path $work 'stuck-stdout.txt'
+    $stuckStderr = Join-Path $work 'stuck-stderr.txt'
+    $stuck = Start-Process $hostExe -ArgumentList $stuckArgs -Wait -PassThru `
+        -RedirectStandardOutput $stuckStdout -RedirectStandardError $stuckStderr
+    $stuckLogs = @(Get-ChildItem (Join-Path $work 'NeuroBridge\installer-logs') -Filter 'install-*.log' |
+        Where-Object { $_.FullName -ne $logs[0].FullName })
+    $stuckText = if ($stuckLogs.Count -eq 1) { Get-Content -LiteralPath $stuckLogs[0].FullName -Raw }
+    if ($stuck.ExitCode -ne 1 -or $stuckText -notmatch 'gateway_service_before=StopPending' -or
+        $stuckText -notmatch 'gateway_service_after=StopPending' -or $stuckText -notmatch 'sc\.exe queryex NeuroBridge') {
+        Write-Host ('Stuck service process exit code: ' + $stuck.ExitCode)
+        Get-Content -LiteralPath $stuckStdout, $stuckStderr | Write-Host
+        Write-Host $stuckText
+        throw 'A stuck service did not block installation with the expected diagnostic.'
+    }
+
     # An upgrade failure must retain distinct package and installed identities.
     . (Join-Path $root 'windows\diagnostic-context.ps1')
     $installed = Join-Path $work 'installed'

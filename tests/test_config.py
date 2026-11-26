@@ -59,6 +59,37 @@ class AlgorithmConfigurationTests(unittest.TestCase):
 
 
 class DeviceStrategyConfigurationTests(unittest.TestCase):
+    def test_eeg_alignment_cache_limits_are_configurable_and_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            path.write_text(BLUETOOTH_DATA_SOURCE, encoding="utf-8")
+            defaults = load(path).data_source
+            self.assertEqual((defaults.eeg_alignment_reference_batches, defaults.eeg_alignment_clock_packets), (16, 4096))
+            self.assertEqual(defaults.eeg_alignment_output_wait_ms, 800)
+            path.write_text(BLUETOOTH_DATA_SOURCE + "eeg_alignment_reference_batches = 8\neeg_alignment_clock_packets = 512\n",
+                            encoding="utf-8")
+            configured = load(path).data_source
+            self.assertEqual((configured.eeg_alignment_reference_batches, configured.eeg_alignment_clock_packets), (8, 512))
+            for key, value in (("eeg_alignment_reference_batches", 0), ("eeg_alignment_clock_packets", 4097),
+                               ("eeg_alignment_output_wait_ms", 1201)):
+                with self.subTest(key=key):
+                    path.write_text(BLUETOOTH_DATA_SOURCE + f"{key} = {value}\n", encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, key):
+                        load(path)
+
+    def test_eeg_alignment_percent_accepts_the_configured_amplitude(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            for value in (0, 5, 20, 100):
+                with self.subTest(value=value):
+                    path.write_text(BLUETOOTH_DATA_SOURCE + f"eeg_alignment_percent = {value}\n", encoding="utf-8")
+                    self.assertEqual(load(path).data_source.eeg_alignment_percent, value)
+            for value in (-1, 101):
+                with self.subTest(value=value):
+                    path.write_text(BLUETOOTH_DATA_SOURCE + f"eeg_alignment_percent = {value}\n", encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "between 0 and 100"):
+                        load(path)
+
     def test_unknown_configuration_fields_are_rejected_before_io(self) -> None:
         for contents, message in (
             ('future = true\n[data_source]\ntype = "serial"\n', "Unknown top-level"),
@@ -131,6 +162,20 @@ class DeviceStrategyConfigurationTests(unittest.TestCase):
             self.assertEqual(config.data_source.type, "serial")
             self.assertEqual(config.ble.scan_timeout_seconds, 5)
             self.assertEqual(config.ble.reconnect_delay_seconds, 3)
+
+    def test_ble_notification_timeout_defaults_and_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gateway.toml"
+            prefix = '[data_source]\ntype = "bluetooth"\n[ble]\n'
+            path.write_text(prefix, encoding="utf-8")
+            self.assertEqual(load(path).ble.notification_timeout_seconds, 10)
+            path.write_text(prefix + "notification_timeout_seconds = 15\n", encoding="utf-8")
+            self.assertEqual(load(path).ble.notification_timeout_seconds, 15)
+            for value in ("0", "-1", "true", '"15"'):
+                with self.subTest(value=value):
+                    path.write_text(prefix + f"notification_timeout_seconds = {value}\n", encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "ble.notification_timeout_seconds"):
+                        load(path)
 
     def test_native_usb_is_a_reserved_strategy_value(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

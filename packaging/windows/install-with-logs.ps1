@@ -58,14 +58,32 @@ try {
         '.exe' { $executable = $path; $arguments = '/log "' + $nativeLog + '"' }
         default { throw 'Installer must be an EXE or MSI.' }
     }
+    $gateway = Get-Service -Name NeuroBridge -ErrorAction SilentlyContinue
+    if ($gateway) {
+        ('gateway_service_before=' + $gateway.Status) | Add-Content -LiteralPath $summary -Encoding UTF8
+        if ($gateway.Status -eq 'StopPending') {
+            Write-Host 'Waiting up to 15 seconds for the NeuroBridge Gateway service to stop.'
+            try {
+                $gateway.WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(15))
+            } catch [System.ServiceProcess.TimeoutException] {
+                throw 'NeuroBridge Gateway is still stopping. Run sc.exe queryex NeuroBridge and resolve the stuck service before retrying setup.'
+            }
+        }
+    }
     $process = Start-Process -FilePath $executable -ArgumentList $arguments -Verb RunAs -Wait -PassThru
     $result = $process.ExitCode
+    if ($result -in 1618, -2147023278) {
+        throw 'Windows Installer is busy (1618 / 0x80070652). Wait for the other installation or rollback and check the MsiInstaller events before retrying.'
+    }
     if ($result -notin 0, 1641, 3010) { throw ('Installation failed: exit_code=' + $result) }
     Write-Host ('Installer completed: exit_code=' + $result + '. Verify service, ports and capture separately.')
 } catch {
     $_.Exception.Message | Add-Content -LiteralPath $summary -Encoding UTF8
     Write-Error -Message $_.Exception.Message -ErrorAction Continue
 } finally {
+    $gateway = Get-Service -Name NeuroBridge -ErrorAction SilentlyContinue
+    $gatewayStatus = if ($gateway) { $gateway.Status } else { 'NotInstalled' }
+    ('gateway_service_after=' + $gatewayStatus) | Add-Content -LiteralPath $summary -Encoding UTF8
     ('INSTALL_END utc=' + [DateTime]::UtcNow.ToString('o') + ' exit_code=' + $result) | Add-Content -LiteralPath $summary -Encoding UTF8
     Write-Host ('Installation logs: ' + $logDirectory)
     Write-Host 'Export: powershell -NoProfile -ExecutionPolicy Bypass -File .\install-with-logs.ps1 -Export'

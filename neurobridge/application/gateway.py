@@ -9,7 +9,9 @@ import time
 import uuid
 from typing import Any, Awaitable, Callable
 
+from ..domain.algorithm import AlgorithmResult
 from ..domain.result import WindowResult
+from ..domain.signal import ParsedSignalBatch
 from ..ports.recording import RecordingRepository
 from .subscriptions import SubscriptionFanout
 from ..ports.errors import ProtocolError
@@ -41,6 +43,7 @@ class Subscription:
     streams: frozenset[str]
     include_invalid: bool
     send: Any
+    delivery_mode: str = "window"
     replay_outbox: asyncio.Queue[dict] = field(default_factory=lambda: asyncio.Queue(maxsize=REPLAY_DELIVERY_QUEUE_SIZE))
     replay_delivery_task: asyncio.Task | None = None
     live_delivery_task: asyncio.Task | None = None
@@ -49,6 +52,96 @@ class Subscription:
 @dataclass(eq=False)
 class ClientSession:
     subscriptions: dict[str, Subscription] = field(default_factory=dict)
+
+
+class _LegacyWindowAggregator:
+    """Aggregate as-available results into the released 600 ms v1.1 batches."""
+
+    def __init__(self, interval_ms: int = 600) -> None:
+        self.interval_ms = interval_ms
+        self._buckets: dict[int, dict[str, object]] = {}
+        self._last_flushed_start: int | None = None
+
+    def add(self, result: WindowResult) -> bool:
+        bucket_start = result.batch.window_end_ms - result.batch.window_end_ms % self.interval_ms
+        if self._last_flushed_start is not None and bucket_start < self._last_flushed_start:
+            return False
+        entry = self._buckets.get(bucket_start)
+        if entry is None:
+            entry = {
+                "signals": [],
+                "frame_refs": set(),
+                "valid": True,
+                "algorithm_valid": True,
+                "algorithm_metrics": {},
+                "reasons": [],
+                "device_protocol": result.batch.device_protocol,
+                "connection_session_id": result.batch.connection_session_id,
+                "recording_session_id": result.batch.recording_session_id,
+                "source_type": result.batch.source_type,
+            }
+            self._buckets[bucket_start] = entry
+        entry["signals"].extend(result.batch.signals)
+        entry["frame_refs"].update(result.batch.frame_refs)
+        entry["valid"] = bool(entry["valid"]) and result.batch.valid
+        entry["algorithm_valid"] = bool(entry["algorithm_valid"]) and result.algorithm_result.valid
+        if result.algorithm_result.metrics:
+            merged = dict(entry["algorithm_metrics"])
+            merged.update(result.algorithm_result.metrics)
+            entry["algorithm_metrics"] = merged
+        entry["reasons"].extend(result.batch.invalid_reasons)
+        entry["reasons"].extend(result.algorithm_result.invalid_reasons)
+        return True
+
+    def pop_ready(self, now_ms: int) -> list[WindowResult]:
+        ready: list[WindowResult] = []
+        for bucket_start in sorted(self._buckets):
+            if bucket_start + self.interval_ms > now_ms:
+                break
+            entry = self._buckets.pop(bucket_start)
+            signals = tuple(entry["signals"])
+            reasons = tuple(dict.fromkeys(entry["reasons"]))
+            batch_id = f"batch-legacy-{uuid.uuid4().hex}"
+            batch_valid = bool(entry["valid"])
+            batch_reasons = tuple(reason for reason in reasons if reason in signals_invalid_reasons(signals))
+            if not batch_valid and not batch_reasons:
+                batch_reasons = ("WINDOW_INVALID",)
+            batch = ParsedSignalBatch(
+                batch_id,
+                str(entry["device_protocol"]),
+                str(entry["connection_session_id"]),
+                str(entry["recording_session_id"]),
+                bucket_start,
+                bucket_start + self.interval_ms,
+                signals,
+                tuple(entry["frame_refs"]),
+                batch_valid,
+                batch_reasons,
+                entry["source_type"],
+            )
+            metrics = dict(entry["algorithm_metrics"])
+            algorithm_valid = bool(entry["algorithm_valid"]) and bool(metrics)
+            algorithm_reasons = tuple(
+                reason for reason in reasons if reason not in signals_invalid_reasons(signals)
+            )
+            if not algorithm_valid and not algorithm_reasons:
+                algorithm_reasons = ("ALGORITHM_RESULT_UNAVAILABLE",)
+            algorithm = AlgorithmResult(
+                batch_id,
+                None,
+                now_ms,
+                now_ms,
+                metrics,
+                algorithm_valid,
+                algorithm_reasons,
+            )
+            ready.append(WindowResult(batch, algorithm, "live", bucket_start + self.interval_ms, True))
+            self._last_flushed_start = bucket_start
+        return ready
+
+
+def signals_invalid_reasons(signals: tuple) -> set[str]:
+    return {reason for signal in signals for reason in signal.invalid_reasons}
 
 
 class GatewayApplication:
@@ -70,7 +163,7 @@ class GatewayApplication:
         self.recording_repository: RecordingRepository | None = None
         self.algorithm = algorithm
         self.live_connection_states = frozenset(live_connection_states)
-        self.status: dict[str, Any] = {"connectionState": initial_connection_state, "wearState": "unknown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
+        self.status: dict[str, Any] = {"connectionState": initial_connection_state, "wearState": "unknown", "eegDisplay": "shown", "batteryPercent": None, "signalQuality": None, "algorithmState": "unavailable"}
         # This is deliberately an operational-only field: the released B-side
         # status contract is unchanged.  Linux operators can inspect it in the
         # durable gateway log, matching the failure detail shown by the macOS
@@ -84,6 +177,10 @@ class GatewayApplication:
         self.window_observer: Callable[..., Awaitable[None]] | None = None
         self._window_flush_task: asyncio.Task | None = None
         self._window_flush_deadline_ms: int | None = None
+        self.legacy_enabled = getattr(getattr(config, "pipeline", None), "batch_mode", "window") == "as_available"
+        self._legacy_aggregator = _LegacyWindowAggregator()
+        self._legacy_task: asyncio.Task | None = None
+        self.eeg_alignment = None
         self._replay_task: asyncio.Task | None = None
         self._active_replay_recording_id: str | None = None
         self._replay_algorithm: dict | None = None
@@ -124,10 +221,20 @@ class GatewayApplication:
         )
 
     async def stop(self) -> None:
+        task, self._legacy_task = self._legacy_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
         for session in tuple(self.sessions):
             await self.close_session(session)
         await self._stop_replay()
-        await self.algorithm.stop()
+        try:
+            await self.algorithm.stop()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.log.exception("Algorithm cleanup failed during gateway stop")
         if not self._capture_final_summary_logged and (
             int(self._capture_stats["eegPackets"] or 0) or int(self._capture_stats["hrPackets"] or 0)
         ):
@@ -163,8 +270,15 @@ class GatewayApplication:
                 recording_id,
             )
         if name == "connectionState" and value == "disconnected" and previous != "disconnected":
-            await self.algorithm.stop()
+            try:
+                await self.algorithm.stop()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.log.exception("Algorithm cleanup failed during disconnect; continuing gateway cleanup")
             self.status["algorithmState"] = "unavailable"
+            self.status["wearState"] = "unknown"
+            self.status["eegDisplay"] = "shown"
             self._log_capture_summary("disconnected")
             self._capture_final_summary_logged = True
             recording_id = self.store.recording_id
@@ -220,9 +334,120 @@ class GatewayApplication:
                 await self.window_observer(result.batch, algorithm_payload, event_reasons, event_valid)
             except Exception:
                 self.log.exception("Capture window observer failed")
+        if self.legacy_enabled:
+            await self._emit_result(result, raw, algorithm_payload, result_reasons, event_valid, "event")
+            if any(
+                subscription.delivery_mode == "window"
+                for session in tuple(self.sessions)
+                for subscription in tuple(session.subscriptions.values())
+            ):
+                self._legacy_aggregator.add(result)
+                self._ensure_legacy_task()
+        else:
+            await self._emit_result(result, raw, algorithm_payload, result_reasons, event_valid, None)
+        await asyncio.sleep(0)
+
+    def _ensure_legacy_task(self) -> None:
+        if self._legacy_task is None or self._legacy_task.done():
+            self._legacy_task = asyncio.create_task(self._legacy_loop(), name="neurobridge-legacy-batch")
+
+    async def _legacy_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(0.05)
+                for result in self._legacy_aggregator.pop_ready(now_ms()):
+                    raw, _refs, _signals = self._project_window(result)
+                    algorithm_payload = dict(result.algorithm_result.metrics) or None
+                    reasons = list(dict.fromkeys((*result.batch.invalid_reasons, *result.algorithm_result.invalid_reasons)))
+                    await self._emit_result(result, raw, algorithm_payload, reasons, result.valid, "window")
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            self.log.exception("Legacy 600 ms aggregation failed")
+
+    async def publish_headband_eeg(self, result: WindowResult) -> None:
+        """Fan the newest headband EEG out as a headset event with configured variation."""
+        if self.eeg_alignment is None or not self.eeg_alignment.relay_ready():
+            return
+        if not result.valid or not result.algorithm_result.metrics.get("eeg"):
+            return
+        metrics = self.eeg_alignment.varied_headband_metrics()
+        if not metrics.get("eeg"):
+            return
+        payload = {"algorithm": metrics, "eegOrigin": "headband"}
+        relay_batch = ParsedSignalBatch(
+            f"batch-headset-eeg-{uuid.uuid4().hex}",
+            "headset_rev181",
+            result.batch.connection_session_id,
+            result.batch.recording_session_id,
+            result.batch.window_start_ms,
+            result.batch.window_end_ms,
+            (),
+            (),
+        )
+        relay_result = WindowResult(
+            relay_batch,
+            AlgorithmResult(relay_batch.batch_id, None, result.batch.window_end_ms, result.batch.window_end_ms,
+                            metrics, result.valid, ()),
+            "live",
+            result.batch.window_end_ms,
+            result.persistence_guaranteed,
+        )
+        self.latest_snapshot.replace(relay_result)
+        if self.legacy_enabled and any(
+            subscription.delivery_mode == "window"
+            for session in tuple(self.sessions)
+            for subscription in tuple(session.subscriptions.values())
+        ):
+            legacy_batch = ParsedSignalBatch(
+                f"batch-headband-eeg-{uuid.uuid4().hex}",
+                "headset_rev181",
+                result.batch.connection_session_id,
+                result.batch.recording_session_id,
+                result.batch.window_start_ms,
+                result.batch.window_end_ms,
+                (),
+                (),
+            )
+            legacy_result = WindowResult(
+                legacy_batch,
+                AlgorithmResult(legacy_batch.batch_id, None, result.batch.window_end_ms, result.batch.window_end_ms,
+                                metrics, result.valid, ()),
+                "live",
+                result.batch.window_end_ms,
+                result.persistence_guaranteed,
+            )
+            self._legacy_aggregator.add(legacy_result)
+            self._ensure_legacy_task()
         for session in tuple(self.sessions):
             for subscription in tuple(session.subscriptions.values()):
+                if subscription.delivery_mode != "event" or "eeg" not in subscription.streams:
+                    continue
+                self._queue_live_message(
+                    session,
+                    subscription,
+                    self.wire.envelope(
+                        200,
+                        self.event_data(
+                            "data",
+                            subscription.id,
+                            result.batch.window_end_ms,
+                            "live",
+                            result.valid,
+                            payload,
+                        ),
+                    ),
+                )
+        await asyncio.sleep(0)
+
+    async def _emit_result(self, result, raw, algorithm_payload, result_reasons, event_valid, delivery_mode) -> None:
+        for session in tuple(self.sessions):
+            for subscription in tuple(session.subscriptions.values()):
+                if delivery_mode is not None and subscription.delivery_mode != delivery_mode:
+                    continue
                 payload = self.filtered_payload(raw, algorithm_payload, subscription.streams)
+                if subscription.streams & {"eeg", "hr"}:
+                    payload["display"] = {"eeg": self.status.get("eegDisplay", "shown")}
                 algorithm_requested = bool(subscription.streams & {"eeg", "hr"})
                 subscription_valid = result.batch.valid and (
                     result.algorithm_result.valid if algorithm_requested else True
@@ -251,7 +476,6 @@ class GatewayApplication:
                         ),
                     ),
                 )
-        await asyncio.sleep(0)
 
     @property
     def live(self) -> bool:
@@ -452,6 +676,10 @@ class GatewayApplication:
     async def subscribe(self, session: ClientSession, params: dict, send: Any, *, start_replay: bool = True) -> dict:
         streams = self.validate_streams(params.get("streams"))
         data_streams = set(streams) - {"status"}
+        delivery = params.get("mode", "window")
+        if delivery not in {"window", "as_available"}:
+            raise ProtocolError(400, "INVALID_REQUEST", "params.mode must be 'window' or 'as_available'.")
+        delivery_mode = "event" if delivery == "as_available" else "window"
         include_invalid = params.get("includeInvalid", False)
         if not isinstance(include_invalid, bool):
             raise ProtocolError(400, "INVALID_REQUEST", "params.includeInvalid must be boolean.")
@@ -466,16 +694,23 @@ class GatewayApplication:
         unavailable = set(streams) - self.available_streams()
         if unavailable:
             raise ProtocolError(409, STREAM_NOT_AVAILABLE_REASON, "One or more streams are unavailable.", details={"streams": sorted(unavailable)})
-        subscription = Subscription(f"sub-{uuid.uuid4().hex}", frozenset(streams), include_invalid, send)
+        subscription = Subscription(f"sub-{uuid.uuid4().hex}", frozenset(streams), include_invalid, send, delivery_mode)
         self.sessions.add(session)
         session.subscriptions[subscription.id] = subscription
         self.fanout.subscribe(subscription.id, subscription.streams)
         subscription.replay_delivery_task = asyncio.create_task(self._deliver_replay(session, subscription))
         subscription.live_delivery_task = asyncio.create_task(self._deliver_live(session, subscription))
-        self.log.info("Subscription created: subscriptionId=%s streams=%s includeInvalid=%s mode=%s", subscription.id, ",".join(streams), include_invalid, self.mode())
+        if delivery_mode == "window" and self.legacy_enabled:
+            self._ensure_legacy_task()
+        self.log.info("Subscription created: subscriptionId=%s streams=%s includeInvalid=%s mode=%s delivery=%s", subscription.id, ",".join(streams), include_invalid, self.mode(), delivery_mode)
         if start_replay and data_streams and not self.live:
             self._start_replay_if_needed()
-        return {"subscriptionId": subscription.id, "streams": streams, "mode": self.mode(), "intervalMs": 600}
+        result = {"subscriptionId": subscription.id, "streams": streams, "mode": self.mode()}
+        if delivery_mode == "event":
+            result["eventMode"] = "as_available"
+        else:
+            result["intervalMs"] = 600
+        return result
 
     async def unsubscribe(self, session: ClientSession, params: dict) -> dict:
         subscription_id = params.get("subscriptionId")
@@ -566,6 +801,8 @@ class GatewayApplication:
                         filtered.setdefault("algorithm", {})
                     if "invalidReasons" in payload:
                         filtered["invalidReasons"] = payload["invalidReasons"]
+                    if "eegOrigin" in payload:
+                        filtered["eegOrigin"] = payload["eegOrigin"]
                     await self._send_subscription(subscription, {**message, "data": {**message["data"], "payload": filtered}}, streams=streams)
         except asyncio.CancelledError:
             raise

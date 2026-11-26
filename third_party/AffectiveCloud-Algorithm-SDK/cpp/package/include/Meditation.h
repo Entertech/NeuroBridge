@@ -5,6 +5,7 @@
 #include "NumCpp.hpp"
 #include "MeditationHandler.h"
 #include "AffectionData.h"
+#include "Define.h"
 #include "SimpleHandler.h"
 namespace ac
 {
@@ -35,6 +36,7 @@ namespace ac
     {
         double meditation;     // 冥想程度
         double meditationTips; // 冥想状态提示
+        FlowDiagnostic diagnostic;
     };
 
     struct MeditationReportRes

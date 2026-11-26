@@ -1,0 +1,16 @@
+flowchart TD
+    A["一路窗口的算法结果"] --> B["原始 EEG 佩戴判定<br/>全部样本 FF FF FF 或任一通道全 00 00 00 → 未佩戴<br/>窗口没有 EEG 样本 → 未知"]
+    B --> C{"deviceProtocol"}
+    C -->|"headband_ble"| H1{"头环未佩戴？"}
+    H1 -->|"是"| H2["隐藏头环 EEG 字段，仅保留心率类指标<br/>清空头环 EEG 参考"]
+    H1 -->|"否"| H3["头环结果原样输出<br/>缓存 eeg / attention / relaxation / pleasure / flow / sleep 与 batchId"]
+    C -->|"headset_rev181"| S1{"耳机未佩戴，或头环已连接且未佩戴<br/>而耳机不是已佩戴？"}
+    S1 -->|"是"| S2["隐藏耳机 EEG 字段，心率/压力等保留"]
+    S1 -->|"否"| S3{"耳机已佩戴 且 头环已连接且已佩戴<br/>且存在头环最新 EEG 参考？"}
+    S3 -->|"是"| S4["EEG 波形/质量/频段、专注、放松、愉悦、Flow、睡眠<br/>= 头环最新值 × (1 ± 5%)<br/>不要求同一时间窗口"]
+    S3 -->|"否"| S5["保留耳机自身算法结果"]
+    H2 --> P["状态通道广播 wearState<br/>eegDisplay 仅内部状态<br/>窗口继续持久化并按订阅推送"]
+    H3 --> P
+    S2 --> P
+    S4 --> P
+    S5 --> P

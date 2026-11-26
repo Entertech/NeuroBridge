@@ -12,6 +12,7 @@ import websockets
 from neurobridge.config import AlgorithmConfig, BleConfig, GatewayConfig, RecordingConfig, ServerConfig
 from neurobridge.business.gateway import Gateway
 from neurobridge.northbound.websocket import SUBPROTOCOL, create_server
+from neurobridge.versioning import LEGACY_NORTHBOUND_PROTOCOL_VERSION, NORTHBOUND_PROTOCOL_VERSION
 
 
 def unused_port() -> int:
@@ -55,8 +56,36 @@ class WebSocketIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await client.send(json.dumps({"protocolVersion": "1.0", "messageType": "request", "requestId": "status-1", "action": "getStatus", "params": {}}))
             response = json.loads(await client.recv())
             self.assertEqual(set(response), {"protocolVersion", "code", "data", "message"})
+            self.assertEqual(response["protocolVersion"], LEGACY_NORTHBOUND_PROTOCOL_VERSION)
+            self.assertNotIn("source", response["data"])
             self.assertEqual(response["code"], 200)
             self.assertEqual(response["data"]["result"]["gatewayBootId"], self.gateway.boot_id)
+
+    async def test_headband_source_and_subscription_version(self) -> None:
+        async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None, origin=self.origin) as client:
+            async def request(version, action, params):
+                await client.send(json.dumps({
+                    "protocolVersion": version, "messageType": "request", "requestId": action,
+                    "action": action, "params": params,
+                }))
+                return json.loads(await asyncio.wait_for(client.recv(), 1))
+
+            subscribed = await request(NORTHBOUND_PROTOCOL_VERSION, "subscribe", {"streams": ["status"]})
+            self.assertEqual(subscribed["code"], 200)
+            self.assertEqual(subscribed["data"]["source"], "headband")
+            legacy = await request(LEGACY_NORTHBOUND_PROTOCOL_VERSION, "getStatus", {})
+            self.assertNotIn("source", legacy["data"])
+            await self.gateway.update_status("batteryPercent", 75)
+            event = json.loads(await asyncio.wait_for(client.recv(), 1))
+            self.assertEqual(event["protocolVersion"], NORTHBOUND_PROTOCOL_VERSION)
+            self.assertEqual(event["data"]["source"], "headband")
+            self.assertEqual(event["data"]["subscriptionId"], subscribed["data"]["result"]["subscriptionId"])
+            self.assertEqual(event["data"]["payload"]["status"]["batteryPercent"], 75)
+
+            unsupported = await request("99.0", "getStatus", {})
+            self.assertEqual(unsupported["code"], 505)
+            self.assertEqual(unsupported["data"]["reason"], "UNSUPPORTED_VERSION")
+            self.assertEqual(unsupported["data"]["source"], "headband")
 
     async def test_binary_frame_is_rejected(self) -> None:
         async with websockets.connect(self.url, subprotocols=[SUBPROTOCOL], ping_interval=None, origin=self.origin) as client:

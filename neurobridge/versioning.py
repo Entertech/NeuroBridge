@@ -13,3 +13,4 @@ def _load_registry() -> dict:
 REGISTRY = _load_registry()
 APPLICATION_VERSION = REGISTRY["application"]["version"]
 NORTHBOUND_PROTOCOL_VERSION = REGISTRY["northbound_wire_protocol"]["version"]
+LEGACY_NORTHBOUND_PROTOCOL_VERSION = REGISTRY["northbound_wire_protocol"]["legacy_version"]

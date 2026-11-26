@@ -159,11 +159,23 @@ struct SleepTriggerRes
     double sleepSpindle; //睡眠抗干扰
 };
 
+struct FlowDiagnostic
+{
+    int eegQuality{};
+    bool historyReset{};
+    int bufferedSamples{};
+    int requiredSamples{};
+    bool modelsEvaluated{};
+    double expertScore{};
+    double aiScore{};
+};
+
 //实时心流
 struct FlowTriggerRes
 {
     double meditation;     // 冥想程度
     double meditationTips; // 冥想状态提示
+    FlowDiagnostic diagnostic;
 };
 
 //实时心率

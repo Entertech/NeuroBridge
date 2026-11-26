@@ -145,6 +145,37 @@ class StorageRequirementTests(unittest.IsolatedAsyncioTestCase):
 
 
 class BleControlRequirementTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unresponsive_ble_stop_and_disconnect_do_not_trap_shutdown(self):
+        cfg = load(ROOT / 'config/gateway.ubuntu.toml.example')
+        source = BluetoothBleakSource(cfg.ble, None, shutdown_timeout_ms=20)
+        never = asyncio.Event()
+        operations = []
+
+        class Client:
+            is_connected = True
+
+            async def write_gatt_char(self, characteristic, value, **kwargs):
+                if value == b'\x06':
+                    operations.append('stop')
+                    await never.wait()
+
+            async def disconnect(self):
+                operations.append('disconnect')
+                await never.wait()
+
+        source._adapter._client = Client()
+        source._session_id = 'a'
+        await source.control.start_stream('a')
+        source._task = asyncio.create_task(never.wait())
+
+        with self.assertLogs('neurobridge.adapters.sources.bluetooth_bleak', level='WARNING') as warnings:
+            await asyncio.wait_for(source.stop(), timeout=1)
+        self.assertEqual(operations, ['stop', 'disconnect'])
+        self.assertEqual(len(warnings.output), 2)
+        self.assertTrue(source._task.cancelled())
+        self.assertIsNone(source._chunks.get_nowait())
+        self.assertIsNone(source._events.get_nowait())
+
     async def test_ble_control_is_session_bound_idempotent_and_closes_after_failure(self):
         cfg=load(ROOT/'config/gateway.ubuntu.toml.example')
         async def ready(): pass

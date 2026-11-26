@@ -1,0 +1,21 @@
+flowchart LR
+    TOML["gateway.toml<br/>profile = windows_headset_local<br/>data_source.type = serial<br/>include_headband = true<br/>ble.enabled = true"] --> LOAD["load_runtime_config<br/>字段校验 + 旧配置迁移"]
+    LOAD --> RESOLVE["resolve_profile（Windows x86_64）<br/>校验 serial + local_browser<br/>双设备还要求 BLE 开关与正数扫描/重连间隔"]
+    RESOLVE --> BUILD["build_runtime"]
+    BUILD --> Q{"include_headband ?"}
+    Q -->|"false"| SINGLE["单容器：仅耳机<br/>不创建 SourceRouter"]
+    Q -->|"true"| DUAL["双容器组合根"]
+    DUAL --> HBCFG["派生头环配置<br/>profile = windows_headband_local<br/>data_source.type = bluetooth<br/>recording.directory = 原目录 / headband"]
+    DUAL --> CALQ{"eeg_alignment_percent > 0 ?"}
+    CALQ -->|"是（默认 5）"| SHARE["创建共享 EegAlignmentCache"]
+    CALQ -->|"否（0）"| NOSHARE["两路完全独立，不做跨设备校准"]
+    DUAL --> A["build_container A<br/>WindowsSerialSource + HeadsetRev181Parser<br/>+ 算法桥 A + GatewayApplication A"]
+    DUAL --> B["build_container B<br/>BluetoothBleakSource + HeadbandBleParser<br/>+ 算法桥 B + GatewayApplication B"]
+    SHARE --> A
+    SHARE --> B
+    A --> RUN["__main__.run 启动<br/>两个 gateway.start()（建立录制仓库）<br/>并发任务：WS 服务 + 两条 device_adapter.run() + 本机 UI + 下载服务"]
+    B --> RUN
+    A --> ROUTER["SourceRouter(Gateway A 控制器, Gateway B 控制器)"]
+    B --> ROUTER
+    NOSHARE --> A
+    NOSHARE --> B

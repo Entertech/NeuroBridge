@@ -25,6 +25,7 @@ class AlgorithmRunner:
         self.config = config
         self.process: asyncio.subprocess.Process | None = None
         self.error: str | None = None
+        self._flow_log_times: dict[str, float] = {}
 
     @property
     def available(self) -> bool:
@@ -52,32 +53,66 @@ class AlgorithmRunner:
             self.error = str(exc)
             LOG.exception("Cannot start algorithm bridge: %s", _safe_log_text(self.error))
 
-    async def initialize(self) -> None:
+    async def initialize(self, device_protocol: str | None = None) -> None:
         """Create a clean SDK process for each new device connection/session."""
         LOG.info("Initializing algorithm bridge for new capture session")
         await self.stop()
         self.process = None
         self.error = None
+        self._flow_log_times.clear()
         await self.start()
+        process = self.process
+        if device_protocol == "headset_rev181" and process is not None and self.available:
+            try:
+                result = await self._exchange(process, {"deviceProtocol": device_protocol,
+                                                       "eegRawBase64": "", "hrRawBase64": ""})
+                if result != {"algorithm": {}, "deviceProtocol": device_protocol}:
+                    raise ValueError("algorithm bridge did not confirm headset mode; rebuild the bridge")
+            except asyncio.CancelledError:
+                await self._discard_exchange(process)
+                raise
+            except (TimeoutError, OSError, ValueError, RuntimeError) as exc:
+                self.error = str(exc) or type(exc).__name__
+                LOG.error("Headset algorithm bridge preflight failed: %s", _safe_log_text(self.error))
+                await self._discard_exchange(process)
 
     async def stop(self) -> None:
         process, self.process = self.process, None
-        if process and process.returncode is None:
+        if process is None:
+            return
+        if process.returncode is None:
             LOG.info("Stopping algorithm bridge: pid=%s", process.pid)
             try:
                 process.terminate()
             except ProcessLookupError:
                 pass
+            except Exception:
+                LOG.exception("Failed to terminate algorithm bridge pid=%s", process.pid)
             try:
                 await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
+            except asyncio.CancelledError:
+                raise
             except TimeoutError:
                 LOG.error("Algorithm bridge ignored terminate; killing pid=%s", process.pid)
                 try:
                     process.kill()
                 except ProcessLookupError:
                     pass
-                await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
-            LOG.info("Algorithm bridge stopped: returncode=%s", process.returncode)
+                except Exception:
+                    LOG.exception("Failed to kill algorithm bridge pid=%s", process.pid)
+                try:
+                    await asyncio.wait_for(process.wait(), self.config.request_timeout_ms / 1000)
+                except asyncio.CancelledError:
+                    raise
+                except TimeoutError:
+                    # Cleanup is best effort. A stuck bridge must never crash the
+                    # service from the device-disconnect or shutdown path.
+                    LOG.error("Algorithm bridge did not exit after kill; abandoning pid=%s", process.pid)
+                except Exception:
+                    LOG.exception("Failed while waiting for killed algorithm bridge pid=%s", process.pid)
+            except Exception:
+                LOG.exception("Failed while waiting for algorithm bridge pid=%s", process.pid)
+        LOG.info("Algorithm bridge stopped: returncode=%s", process.returncode)
 
     async def _discard_exchange(self, process: asyncio.subprocess.Process) -> None:
         # There is no request ID in this bridge protocol. Once an exchange is
@@ -89,6 +124,17 @@ class AlgorithmRunner:
             await self.stop()
         except (TimeoutError, OSError) as exc:
             LOG.error("Failed to reap discarded algorithm bridge: %s", _safe_log_text(exc))
+
+    async def _exchange(self, process: asyncio.subprocess.Process, request: dict) -> object:
+        assert process.stdin is not None and process.stdout is not None
+        # Include pipe backpressure in the request budget, not just reading.
+        async with asyncio.timeout(self.config.request_timeout_ms / 1000):
+            process.stdin.write((json.dumps(request) + "\n").encode())
+            await process.stdin.drain()
+            response = await process.stdout.readline()
+        if not response:
+            raise RuntimeError("algorithm bridge closed stdout without a response")
+        return json.loads(response)
 
     async def evaluate(self, window: object) -> tuple[dict | None, list[str]]:
         eeg_packets = getattr(window, "eeg")
@@ -102,6 +148,50 @@ class AlgorithmRunner:
             hr_packet_count=len(hr_packets),
         )
 
+    def _log_headset_flow(self, diagnostic: object, timestamp_ms: int) -> None:
+        if not isinstance(diagnostic, dict):
+            return
+        quality = diagnostic.get("eegQuality")
+        reset = diagnostic.get("historyReset")
+        buffered = diagnostic.get("bufferedSamples")
+        required = diagnostic.get("requiredSamples")
+        evaluated = diagnostic.get("modelsEvaluated")
+        if not all(type(value) is int for value in (quality, buffered, required)):
+            return
+        if type(reset) is not bool or type(evaluated) is not bool:
+            return
+
+        expert = diagnostic.get("expertScore") if evaluated else None
+        ai = diagnostic.get("aiScore") if evaluated else None
+        if not evaluated:
+            reason = "eeg_quality_reset" if reset else "waiting_eeg_history"
+        else:
+            expert_ready = type(expert) in (int, float) and expert > 0
+            ai_ready = type(ai) in (int, float) and ai > 0
+            if expert_ready and ai_ready:
+                reason = "ready"
+            elif expert_ready:
+                reason = "ai_no_value"
+            elif ai_ready:
+                reason = "expert_no_value"
+            else:
+                reason = "both_no_value"
+
+        now = time.monotonic()
+        level = logging.DEBUG
+        last_info = self._flow_log_times.get(reason)
+        if last_info is None or now - last_info >= 10:
+            self._flow_log_times[reason] = now
+            level = logging.INFO
+        LOG.log(
+            level,
+            "Headset Flow diagnostic: timestampMs=%s reason=%s eegQuality=%s historyReset=%s "
+            "bufferedSamples=%s requiredSamples=%s modelsEvaluated=%s expertScore=%s aiScore=%s",
+            timestamp_ms, reason, quality, reset, buffered, required, evaluated,
+            expert if type(expert) in (int, float) else None,
+            ai if type(ai) in (int, float) else None,
+        )
+
     async def evaluate_raw(
         self,
         eeg: bytes,
@@ -111,6 +201,7 @@ class AlgorithmRunner:
         end_ms: int,
         eeg_packet_count: int = 0,
         hr_packet_count: int = 0,
+        device_protocol: str | None = None,
     ) -> tuple[dict | None, list[str]]:
         """Evaluate transport-neutral bytes without requiring legacy BLE models."""
 
@@ -122,14 +213,9 @@ class AlgorithmRunner:
         started_at = time.monotonic()
         try:
             request = {"timestampMs": end_ms, "windowStartMs": start_ms, "eegRawBase64": base64.b64encode(eeg).decode(), "hrRawBase64": base64.b64encode(hr).decode()}
-            # Include pipe backpressure in the request budget, not just reading.
-            async with asyncio.timeout(self.config.request_timeout_ms / 1000):
-                process.stdin.write((json.dumps(request) + "\n").encode())
-                await process.stdin.drain()
-                response = await process.stdout.readline()
-            if not response:
-                raise RuntimeError("algorithm bridge closed stdout without a response")
-            result = json.loads(response)
+            if device_protocol is not None:
+                request["deviceProtocol"] = device_protocol
+            result = await self._exchange(process, request)
             bridge_error = (result.get("bridgeError") or result.get("pocError")) if isinstance(result, dict) else None
             if bridge_error:
                 raise ValueError(f"algorithm bridge: {bridge_error}")
@@ -145,6 +231,14 @@ class AlgorithmRunner:
                     self.error = "algorithm bridge returned an invalid output object"
                 await self._discard_exchange(process)
                 return None, ["ALGORITHM_OUTPUT_INVALID"]
+            expected_protocol = device_protocol or "headband_ble"
+            reported_protocol = result.get("deviceProtocol")
+            if reported_protocol != expected_protocol and (
+                reported_protocol is not None or expected_protocol == "headset_rev181"
+            ):
+                raise ValueError("algorithm bridge response belongs to a different device mode")
+            if expected_protocol == "headset_rev181":
+                self._log_headset_flow(result.get("flowDiagnostic"), end_ms)
             LOG.debug(
                 "Algorithm window evaluated: timestampMs=%s eegPackets=%s hrPackets=%s durationMs=%s outputFields=%s",
                 end_ms,

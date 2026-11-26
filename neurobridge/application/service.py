@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from dataclasses import replace
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from ..domain.algorithm import AlgorithmResult, AlgorithmSession, AlgorithmState
 from ..domain.raw import DeviceFrame, ParseOutcome, RawChunk
@@ -18,12 +19,14 @@ from ..ports.device_control import DeviceControl
 from ..ports.northbound import ApplicationEvent, LatestSnapshotStore, NorthboundSink
 from ..ports.raw_parser import FlushReason, RawDataParser
 from ..ports.recording import PersistenceReceipt, PersistenceRecord, RecordingRepository
+from .eeg_alignment import EegAlignmentCache
 from .processing import AlgorithmInputMapper, WindowResultAggregator
 from .status import ConnectionStateMachine, DataStateMachine
 from .windowing import SignalWindowAssembler
 
 
 LOG = logging.getLogger(__name__)
+_SOURCE_BY_DEVICE_PROTOCOL = {"headset_rev181": "serial", "headband_ble": "bluetooth"}
 
 
 class ApplicationService:
@@ -37,6 +40,8 @@ class ApplicationService:
         self,
         *,
         device_protocol: str,
+        batch_mode: str = "window",
+        event_batch_ms: int = 50,
         requires_algorithm_to_start: bool = True,
         transport_trace_enabled: bool = False,
         transport_trace_max_bytes: int = 1024 * 1024,
@@ -53,8 +58,23 @@ class ApplicationService:
         algorithm_queue_size: int = 8,
         persistence_timeout_ms: int = 1000,
         shutdown_timeout_ms: int = 5000,
+        observe_batch: Callable[[ParsedSignalBatch], None] | None = None,
+        eeg_alignment: EegAlignmentCache | None = None,
+        input_mapper: AlgorithmInputMapper | None = None,
     ) -> None:
         self.device_protocol = device_protocol
+        if batch_mode not in {"window", "as_available"}:
+            raise ValueError("batch_mode must be 'window' or 'as_available'")
+        self.batch_mode = batch_mode
+        self.event_driven = batch_mode == "as_available"
+        if event_batch_ms <= 0:
+            raise ValueError("event_batch_ms must be positive")
+        self.event_batch_ms = event_batch_ms
+        self._event_pending: list[ParsedSignal] = []
+        self._event_pending_start_ms: int | None = None
+        self._event_pending_session_id: str | None = None
+        self._event_pending_source_type: str | None = None
+        self._event_flush_task: asyncio.Task[None] | None = None
         self.requires_algorithm_to_start = requires_algorithm_to_start
         self.transport_trace_enabled = transport_trace_enabled
         self.transport_trace_max_bytes = transport_trace_max_bytes
@@ -65,6 +85,9 @@ class ApplicationService:
         self.northbound = northbound
         self.recording = recording
         self.control = control
+        self.observe_batch = observe_batch
+        self.eeg_alignment = eeg_alignment
+        self.eeg_forward: Callable[[WindowResult], Awaitable[None]] | None = None
         if min(algorithm_queue_size, persistence_timeout_ms, shutdown_timeout_ms) <= 0:
             raise ValueError("Pipeline limits must be positive")
         self.persistence_timeout_ms = persistence_timeout_ms
@@ -78,7 +101,7 @@ class ApplicationService:
         self.connection = ConnectionStateMachine()
         self.data = DataStateMachine()
         self.assembler = SignalWindowAssembler(interval_ms)
-        self.mapper = AlgorithmInputMapper()
+        self.mapper = input_mapper if input_mapper is not None else AlgorithmInputMapper()
         self.aggregator = WindowResultAggregator(algorithm, algorithm_timeout_ms)
         if stale_after_ms <= interval_ms:
             raise ValueError("stale_after_ms must be greater than interval_ms")
@@ -183,6 +206,8 @@ class ApplicationService:
             # device session must never publish into the disconnected/new one.
             async with self._lifecycle_lock:
                 self._connection_session_id = None
+                if self.eeg_alignment is not None:
+                    self.eeg_alignment.set_session(self.device_protocol, None)
                 if self.data.snapshot.data_state != DataState.UNAVAILABLE:
                     self.data.on_connection(applied)
             await self._cancel_stale()
@@ -202,6 +227,8 @@ class ApplicationService:
 
         async with self._lifecycle_lock:
             self._connection_session_id = connection_session_id
+            if self.eeg_alignment is not None:
+                self.eeg_alignment.set_session(self.device_protocol, connection_session_id)
             self._recording_session_id = recording_session_id
             if self.data.snapshot.data_state == DataState.UNAVAILABLE:
                 self.data.transition(DataState.PREPARING)
@@ -270,6 +297,12 @@ class ApplicationService:
                 chunk.connection_session_id,
             )
             return ParseOutcome()
+        expected_source = _SOURCE_BY_DEVICE_PROTOCOL.get(self.device_protocol)
+        if expected_source is not None and chunk.source_type != expected_source:
+            self.diagnostics["source_mismatch_chunks"] = self.diagnostics.get("source_mismatch_chunks", 0) + 1
+            LOG.warning("Raw chunk rejected: deviceProtocol=%s expectedSource=%s actualSource=%s byteCount=%s",
+                        self.device_protocol, expected_source, chunk.source_type, len(chunk.data))
+            return ParseOutcome(discarded_bytes=len(chunk.data))
         if self.transport_trace_enabled:
             if self._trace_bytes + len(chunk.data) <= self.transport_trace_max_bytes:
                 self._trace_bytes += len(chunk.data)
@@ -328,28 +361,97 @@ class ApplicationService:
                     },
                 )
             )
-        for signal in outcome.signals:
-            batches = self.assembler.append(
-                signal,
-                device_protocol=self.device_protocol,
-                connection_session_id=chunk.connection_session_id,
-                recording_session_id=self._required_recording_id(),
-                source_type=chunk.source_type,
-            )
-            for batch in batches:
-                await self._submit_batch(batch)
-        self._schedule_flush()
+        if self.event_driven:
+            await self._queue_event_signals(outcome.signals, chunk)
+        else:
+            for signal in outcome.signals:
+                batches = self.assembler.append(
+                    signal,
+                    device_protocol=self.device_protocol,
+                    connection_session_id=chunk.connection_session_id,
+                    recording_session_id=self._required_recording_id(),
+                    source_type=chunk.source_type,
+                )
+                for batch in batches:
+                    await self._submit_batch(batch)
+            self._schedule_flush()
         return outcome
 
+    async def _queue_event_signals(self, signals: tuple, chunk: RawChunk) -> None:
+        """Coalesce a small data-arrival block; publish as soon as the block closes."""
+        if not signals:
+            return
+        if not self._event_pending:
+            self._event_pending_start_ms = min(signal.received_at_ms for signal in signals)
+            self._event_pending_session_id = chunk.connection_session_id
+            self._event_pending_source_type = chunk.source_type
+        self._event_pending.extend(signals)
+        newest = max(signal.received_at_ms for signal in signals)
+        if (newest - (self._event_pending_start_ms or newest) >= self.event_batch_ms
+                or len(self._event_pending) >= 512):
+            await self._flush_event_pending()
+            return
+        if self._event_flush_task is None or self._event_flush_task.done():
+            self._event_flush_task = asyncio.create_task(self._flush_event_after_delay(), name="neurobridge-event-batch")
+
+    async def _flush_event_after_delay(self) -> None:
+        try:
+            await asyncio.sleep(self.event_batch_ms / 1000)
+            await self._flush_event_pending()
+        except asyncio.CancelledError:
+            return
+
+    async def _flush_event_pending(self) -> None:
+        task, self._event_flush_task = self._event_flush_task, None
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        signals = tuple(self._event_pending)
+        session_id = self._event_pending_session_id
+        source_type = self._event_pending_source_type
+        self._event_pending = []
+        self._event_pending_start_ms = None
+        self._event_pending_session_id = None
+        self._event_pending_source_type = None
+        if not signals or session_id is None:
+            return
+        batch = self._batch_from_signals(signals, session_id, source_type)
+        if batch is not None:
+            await self._submit_batch(batch)
+
+    def _batch_from_signals(self, signals: tuple, session_id: str, source_type: str | None) -> ParsedSignalBatch:
+        start_ms = min(signal.received_at_ms for signal in signals)
+        end_ms = max(signal.received_at_ms for signal in signals)
+        if end_ms <= start_ms:
+            end_ms = start_ms + 1
+        reasons = tuple(dict.fromkeys(reason for signal in signals for reason in signal.invalid_reasons))
+        frame_refs = tuple(dict.fromkeys(ref for signal in signals for ref in signal.frame_refs))
+        return ParsedSignalBatch(
+            f"batch-{uuid.uuid4().hex}",
+            self.device_protocol,
+            session_id,
+            self._required_recording_id(),
+            start_ms,
+            end_ms,
+            tuple(signals),
+            frame_refs,
+            not reasons,
+            reasons,
+            source_type,
+        )
+
     async def flush(self, reason: FlushReason = FlushReason.STOPPED, *, drain: bool = True) -> None:
+        if self.event_driven:
+            await self._flush_event_pending()
         await self._cancel_flush()
         parser_outcome = self.parser.flush(reason)
         for diagnostic in parser_outcome.diagnostics:
             LOG.warning("Parser flushed: kind=%s discardedBytes=%s reason=%s", diagnostic.kind, parser_outcome.discarded_bytes, reason.value)
         self.diagnostics["discarded_bytes"] += parser_outcome.discarded_bytes
-        batch = self.assembler.flush()
-        if batch is not None:
-            await self._submit_batch(batch)
+        if not self.event_driven:
+            batch = self.assembler.flush()
+            if batch is not None:
+                await self._submit_batch(batch)
         if drain:
             await self.drain()
 
@@ -376,6 +478,8 @@ class ApplicationService:
         self._batch_sequence += 1
         self._batch_order[batch.batch_id] = self._batch_sequence
         receipt = self._persist_parsed(batch)
+        if self.observe_batch is not None:
+            self.observe_batch(batch)
         try:
             self._batches.put_nowait((batch, receipt))
         except asyncio.QueueFull:
@@ -387,7 +491,7 @@ class ApplicationService:
             self._worker = asyncio.create_task(self._process_queued(), name="neurobridge-algorithm-worker")
 
     async def _process_queued(self) -> None:
-        while True:
+        while self._worker is asyncio.current_task():
             batch, receipt = await self._batches.get()
             try:
                 await self._process_batch(batch, receipt)
@@ -407,11 +511,29 @@ class ApplicationService:
             except (Exception, TimeoutError):
                 LOG.exception("Device stop failed during application shutdown")
         await self.flush(FlushReason.STOPPED)
+        if self.eeg_alignment is not None:
+            self.eeg_alignment.set_session(self.device_protocol, None)
         await self._stop_worker()
         await self.aggregator.close()
         await self._cancel_stale()
-        await self.algorithm.close()
+        try:
+            await self.algorithm.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOG.exception("Algorithm close failed during application shutdown")
         self._closed = True
+
+    async def _publish_wear_state(self, batch: ParsedSignalBatch) -> None:
+        from .eeg_alignment import raw_eeg_worn
+
+        worn = raw_eeg_worn(batch)
+        publish_status = getattr(self.northbound, "publish_status", None)
+        if publish_status is None:
+            return
+        if worn is not None:
+            await publish_status("wearState", "worn" if worn else "notWorn")
+        await publish_status("eegDisplay", "shown" if self.eeg_alignment.display_eeg.get(batch.device_protocol, True) else "hidden")
 
     def _persist_parsed(self, batch: ParsedSignalBatch) -> PersistenceReceipt:
         return self._persist(
@@ -442,6 +564,26 @@ class ApplicationService:
     async def _process_batch(self, batch: ParsedSignalBatch, parsed_receipt: PersistenceReceipt, *, backlog: bool = False) -> WindowResult:
         self.diagnostics["batches"] += 1
         persistence_guaranteed = parsed_receipt.persistence_guaranteed
+        # A timer flush and a late packet can produce a second window with the
+        # same end timestamp (or an older one). Publish each boundary once and
+        # discard the residual window instead of appending a 3/6-point fragment.
+        if not self.event_driven and self._last_window_end_ms is not None and batch.window_end_ms == self._last_window_end_ms:
+            self.diagnostics["superseded_windows"] = self.diagnostics.get("superseded_windows", 0) + 1
+            LOG.info(
+                "Late window discarded before evaluation: batchId=%s windowEndMs=%s lastPublishedWindowEndMs=%s",
+                batch.batch_id,
+                batch.window_end_ms,
+                self._last_window_end_ms,
+            )
+            self._discard_batch_frames(batch)
+            timestamp = self.clock_ms()
+            return WindowResult(
+                batch,
+                AlgorithmResult(batch.batch_id, None, timestamp, timestamp, {}, False, ("LATE_WINDOW",)),
+                "live",
+                timestamp,
+                False,
+            )
         if batch.connection_session_id != self._connection_session_id:
             timestamp = self.clock_ms()
             stale_result = WindowResult(
@@ -472,17 +614,27 @@ class ApplicationService:
             result = WindowResult(batch, self.aggregator._invalid(batch.batch_id, "ALGORITHM_BACKLOG"), "live", self.clock_ms(), False)
         elif self._algorithm_state in {AlgorithmState.READY, AlgorithmState.ERROR}:
             evaluation_started = time.monotonic()
-            algorithm_input = self.mapper.map(batch, (self._frames[ref] for ref in batch.frame_refs if ref in self._frames))
+            frames = tuple(self._frames[ref] for ref in batch.frame_refs if ref in self._frames)
+            algorithm_input = self.mapper.map(batch, frames)
             result = await self.aggregator.evaluate(
                 batch,
                 algorithm_input,
                 persistence_guaranteed=persistence_guaranteed,
                 on_late_result=lambda value: self._persist_late(batch, value),
             )
+            if self.eeg_alignment is not None:
+                LOG.debug("EEG algorithm response: source=%s batchId=%s windowEndMs=%s mappingVersion=%s "
+                          "valid=%s invalidReasons=%s evaluationMs=%s",
+                          batch.source_type, batch.batch_id, batch.window_end_ms, algorithm_input.mapping_version,
+                          result.algorithm_result.valid, result.algorithm_result.invalid_reasons,
+                          round((time.monotonic() - evaluation_started) * 1000))
             duration_ms = int((time.monotonic() - evaluation_started) * 1000)
             self.diagnostics["algorithm_duration_ms"] += duration_ms
             self.diagnostics["algorithm_evaluations"] += 1
             self.diagnostics["algorithm_max_duration_ms"] = max(self.diagnostics["algorithm_max_duration_ms"], duration_ms)
+            if self.eeg_alignment is not None and batch.connection_session_id == self._connection_session_id:
+                await self._publish_wear_state(batch)
+                result = await self.eeg_alignment.align_result(result)
         else:
             timestamp = self.clock_ms()
             unavailable = AlgorithmResult(
@@ -556,6 +708,11 @@ class ApplicationService:
             if self.data.snapshot.data_state in {DataState.READY, DataState.STREAMING, DataState.STALE}:
                 self.data.produced(batch.window_end_ms, valid=result.valid)
             await self.northbound.publish(ApplicationEvent("window", result=result, algorithm_state=self._algorithm_state))
+            if self.eeg_forward is not None:
+                try:
+                    await self.eeg_forward(result)
+                except Exception:
+                    LOG.exception("EEG display forward failed: batchId=%s", batch.batch_id)
             self.data.transition(DataState.STREAMING, last_published_at_ms=self.clock_ms())
             self._schedule_stale(batch.window_end_ms)
             self.diagnostics["published"] += 1
@@ -583,6 +740,8 @@ class ApplicationService:
                 {
                     "batchId": batch.batch_id,
                     "algorithmVersion": result.algorithm_version,
+                    "deviceProtocol": batch.device_protocol,
+                    "sourceType": batch.source_type,
                     "connectionSessionId": batch.connection_session_id,
                     "windowStartMs": batch.window_start_ms,
                     "windowEndMs": batch.window_end_ms,
@@ -632,6 +791,8 @@ class ApplicationService:
         return self._recording_session_id
 
     def _schedule_flush(self) -> None:
+        if self.event_driven:
+            return
         deadline = self.assembler.window_end_ms
         if deadline is None:
             return
