@@ -40,13 +40,47 @@ const algorithmStatesByValue = {
   "sleep.state": ["清醒", "入睡"],
   "sleep.stage": ["清醒", "NREM1", "NREM2", "NREM3", "REM"],
 };
+const flowLossThreshold = 100 / 3;
+const flowRecoveryThreshold = 200 / 3;
+const coherenceReference = 50;
 const scoreDescriptions = {
   attention: "高分对应更高的专注度",
   relaxation: "高分对应更高的放松度",
   pressure: "高分对应更高的压力评分",
   arousal: "高分对应更强的激活水平",
-  coherence: "SDK 报表参考线 50 分",
-  "flow.meditation": "SDK 提示分界约 33.33、66.67",
+  coherence: `SDK 报表参考线 ${coherenceReference} 分`,
+  "flow.meditation": "SDK 提示分界 33⅓、66⅔",
+};
+const scoreRanges = {
+  "flow.meditation": [
+    {
+      label: "≤33⅓",
+      description: "低分区 · 达到心流丢失提示的分数条件",
+      matches: (value) => value <= flowLossThreshold,
+    },
+    {
+      label: "中间区",
+      description: "中间区 · 位于两条心流提示线之间",
+      matches: (value) => value < flowRecoveryThreshold,
+    },
+    {
+      label: "≥66⅔",
+      description: "高分区 · 达到心流恢复提示的分数条件",
+      matches: (value) => value >= flowRecoveryThreshold,
+    },
+  ],
+  coherence: [
+    {
+      label: `≤${coherenceReference}`,
+      description: "未超过和谐度报表参考线",
+      matches: (value) => value <= coherenceReference,
+    },
+    {
+      label: `>${coherenceReference}`,
+      description: "高于和谐度报表参考线",
+      matches: (value) => value > coherenceReference,
+    },
+  ],
 };
 
 const elements = {
@@ -86,14 +120,16 @@ function metricGuide(key, score) {
   const scale = "SDK 标尺 0–100";
   if (!Number.isFinite(score) || score === 0) return `${scale} · ${scoreDescriptions[key]}`;
   if (score < 0 || score > 100) return `超出 ${scale}`;
-  if (key === "coherence") {
-    return `${scale} · ${score > 50 ? "高于报表参考线" : "未超过报表参考线"} 50`;
-  }
-  if (key === "flow.meditation") {
-    const position = score <= 100 / 3 ? "低分提示区" : score >= 200 / 3 ? "高分提示区" : "两提示分界之间";
-    return `${scale} · ${position}`;
-  }
   return `${scale} · ${scoreDescriptions[key]}`;
+}
+
+function updateMetricGuide(metric, score) {
+  if (!metric.guide) return;
+  const ranges = scoreRanges[metric.key];
+  const active = ranges && Number.isFinite(score) && score > 0 && score <= 100
+    ? ranges.findIndex(({ matches }) => matches(score)) : -1;
+  metric.rangeLabels.forEach((label, index) => label.toggleAttribute("data-active", index === active));
+  metric.guide.textContent = active >= 0 ? ranges[active].description : metricGuide(metric.key, score);
 }
 
 function createOverview(source, sleepGrid) {
@@ -126,6 +162,17 @@ function createOverview(source, sleepGrid) {
     card.append(label, output, meta);
     const group = path[0] === "sleep" ? sleepGrid : grid;
     group.append(card);
+    const rangeLabels = (scoreRanges[key] ?? []).map(({ label }) => {
+      const segment = document.createElement("span");
+      segment.textContent = label;
+      return segment;
+    });
+    if (rangeLabels.length) {
+      const ranges = document.createElement("div");
+      ranges.className = "metric-ranges";
+      ranges.append(...rangeLabels);
+      card.append(ranges);
+    }
     const description = metricGuide(key);
     const guide = description ? document.createElement("p") : null;
     if (guide) {
@@ -133,7 +180,7 @@ function createOverview(source, sleepGrid) {
       guide.textContent = description;
       card.append(guide);
     }
-    return { key, stream, path, unit, output, meta, guide, timestamp: null };
+    return { key, stream, path, unit, output, meta, guide, rangeLabels, timestamp: null };
   });
   return { section, state, metrics };
 }
@@ -302,7 +349,7 @@ function resetOverview(panel, reason) {
     metric.output.textContent = "—";
     metric.meta.textContent = reason;
     metric.timestamp = null;
-    if (metric.guide) metric.guide.textContent = metricGuide(metric.key);
+    updateMetricGuide(metric);
   }
 }
 
@@ -354,9 +401,7 @@ function updateAlgorithmOverview(data, panel, unavailable, renderedStreams) {
     const missingHeartRate = metric.path[0] === "hr" && metric.path[1] === "value" && value === 0;
     const missingEeg = metric.stream === "eeg" && (unavailable.eeg === "未佩戴"
       || (!isSleep && (value === 0 || unavailable.eeg)));
-    if (metric.guide) {
-      metric.guide.textContent = metricGuide(metric.key, valid && !missingHeartRate && !missingEeg ? value : null);
-    }
+    updateMetricGuide(metric, valid && !missingHeartRate && !missingEeg ? value : null);
     if (mode === "live" && (!valid || missingHeartRate || missingEeg)) {
       if (metric.output.textContent !== "—") metric.meta.textContent = "沿用上次有效值";
       else if (result.valid === false) metric.meta.textContent = "无效窗口";
@@ -522,7 +567,7 @@ function showMissingAlgorithmStream(panel, stream, label, timestamp) {
     if (metric.timestamp !== null && timestamp !== null && timestamp < metric.timestamp) continue;
     metric.meta.textContent = metric.output.textContent === "—" ? label : `${label} · 沿用上次有效值`;
     if (timestamp !== null) metric.timestamp = timestamp;
-    if (metric.guide) metric.guide.textContent = metricGuide(metric.key);
+    updateMetricGuide(metric);
   }
   const group = panel.algorithmGroups.find((group) => group.stream === stream);
   if (group.timestamp == null || timestamp === null || timestamp >= group.timestamp) {
