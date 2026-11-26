@@ -71,7 +71,7 @@ code { color: #9ee7f5; font-family: ui-monospace, SFMono-Regular, Menlo, Consola
 .metric output { display: block; color: #87e0e4; font-size: clamp(1.25rem, 2.1vw, 1.8rem); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .metric p { color: #aabbd2; margin: 3px 0 0; font-size: .7rem; overflow-wrap: anywhere; }
 @media (max-width: 950px) { .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.sleep-title { margin: 16px 0 0; color: #e3edf8; font-size: .9rem; }
+.sleep-window { margin-top: 12px; font-size: .85rem; }
 .sleep-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 104px), 1fr)); margin-top: 8px; }
 .sleep-grid .metric { padding: 9px; }
 .sleep-grid .metric output { font-size: 1.15rem; }

@@ -28,6 +28,9 @@ const algorithmMetrics = {
     ["hr.value", "心率（bpm）"], ["hr.hrv", "HRV"], ["pressure", "压力"], ["coherence", "和谐度"], ["arousal", "激活度"],
   ],
 };
+const algorithmStreamFields = Object.entries(algorithmMetrics).map(([stream, metrics]) => [
+  stream, [...new Set(metrics.map(([key]) => key.split(".")[0]))],
+]);
 const eegScoresWithZeroPlaceholder = new Set(["attention", "relaxation", "pleasure", "flow.meditation"]);
 
 const elements = {
@@ -59,14 +62,12 @@ const overviewMetrics = [
     .map(([key, title]) => [title, "eeg", key.split(".")]),
 ];
 
-function createOverview(source) {
+function createOverview(source, sleepGrid) {
   const section = document.createElement("section");
   const heading = document.createElement("div");
   const title = document.createElement("h3");
   const state = document.createElement("span");
   const grid = document.createElement("div");
-  const sleepTitle = document.createElement("h4");
-  const sleepGrid = document.createElement("div");
   section.className = "source-window";
   section.dataset.source = source;
   heading.className = "chart-heading";
@@ -75,11 +76,8 @@ function createOverview(source) {
   section.setAttribute("aria-labelledby", title.id);
   state.className = "source-status";
   grid.className = "metric-grid";
-  sleepTitle.className = "sleep-title";
-  sleepTitle.textContent = "睡眠指标";
-  sleepGrid.className = "metric-grid sleep-grid";
   heading.append(title, state);
-  section.append(heading, grid, sleepTitle, sleepGrid);
+  section.append(heading, grid);
   elements.algorithmMetrics.append(section);
 
   const metrics = overviewMetrics.map(([name, stream, path, unit = ""]) => {
@@ -111,7 +109,7 @@ function createSourcePanel(source) {
   const algorithmGroups = [...section.querySelectorAll("[data-algorithm]")].map((section) => {
     const stream = section.dataset.algorithm;
     const list = section.querySelector(".algorithm-metrics");
-    const metrics = algorithmMetrics[stream].map(([key, title]) => {
+    const metrics = algorithmMetrics[stream].filter(([key]) => !key.startsWith("sleep.")).map(([key, title]) => {
       const item = document.createElement("div");
       const label = document.createElement("dt");
       const output = document.createElement("dd");
@@ -125,7 +123,7 @@ function createSourcePanel(source) {
       status: section.querySelector("[data-window-status]") };
   });
   return {
-    source, section, fields, algorithmGroups, overview: createOverview(source),
+    source, section, fields, algorithmGroups, overview: createOverview(source, fields.sleepMetrics),
     socket: null, initialStatusRequestId: null, statusSubscriptionRequestId: null, statusSubscriptionId: null,
     eventModeSubscriptions: new Set(), deviceStatusTimestamp: null,
     eegStateTimestamp: null, eegStaleTimer: null, wearState: "unknown", eegDisplay: "shown",
@@ -350,7 +348,7 @@ function updateAlgorithmOverview(data, panel, unavailable, renderedStreams) {
   }
 }
 
-function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {}, { holdLast = false, showSleep = false } = {}) {
+function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {}, holdLast = false) {
   group.timestamp = timestampMs;
   group.section.dataset.validity = validity;
   const date = new Date(timestampMs ?? NaN);
@@ -360,8 +358,7 @@ function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {
     const value = path.reduce((node, key) => node?.[key], algorithm);
     const zeroPlaceholder = value === 0 && (key === "hr.value" || (holdLast && eegScoresWithZeroPlaceholder.has(key)));
     const hasValue = typeof value === "boolean" || (Number.isFinite(value) && !zeroPlaceholder);
-    const usable = validity === "valid" || (showSleep && path[0] === "sleep");
-    if (holdLast && (!usable || !hasValue)) {
+    if (holdLast && (validity !== "valid" || !hasValue)) {
       if (output.textContent !== "—") output.title = "沿用上次有效值";
       continue;
     }
@@ -401,9 +398,7 @@ function updateLiveAlgorithm(data, panel, unavailable, renderedStreams) {
     const missingEeg = group.stream === "eeg" && unavailable.eeg;
     const label = unavailable[group.stream] || (query ? "单次查询" : "有效窗口");
     showAlgorithmWindow(group, !valid ? "invalid" : missingEeg ? "missing" : "valid", result.timestampMs,
-      valid ? label : `无效窗口${reasons ? ` · ${reasons}` : ""}`, algorithm, {
-        holdLast: true, showSleep: valid && unavailable.eeg === "无有效脑波",
-      });
+      valid ? label : `无效窗口${reasons ? ` · ${reasons}` : ""}`, algorithm, true);
   }
 }
 
@@ -500,7 +495,7 @@ function showMissingAlgorithmStream(panel, stream, label, timestamp) {
   }
   const group = panel.algorithmGroups.find((group) => group.stream === stream);
   if (group.timestamp == null || timestamp === null || timestamp >= group.timestamp) {
-    showAlgorithmWindow(group, "missing", timestamp ?? group.timestamp, label, {}, { holdLast: true });
+    showAlgorithmWindow(group, "missing", timestamp ?? group.timestamp, label, {}, true);
   }
 }
 
@@ -836,10 +831,10 @@ function liveMessageStreams(data, panel) {
   const algorithm = payload.algorithm || {};
   const requested = panel.subscriptions.get(data.subscriptionId) || [];
   const emptyInvalidAlgorithm = result.valid === false && payload.algorithm && Object.keys(algorithm).length === 0;
-  const streams = panel.algorithmGroups.filter(({ stream, metrics }) =>
-    metrics.some(({ path }) => Object.prototype.hasOwnProperty.call(algorithm, path[0]))
+  const streams = algorithmStreamFields.filter(([stream, fields]) =>
+    fields.some((field) => Object.prototype.hasOwnProperty.call(algorithm, field))
     || (emptyInvalidAlgorithm && requested.includes(stream))
-  ).map(({ stream }) => stream);
+  ).map(([stream]) => stream);
   if (payload.eegRaw) streams.push("eeg.raw");
   if (payload.hrRaw) streams.push("hr.raw");
   if (payload.status) streams.push("status");
