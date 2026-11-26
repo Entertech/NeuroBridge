@@ -104,7 +104,7 @@ SDK 的固定来源和算法启用 POC 见 [sdk.lock](sdk.lock) 与 [算法 SDK 
 | macOS 历史 POC | [`mac/start-poc.command`](mac/start-poc.command) | 已接入统一 Bootstrap/BLE Profile，不属于当前 M1 验收。 |
 | Windows 网关 | [`windows/README.md`](windows/README.md)；[一键操作教程](doc/tech/麒麟V10网关运行与串口联调内部文档.md#101-一键准备与启动推荐) | 旧平台台账版本 `0.0.1`，build `1`，仅供现有入口参考；新发布包使用应用版本。双击 `windows/neurobridge-windows-bootstrap.cmd` 自动准备配置、构建自检算法，首次管理员授权后安装开机自启服务并打开本机页面；可在菜单关闭自启。用户已确认上述 Windows x64 实机运行成功，新增开机自启仍待实机重启验证。串口发现与算法准备并行，直接 E1 后以合法帧验证；真实耳机新流程复测待完成。Windows 7 与 32 位系统不在交付范围内；签名不属于当前发布门禁。 |
 | 耳机原始数据查看页 | [`web/capture/`](web/capture/) | 启动网关后访问 `http://127.0.0.1:8080/capture/`；明确区分实时耳机连接与 `live`/`replay` 数据来源，原始数据区与解析数据区固定上下排列。 |
-| 本机可视化/兼容 B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 默认由网关在回环地址提供；兼容模式仍可作为独立 B 端联调页。 |
+| 本机可视化/兼容 B 端联调网页 | [`web/b-client-test/`](web/b-client-test/) | 默认由网关在回环地址提供，也可作为独立 B 端联调页。实时指标按流每 600 ms 刷新，脑波逐窗口绘制。 |
 
 默认本机场景启动网关后访问 `http://127.0.0.1:8080/` 使用完整联调台，访问 `http://127.0.0.1:8080/capture/` 查看耳机原始数据。两个页面都使用网关动态注入的 `ws://127.0.0.1:8765/neurobridge/v1/ws`。`capture` 的开始/停止按钮只订阅或取消当前网页的数据推送，设备连接、串口、算法、录制和服务生命周期仍由后台网关负责。
 

@@ -28,6 +28,7 @@ const algorithmMetrics = {
     ["hr.value", "心率（bpm）"], ["hr.hrv", "HRV"], ["pressure", "压力"], ["coherence", "和谐度"], ["arousal", "激活度"],
   ],
 };
+const eegScoresWithZeroPlaceholder = new Set(["attention", "relaxation", "pleasure", "flow.meditation"]);
 
 const elements = {
   connectionRows: document.querySelector("#connectionRows"),
@@ -53,6 +54,9 @@ const overviewMetrics = [
   ["放松度", "eeg", ["relaxation"]], ["压力值", "hr", ["pressure"]],
   ["心率", "hr", ["hr", "value"], " bpm"], ["HRV", "hr", ["hr", "hrv"]],
   ["注意力", "eeg", ["attention"]], ["Flow", "eeg", ["flow", "meditation"]],
+  ["和谐度", "hr", ["coherence"]], ["激活度", "hr", ["arousal"]],
+  ...algorithmMetrics.eeg.filter(([key]) => key.startsWith("sleep."))
+    .map(([key, title]) => [title, "eeg", key.split(".")]),
 ];
 
 function createOverview(source) {
@@ -61,6 +65,8 @@ function createOverview(source) {
   const title = document.createElement("h3");
   const state = document.createElement("span");
   const grid = document.createElement("div");
+  const sleepTitle = document.createElement("h4");
+  const sleepGrid = document.createElement("div");
   section.className = "source-window";
   section.dataset.source = source;
   heading.className = "chart-heading";
@@ -69,8 +75,11 @@ function createOverview(source) {
   section.setAttribute("aria-labelledby", title.id);
   state.className = "source-status";
   grid.className = "metric-grid";
+  sleepTitle.className = "sleep-title";
+  sleepTitle.textContent = "睡眠指标";
+  sleepGrid.className = "metric-grid sleep-grid";
   heading.append(title, state);
-  section.append(heading, grid);
+  section.append(heading, grid, sleepTitle, sleepGrid);
   elements.algorithmMetrics.append(section);
 
   const metrics = overviewMetrics.map(([name, stream, path, unit = ""]) => {
@@ -82,7 +91,8 @@ function createOverview(source) {
     label.textContent = name;
     output.setAttribute("aria-label", `${sourceLabels[source]}${name}`);
     card.append(label, output, meta);
-    grid.append(card);
+    const group = path[0] === "sleep" ? sleepGrid : grid;
+    group.append(card);
     return { stream, path, unit, output, meta, timestamp: null };
   });
   return { section, state, metrics };
@@ -109,7 +119,7 @@ function createSourcePanel(source) {
       output.textContent = "—";
       item.append(label, output);
       list.append(item);
-      return { path: key.split("."), output };
+      return { key, path: key.split("."), output };
     });
     return { section, stream, metrics, time: section.querySelector("[data-window-time]"),
       status: section.querySelector("[data-window-status]") };
@@ -286,10 +296,15 @@ function resetAlgorithmReadings(panel, reason) {
   panel.eegTimestamp = null;
   panel.fields.waveformMeta.textContent = reason;
   panel.fields.spectrumMeta.textContent = reason;
+  panel.fields.eegOrigin.textContent = "—";
+  panel.fields.hrRawDetails.hidden = true;
+  panel.fields.hrRawDetails.open = false;
+  panel.fields.hrRawTime.textContent = "";
+  panel.fields.hrRawBytes.textContent = "";
   drawSourceCharts(panel);
 }
 
-function updateAlgorithmOverview(data, panel, unavailable) {
+function updateAlgorithmOverview(data, panel, unavailable, renderedStreams) {
   const result = data?.result || data;
   if (!result) return;
   const identity = { gatewayBootId: result.gatewayBootId, subjectId: result.subjectId, mode: result.mode };
@@ -309,34 +324,44 @@ function updateAlgorithmOverview(data, panel, unavailable) {
   const query = data.action === "getLatest";
   if ((data.event !== "data" && !query) || !algorithm || !Number.isFinite(result.timestampMs)) return;
 
-  const streams = panel.subscriptions.get(data.subscriptionId) || [];
+  const streams = renderedStreams ?? liveMessageStreams(data, panel);
   for (const metric of panel.overview.metrics) {
+    if (!streams.includes(metric.stream)) continue;
     const value = metric.path.reduce((node, key) => node?.[key], algorithm);
-    if (value === undefined && (result.valid !== false || !streams.includes(metric.stream))) continue;
+    const isSleep = metric.path[0] === "sleep";
     if (metric.timestamp !== null && result.timestampMs < metric.timestamp) continue;
     metric.timestamp = result.timestampMs;
-    const valid = result.valid !== false && Number.isFinite(value);
-    if (mode === "live" && (!valid || value === 0 || unavailable[metric.stream])) {
+    const hasValue = typeof value === "boolean" || Number.isFinite(value);
+    const valid = result.valid !== false && hasValue;
+    const missingHeartRate = metric.path[0] === "hr" && metric.path[1] === "value" && value === 0;
+    const missingEeg = metric.stream === "eeg" && (unavailable.eeg === "未佩戴"
+      || (!isSleep && (value === 0 || unavailable.eeg)));
+    if (mode === "live" && (!valid || missingHeartRate || missingEeg)) {
       if (metric.output.textContent !== "—") metric.meta.textContent = "沿用上次有效值";
+      else if (result.valid === false) metric.meta.textContent = "无效窗口";
+      else if (!hasValue) metric.meta.textContent = "本窗口未上报";
       continue;
     }
-    metric.output.textContent = valid ? `${Number(value.toPrecision(8))}${metric.unit}` : "—";
+    if (!valid) metric.output.textContent = "—";
+    else if (typeof value === "boolean") metric.output.textContent = value ? "是" : "否";
+    else metric.output.textContent = `${Number(value.toPrecision(8))}${metric.unit}`;
     const status = result.valid === false ? "无效窗口" : !valid ? "算法未提供" : query ? "单次查询" : "连续订阅";
     metric.meta.textContent = `${status} · ${algorithmTimeFormat.format(result.timestampMs)}`;
   }
 }
 
-function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {}, holdLast = false) {
+function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {}, { holdLast = false, showSleep = false } = {}) {
   group.timestamp = timestampMs;
   group.section.dataset.validity = validity;
   const date = new Date(timestampMs ?? NaN);
   group.time.textContent = Number.isNaN(date.getTime()) ? "—" : algorithmTimeFormat.format(date);
   group.status.textContent = status;
-  for (const { path, output } of group.metrics) {
+  for (const { key, path, output } of group.metrics) {
     const value = path.reduce((node, key) => node?.[key], algorithm);
-    const categorical = ["eeg.quality", "flow.meditationTips", "sleep.state", "sleep.stage"].includes(path.join("."));
-    const hasValue = typeof value === "boolean" || (Number.isFinite(value) && (value !== 0 || categorical));
-    if (holdLast && (validity !== "valid" || !hasValue)) {
+    const zeroPlaceholder = value === 0 && (key === "hr.value" || (holdLast && eegScoresWithZeroPlaceholder.has(key)));
+    const hasValue = typeof value === "boolean" || (Number.isFinite(value) && !zeroPlaceholder);
+    const usable = validity === "valid" || (showSleep && path[0] === "sleep");
+    if (holdLast && (!usable || !hasValue)) {
       if (output.textContent !== "—") output.title = "沿用上次有效值";
       continue;
     }
@@ -346,7 +371,7 @@ function showAlgorithmWindow(group, validity, timestampMs, status, algorithm = {
   }
 }
 
-function updateLiveAlgorithm(data, panel, unavailable) {
+function updateLiveAlgorithm(data, panel, unavailable, renderedStreams) {
   const result = data?.result || data;
   const payload = result?.payload;
   const connection = payload?.status?.connectionState ?? result?.connectionState;
@@ -362,18 +387,23 @@ function updateLiveAlgorithm(data, panel, unavailable) {
     return;
   }
   const algorithm = payload?.algorithm;
-  if (data?.event !== "data" || result.mode !== "live" || !algorithm || typeof algorithm !== "object") return;
+  const query = data?.action === "getLatest";
+  if ((!query && data?.event !== "data") || result.mode !== "live" || !algorithm || typeof algorithm !== "object") return;
 
   const requestedStreams = panel.subscriptions.get(data.subscriptionId) || [];
   const valid = result.valid === true;
   const reasons = Array.isArray(payload.invalidReasons) ? payload.invalidReasons.join("、") : "";
   for (const group of panel.algorithmGroups) {
+    if (renderedStreams && !renderedStreams.includes(group.stream)) continue;
     const hasMetrics = group.metrics.some(({ path }) => Object.prototype.hasOwnProperty.call(algorithm, path[0]));
     if (!hasMetrics && (valid || !requestedStreams.includes(group.stream))) continue;
     if (group.timestamp != null && result.timestampMs < group.timestamp) continue;
-    const issue = unavailable[group.stream];
-    showAlgorithmWindow(group, issue ? "missing" : valid ? "valid" : "invalid", result.timestampMs,
-      issue || (valid ? "有效窗口" : `无效窗口${reasons ? ` · ${reasons}` : ""}`), algorithm, true);
+    const missingEeg = group.stream === "eeg" && unavailable.eeg;
+    const label = unavailable[group.stream] || (query ? "单次查询" : "有效窗口");
+    showAlgorithmWindow(group, !valid ? "invalid" : missingEeg ? "missing" : "valid", result.timestampMs,
+      valid ? label : `无效窗口${reasons ? ` · ${reasons}` : ""}`, algorithm, {
+        holdLast: true, showSleep: valid && unavailable.eeg === "无有效脑波",
+      });
   }
 }
 
@@ -470,7 +500,7 @@ function showMissingAlgorithmStream(panel, stream, label, timestamp) {
   }
   const group = panel.algorithmGroups.find((group) => group.stream === stream);
   if (group.timestamp == null || timestamp === null || timestamp >= group.timestamp) {
-    showAlgorithmWindow(group, "missing", timestamp ?? group.timestamp, label, {}, true);
+    showAlgorithmWindow(group, "missing", timestamp ?? group.timestamp, label, {}, { holdLast: true });
   }
 }
 
@@ -491,7 +521,7 @@ function eegWindowState(message, wearState, eegDisplay) {
   const channels = Object.values(eeg?.wave || {}).filter((values) => Array.isArray(values) && values.length);
   const detached = eegDisplay === "hidden" || wearState === "notWorn"
     || channels.some((values) => values.every((value) => [255, -1, "FF", "ff"].includes(value)));
-  const zeroPlaceholder = eeg?.quality === 0
+  const zeroPlaceholder = eeg?.quality === 0 && channels.length > 0
     && !channels.some((values) => values.some((value) => Number.isFinite(value) && value !== 0));
   return {
     issue: detached ? "未佩戴" : zeroPlaceholder ? "无有效脑波" : null,
@@ -542,15 +572,7 @@ function updateEegState(message, panel, { issue, hasWave }) {
   }
 }
 
-function updateMissingHeartRate(data, panel) {
-  if (!sharedConnection || panel.section.hidden || (data?.event !== "data" && data?.action !== "getLatest")) return;
-  const result = data.result || data;
-  if (result.valid === true && Number.isFinite(result.timestampMs) && result.payload?.algorithm?.hr?.value === 0) {
-    showMissingAlgorithmStream(panel, "hr", "无心率数据", result.timestampMs);
-  }
-}
-
-function updateSnapshot(data, panel) {
+function updateSnapshot(data, panel, renderedStreams) {
   if (!data || typeof data !== "object") return;
   const { fields } = panel;
   const result = data.result || data;
@@ -565,9 +587,26 @@ function updateSnapshot(data, panel) {
   }
   if (status.wearState !== undefined) fields.wear.textContent = status.wearState;
   if (status.batteryPercent !== undefined) fields.battery.textContent = status.batteryPercent === null ? "—" : `${status.batteryPercent}%`;
-  for (const stream of ["eegRaw", "hrRaw"]) {
-    const raw = payload[stream];
-    if (raw) fields[stream].textContent = `${raw.byteLength ?? "?"} B · ${raw.packetCount ?? "?"} 包`;
+  if (status.signalQuality !== undefined) fields.signalQuality.textContent = status.signalQuality ?? "—";
+  if (status.algorithmState !== undefined) {
+    fields.algorithmState.textContent = {
+      ready: "就绪", warmingUp: "预热中", unavailable: "不可用", error: "异常",
+    }[status.algorithmState] ?? status.algorithmState;
+  }
+  if (Array.isArray(result.availableStreams)) fields.availableStreams.textContent = result.availableStreams.join("、") || "—";
+  if ((!renderedStreams || renderedStreams.includes("eeg"))
+    && (payload.eegOrigin !== undefined || payload.algorithm?.eeg)) {
+    fields.eegOrigin.textContent = { headset: "耳机", headband: "头环" }[payload.eegOrigin] ?? "—";
+  }
+  for (const [stream, key] of [["eeg.raw", "eegRaw"], ["hr.raw", "hrRaw"]]) {
+    const raw = payload[key];
+    if (!raw || (renderedStreams && !renderedStreams.includes(stream))) continue;
+    fields[key].textContent = `${raw.byteLength ?? "?"} B · ${raw.packetCount ?? "?"} 包`;
+    if (stream === "hr.raw") {
+      fields.hrRawDetails.hidden = false;
+      fields.hrRawTime.textContent = `${readableTimestamp(raw.windowStartMs)} ～ ${readableTimestamp(raw.windowEndMs)} · ${raw.packetBytes ?? "?"} B/包 · Base64`;
+      fields.hrRawBytes.textContent = result.valid === false ? "无效窗口" : raw.bytesBase64 ?? "—";
+    }
   }
 
   if (result.valid === false) fields.summary.textContent = "该数据窗口无效。";
@@ -791,16 +830,33 @@ function isLiveDataMessage(message, panel) {
   return true;
 }
 
+function liveMessageStreams(data, panel) {
+  const result = data.result || data;
+  const payload = result.payload || {};
+  const algorithm = payload.algorithm || {};
+  const requested = panel.subscriptions.get(data.subscriptionId) || [];
+  const emptyInvalidAlgorithm = result.valid === false && payload.algorithm && Object.keys(algorithm).length === 0;
+  const streams = panel.algorithmGroups.filter(({ stream, metrics }) =>
+    metrics.some(({ path }) => Object.prototype.hasOwnProperty.call(algorithm, path[0]))
+    || (emptyInvalidAlgorithm && requested.includes(stream))
+  ).map(({ stream }) => stream);
+  if (payload.eegRaw) streams.push("eeg.raw");
+  if (payload.hrRaw) streams.push("hr.raw");
+  if (payload.status) streams.push("status");
+  return streams.length ? streams : ["other"];
+}
+
 function queueLiveMessage(message, panel) {
   let pending = pendingLiveMessages.get(panel.source);
   if (!pending) {
     pending = new Map();
     pendingLiveMessages.set(panel.source, pending);
   }
-  // Keep only the newest window per subscription and drop superseded ones.
-  const key = message.data?.subscriptionId || "live";
-  pending.delete(key);
-  pending.set(key, message);
+  // EEG, HR and raw windows may arrive separately under one subscription.
+  for (const stream of liveMessageStreams(message.data, panel)) {
+    const previous = pending.get(stream);
+    if (!previous || message.data.timestampMs >= previous.data.timestampMs) pending.set(stream, message);
+  }
   if (liveDisplayTimer === null) {
     liveDisplayTimer = window.setTimeout(flushPendingLiveMessages, liveDisplayIntervalMs);
   }
@@ -810,10 +866,15 @@ function flushLiveMessages(panel) {
   const pending = pendingLiveMessages.get(panel.source);
   if (!pending) return;
   pendingLiveMessages.delete(panel.source);
-  const messages = [...pending.values()].sort(
-    (left, right) => (left.data?.timestampMs ?? 0) - (right.data?.timestampMs ?? 0),
+  const messages = new Map();
+  for (const [stream, message] of pending) {
+    if (!messages.has(message)) messages.set(message, []);
+    messages.get(message).push(stream);
+  }
+  const ordered = [...messages].sort(
+    ([left], [right]) => left.data.timestampMs - right.data.timestampMs,
   );
-  for (const message of messages) handleGatewayMessage(message, panel, { log: false });
+  for (const [message, streams] of ordered) handleGatewayMessage(message, panel, { log: false, streams });
 }
 
 function flushPendingLiveMessages() {
@@ -829,7 +890,7 @@ function clearPendingLiveMessages(panel) {
   }
 }
 
-function handleGatewayMessage(message, panel, { log = true } = {}) {
+function handleGatewayMessage(message, panel, { log = true, streams } = {}) {
   if (!message || typeof message !== "object") return;
   const data = message.data;
   if (message.protocolVersion === PROTOCOL_VERSION) {
@@ -859,12 +920,13 @@ function handleGatewayMessage(message, panel, { log = true } = {}) {
       eeg: eeg.issue,
       hr: result?.payload?.algorithm?.hr?.value === 0 ? "无心率数据" : null,
     };
-    updateAlgorithmOverview(data, panel, unavailable);
-    updateSnapshot(data, panel);
-    updateLiveAlgorithm(data, panel, unavailable);
-    updateVisuals(data, panel);
-    updateEegState(message, panel, eeg);
-    updateMissingHeartRate(data, panel);
+    updateAlgorithmOverview(data, panel, unavailable, streams);
+    updateSnapshot(data, panel, streams);
+    updateLiveAlgorithm(data, panel, unavailable, streams);
+    if (!streams || streams.includes("eeg") || streams.includes("status")) {
+      updateVisuals(data, panel);
+      updateEegState(message, panel, eeg);
+    }
   }
 
   const subscriptionId = data?.result?.subscriptionId;
@@ -972,7 +1034,8 @@ function connect(panel) {
       const message = JSON.parse(event.data);
       const source = sourceByDevice.get(message?.data?.source);
       const target = sharedConnection && source ? panels[source] : panel;
-      if (isLiveDataMessage(message, target)) {
+      if (message?.code === 200 && (message.protocolVersion !== PROTOCOL_VERSION || source === target.source)
+        && Number.isFinite(message.data?.timestampMs) && isLiveDataMessage(message, target)) {
         appendLog("in", "← IN", message, target);
         const display = message.data?.payload?.display?.eeg;
         if (display === "shown" || display === "hidden") target.eegDisplay = display;

@@ -74,13 +74,17 @@
               <div><dt>采集模式</dt><dd data-field="mode">—</dd></div>
               <div><dt>佩戴状态</dt><dd data-field="wear">—</dd></div>
               <div><dt>电量</dt><dd data-field="battery">—</dd></div>
+              <div><dt>信号质量</dt><dd data-field="signalQuality">—</dd></div>
+              <div><dt>算法状态</dt><dd data-field="algorithmState">—</dd></div>
+              <div><dt>可用数据流</dt><dd data-field="availableStreams">—</dd></div>
+              <div><dt>脑电指标来源</dt><dd data-field="eegOrigin">—</dd></div>
               <div><dt>受试者</dt><dd data-field="subject">—</dd></div>
               <div><dt>数据时间</dt><dd data-field="timestamp">—</dd></div>
               <div><dt>EEG 原始字节</dt><dd data-field="eegRaw">—</dd></div>
               <div><dt>HR 原始字节</dt><dd data-field="hrRaw">—</dd></div>
             </dl>
             <div class="latest-summary" data-field="summary">尚未收到网关数据。</div>
-            <details class="algorithm-window">
+            <details class="algorithm-window" open>
               <summary>实时窗口详情</summary>
               <div class="algorithm-groups">
                 <section class="algorithm-group" data-algorithm="eeg">
@@ -94,6 +98,11 @@
                   <dl class="algorithm-metrics"></dl>
                 </section>
               </div>
+            </details>
+            <details class="raw-window" data-field="hrRawDetails" hidden>
+              <summary>原始心率窗口</summary>
+              <p class="hint" data-field="hrRawTime"></p>
+              <code data-field="hrRawBytes"></code>
             </details>
           </div>
         </section>
@@ -124,7 +133,7 @@
 
             <article class="action-card action-card-accent">
               <h4>连续订阅</h4>
-              <p>网关确认后按 as_available 持续推送事件；实时算法数据每 600 ms 刷新最新一组，脑波波形按窗口即时追加。</p>
+              <p>网关按 as_available 推送事件。各实时数据流每 600 ms 刷新最新窗口，脑波波形按窗口即时追加。</p>
               <fieldset class="stream-options" aria-label="订阅流选择">
                 <legend>订阅流</legend>
                 <label><input type="checkbox" name="subscribeStream" value="eeg" checked /> EEG 算法</label>

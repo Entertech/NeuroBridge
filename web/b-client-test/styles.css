@@ -71,6 +71,10 @@ code { color: #9ee7f5; font-family: ui-monospace, SFMono-Regular, Menlo, Consola
 .metric output { display: block; color: #87e0e4; font-size: clamp(1.25rem, 2.1vw, 1.8rem); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .metric p { color: #aabbd2; margin: 3px 0 0; font-size: .7rem; overflow-wrap: anywhere; }
 @media (max-width: 950px) { .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.sleep-title { margin: 16px 0 0; color: #e3edf8; font-size: .9rem; }
+.sleep-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 104px), 1fr)); margin-top: 8px; }
+.sleep-grid .metric { padding: 9px; }
+.sleep-grid .metric output { font-size: 1.15rem; }
 .action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
 .action-card { min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 15px; border: 1px solid rgba(83, 120, 159, .45); border-radius: 12px; background: rgba(5, 17, 31, .4); }
 .action-card h4 { margin: 0; font-size: .9rem; }
@@ -106,6 +110,9 @@ dd { margin: 0; max-width: 170px; color: #f2f7fc; font-size: .82rem; text-align:
 .algorithm-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 112px), 1fr)); gap: 6px 10px; margin: 0; }
 .algorithm-metrics div { padding: 8px 0; border-top: 1px solid rgba(83, 120, 159, .3); }
 .algorithm-metrics dd { margin-top: 3px; text-align: left; font-variant-numeric: tabular-nums; }
+.raw-window { margin-top: 14px; }
+.raw-window summary { color: #a7ddeb; cursor: pointer; }
+.raw-window code { font-size: .82rem; overflow-wrap: anywhere; }
 @media (max-width: 650px) { .algorithm-groups { grid-template-columns: 1fr; } }
 
 .log-card { margin-top: 18px; }

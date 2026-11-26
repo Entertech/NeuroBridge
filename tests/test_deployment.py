@@ -887,7 +887,8 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("function flushLiveMessages(panel)", script)
         self.assertIn("function flushPendingLiveMessages()", script)
         self.assertIn("window.setTimeout(flushPendingLiveMessages, liveDisplayIntervalMs)", script)
-        self.assertIn("handleGatewayMessage(message, panel, { log: false })", script)
+        self.assertIn("handleGatewayMessage(message, panel, { log: false, streams })", script)
+        self.assertIn("pending.set(stream, message)", script)
         self.assertIn("function updateLiveWaveform(data, panel)", script)
         self.assertIn("function appendWaveChannels(panel, eeg, invalid)", script)
         self.assertIn("function updateWaveformMeta(panel, invalid)", script)
@@ -895,7 +896,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn('appendLog("in", "← IN", message, target);', script)
         self.assertIn("flushLiveMessages(target);", script)
         html = (ROOT / "web" / "b-client-test" / "index.html").read_text(encoding="utf-8")
-        self.assertIn("实时算法数据每 600 ms 刷新最新一组，脑波波形按窗口即时追加", html)
+        self.assertIn("各实时数据流每 600 ms 刷新最新窗口，脑波波形按窗口即时追加", html)
 
     def test_one_command_update_uses_only_the_existing_checkout(self) -> None:
         script = (ROOT / "linux" / "update-ubuntu.sh").read_text(encoding="utf-8")
